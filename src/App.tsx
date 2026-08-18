@@ -15,6 +15,7 @@ import type {
   TerminalScrollback,
   TaskDisplayWindow,
   SkillHubConfig,
+  YunxiaoWorkitem,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -28,6 +29,11 @@ import {
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
 import type { FontFamily } from "./types";
 import { quoteFontName } from "./utils/fonts";
+import {
+  buildYunxiaoPrompt,
+  buildYunxiaoTaskName,
+  isYunxiaoWorkitemImported,
+} from "./utils/yunxiao";
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -1250,6 +1256,39 @@ function App() {
     });
   }
 
+  /** 云效议题 → 待办任务：去重 + 写入任务 state 并落盘。 */
+  async function handleImportYunxiaoIssue(
+    issue: YunxiaoWorkitem,
+    targetProjectId: string,
+  ): Promise<boolean> {
+    const targetProject = projects.find((p) => p.id === targetProjectId);
+    if (!targetProject) return false;
+    if (isYunxiaoWorkitemImported(tasks, issue.id)) return false;
+
+    const now = Date.now();
+    const task: Task = {
+      id: `${now}`,
+      projectId: targetProject.id,
+      name: buildYunxiaoTaskName(issue),
+      prompt: buildYunxiaoPrompt(issue),
+      agent: "claude",
+      permissionMode: "ask",
+      status: "todo",
+      createdAt: now,
+      updatedAt: now,
+      yunxiaoWorkitemId: issue.id,
+      yunxiaoSerialNumber: issue.serialNumber,
+    };
+
+    setTasks((prev) => {
+      if (prev.some((t) => t.yunxiaoWorkitemId === issue.id)) return prev;
+      const next = [task, ...prev];
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    return true;
+  }
+
   function handleRenameTask(taskId: string, name: string) {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
@@ -1658,6 +1697,7 @@ function App() {
             onRenameProject={handleRenameProject}
             skillHubConfig={skillHubConfig}
             onEnterSkillHub={handleEnterSkillHub}
+            onImportYunxiaoIssue={handleImportYunxiaoIssue}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}

@@ -14,7 +14,7 @@ export const OPEN_KANBAN_VIEW_EVENT = "nezha:open-kanban-view";
 /** 看板上每列最多渲染多少卡片，超出折叠为 "+N more"。 */
 const COLUMN_LIMIT = 5;
 
-type ColumnKey = "running" | "attention" | "awaiting";
+type ColumnKey = "todo" | "running" | "attention" | "awaiting";
 
 interface KanbanGroup {
   projectId: string;
@@ -22,8 +22,10 @@ interface KanbanGroup {
   totalActive: number;
 }
 
-function columnForStatus(status: TaskStatus): ColumnKey | null {
+export function columnForStatus(status: TaskStatus): ColumnKey | null {
   switch (status) {
+    case "todo":
+      return "todo";
     case "pending":
     case "running":
       return "running";
@@ -38,9 +40,10 @@ function columnForStatus(status: TaskStatus): ColumnKey | null {
   }
 }
 
-const COLUMN_ORDER: ColumnKey[] = ["running", "attention", "awaiting"];
+const COLUMN_ORDER: ColumnKey[] = ["todo", "running", "attention", "awaiting"];
 
 const COLUMN_DOT_STYLE: Record<ColumnKey, CSSProperties> = {
+  todo: s.kanbanColumnDotTodo,
   running: s.kanbanColumnDotRunning,
   attention: s.kanbanColumnDotAttention,
   awaiting: s.kanbanColumnDotAwaiting,
@@ -172,16 +175,20 @@ export function KanbanView({
       if (!group) {
         group = {
           projectId: task.projectId,
-          columns: { running: [], attention: [], awaiting: [] },
+          columns: { todo: [], running: [], attention: [], awaiting: [] },
           totalActive: 0,
         };
         byProject.set(task.projectId, group);
       }
       group.columns[col].push(task);
-      group.totalActive += 1;
+      // 待办列不纳入“活跃任务”统计，保持副标题语义（活跃 = 已开始/待介入/待确认）。
+      if (col !== "todo") {
+        group.totalActive += 1;
+      }
     }
     // 列内排序：待介入和已完成待确认按 attention 时间倒序，进行中按创建时间倒序
     for (const group of byProject.values()) {
+      group.columns.todo.sort((a, b) => b.createdAt - a.createdAt);
       group.columns.running.sort((a, b) => b.createdAt - a.createdAt);
       group.columns.attention.sort(sortAttention);
       group.columns.awaiting.sort(sortAttention);

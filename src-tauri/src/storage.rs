@@ -80,6 +80,12 @@ pub struct Task {
     pub additions: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletions: Option<i32>,
+    /// 导入自云效 Projex 的工作项 id（去重键）。
+    #[serde(rename = "yunxiaoWorkitemId", default, skip_serializing_if = "Option::is_none")]
+    pub yunxiao_workitem_id: Option<String>,
+    /// 导入自云效 Projex 的工作项编号，如 QHDK-29728。
+    #[serde(rename = "yunxiaoSerialNumber", default, skip_serializing_if = "Option::is_none")]
+    pub yunxiao_serial_number: Option<String>,
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────

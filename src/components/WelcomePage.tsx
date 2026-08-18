@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud } from "lucide-react";
 import type {
   Project,
   Task,
@@ -10,11 +10,13 @@ import type {
   TaskDisplayWindow,
   FontFamily,
   SkillHubConfig,
+  YunxiaoWorkitem,
 } from "../types";
 import type { ProjectRenameResult } from "../projectName";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
+import { YunxiaoView } from "./yunxiao/YunxiaoView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { ProjectListItem } from "./welcome/ProjectListItem";
 import { useI18n, pluralKey } from "../i18n";
@@ -98,6 +100,7 @@ export function WelcomePage({
   onMonoFontFamilyChange,
   skillHubConfig,
   onEnterSkillHub,
+  onImportYunxiaoIssue,
 }: {
   projects: Project[];
   allProjects: Project[];
@@ -126,10 +129,11 @@ export function WelcomePage({
   onMonoFontFamilyChange: (family: FontFamily) => void;
   skillHubConfig: SkillHubConfig | null;
   onEnterSkillHub: () => void;
+  onImportYunxiaoIssue: (issue: YunxiaoWorkitem, targetProjectId: string) => Promise<boolean>;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills">("projects");
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao">("projects");
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -173,6 +177,12 @@ export function WelcomePage({
               active={view === "skills"}
               onClick={() => setView("skills")}
             />
+            <SidebarItem
+              icon={<Cloud size={15} />}
+              label={t("welcome.yunxiao")}
+              active={view === "yunxiao"}
+              onClick={() => setView("yunxiao")}
+            />
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -198,7 +208,14 @@ export function WelcomePage({
           </div>
         </div>
 
-        {view === "timeline" ? (
+        {view === "yunxiao" ? (
+          <YunxiaoView
+            projects={allProjects}
+            tasks={tasks}
+            onBack={() => setView("projects")}
+            onImportIssue={onImportYunxiaoIssue}
+          />
+        ) : view === "timeline" ? (
           <TimelineView
             projects={allProjects}
             tasks={tasks}

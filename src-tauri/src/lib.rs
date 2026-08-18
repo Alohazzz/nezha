@@ -23,6 +23,7 @@ mod skills;
 mod storage;
 mod subprocess;
 mod usage;
+mod yunxiao;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo, DshSessionInfo};
 
@@ -404,9 +405,13 @@ pub fn run() {
             app_settings::save_use_sideloaded_conpty,
             app_settings::save_terminal_scrollback,
             app_settings::save_terminal_copy_on_select,
+            app_settings::save_yunxiao_settings,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
             app_settings::get_system_fonts,
+            yunxiao::yunxiao_list_organizations,
+            yunxiao::yunxiao_search_projects,
+            yunxiao::yunxiao_search_workitems,
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,

@@ -152,7 +152,7 @@ export const kanban = {
   },
   kanbanColumns: {
     display: "grid",
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 10,
   },
   kanbanColumn: {
@@ -175,6 +175,10 @@ export const kanban = {
   kanbanColumnDotRunning: {
     ...kanbanColumnDot,
     background: "var(--accent)",
+  },
+  kanbanColumnDotTodo: {
+    ...kanbanColumnDot,
+    background: "var(--text-hint)",
   },
   kanbanColumnDotAttention: {
     ...kanbanColumnDot,

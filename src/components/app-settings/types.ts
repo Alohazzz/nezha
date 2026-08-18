@@ -57,6 +57,21 @@ export const EMPTY_AGENT_MODEL_CATALOG: AgentModelCatalog = {
   initialized: false,
 };
 
+/** 云效 (Aliyun DevOps / Projex) 集成配置（token 仅存本地用户目录） */
+export interface YunxiaoSettings {
+  token: string;
+  organizationId: string;
+  organizationName?: string;
+  projectId: string;
+  projectName?: string;
+}
+
+export const EMPTY_YUNXIAO_SETTINGS: YunxiaoSettings = {
+  token: "",
+  organizationId: "",
+  projectId: "",
+};
+
 export interface AppSettings {
   claude_path: string;
   codex_path: string;
@@ -72,6 +87,7 @@ export interface AppSettings {
   use_sideloaded_conpty: boolean;
   claude_model_catalog: AgentModelCatalog;
   codex_model_catalog: AgentModelCatalog;
+  yunxiao: YunxiaoSettings;
 }
 
 /**
@@ -91,6 +107,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   use_sideloaded_conpty: true,
   claude_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   codex_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
+  yunxiao: EMPTY_YUNXIAO_SETTINGS,
 };
 
 export interface AgentVersions {

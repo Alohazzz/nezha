@@ -12,6 +12,7 @@ import { skillHub } from "./skill-hub";
 import { task } from "./task";
 import { terminal } from "./terminal";
 import { timeline } from "./timeline";
+import { yunxiao } from "./yunxiao";
 
 const s = {
   ...layout,
@@ -26,6 +27,7 @@ const s = {
   ...kanban,
   ...skillHub,
   ...reviewComments,
+  ...yunxiao,
 } satisfies Record<string, React.CSSProperties>;
 
 export default s;
@@ -43,4 +45,5 @@ export {
   task,
   terminal,
   timeline,
+  yunxiao,
 };

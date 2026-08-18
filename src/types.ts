@@ -153,6 +153,75 @@ export interface Task {
   additions?: number;
   /** 任务完成时计算的相对 baseBranch merge-base 的累计删除行数（仅 worktree 任务） */
   deletions?: number;
+  /** 导入自云效 Projex 的工作项 id（去重键：同一议题只导入一次） */
+  yunxiaoWorkitemId?: string;
+  /** 导入自云效 Projex 的工作项编号，如 QHDK-29728 */
+  yunxiaoSerialNumber?: string;
+}
+
+// ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────
+
+/** 云效个人访问令牌可访问的组织 */
+export interface YunxiaoOrganization {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+/** 云效组织下的项目 */
+export interface YunxiaoProject {
+  id: string;
+  name: string;
+  customCode?: string;
+  description?: string;
+}
+
+export interface YunxiaoUserRef {
+  id: string;
+  name: string;
+}
+
+export interface YunxiaoStatus {
+  name: string;
+  displayName?: string;
+  nameEn?: string;
+  id: string;
+}
+
+export interface YunxiaoCustomFieldEntry {
+  identifier?: string;
+  displayValue?: string;
+}
+
+export interface YunxiaoCustomFieldValue {
+  fieldId: string;
+  fieldName: string;
+  values: YunxiaoCustomFieldEntry[];
+}
+
+/** 云效 Projex 工作项（议题），字段与 SearchWorkitems 响应对齐 */
+export interface YunxiaoWorkitem {
+  id: string;
+  serialNumber: string;
+  subject: string;
+  description?: string;
+  status?: YunxiaoStatus;
+  assignedTo?: YunxiaoUserRef;
+  creator?: YunxiaoUserRef;
+  gmtCreate?: number;
+  gmtModified?: number;
+  customFieldValues: YunxiaoCustomFieldValue[];
+  categoryId?: string;
+  logicalStatus?: string;
+  workitemType?: { id: string; name: string };
+}
+
+/** 云效接口统一分页返回（total 来自响应头 x-total） */
+export interface YunxiaoPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  perPage: number;
 }
 
 export const PERM_LABELS: Record<PermissionMode, string> = {

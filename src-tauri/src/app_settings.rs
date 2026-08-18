@@ -106,6 +106,26 @@ pub struct AgentModelCatalog {
     pub source_version: Option<String>,
 }
 
+/// 云效 (Aliyun DevOps / Projex) 集成配置，随应用级设置存放在 ~/.nezha/settings.json。
+/// token 是用户个人访问令牌：仅存本地用户目录，禁止硬编码进代码或提交仓库。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct YunxiaoSettings {
+    #[serde(default)]
+    pub token: String,
+    #[serde(rename = "organizationId", default)]
+    pub organization_id: String,
+    #[serde(
+        rename = "organizationName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub organization_name: Option<String>,
+    #[serde(rename = "projectId", default)]
+    pub project_id: String,
+    #[serde(rename = "projectName", default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AppSettings {
     #[serde(default)]
@@ -140,6 +160,8 @@ pub struct AppSettings {
     pub claude_model_catalog: AgentModelCatalog,
     #[serde(default)]
     pub codex_model_catalog: AgentModelCatalog,
+    #[serde(default)]
+    pub yunxiao: YunxiaoSettings,
 }
 
 impl Default for AppSettings {
@@ -157,6 +179,7 @@ impl Default for AppSettings {
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
+            yunxiao: YunxiaoSettings::default(),
         }
     }
 }
@@ -534,6 +557,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         use_sideloaded_conpty: settings.use_sideloaded_conpty,
         claude_model_catalog: normalize_catalog(settings.claude_model_catalog),
         codex_model_catalog: normalize_catalog(settings.codex_model_catalog),
+        yunxiao: settings.yunxiao,
     }
 }
 
@@ -557,6 +581,7 @@ fn load_settings_unlocked() -> AppSettings {
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
+            yunxiao: YunxiaoSettings::default(),
         });
         if let Ok(dir) = nezha_dir() {
             let _ = fs::create_dir_all(&dir);
@@ -691,6 +716,35 @@ pub async fn save_agent_model_catalog(
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         catalog_mut(&mut settings, &agent)?.models = models;
+        save_settings_unlocked(settings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 保存云效连接配置（令牌、组织、项目）。仅写入本地设置，不经过任何日志。
+#[tauri::command]
+pub async fn save_yunxiao_settings(
+    token: String,
+    organization_id: String,
+    organization_name: Option<String>,
+    project_id: String,
+    project_name: Option<String>,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.yunxiao = YunxiaoSettings {
+            token: token.trim().to_string(),
+            organization_id: organization_id.trim().to_string(),
+            organization_name: organization_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            project_id: project_id.trim().to_string(),
+            project_name: project_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        };
         save_settings_unlocked(settings)
     })
     .await
