@@ -18,6 +18,14 @@ import { RunningView } from "./RunningView";
 import { FileExplorer } from "./FileExplorer";
 import { FileSearchDialog } from "./file-explorer/SearchPanel";
 import { FileViewer } from "./FileViewer";
+import { CommentSendDialog, type SendMode } from "./file-viewer/CommentSendDialog";
+import {
+  buildBatchMessage,
+  newCommentId,
+  resolveTargetTask,
+  type CommentDraft,
+  type ReviewComment,
+} from "./file-viewer/reviewComments";
 import { GitChanges } from "./GitChanges";
 import { GitHistory } from "./GitHistory";
 import { GitDiffViewer } from "./GitDiffViewer";
@@ -55,6 +63,7 @@ export function ProjectPage({
   onUpdateTodo,
   onCancelTask,
   onResumeTask,
+  onResumeTaskAndSend,
   onForkTask,
   onMergeWorktree,
   onDiscardWorktree,
@@ -126,6 +135,8 @@ export function ProjectPage({
   ) => void;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
+  /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
+  onResumeTaskAndSend: (taskId: string, data: string) => void;
   onForkTask: (id: string, name: string) => void;
   onMergeWorktree: (id: string) => Promise<void>;
   onDiscardWorktree: (id: string) => Promise<void>;
@@ -367,6 +378,121 @@ export function ProjectPage({
 
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
 
+  // ── 行级 Review 评论（纯前端内存态，决策 6：不持久化） ─────────────────
+  const [reviewComments, setReviewComments] = useState<ReviewComment[]>([]);
+  // 发送对话框：待发送的评论 id 集合（open 时由 drawer 传入）。
+  const [sendDialog, setSendDialog] = useState<{ commentIds: string[] } | null>(null);
+
+  // 切项目清空（决策 6：评论是项目会话级产物）。
+  useEffect(() => {
+    setReviewComments([]);
+    setSendDialog(null);
+  }, [project.id]);
+
+  const handleCreateComment = useCallback(
+    (draft: CommentDraft) => {
+      const anchorTask = resolveTargetTask(projectTasks);
+      setReviewComments((prev) => [
+        ...prev,
+        {
+          ...draft,
+          id: newCommentId(),
+          status: "open",
+          taskId: anchorTask?.id,
+          createdAt: Date.now(),
+        },
+      ]);
+    },
+    [projectTasks],
+  );
+
+  const handleUpdateCommentText = useCallback((id: string, text: string) => {
+    setReviewComments((prev) =>
+      prev.map((comment) => (comment.id === id ? { ...comment, text } : comment)),
+    );
+  }, []);
+
+  const handleDeleteComment = useCallback((id: string) => {
+    setReviewComments((prev) => prev.filter((comment) => comment.id !== id));
+  }, []);
+
+  const handleToggleCommentStatus = useCallback((id: string) => {
+    setReviewComments((prev) =>
+      prev.map((comment) =>
+        comment.id === id
+          ? { ...comment, status: comment.status === "resolved" ? "open" : "resolved" }
+          : comment,
+      ),
+    );
+  }, []);
+
+  const handleSendComments = useCallback(
+    (commentIds: string[]) => {
+      const ids = commentIds.filter((id) => reviewComments.some((c) => c.id === id));
+      if (ids.length === 0) return;
+      // 默认目标：存活任务自动判定；全死时兜底最近任务（让「恢复会话/新建」入口可达）。
+      const target =
+        resolveTargetTask(projectTasks) ??
+        [...projectTasks].sort(
+          (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt),
+        )[0] ??
+        null;
+      if (!target) {
+        showToast(t("reviewComments.noTargetTask"), "warning");
+        return;
+      }
+      setSendDialog({ commentIds: ids });
+    },
+    [reviewComments, projectTasks, showToast, t],
+  );
+
+  const handleSendDialogSend = useCallback(
+    (taskId: string, mode: SendMode) => {
+      if (!sendDialog) return;
+      const task = projectTasks.find((candidate) => candidate.id === taskId);
+      if (!task) return;
+      const comments = sendDialog.commentIds
+        .map((id) => reviewComments.find((c) => c.id === id))
+        .filter((c): c is ReviewComment => Boolean(c));
+      if (comments.length === 0) return;
+      const message = buildBatchMessage(comments);
+
+      if (mode === "direct") {
+        onInput(task.id, `${message}\r`);
+      } else if (mode === "resume") {
+        onResumeTaskAndSend(task.id, `${message}\r`);
+      } else {
+        // 作为新任务发：带上原任务 prompt 作上下文（决策 4）
+        const prompt = [task.prompt, message].filter(Boolean).join("\n\n");
+        onSubmitTask({
+          prompt,
+          agent: task.agent,
+          permissionMode: task.permissionMode,
+          model: task.model,
+          reasoningEffort: task.reasoningEffort,
+          images: [],
+          texts: [],
+          immediate: true,
+          launchMode: "local",
+          baseBranch: "",
+          repoPath: subRepoPath,
+        });
+      }
+
+      const sentIds = new Set(comments.map((c) => c.id));
+      setReviewComments((prev) =>
+        prev.map((comment) =>
+          sentIds.has(comment.id) && !comment.sentAt
+            ? { ...comment, sentAt: Date.now(), taskId: comment.taskId ?? task.id }
+            : comment,
+        ),
+      );
+      setSendDialog(null);
+      showToast(t("reviewComments.sentToast", { count: comments.length, name: task.name ?? task.id }));
+    },
+    [sendDialog, projectTasks, reviewComments, onInput, onResumeTaskAndSend, onSubmitTask, subRepoPath, showToast, t],
+  );
+
   return (
     <div style={visible ? s.projectBodyVisible : s.projectBodyHidden}>
       <ProjectRail
@@ -489,6 +615,12 @@ export function ProjectPage({
                 onCloseAllTabs={handleCloseAllFileTabs}
                 themeVariant={themeVariant}
                 onRunMakeTarget={handleRunMakeTarget}
+                comments={reviewComments}
+                onCreateComment={handleCreateComment}
+                onUpdateCommentText={handleUpdateCommentText}
+                onDeleteComment={handleDeleteComment}
+                onToggleCommentStatus={handleToggleCommentStatus}
+                onSendComments={handleSendComments}
               />
             ) : isNewTask || !selectedTask ? (
               <NewTaskView
@@ -632,6 +764,18 @@ export function ProjectPage({
 
       {showSettings && (
         <SettingsDialog projectPath={project.path} onClose={() => setShowSettings(false)} />
+      )}
+
+      {sendDialog && (
+        <CommentSendDialog
+          comments={sendDialog.commentIds
+            .map((id) => reviewComments.find((c) => c.id === id))
+            .filter((c): c is ReviewComment => Boolean(c))}
+          tasks={projectTasks}
+          defaultTaskId={resolveTargetTask(projectTasks)?.id ?? null}
+          onClose={() => setSendDialog(null)}
+          onSend={handleSendDialogSend}
+        />
       )}
     </div>
   );

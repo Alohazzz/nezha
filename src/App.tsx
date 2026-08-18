@@ -326,6 +326,9 @@ function App() {
 
   const tm = useTerminalManager();
   const pendingResumeStartsRef = useRef<Record<string, () => void>>({});
+  // 「恢复会话再发」时暂存的待发送输入：resume_task 启动的 PTY 会缓冲写入，
+  // invoke 完成后补发 send_input 即可（决策 9）。
+  const pendingResumeInputRef = useRef<Record<string, string>>({});
 
   const formatSaveProjectsError = useCallback(
     (error: string) => t("toast.saveProjectsFailed", { error }),
@@ -955,14 +958,23 @@ function App() {
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-      updateTaskStatus(task.id, "failed", undefined, msg);
-    });
+    })
+      .then(() => {
+        // resume 启动的 PTY 缓冲输入，任务就绪后自动补发待发送的评论消息。
+        const pendingInput = pendingResumeInputRef.current[task.id];
+        if (pendingInput !== undefined) {
+          delete pendingResumeInputRef.current[task.id];
+          invoke("send_input", { taskId: task.id, data: pendingInput }).catch(console.error);
+        }
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      });
   }
 
-  function handleResumeTask(taskId: string) {
+  function queueResumeTask(taskId: string, afterStart?: () => void) {
     const task = tasks.find((t) => t.id === taskId);
     const sessionId =
       task?.agent === "codex"
@@ -997,8 +1009,20 @@ function App() {
     setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
 
     pendingResumeStartsRef.current[taskId] = () => {
+      if (afterStart) afterStart();
       invokeResumeTask(task, project, sessionId ?? "");
     };
+  }
+
+  function handleResumeTask(taskId: string) {
+    queueResumeTask(taskId);
+  }
+
+  /** 任务已结束时的「恢复会话再发」：resume 启动后自动把评论消息写入 PTY */
+  function handleResumeTaskAndSend(taskId: string, input: string) {
+    queueResumeTask(taskId, () => {
+      pendingResumeInputRef.current[taskId] = input;
+    });
   }
 
   function invokeForkTask(task: Task, project: Project, sourceSessionId: string) {
@@ -1571,6 +1595,7 @@ function App() {
               onUpdateTodo={handleUpdateTodo}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
+              onResumeTaskAndSend={handleResumeTaskAndSend}
               onForkTask={handleForkTask}
               onMergeWorktree={handleMergeWorktree}
               onDiscardWorktree={handleDiscardWorktree}

@@ -1,15 +1,18 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
 import * as Popover from "@radix-ui/react-popover";
 import { X, AlertCircle, Eye, PencilLine, MoreHorizontal, List } from "lucide-react";
 import { getFileColor } from "../utils";
-import ReactCodeMirror, { EditorView } from "@uiw/react-codemirror";
+import { EditorView } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import { useLanguageExtension } from "./file-viewer/languageExtensions";
+import { CommentableEditor } from "./file-viewer/CommentableEditor";
+import { CommentDrawer } from "./file-viewer/CommentDrawer";
+import { joinProjectPath, type CommentDraft, type ReviewComment } from "./file-viewer/reviewComments";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type { ThemeVariant } from "../types";
 import { useI18n } from "../i18n";
@@ -178,12 +181,18 @@ function FilePreviewPane({
   projectPath,
   themeVariant,
   previewMode,
+  onCreateComment,
+  jumpRequest,
+  onJumpHandled,
 }: {
   filePath: string;
   fileName: string;
   projectPath: string;
   themeVariant: ThemeVariant;
   previewMode: boolean;
+  onCreateComment: (draft: CommentDraft) => void;
+  jumpRequest: { line: number; seq: number } | null;
+  onJumpHandled: () => void;
 }) {
   const editorTheme =
     themeVariant === "dark" || themeVariant === "midnight"
@@ -386,21 +395,16 @@ function FilePreviewPane({
                 )}
               </div>
             ) : (
-              <ReactCodeMirror
+              <CommentableEditor
                 value={content}
                 onChange={handleChange}
                 theme={editorTheme}
-                extensions={extensions}
-                height="100%"
-                style={{ height: "100%" }}
-                basicSetup={{
-                  lineNumbers: true,
-                  foldGutter: true,
-                  highlightActiveLine: true,
-                  highlightSelectionMatches: true,
-                  autocompletion: false,
-                  searchKeymap: true,
-                }}
+                baseExtensions={extensions}
+                filePath={filePath}
+                projectPath={projectPath}
+                onCreateComment={onCreateComment}
+                jumpRequest={jumpRequest}
+                onJumpHandled={onJumpHandled}
               />
             )
           ) : null)}
@@ -452,6 +456,12 @@ export function FileViewer({
   onCloseAllTabs,
   themeVariant,
   onRunMakeTarget: _onRunMakeTarget,
+  comments,
+  onCreateComment,
+  onUpdateCommentText,
+  onDeleteComment,
+  onToggleCommentStatus,
+  onSendComments,
 }: {
   tabs: OpenFileTab[];
   activeFilePath: string | null;
@@ -464,10 +474,19 @@ export function FileViewer({
   onCloseAllTabs: () => void;
   themeVariant: ThemeVariant;
   onRunMakeTarget?: (target: string) => void;
+  comments: ReviewComment[];
+  onCreateComment: (draft: CommentDraft) => void;
+  onUpdateCommentText: (id: string, text: string) => void;
+  onDeleteComment: (id: string) => void;
+  onToggleCommentStatus: (id: string) => void;
+  onSendComments: (ids: string[]) => void;
 }) {
   const { t } = useI18n();
   const [previewModes, setPreviewModes] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // 评论跳转请求（抽屉点击条目 → 定位编辑器行）；seq 保证同一条目重复点击也触发。
+  const [jumpReq, setJumpReq] = useState<{ line: number; seq: number } | null>(null);
   // Right-click context menu for a tab: anchored at the cursor, scoped to the
   // tab that was right-clicked (which may differ from the active tab).
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; path: string } | null>(null);
@@ -537,6 +556,19 @@ export function FileViewer({
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.path === activeFilePath) ?? tabs[tabs.length - 1] ?? null,
     [tabs, activeFilePath],
+  );
+
+  // 抽屉条目跳转：先切到目标 tab，再向活动编辑器发定位请求（seq 递增保证重复跳转生效）。
+  const handleJumpHandled = useCallback(() => setJumpReq(null), []);
+  const handleJumpToComment = useCallback(
+    (comment: ReviewComment) => {
+      const abs = joinProjectPath(projectPath, comment.path);
+      const existing = tabs.find((tab) => tab.path.replace(/\\/g, "/") === abs);
+      if (!existing) return;
+      if (existing.path !== activeTab?.path) onSelectTab(existing.path);
+      setJumpReq((prev) => ({ line: comment.startLine, seq: (prev?.seq ?? 0) + 1 }));
+    },
+    [projectPath, tabs, activeTab?.path, onSelectTab],
   );
 
   if (!activeTab) return null;
@@ -819,11 +851,27 @@ export function FileViewer({
                 projectPath={projectPath}
                 themeVariant={themeVariant}
                 previewMode={previewModes[tab.path] ?? isMarkdownFile(tab.name)}
+                onCreateComment={onCreateComment}
+                jumpRequest={isActive ? jumpReq : null}
+                onJumpHandled={handleJumpHandled}
               />
             </div>
           );
         })}
       </div>
+
+      {comments.length > 0 && (
+        <CommentDrawer
+          comments={comments}
+          open={drawerOpen}
+          onToggleOpen={() => setDrawerOpen((v) => !v)}
+          onJump={handleJumpToComment}
+          onUpdateText={onUpdateCommentText}
+          onDelete={onDeleteComment}
+          onToggleStatus={onToggleCommentStatus}
+          onSend={onSendComments}
+        />
+      )}
 
       {tabMenu && tabMenuIndex !== -1 && (
         <div
