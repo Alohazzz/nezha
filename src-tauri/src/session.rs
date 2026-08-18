@@ -24,6 +24,12 @@ pub(crate) struct ClaudeSessionInfo {
     pub(crate) is_placeholder: bool,
 }
 
+#[derive(Clone)]
+pub(crate) struct DshSessionInfo {
+    pub(crate) session_id: String,
+    pub(crate) session_path: String,
+}
+
 // ── 公共辅助函数 ──────────────────────────────────────────────────────────────
 
 pub(crate) fn emit_task_status(app: &AppHandle, task_id: &str, status: &str) {
@@ -65,7 +71,18 @@ pub(crate) fn is_task_active(app: &AppHandle, task_id: &str) -> bool {
         })
         .unwrap_or(false);
 
-    has_claude_session
+    if has_claude_session {
+        return true;
+    }
+
+    let has_dsh_session = tm
+        .dsh_sessions
+        .lock()
+        .get(task_id)
+        .map(|info| !info.session_id.is_empty() && !info.session_path.is_empty())
+        .unwrap_or(false);
+
+    has_dsh_session
 }
 
 fn claim_session_path(app: &AppHandle, path: &str) -> bool {
@@ -618,8 +635,8 @@ fn process_claude_session_line(
 
 #[derive(serde::Serialize, Clone)]
 pub(crate) struct SessionMessage {
-    role: String,
-    content: Vec<SessionContent>,
+    pub(crate) role: String,
+    pub(crate) content: Vec<SessionContent>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -640,6 +657,12 @@ pub(crate) enum SessionContent {
 
 #[tauri::command]
 pub async fn read_session_messages(session_path: String) -> Result<Vec<SessionMessage>, String> {
+    if session_path.ends_with(".jsonl.zstd") {
+        let path = std::path::PathBuf::from(&session_path);
+        return tokio::task::spawn_blocking(move || crate::dsh::read_messages(&path))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     let content = std::fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
     if is_codex_format(&lines) {
@@ -1314,6 +1337,51 @@ pub(crate) fn register_and_watch_session(
     } else {
         thread::spawn(move || watch_claude_session(app_clone, tid, path));
     }
+}
+
+/// dsh 会话发现：轮询 `~/.dsh/sessions/<projectKey>/` 下 task 启动后新建/更新的
+/// 会话目录，命中后注册 `dsh_sessions` 并广播 `task-session`。
+/// dsh 无 `/status` → session id 提取链路，也不吃 CLI 会话旗标，因此只能走文件扫描。
+pub(crate) fn spawn_dsh_session_watcher(
+    app: AppHandle,
+    task_id: String,
+    project_path: String,
+    created_at_ms: i64,
+) {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while Instant::now() < deadline {
+            if !is_task_active(&app, &task_id) {
+                return;
+            }
+            if let Some(session) = crate::dsh::discover_session(&project_path, created_at_ms) {
+                let path_string = session.path.clone();
+                if !claim_session_path(&app, &path_string) {
+                    return;
+                }
+                {
+                    let tm = app.state::<TaskManager>();
+                    tm.dsh_sessions.lock().insert(
+                        task_id.clone(),
+                        DshSessionInfo {
+                            session_id: session.id.clone(),
+                            session_path: path_string.clone(),
+                        },
+                    );
+                }
+                let _ = app.emit(
+                    "task-session",
+                    serde_json::json!({
+                        "task_id": task_id,
+                        "session_id": session.id,
+                        "session_path": path_string
+                    }),
+                );
+                return;
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
 }
 
 /// 监听 PTY 输出流，通过 `/status` 响应获取 Session ID。

@@ -254,7 +254,7 @@ export function NewTaskView({
     )
       .then((cfg) => {
         const defaultAgent = cfg.agent.default;
-        if (defaultAgent === "claude" || defaultAgent === "codex") {
+        if (defaultAgent === "claude" || defaultAgent === "codex" || defaultAgent === "dsh") {
           setAgent(defaultAgent);
         }
         const defaultPerm = cfg.agent.default_permission_mode;
@@ -645,17 +645,19 @@ export function NewTaskView({
           }
           sendShortcutKeys={getSendShortcutKeys(sendShortcut, APP_PLATFORM)}
           modelSelector={
-            <TaskModelSelector
-              catalog={
-                agent === "claude"
-                  ? appSettings.claude_model_catalog
-                  : appSettings.codex_model_catalog
-              }
-              model={model}
-              reasoningEffort={reasoningEffort}
-              onSetModel={setModel}
-              onSetReasoningEffort={setReasoningEffort}
-            />
+            agent === "dsh" ? undefined : (
+              <TaskModelSelector
+                catalog={
+                  agent === "claude"
+                    ? appSettings.claude_model_catalog
+                    : appSettings.codex_model_catalog
+                }
+                model={model}
+                reasoningEffort={reasoningEffort}
+                onSetModel={setModel}
+                onSetReasoningEffort={setReasoningEffort}
+              />
+            )
           }
           onSetAgent={(nextAgent) => {
             if (nextAgent !== agent) {

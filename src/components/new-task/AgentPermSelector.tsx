@@ -1,6 +1,7 @@
 import { useRef, type ReactNode } from "react";
 import {
   BookmarkPlus,
+  Bot,
   ChevronDown,
   Command,
   CornerDownLeft,
@@ -18,15 +19,29 @@ import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 
-const AGENTS: AgentType[] = ["claude", "codex"];
+const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
 function agentLabel(agent: AgentType): string {
-  return agent === "claude" ? "Claude Code" : "Codex";
+  if (agent === "claude") return "Claude Code";
+  if (agent === "codex") return "Codex";
+  return "DSH";
 }
 
 function agentIcon(agent: AgentType): string {
-  return agent === "claude" ? claudeLogo : chatgptLogo;
+  return agent === "codex" ? chatgptLogo : claudeLogo;
+}
+
+function AgentMark({ agent }: { agent: AgentType }) {
+  if (agent === "dsh") {
+    return <Bot size={14} strokeWidth={2} color="var(--text-muted)" />;
+  }
+  return (
+    <img
+      src={agentIcon(agent)}
+      style={agent === "claude" ? s.toolbarMenuItemIcon : s.toolbarMenuItemIconMuted}
+    />
+  );
 }
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -176,14 +191,7 @@ export function AgentPermSelector({
 
         <Select.Root value={agent} onValueChange={(v) => onSetAgent(v as AgentType)}>
           <Select.Trigger style={s.toolbarBtn} aria-label={t("settings.agent")}>
-            <img
-              src={agentIcon(agent)}
-              style={
-                agent === "claude"
-                  ? s.toolbarMenuItemIcon
-                  : s.toolbarMenuItemIconMuted
-              }
-            />
+            <AgentMark agent={agent} />
             <span>{agentLabel(agent)}</span>
             <Select.Icon>
               <ChevronDown size={12} strokeWidth={2.5} style={s.toolbarChevron} />
@@ -199,14 +207,7 @@ export function AgentPermSelector({
                     className="branch-popover-item"
                     style={s.toolbarMenuItem}
                   >
-                    <img
-                      src={agentIcon(item)}
-                      style={
-                        item === "claude"
-                          ? s.toolbarMenuItemIcon
-                          : s.toolbarMenuItemIconMuted
-                      }
-                    />
+                    <AgentMark agent={item} />
                     <Select.ItemText>{agentLabel(item)}</Select.ItemText>
                   </Select.Item>
                 ))}
@@ -215,31 +216,33 @@ export function AgentPermSelector({
           </Select.Portal>
         </Select.Root>
 
-        <Select.Root value={permMode} onValueChange={(v) => onSetPermMode(v as PermissionMode)}>
-          <Select.Trigger style={s.toolbarBtn} aria-label={t("settings.defaultPermissionMode")}>
-            <Hand size={14} strokeWidth={2} color="var(--text-muted)" />
-            <Select.Value />
-            <Select.Icon>
-              <ChevronDown size={12} strokeWidth={2.5} style={s.toolbarChevron} />
-            </Select.Icon>
-          </Select.Trigger>
-          <Select.Portal>
-            <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
-              <Select.Viewport>
-                {PERMS.map((perm) => (
-                  <Select.Item
-                    key={perm}
-                    value={perm}
-                    className="branch-popover-item"
-                    style={s.toolbarMenuItem}
-                  >
-                    <Select.ItemText>{permissionModeLabel(perm, agent)}</Select.ItemText>
-                  </Select.Item>
-                ))}
-              </Select.Viewport>
-            </Select.Content>
-          </Select.Portal>
-        </Select.Root>
+        {agent !== "dsh" && (
+          <Select.Root value={permMode} onValueChange={(v) => onSetPermMode(v as PermissionMode)}>
+            <Select.Trigger style={s.toolbarBtn} aria-label={t("settings.defaultPermissionMode")}>
+              <Hand size={14} strokeWidth={2} color="var(--text-muted)" />
+              <Select.Value />
+              <Select.Icon>
+                <ChevronDown size={12} strokeWidth={2.5} style={s.toolbarChevron} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
+                <Select.Viewport>
+                  {PERMS.map((perm) => (
+                    <Select.Item
+                      key={perm}
+                      value={perm}
+                      className="branch-popover-item"
+                      style={s.toolbarMenuItem}
+                    >
+                      <Select.ItemText>{permissionModeLabel(perm, agent)}</Select.ItemText>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        )}
       </div>
 
       <div style={s.toolbarSpacer} />

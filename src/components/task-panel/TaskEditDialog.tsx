@@ -5,7 +5,7 @@ import { permissionModeLabel } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
-const AGENTS: AgentType[] = ["claude", "codex"];
+const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
 export function TaskEditDialog({
@@ -54,16 +54,18 @@ export function TaskEditDialog({
           style={{ ...s.toolbarBtn, fontSize: 12 }}
           onClick={() => setEditAgent(AGENTS[(AGENTS.indexOf(editAgent) + 1) % AGENTS.length])}
         >
-          {editAgent === "claude" ? "Claude Code" : "Codex"}
+          {editAgent === "claude" ? "Claude Code" : editAgent === "dsh" ? "DSH" : "Codex"}
         </button>
-        <button
-          style={{ ...s.toolbarBtn, fontSize: 12 }}
-          onClick={() => {
-            setEditPermMode(PERMS[(PERMS.indexOf(editPermMode) + 1) % PERMS.length]);
-          }}
-        >
-          {permissionModeLabel(editPermMode, editAgent)}
-        </button>
+        {editAgent !== "dsh" && (
+          <button
+            style={{ ...s.toolbarBtn, fontSize: 12 }}
+            onClick={() => {
+              setEditPermMode(PERMS[(PERMS.indexOf(editPermMode) + 1) % PERMS.length]);
+            }}
+          >
+            {permissionModeLabel(editPermMode, editAgent)}
+          </button>
+        )}
         <div style={{ flex: 1 }} />
         <button
           style={{

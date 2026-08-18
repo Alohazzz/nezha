@@ -145,8 +145,14 @@ export function RunningView({
     task.status === "awaiting_review";
   const isDetached = task.status === "detached";
   const isInterrupted = task.status === "interrupted";
-  const sessionPath = task.claudeSessionPath ?? task.codexSessionPath;
-  const resumeSessionId = task.agent === "codex" ? task.codexSessionId : task.claudeSessionId;
+  const sessionPath = task.claudeSessionPath ?? task.codexSessionPath ?? task.dshSessionPath;
+  const resumeSessionId =
+    task.agent === "codex"
+      ? task.codexSessionId
+      : task.agent === "dsh"
+        ? task.dshSessionId
+        : task.claudeSessionId;
+  const resumeAvailable = task.agent === "dsh" || !!resumeSessionId;
   const restoreState = getRestoreState?.() ?? {};
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
@@ -180,7 +186,7 @@ export function RunningView({
   );
   const forkDisabledReason = task.worktreePath
     ? t("running.forkWorktreeUnsupported")
-    : !resumeSessionId || !onFork
+    : !onFork || (task.agent !== "dsh" && !resumeSessionId)
       ? t("running.forkUnavailable")
       : undefined;
 
@@ -227,7 +233,12 @@ export function RunningView({
           prompt: task.prompt,
           agent: task.agent,
           createdAt: task.createdAt,
-          sessionId: task.agent === "codex" ? task.codexSessionId : task.claudeSessionId,
+          sessionId:
+            task.agent === "codex"
+              ? task.codexSessionId
+              : task.agent === "dsh"
+                ? task.dshSessionId
+                : task.claudeSessionId,
           worktreeBranch: task.worktreeBranch,
           baseBranch: task.baseBranch,
           additions: task.additions,
@@ -461,7 +472,7 @@ export function RunningView({
           !isDetached &&
           !isInterrupted &&
           onResume &&
-          resumeSessionId &&
+          resumeAvailable &&
           !task.worktreeDiscarded && (
             <button style={s.resumeBtn} onClick={onResume}>
               <RotateCcw size={12} strokeWidth={2.5} />
@@ -525,7 +536,7 @@ export function RunningView({
             </span>
           </button>
         )}
-        {!isActive && (sessionPath || resumeSessionId) && (
+        {!isActive && (sessionPath || resumeSessionId || task.agent === "dsh") && (
           <SessionActionsMenu
             defaultForkName={defaultForkName}
             forkDisabledReason={forkDisabledReason}
@@ -545,8 +556,14 @@ export function RunningView({
       >
         <div style={s.runMetaRow}>
           <span style={s.runMetaFixed}>
-            {task.agent === "claude" ? "✦ Claude Code" : "⬡ Codex"} ·{" "}
-            {permissionModeLabel(task.permissionMode, task.agent)}
+            {task.agent === "claude"
+              ? "✦ Claude Code"
+              : task.agent === "dsh"
+                ? "⬡ DSH"
+                : "⬡ Codex"}
+            {task.agent !== "dsh" && (
+              <> · {permissionModeLabel(task.permissionMode, task.agent)}</>
+            )}
           </span>
           {ENABLE_USAGE_INSIGHTS && usageSnapshot && (task.agent === "claude"
             ? usageSnapshot.claude.status === "available" && (
@@ -649,13 +666,13 @@ export function RunningView({
             <div style={s.interruptedBannerActions}>
               <button
                 type="button"
-                title={!resumeSessionId ? t("running.resumeUnavailable") : undefined}
+                title={!resumeAvailable ? t("running.resumeUnavailable") : undefined}
                 style={{
                   ...s.interruptedPrimaryBtn,
-                  opacity: resumeSessionId ? 1 : 0.45,
-                  cursor: resumeSessionId ? "pointer" : "not-allowed",
+                  opacity: resumeAvailable ? 1 : 0.45,
+                  cursor: resumeAvailable ? "pointer" : "not-allowed",
                 }}
-                disabled={!resumeSessionId}
+                disabled={!resumeAvailable}
                 onClick={isDetached ? onReconnect : onResume}
               >
                 <RotateCcw size={12} strokeWidth={2.1} />

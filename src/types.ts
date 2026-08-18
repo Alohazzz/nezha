@@ -19,7 +19,7 @@ export interface GitRoot {
   isRoot: boolean;
 }
 
-export type AgentType = "claude" | "codex";
+export type AgentType = "claude" | "codex" | "dsh";
 export type ThemeMode = "system" | "dark" | "light" | "eyecare" | "midnight";
 export type ThemeVariant = "dark" | "light" | "eyecare" | "midnight";
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
@@ -137,6 +137,8 @@ export interface Task {
   failureReason?: string;
   codexSessionId?: string;
   codexSessionPath?: string;
+  dshSessionId?: string;
+  dshSessionPath?: string;
   claudeSessionId?: string;
   claudeSessionPath?: string;
   worktreePath?: string;

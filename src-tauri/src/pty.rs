@@ -57,6 +57,7 @@ fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
         tm.codex_sessions.lock().contains_key(task_id)
     } else {
         tm.claude_sessions.lock().contains_key(task_id)
+            || tm.dsh_sessions.lock().contains_key(task_id)
     }
 }
 
@@ -94,6 +95,8 @@ fn finalize_task_exit(
         let codex_path = codex_info.map(|info| info.session_path);
         let claude_info = tm.claude_sessions.lock().remove(task_id);
         let claude_path = claude_info.as_ref().map(|info| info.session_path.clone());
+        let dsh_info = tm.dsh_sessions.lock().remove(task_id);
+        let dsh_path = dsh_info.map(|info| info.session_path);
         had_agent_session = if is_codex {
             codex_path.is_some()
         } else {
@@ -103,12 +106,16 @@ fn finalize_task_exit(
                 .as_ref()
                 .map(|info| !info.is_placeholder)
                 .unwrap_or(false)
+                || dsh_path.is_some()
         };
         let mut claimed = tm.claimed_session_paths.lock();
         if let Some(path) = codex_path {
             claimed.remove(&path);
         }
         if let Some(path) = claude_path {
+            claimed.remove(&path);
+        }
+        if let Some(path) = dsh_path {
             claimed.remove(&path);
         }
     }
@@ -559,6 +566,27 @@ fn append_fork_session_args(command: &mut CommandBuilder, is_codex: bool, source
     }
 }
 
+/// 为 DSH 命令构建 CommandBuilder。profile 来自应用设置（默认 `cc-tui`）。
+/// dsh 启动器只解析自己的 launcher 旗标（`--profile` / `--patch` / dump），
+/// 其余参数原样透传给 profile 树；cc-tui（tianshu-tui）不解析任何透传参数，
+/// 因此这里不传 prompt / permission / model / effort / resume 旗标。
+fn build_dsh_cmd(agent_bin: &str, profile: &str) -> CommandBuilder {
+    let mut c = CommandBuilder::new(agent_bin);
+    c.arg("--profile");
+    c.arg(profile);
+    c
+}
+
+/// dsh 会话发现用「任务启动时刻」基准（含 5s 容差），避免把启动前遗留的旧会话
+/// 错认成本次任务。
+fn dsh_since_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+        - 5000
+}
+
 struct SpawnedForkTask {
     master: Box<dyn portable_pty::MasterPty + Send>,
     reader: Box<dyn Read + Send>,
@@ -586,15 +614,20 @@ fn spawn_fork_task_process(
     let launch = crate::app_settings::get_agent_launch_spec(agent);
     let agent_bin = launch.program.clone();
     let is_codex = agent == "codex";
-    let use_hooks = crate::hooks::usable_for(agent);
+    let is_dsh = agent == "dsh";
+    let use_hooks = !is_dsh && crate::hooks::usable_for(agent);
     let claude_pass_settings = !is_codex
+        && !is_dsh
         && (use_hooks || {
             let settings = crate::app_settings::load_settings_internal();
             settings.claude_force_default_tui
                 && crate::app_settings::claude_version_gte(crate::hooks::CLAUDE_TUI_MIN_VERSION)
         });
 
-    let mut command = if is_codex {
+    let mut command = if is_dsh {
+        let profile = crate::app_settings::load_settings_internal().dsh_profile;
+        build_dsh_cmd(&agent_bin, &profile)
+    } else if is_codex {
         let mut command =
             build_codex_cmd(&agent_bin, permission_mode, model, reasoning_effort);
         if use_hooks {
@@ -834,10 +867,12 @@ pub async fn run_task(
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
     let is_codex = agent == "codex";
+    let is_dsh = agent == "dsh";
 
     // 版本统一走全局探测（带缓存），判断是否支持 --session-id。
     // 缓存未命中时 *_version_gte 会启子进程探测，故放进 spawn_blocking 避免阻塞 async runtime。
     let use_explicit_session = !is_codex
+        && !is_dsh
         && tokio::task::spawn_blocking(|| crate::app_settings::claude_version_gte("2.1.87"))
             .await
             .unwrap_or(false);
@@ -855,7 +890,9 @@ pub async fn run_task(
     // 会同时触发已安装 hook 与轮询 watcher,导致 session 注册/状态重复上报。
     // 先于 cmd 构建计算,因为 Codex 的 --dangerously-bypass-hook-trust 必须加在
     // `--`/positional prompt 之前。
-    let use_hooks = {
+    let use_hooks = if is_dsh {
+        false
+    } else {
         let agent = agent.clone();
         tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
             .await
@@ -865,6 +902,7 @@ pub async fn run_task(
     // 版本支持 tui 字段) 任一为真即需要。判断逻辑与 hooks::nezha_claude_settings_needed
     // 保持一致,使文件状态与命令行参数同步。
     let claude_pass_settings = !is_codex
+        && !is_dsh
         && (use_hooks
             || tokio::task::spawn_blocking(|| {
                 let s = crate::app_settings::load_settings_internal();
@@ -874,7 +912,10 @@ pub async fn run_task(
             .await
             .unwrap_or(false));
 
-    let mut cmd = if is_codex {
+    let mut cmd = if is_dsh {
+        let profile = crate::app_settings::load_settings_internal().dsh_profile;
+        build_dsh_cmd(&agent_bin, &profile)
+    } else if is_codex {
         let mut c = build_codex_cmd(
             &agent_bin,
             &permission_mode,
@@ -943,7 +984,15 @@ pub async fn run_task(
     );
 
     // hook 可信时不创建 session 转发通道,也不拉起轮询 watcher。
-    let session_tx = if use_hooks {
+    let session_tx = if is_dsh {
+        crate::session::spawn_dsh_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            project_path.clone(),
+            dsh_since_ms(),
+        );
+        None
+    } else if use_hooks {
         None
     } else {
         let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();
@@ -1130,17 +1179,21 @@ pub async fn resume_task(
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
+    let is_dsh = agent == "dsh";
     // hook 可信时会话发现/状态由 event_watcher 驱动,跳过轮询 watcher;否则回退,
     // 且不注入 NEZHA_* 守卫变量,避免旧版但已安装 hook 的 agent 与轮询路径并行重复
     // 上报。版本统一走全局带缓存的探测。
     // 先于 cmd 构建计算,因 Codex 的 bypass flag 需加在 `resume` 子命令之前。
-    let use_hooks = {
+    let use_hooks = if is_dsh {
+        false
+    } else {
         let agent = agent.clone();
         tokio::task::spawn_blocking(move || crate::hooks::usable_for(&agent))
             .await
             .unwrap_or(false)
     };
     let claude_pass_settings = agent != "codex"
+        && !is_dsh
         && (use_hooks
             || tokio::task::spawn_blocking(|| {
                 let s = crate::app_settings::load_settings_internal();
@@ -1150,7 +1203,10 @@ pub async fn resume_task(
             .await
             .unwrap_or(false));
 
-    let mut cmd = if agent == "codex" {
+    let mut cmd = if is_dsh {
+        let profile = crate::app_settings::load_settings_internal().dsh_profile;
+        build_dsh_cmd(&agent_bin, &profile)
+    } else if agent == "codex" {
         let mut c = build_codex_cmd(
             &agent_bin,
             &permission_mode,
@@ -1208,7 +1264,14 @@ pub async fn resume_task(
     let is_codex = agent == "codex";
 
     // resume 时 session_id 已知，直接查找文件并开始监视(hook 可信时跳过)
-    if !use_hooks {
+    if is_dsh {
+        crate::session::spawn_dsh_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            project_path.clone(),
+            dsh_since_ms(),
+        );
+    } else if !use_hooks {
         spawn_resume_session_watcher(
             app.clone(),
             task_id.clone(),
@@ -1297,7 +1360,16 @@ pub async fn fork_task(
 
     // Fork 会生成全新的 session id，不能复用 resume watcher 去绑定父会话。
     // hook 不可用时把 PTY 输出转发给 /status watcher，由它发现并注册新 id。
-    let session_tx = if use_hooks {
+    let is_dsh = agent == "dsh";
+    let session_tx = if is_dsh {
+        crate::session::spawn_dsh_session_watcher(
+            app.clone(),
+            task_id.clone(),
+            project_path.clone(),
+            dsh_since_ms(),
+        );
+        None
+    } else if use_hooks {
         None
     } else {
         let (session_tx, session_rx) = std::sync::mpsc::channel::<String>();

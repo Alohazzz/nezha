@@ -17,7 +17,8 @@ export type NavKey =
   | "thanks"
   | "community"
   | "claude"
-  | "codex";
+  | "codex"
+  | "dsh";
 
 export interface HookInstallStatus {
   node_path: string;
@@ -59,6 +60,8 @@ export const EMPTY_AGENT_MODEL_CATALOG: AgentModelCatalog = {
 export interface AppSettings {
   claude_path: string;
   codex_path: string;
+  dsh_path: string;
+  dsh_profile: string;
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
   claude_force_default_tui: boolean;
@@ -78,6 +81,8 @@ export interface AppSettings {
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   claude_path: "",
   codex_path: "",
+  dsh_path: "",
+  dsh_profile: "cc-tui",
   send_shortcut: DEFAULT_SEND_SHORTCUT,
   terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
   claude_force_default_tui: true,
@@ -93,7 +98,7 @@ export interface AgentVersions {
   codex_version: string;
 }
 
-export type AgentKey = "claude" | "codex";
+export type AgentKey = "claude" | "codex" | "dsh";
 
 export type NavSection = "application" | "agents" | "community" | "about";
 

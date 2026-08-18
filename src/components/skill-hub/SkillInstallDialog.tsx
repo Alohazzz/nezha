@@ -27,6 +27,7 @@ interface Props {
 const AGENT_LOGO: Record<AgentType, string> = {
   claude: claudeLogo,
   codex: chatgptLogo,
+  dsh: "",
 };
 
 const DEFAULT_PROJECT_OPTION_LIMIT = 8;

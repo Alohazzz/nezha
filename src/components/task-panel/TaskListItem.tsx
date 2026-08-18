@@ -84,21 +84,45 @@ export const TaskListItem = memo(
               )}
           </div>
         </div>
-        <img
-          src={task.agent === "claude" ? claudeLogo : chatgptLogo}
-          title={task.agent === "claude" ? "Claude Code" : "Codex"}
-          style={{
-            ...s.agentBadge,
-            position: "absolute",
-            right: 16,
-            top: 11,
-            opacity: hov ? 0 : 1,
-            filter: task.agent === "codex" ? "var(--agent-badge-filter)" : "none",
-            pointerEvents: "none",
-            transition: "opacity 0.12s ease",
-            zIndex: 1,
-          }}
-        />
+        {task.agent === "dsh" ? (
+          <span
+            title="DSH"
+            style={{
+              ...s.agentBadge,
+              position: "absolute",
+              right: 16,
+              top: 11,
+              opacity: hov ? 0 : 1,
+              pointerEvents: "none",
+              transition: "opacity 0.12s ease",
+              zIndex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 9,
+              fontWeight: 700,
+              color: "var(--text-muted)",
+            }}
+          >
+            DSH
+          </span>
+        ) : (
+          <img
+            src={task.agent === "claude" ? claudeLogo : chatgptLogo}
+            title={task.agent === "claude" ? "Claude Code" : "Codex"}
+            style={{
+              ...s.agentBadge,
+              position: "absolute",
+              right: 16,
+              top: 11,
+              opacity: hov ? 0 : 1,
+              filter: task.agent === "codex" ? "var(--agent-badge-filter)" : "none",
+              pointerEvents: "none",
+              transition: "opacity 0.12s ease",
+              zIndex: 1,
+            }}
+          />
+        )}
         {task.worktreePath && task.worktreeBranch && (
           <span
             title={t("task.worktreeBadge", { branch: task.worktreeBranch })}

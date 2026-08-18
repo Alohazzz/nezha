@@ -18,11 +18,13 @@ interface Props {
 const AGENT_LABEL: Record<AgentType, string> = {
   claude: "Claude",
   codex: "Codex",
+  dsh: "DSH",
 };
 
 const AGENT_LOGO: Record<AgentType, string> = {
   claude: claudeLogo,
   codex: chatgptLogo,
+  dsh: "",
 };
 
 export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Props) {

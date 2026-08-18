@@ -964,9 +964,14 @@ function App() {
 
   function handleResumeTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
-    const sessionId = task?.agent === "codex" ? task.codexSessionId : task?.claudeSessionId;
+    const sessionId =
+      task?.agent === "codex"
+        ? task.codexSessionId
+        : task?.agent === "dsh"
+          ? task.dshSessionId
+          : task?.claudeSessionId;
     if (!task) return;
-    if (!sessionId) {
+    if (task.agent !== "dsh" && !sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
       return;
     }
@@ -992,7 +997,7 @@ function App() {
     setTaskRunCounts((prev) => ({ ...prev, [taskId]: (prev[taskId] ?? 0) + 1 }));
 
     pendingResumeStartsRef.current[taskId] = () => {
-      invokeResumeTask(task, project, sessionId);
+      invokeResumeTask(task, project, sessionId ?? "");
     };
   }
 
@@ -1024,8 +1029,12 @@ function App() {
     }
 
     const sourceSessionId =
-      sourceTask.agent === "codex" ? sourceTask.codexSessionId : sourceTask.claudeSessionId;
-    if (!sourceSessionId) {
+      sourceTask.agent === "codex"
+        ? sourceTask.codexSessionId
+        : sourceTask.agent === "dsh"
+          ? sourceTask.dshSessionId
+          : sourceTask.claudeSessionId;
+    if (sourceTask.agent !== "dsh" && !sourceSessionId) {
       showToast(t("running.forkUnavailable"), "warning");
       return;
     }
@@ -1058,14 +1067,19 @@ function App() {
     mountProject(project.id);
     updateProjectView(project.id, { selectedTaskId: forkedTask.id, isNewTask: false });
     tm.resetTaskTerminal(forkedTask.id);
-    invokeForkTask(forkedTask, project, sourceSessionId);
+    invokeForkTask(forkedTask, project, sourceSessionId ?? "");
   }
 
   async function handleReconnectTask(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
-    const sessionId = task.agent === "codex" ? task.codexSessionId : task.claudeSessionId;
-    if (!sessionId) {
+    const sessionId =
+      task.agent === "codex"
+        ? task.codexSessionId
+        : task.agent === "dsh"
+          ? task.dshSessionId
+          : task.claudeSessionId;
+    if (task.agent !== "dsh" && !sessionId) {
       showToast(t("running.resumeUnavailable"), "warning");
       return;
     }
@@ -1419,6 +1433,11 @@ function App() {
             return task;
           changed = true;
           return { ...task, claudeSessionId: sessionId, claudeSessionPath: sessionPath };
+        } else if (task.agent === "dsh") {
+          if (task.dshSessionId === sessionId && task.dshSessionPath === sessionPath)
+            return task;
+          changed = true;
+          return { ...task, dshSessionId: sessionId, dshSessionPath: sessionPath };
         } else {
           if (task.codexSessionId === sessionId && task.codexSessionPath === sessionPath)
             return task;

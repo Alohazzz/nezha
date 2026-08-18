@@ -35,6 +35,10 @@ fn default_claude_force_default_tui() -> bool {
     true
 }
 
+fn default_dsh_profile() -> String {
+    "cc-tui".to_string()
+}
+
 fn default_terminal_scrollback() -> u32 {
     1000
 }
@@ -108,6 +112,10 @@ pub struct AppSettings {
     pub claude_path: String,
     #[serde(default)]
     pub codex_path: String,
+    #[serde(default)]
+    pub dsh_path: String,
+    #[serde(default = "default_dsh_profile")]
+    pub dsh_profile: String,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
     #[serde(default = "default_shift_enter_newline")]
@@ -139,6 +147,8 @@ impl Default for AppSettings {
         Self {
             claude_path: String::new(),
             codex_path: String::new(),
+            dsh_path: String::new(),
+            dsh_profile: default_dsh_profile(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
             claude_force_default_tui: default_claude_force_default_tui(),
@@ -164,6 +174,13 @@ fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
                 "codex".to_string()
             } else {
                 settings.codex_path.clone()
+            }
+        }
+        "dsh" => {
+            if settings.dsh_path.is_empty() {
+                "dsh".to_string()
+            } else {
+                settings.dsh_path.clone()
             }
         }
         _ => {
@@ -503,6 +520,12 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
     AppSettings {
         claude_path: resolve_agent_launch_spec_from_path("claude", &settings.claude_path).program,
         codex_path: resolve_agent_launch_spec_from_path("codex", &settings.codex_path).program,
+        dsh_path: resolve_agent_launch_spec_from_path("dsh", &settings.dsh_path).program,
+        dsh_profile: if settings.dsh_profile.trim().is_empty() {
+            default_dsh_profile()
+        } else {
+            settings.dsh_profile
+        },
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
         claude_force_default_tui: settings.claude_force_default_tui,
@@ -524,6 +547,8 @@ fn load_settings_unlocked() -> AppSettings {
         let settings = normalize_settings(AppSettings {
             claude_path: detect_path("claude"),
             codex_path: detect_path("codex"),
+            dsh_path: detect_path("dsh"),
+            dsh_profile: default_dsh_profile(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
             claude_force_default_tui: default_claude_force_default_tui(),
@@ -609,6 +634,26 @@ pub async fn save_agent_paths(claude_path: String, codex_path: String) -> Result
         // 路径变化会改写 claude_version_gte 的判定结果(tui 字段是否写入),需要重新生成
         // Nezha 自有 settings 文件,否则下次启动任务会拿到与新路径版本不匹配的旧文件。
         crate::hooks::regenerate_claude_settings()?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_dsh_settings(dsh_path: String, dsh_profile: String) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.dsh_path = dsh_path;
+        settings.dsh_profile = dsh_profile;
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
     })
     .await
@@ -929,6 +974,7 @@ pub async fn detect_agent_paths() -> Result<AppSettings, String> {
         let mut settings = load_settings_internal();
         settings.claude_path = detect_path("claude");
         settings.codex_path = detect_path("codex");
+        settings.dsh_path = detect_path("dsh");
         Ok(normalize_settings(settings))
     })
     .await

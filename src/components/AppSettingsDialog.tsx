@@ -10,6 +10,7 @@ import {
   Blocks,
   Heart,
   ExternalLink,
+  Bot,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
@@ -36,6 +37,7 @@ import { ThemePanel } from "./app-settings/ThemePanel";
 import { FontPanel } from "./app-settings/FontPanel";
 import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
+import { DshSettingsSection } from "./app-settings/DshSettingsSection";
 import { getAgentSettingsFilePath } from "./app-settings/shared";
 import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 
@@ -61,6 +63,12 @@ const NAV_ITEMS: AppSettingsNavItem[] = [
     logo: chatgptLogo,
     filePath: getAgentSettingsFilePath("codex"),
     lang: "toml",
+  },
+  {
+    key: "dsh",
+    labelKey: "DSH",
+    section: "agents",
+    icon: Bot,
   },
   {
     key: "community",
@@ -253,6 +261,8 @@ export function AppSettingsDialog({
             <AboutPanel key="about" />
           ) : activeNav === "thanks" ? (
             <ThanksPanel key="thanks" />
+          ) : activeNav === "dsh" ? (
+            <DshSettingsSection key="dsh" />
           ) : (
             <AgentConfigPanel
               key={activeNav}

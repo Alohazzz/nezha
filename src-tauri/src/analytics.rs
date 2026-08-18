@@ -178,6 +178,13 @@ fn parse_codex_metrics(content: &str) -> SessionMetrics {
 }
 
 pub(crate) fn parse_session_metrics_from_path(path: &std::path::Path) -> SessionMetrics {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zstd"))
+    {
+        return crate::dsh::metrics(path);
+    }
     let Ok(content) = std::fs::read_to_string(path) else {
         return SessionMetrics::default();
     };
