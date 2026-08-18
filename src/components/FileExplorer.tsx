@@ -1,0 +1,823 @@
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { ListTree, RotateCcw } from "lucide-react";
+import s from "../styles";
+import { useToast } from "./Toast";
+import { useI18n } from "../i18n";
+import { load, save } from "../utils";
+import { writeClipboardText } from "./file-explorer/clipboard";
+import { FileExplorerContextMenu } from "./file-explorer/ContextMenu";
+import { CreateInputRow } from "./file-explorer/CreateInputRow";
+import { FileIcon } from "./file-explorer/FileIcon";
+import { TreeItem } from "./file-explorer/TreeItem";
+import { dispatchFileTreePointerDrag } from "./pathDrop";
+import {
+  FALLBACK_REFRESH_MS,
+  FS_CHANGED_EVENT,
+  ROW_HEIGHT,
+  type ContextMenuState,
+  type CreateKind,
+  type FsEntry,
+  type TreeNode,
+} from "./file-explorer/types";
+import {
+  collectWatchTargets,
+  compactTreeNodes,
+  findNode,
+  flattenVisible,
+  joinPath,
+  loadTreeNodes,
+  mergeDirLevel,
+  parentPathOf,
+  pathSeparator,
+  updateNode,
+} from "./file-explorer/treeUtils";
+
+const COMPACT_EMPTY_FOLDERS_KEY = "nezha.fileExplorer.compactEmptyFolders";
+
+function setIconButtonHoverStyle(element: HTMLElement, active: boolean, hovering: boolean) {
+  if (active) {
+    element.style.color = "var(--accent)";
+    element.style.background = "var(--bg-selected)";
+    return;
+  }
+
+  element.style.color = hovering ? "var(--text-primary)" : "var(--text-hint)";
+  element.style.background = hovering ? "var(--bg-hover)" : "none";
+}
+
+export function FileExplorer({
+  projectPath,
+  projectName,
+  onFileSelect,
+  active = true,
+  width = 240,
+}: {
+  projectPath: string;
+  projectName: string;
+  onFileSelect: (path: string, name: string) => void;
+  active?: boolean;
+  width?: number;
+}) {
+  const { t } = useI18n();
+  const [nodes, setNodes] = useState<TreeNode[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [compactEmptyFolders, setCompactEmptyFolders] = useState(() =>
+    load(COMPACT_EMPTY_FOLDERS_KEY, false),
+  );
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(500);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { showToast } = useToast();
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
+  const [creating, setCreating] = useState<{
+    parentPath: string;
+    kind: CreateKind;
+  } | null>(null);
+  const [dragPreview, setDragPreview] = useState<{
+    x: number;
+    y: number;
+    name: string;
+    path: string;
+    isDir: boolean;
+    extension?: string;
+    isGitignored?: boolean;
+  } | null>(null);
+  const [creatingValue, setCreatingValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const commitInFlightRef = useRef(false);
+  const deleteInFlightRef = useRef(false);
+  const dragPreviewFrameRef = useRef<number | null>(null);
+  const pendingDragPreviewPointRef = useRef<{ x: number; y: number } | null>(null);
+  const pointerDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    paths: string[];
+    dragging: boolean;
+  } | null>(null);
+  const suppressClickPathRef = useRef<string | null>(null);
+  const dragEndRef = useRef<(() => void) | null>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, node: TreeNode) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({
+      x: e.clientX,
+      y: e.clientY,
+      path: node.path,
+      isDir: node.is_dir,
+      isRoot: false,
+    });
+  }, []);
+
+  const handleEmptyContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target !== e.currentTarget) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setCtxMenu({
+        x: e.clientX,
+        y: e.clientY,
+        path: projectPath,
+        isDir: true,
+        isRoot: true,
+      });
+    },
+    [projectPath],
+  );
+
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+
+  const openInSystemFolder = useCallback(
+    async (event: React.MouseEvent, path: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setCtxMenu(null);
+
+      try {
+        await invoke("open_in_system_file_manager", { path, projectPath });
+      } catch (error) {
+        console.error("Failed to open file in system folder", error);
+        showToast(t("file.failedOpenSystemFolder", { error: String(error) }));
+      }
+    },
+    [projectPath, showToast, t],
+  );
+
+  const copyPath = useCallback(async (event: React.MouseEvent, path: string, withAt: boolean) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+      await writeClipboardText(withAt ? `@${path}` : path);
+    } catch (error) {
+      console.error("Failed to copy file path", error);
+    } finally {
+      setCtxMenu(null);
+    }
+  }, []);
+
+  const { safeInvoke, isCancelled } = useCancellableInvoke();
+  const nodesRef = useRef<TreeNode[]>([]);
+  const refreshIdRef = useRef(0);
+  // 已注册到后端 fs_watcher 的目录集合(项目根 + 可见的已展开目录)。
+  const watchedRef = useRef<Set<string>>(new Set());
+  // 各目录在途的 watch_dir 调用。unwatch 必须排在它之后发出,保证后端引用计数
+  // 严格按「先 +1 后 -1」配对——否则 watch 未落地时 unwatch 先到会空扣,
+  // 随后落地的 watch 变成泄漏,或反过来把其他实例的计数打到 0。
+  const pendingWatchRef = useRef<Map<string, Promise<unknown>>>(new Map());
+  // 后端 watcher 不可用(平台不支持等)时置 true,回退到固定间隔轮询。
+  const [watcherFailed, setWatcherFailed] = useState(false);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  const readEntries = useCallback(
+    (path: string) =>
+      safeInvoke<FsEntry[]>(
+        compactEmptyFolders ? "read_compact_dir_entries" : "read_dir_entries",
+        { path, projectPath },
+      ),
+    [compactEmptyFolders, projectPath, safeInvoke],
+  );
+
+  useEffect(() => {
+    save(COMPACT_EMPTY_FOLDERS_KEY, compactEmptyFolders);
+  }, [compactEmptyFolders]);
+
+  const refresh = useCallback(
+    async (showLoading = false) => {
+      const refreshId = refreshIdRef.current + 1;
+      refreshIdRef.current = refreshId;
+      if (showLoading) setLoading(true);
+
+      try {
+        const nextNodes = await loadTreeNodes(projectPath, nodesRef.current, readEntries);
+        if (nextNodes === null || refreshId !== refreshIdRef.current) return;
+        if (nextNodes !== nodesRef.current) {
+          setNodes(nextNodes);
+        }
+        setLoading(false);
+      } catch {
+        if (!isCancelled() && refreshId === refreshIdRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [isCancelled, projectPath, readEntries],
+  );
+
+  /**
+   * 定点刷新单个目录(fs-changed 事件驱动)。fetch 在外、合并放进 setNodes 的
+   * 函数式更新里,保证合并基于最新 state,不会覆盖 await 期间的展开/折叠操作。
+   */
+  const refreshDir = useCallback(
+    async (dirPath: string) => {
+      // 紧凑模式下链路中间目录(name 为 "a/b/c" 的压缩条目的中段)不是树节点;
+      // 向上回退到最近的真实层级整层重拉,让后端重新计算压缩链。
+      let target = dirPath;
+      while (target !== projectPath && !findNode(nodesRef.current, target)) {
+        const parent = parentPathOf(target);
+        if (parent === target) return;
+        target = parent;
+      }
+      try {
+        const entries = await readEntries(target);
+        if (entries === null || isCancelled()) return;
+        if (target === projectPath) {
+          setNodes((prev) => mergeDirLevel(entries, prev));
+          return;
+        }
+        setNodes((prev) =>
+          updateNode(prev, target, (node) => {
+            if (!node.children) return node;
+            const merged = mergeDirLevel(entries, node.children);
+            return merged === node.children ? node : { ...node, children: merged };
+          }),
+        );
+      } catch {
+        // 目录可能刚被删除;父目录的 fs-changed 会把它从树里移除。
+      }
+    },
+    [isCancelled, projectPath, readEntries],
+  );
+
+  useEffect(() => {
+    if (!active) return;
+    void refresh(true);
+  }, [active, projectPath, refresh]);
+
+  // 把 watch 集合同步为「项目根 + 可见的已展开目录」:展开即挂 watch,折叠/
+  // 删除/面板隐藏即摘除。后端按引用计数容忍多实例重复注册。
+  useEffect(() => {
+    const targets = active ? collectWatchTargets(nodes, projectPath) : new Set<string>();
+    const watched = watchedRef.current;
+    const pending = pendingWatchRef.current;
+    for (const dir of targets) {
+      if (watched.has(dir)) continue;
+      watched.add(dir);
+      const request = invoke<boolean>("watch_dir", { path: dir, projectPath })
+        .then((ok) => {
+          if (!ok && watchedRef.current.has(dir)) setWatcherFailed(true);
+        })
+        .catch(() => {
+          // invoke 本身失败(路径校验等):摘除后待下一次树更新重试。
+          watchedRef.current.delete(dir);
+        })
+        .finally(() => {
+          if (pending.get(dir) === request) pending.delete(dir);
+        });
+      pending.set(dir, request);
+    }
+    for (const dir of [...watched]) {
+      if (targets.has(dir)) continue;
+      watched.delete(dir);
+      const inflight = pending.get(dir) ?? Promise.resolve();
+      void inflight.then(() => invoke("unwatch_dir", { path: dir })).catch(() => {});
+    }
+  }, [active, nodes, projectPath]);
+
+  // 卸载时摘除全部 watch,避免后端残留引用计数。
+  useEffect(() => {
+    const watched = watchedRef.current;
+    const pending = pendingWatchRef.current;
+    return () => {
+      for (const dir of watched) {
+        const inflight = pending.get(dir) ?? Promise.resolve();
+        void inflight.then(() => invoke("unwatch_dir", { path: dir })).catch(() => {});
+      }
+      watched.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    const unlistenPromise = listen<{ dir: string }>(FS_CHANGED_EVENT, (event) => {
+      // 事件是全局广播;只处理本实例 watch 的目录(其他项目的实例各自过滤)。
+      if (!watchedRef.current.has(event.payload.dir)) return;
+      void refreshDir(event.payload.dir);
+    });
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [active, refreshDir]);
+
+  useEffect(() => {
+    if (!active) return;
+
+    const handleVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refresh();
+    };
+
+    // 事件驱动为主;固定间隔轮询仅在后端 watcher 不可用时兜底。
+    const timer = watcherFailed
+      ? window.setInterval(() => {
+          if (document.visibilityState !== "visible") return;
+          void refresh();
+        }, FALLBACK_REFRESH_MS)
+      : null;
+
+    window.addEventListener("focus", handleVisibilityRefresh);
+    document.addEventListener("visibilitychange", handleVisibilityRefresh);
+
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+      window.removeEventListener("focus", handleVisibilityRefresh);
+      document.removeEventListener("visibilitychange", handleVisibilityRefresh);
+    };
+  }, [active, refresh, watcherFailed]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setViewportHeight(el.clientHeight);
+    const ro = new ResizeObserver(() => setViewportHeight(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const displayNodes = useMemo(
+    () => (compactEmptyFolders ? compactTreeNodes(nodes) : nodes),
+    [compactEmptyFolders, nodes],
+  );
+
+  const flat = useMemo(
+    () => flattenVisible(displayNodes, projectPath, creating),
+    [displayNodes, projectPath, creating],
+  );
+
+  // The create-input row is rendered outside the virtualized slice (see render block) so its
+  // DOM node remains mounted even when scrolled out of view — otherwise the input ref would
+  // race with focus/scroll on long trees. We still need its index from `flat` to position it.
+  const creatingPlacement = useMemo(() => {
+    if (!creating) return null;
+    const idx = flat.findIndex((r) => r.kind === "input");
+    if (idx < 0) return null;
+    const row = flat[idx];
+    if (row.kind !== "input") return null;
+    return { index: idx, depth: row.depth, kind: row.createKind };
+  }, [flat, creating]);
+
+  const OVERSCAN = 5;
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const endIdx = Math.min(
+    flat.length - 1,
+    Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
+  );
+
+  const handleToggle = useCallback(
+    (dirPath: string) => {
+      if (suppressClickPathRef.current === dirPath) return;
+
+      // Invalidate any in-flight auto-refresh: it captured a snapshot before this
+      // toggle and would otherwise apply that stale tree, collapsing the folder the
+      // user just expanded (issue #194).
+      refreshIdRef.current += 1;
+
+      const current = findNode(nodesRef.current, dirPath);
+      const shouldExpand = !current?.expanded;
+
+      setNodes((prev) =>
+        updateNode(prev, dirPath, (node) => {
+          const nextChildren = shouldExpand ? (node.children ?? []) : node.children;
+          if (node.expanded === shouldExpand && node.children === nextChildren) {
+            return node;
+          }
+          return { ...node, expanded: shouldExpand, children: nextChildren };
+        }),
+      );
+
+      if (!shouldExpand) return;
+
+      void (async () => {
+        const currentChildren = findNode(nodesRef.current, dirPath)?.children ?? [];
+        const nextChildren = await loadTreeNodes(dirPath, currentChildren, readEntries);
+        if (nextChildren === null) return;
+        setNodes((prev) =>
+          updateNode(prev, dirPath, (node) =>
+            node.children === nextChildren ? node : { ...node, children: nextChildren },
+          ),
+        );
+      })();
+    },
+    [readEntries],
+  );
+
+  const handleSelect = useCallback(
+    (node: TreeNode) => {
+      if (suppressClickPathRef.current === node.path) return;
+      setSelectedPath(node.path);
+      onFileSelect(node.path, node.name);
+    },
+    [onFileSelect],
+  );
+
+  const handlePointerDown = useCallback((event: ReactPointerEvent, node: TreeNode) => {
+    if (event.button !== 0) return;
+
+    // 极端情况下上一次会话未正常收尾(组件再次 mount 等),先兜底结束
+    dragEndRef.current?.();
+
+    pointerDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      paths: [node.path],
+      dragging: false,
+    };
+
+    const endSession = () => {
+      window.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", handlePointerUp, true);
+      window.removeEventListener("pointercancel", handlePointerCancel, true);
+      if (dragPreviewFrameRef.current !== null) {
+        window.cancelAnimationFrame(dragPreviewFrameRef.current);
+        dragPreviewFrameRef.current = null;
+      }
+      pendingDragPreviewPointRef.current = null;
+      pointerDragRef.current = null;
+      setDragPreview(null);
+      dragEndRef.current = null;
+    };
+    dragEndRef.current = endSession;
+
+    const schedulePreviewMove = (x: number, y: number) => {
+      pendingDragPreviewPointRef.current = { x, y };
+      if (dragPreviewFrameRef.current !== null) return;
+      dragPreviewFrameRef.current = window.requestAnimationFrame(() => {
+        dragPreviewFrameRef.current = null;
+        const point = pendingDragPreviewPointRef.current;
+        pendingDragPreviewPointRef.current = null;
+        if (!point) return;
+        setDragPreview((prev) =>
+          prev
+            ? {
+                ...prev,
+                x: point.x,
+                y: point.y,
+              }
+            : prev,
+        );
+      });
+    };
+
+    const finishDrag = (type: "drop" | "cancel", x: number, y: number) => {
+      const drag = pointerDragRef.current;
+      const wasDragging = !!drag?.dragging;
+      const dragPaths = drag?.paths ?? [node.path];
+      endSession();
+      if (!wasDragging) return;
+      if (type === "drop") {
+        dispatchFileTreePointerDrag({ type, paths: dragPaths, x, y });
+      }
+      suppressClickPathRef.current = node.path;
+      window.setTimeout(() => {
+        if (suppressClickPathRef.current === node.path) {
+          suppressClickPathRef.current = null;
+        }
+      }, 100);
+    };
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const drag = pointerDragRef.current;
+      if (!drag || drag.pointerId !== moveEvent.pointerId) return;
+      const dx = moveEvent.clientX - drag.startX;
+      const dy = moveEvent.clientY - drag.startY;
+      if (!drag.dragging && Math.hypot(dx, dy) < 5) return;
+      if (!drag.dragging) {
+        drag.dragging = true;
+        setDragPreview({
+          x: moveEvent.clientX,
+          y: moveEvent.clientY,
+          name: node.name,
+          path: node.path,
+          isDir: node.is_dir,
+          extension: node.extension,
+          isGitignored: node.is_gitignored,
+        });
+      }
+      moveEvent.preventDefault();
+      schedulePreviewMove(moveEvent.clientX, moveEvent.clientY);
+    }
+
+    function handlePointerUp(upEvent: PointerEvent) {
+      const drag = pointerDragRef.current;
+      if (!drag || drag.pointerId !== upEvent.pointerId) return;
+      if (drag.dragging) {
+        upEvent.preventDefault();
+      }
+      finishDrag("drop", upEvent.clientX, upEvent.clientY);
+    }
+
+    function handlePointerCancel(cancelEvent: PointerEvent) {
+      const drag = pointerDragRef.current;
+      if (!drag || drag.pointerId !== cancelEvent.pointerId) return;
+      finishDrag("cancel", cancelEvent.clientX, cancelEvent.clientY);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, true);
+    window.addEventListener("pointerup", handlePointerUp, true);
+    window.addEventListener("pointercancel", handlePointerCancel, true);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      dragEndRef.current?.();
+    };
+  }, []);
+
+  const ensureExpanded = useCallback(
+    (dirPath: string) => {
+      if (dirPath === projectPath) return;
+      const current = findNode(nodesRef.current, dirPath);
+      if (!current?.expanded) {
+        handleToggle(dirPath);
+      }
+    },
+    [handleToggle, projectPath],
+  );
+
+  const startCreate = useCallback(
+    (kind: CreateKind) => {
+      if (!ctxMenu) return;
+      let parentPath: string;
+      if (ctxMenu.isRoot) {
+        parentPath = projectPath;
+      } else if (ctxMenu.isDir) {
+        parentPath = ctxMenu.path;
+        ensureExpanded(parentPath);
+      } else {
+        parentPath = parentPathOf(ctxMenu.path);
+      }
+      setCtxMenu(null);
+      setCreatingValue("");
+      setCreating({ parentPath, kind });
+    },
+    [ctxMenu, ensureExpanded, projectPath],
+  );
+
+  const cancelCreate = useCallback(() => {
+    setCreating(null);
+    setCreatingValue("");
+  }, []);
+
+  const commitCreate = useCallback(async () => {
+    if (!creating) return;
+    if (commitInFlightRef.current) return;
+    const name = creatingValue.trim();
+    if (!name) {
+      cancelCreate();
+      return;
+    }
+    if (name.includes("/") || name.includes("\\")) {
+      showToast(t("file.createFailed", { error: "Invalid file name" }));
+      return;
+    }
+    commitInFlightRef.current = true;
+    const fullPath = joinPath(creating.parentPath, name);
+    const kind = creating.kind;
+    const parentPath = creating.parentPath;
+    try {
+      if (kind === "file") {
+        await safeInvoke("create_file", { path: fullPath, projectPath });
+      } else {
+        await safeInvoke("create_directory", { path: fullPath, projectPath });
+      }
+      if (isCancelled()) return;
+      setCreating(null);
+      setCreatingValue("");
+      if (parentPath !== projectPath) {
+        ensureExpanded(parentPath);
+      }
+      await refresh();
+      if (isCancelled()) return;
+      setSelectedPath(fullPath);
+      if (kind === "file") {
+        onFileSelect(fullPath, name);
+      }
+    } catch (error) {
+      if (!isCancelled()) {
+        showToast(t("file.createFailed", { error: String(error) }));
+      }
+    } finally {
+      commitInFlightRef.current = false;
+    }
+  }, [
+    cancelCreate,
+    creating,
+    creatingValue,
+    ensureExpanded,
+    isCancelled,
+    onFileSelect,
+    projectPath,
+    refresh,
+    safeInvoke,
+    showToast,
+    t,
+  ]);
+
+  useEffect(() => {
+    if (!creating || !creatingPlacement) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const rowTop = creatingPlacement.index * ROW_HEIGHT;
+    const rowBottom = rowTop + ROW_HEIGHT;
+    if (rowTop < el.scrollTop || rowBottom > el.scrollTop + el.clientHeight) {
+      const targetTop = Math.max(0, rowTop - el.clientHeight / 2 + ROW_HEIGHT);
+      el.scrollTo({ top: targetTop, behavior: "auto" });
+    }
+  }, [creating, creatingPlacement]);
+
+  useEffect(() => {
+    if (creating && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [creating]);
+
+  const handleDelete = useCallback(async () => {
+    if (!ctxMenu || ctxMenu.isRoot) return;
+    if (deleteInFlightRef.current) return;
+    const targetPath = ctxMenu.path;
+    const isDir = ctxMenu.isDir;
+    const idx = Math.max(targetPath.lastIndexOf("/"), targetPath.lastIndexOf("\\"));
+    const name = idx >= 0 ? targetPath.slice(idx + 1) : targetPath;
+    setCtxMenu(null);
+
+    const ok = await confirm(
+      t(isDir ? "file.confirmDeleteFolder" : "file.confirmDeleteFile", { name }),
+      {
+        title: t("file.confirmDeleteTitle", { name }),
+        kind: "warning",
+        okLabel: t("file.delete"),
+      },
+    );
+    if (!ok) return;
+
+    deleteInFlightRef.current = true;
+    try {
+      await safeInvoke("delete_path", { path: targetPath, projectPath });
+      if (isCancelled()) return;
+      const sep = pathSeparator(targetPath);
+      const descendantPrefix = targetPath + sep;
+      setSelectedPath((prev) => {
+        if (!prev) return prev;
+        if (prev === targetPath) return null;
+        if (prev.startsWith(descendantPrefix)) return null;
+        return prev;
+      });
+      await refresh();
+    } catch (error) {
+      if (!isCancelled()) {
+        showToast(t("file.deleteFailed", { error: String(error) }));
+      }
+    } finally {
+      deleteInFlightRef.current = false;
+    }
+  }, [ctxMenu, isCancelled, projectPath, refresh, safeInvoke, showToast, t]);
+
+  return (
+    <div style={{ ...s.fileExplorerRoot, width }}>
+      {dragPreview && (
+        <div
+          style={{
+            ...s.fileTreeDragPreview,
+            left: dragPreview.x,
+            top: dragPreview.y,
+          }}
+        >
+          <FileIcon
+            name={dragPreview.name}
+            ext={dragPreview.extension}
+            isDir={dragPreview.isDir}
+            expanded={dragPreview.isDir}
+            isGitignored={dragPreview.isGitignored}
+          />
+          <span style={s.fileTreeDragPreviewLabel}>{dragPreview.name}</span>
+        </div>
+      )}
+      {ctxMenu && (
+        <FileExplorerContextMenu
+          ctxMenu={ctxMenu}
+          onClose={closeCtxMenu}
+          onNewFile={() => startCreate("file")}
+          onNewFolder={() => startCreate("folder")}
+          onDelete={() => void handleDelete()}
+          onOpenInSystem={(event, path) => void openInSystemFolder(event, path)}
+          onCopyPath={(event, path, withAt) => void copyPath(event, path, withAt)}
+        />
+      )}
+      {/* Header */}
+      <div style={s.fileExplorerHeader}>
+        <span style={s.fileExplorerHeaderTitle}>{t("file.files")}</span>
+        <button
+          style={{
+            ...s.fileExplorerIconButton,
+            ...(compactEmptyFolders ? s.fileExplorerIconButtonActive : null),
+          }}
+          onClick={() => setCompactEmptyFolders((prev) => !prev)}
+          title={t("file.compactEmptyFolders")}
+          aria-label={t("file.compactEmptyFolders")}
+          aria-pressed={compactEmptyFolders}
+          data-active={compactEmptyFolders ? "true" : undefined}
+          onMouseEnter={(e) => setIconButtonHoverStyle(e.currentTarget, compactEmptyFolders, true)}
+          onMouseLeave={(e) => setIconButtonHoverStyle(e.currentTarget, compactEmptyFolders, false)}
+        >
+          <ListTree size={13} />
+        </button>
+        <button
+          style={s.fileExplorerIconButton}
+          onClick={() => void refresh()}
+          title={t("common.refresh")}
+          aria-label={t("common.refresh")}
+          onMouseEnter={(e) => setIconButtonHoverStyle(e.currentTarget, false, true)}
+          onMouseLeave={(e) => setIconButtonHoverStyle(e.currentTarget, false, false)}
+        >
+          <RotateCcw size={13} />
+        </button>
+      </div>
+      {/* Project root label */}
+      <div style={s.fileExplorerRootLabel}>
+        <span style={s.fileExplorerRootIcon} />
+        {projectName}
+      </div>
+      {/* Tree */}
+      <div
+        ref={scrollRef}
+        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        onContextMenu={handleEmptyContextMenu}
+        style={s.fileExplorerTreeScroll}
+      >
+        {loading ? (
+          <div onContextMenu={handleEmptyContextMenu} style={s.fileExplorerEmpty}>
+            {t("common.loading")}
+          </div>
+        ) : flat.length === 0 ? (
+          <div onContextMenu={handleEmptyContextMenu} style={s.fileExplorerEmpty}>
+            {t("file.emptyDirectory")}
+          </div>
+        ) : (
+          <div
+            style={{ position: "relative", height: flat.length * ROW_HEIGHT + 12 }}
+            onContextMenu={handleEmptyContextMenu}
+          >
+            {flat.slice(startIdx, endIdx + 1).map((row, i) => {
+              if (row.kind === "input") return null;
+              const top = (startIdx + i) * ROW_HEIGHT + 2;
+              return (
+                <div key={row.node.path} style={{ ...s.fileExplorerVirtualRow, top }}>
+                  <TreeItem
+                    node={row.node}
+                    depth={row.depth}
+                    selectedPath={selectedPath}
+                    contextPath={ctxMenu?.path ?? null}
+                    draggingPath={dragPreview?.path ?? null}
+                    onSelect={handleSelect}
+                    onToggle={handleToggle}
+                    onContextMenu={handleContextMenu}
+                    onPointerDown={handlePointerDown}
+                  />
+                </div>
+              );
+            })}
+            {creating && creatingPlacement && (
+              <div
+                key="__create_row__"
+                style={{
+                  ...s.fileExplorerVirtualRow,
+                  top: creatingPlacement.index * ROW_HEIGHT + 2,
+                }}
+              >
+                <CreateInputRow
+                  depth={creatingPlacement.depth}
+                  kind={creatingPlacement.kind}
+                  value={creatingValue}
+                  onChange={setCreatingValue}
+                  onCommit={() => {
+                    void commitCreate();
+                  }}
+                  onCancel={cancelCreate}
+                  inputRef={inputRef}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

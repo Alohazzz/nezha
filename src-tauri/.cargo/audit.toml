@@ -1,0 +1,15 @@
+# cargo-audit configuration (picked up when running `cargo audit` from src-tauri/)
+# https://docs.rs/cargo-audit/latest/cargo_audit/config/index.html
+
+[advisories]
+# quick-xml < 0.41 DoS advisories (quadratic attribute check / unbounded
+# namespace allocation). quick-xml is a transitive dependency of `plist`,
+# pulled in by tauri-codegen / tauri-plugin at build time to parse our own
+# macOS Info.plist — never attacker-controlled XML, so the DoS vectors do
+# not apply. The latest plist (1.9.0) still requires quick-xml ^0.39, so no
+# upgrade path exists yet. Remove these once plist migrates to quick-xml
+# >= 0.41 and tauri picks it up.
+ignore = [
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

@@ -1,0 +1,53 @@
+[package]
+name = "nezha"
+version = "0.4.7"
+description = "An agent-first vibe coding application"
+authors = ["hanshuaikang"]
+edition = "2021"
+repository = "https://github.com/hanshuaikang/nezha"
+homepage = "https://github.com/hanshuaikang/nezha"
+documentation = "https://github.com/hanshuaikang/nezha"
+readme = "../README.md"
+keywords = ["tauri", "desktop", "ai", "agent", "productivity"]
+categories = ["gui", "development-tools"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "nezha_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "macros", "rt", "time", "process", "io-util"] }
+once_cell = "1.19"
+portable-pty = "0.8"
+chrono = "0.4"
+base64 = "0.22"
+notify = "6"
+ignore = "0.4"
+toml = "0.8"
+libc = "0.2"
+parking_lot = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+uuid = { version = "1", features = ["v4"] }
+trash = "=5.2.6"
+font-kit = "=0.14.3"
+
+# 仅 Windows:关闭到托盘后进程常驻,需单实例守卫防止再次打开图标时启动重复后端
+# (两套 watcher/hook 抢写同一批 ~/.nezha 文件)。
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[profile.dev]
+debug = 0

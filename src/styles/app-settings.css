@@ -1,0 +1,54 @@
+.app-settings-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border-dim);
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  cursor: pointer;
+  text-align: left;
+}
+
+.app-settings-toggle[data-disabled="true"] {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.app-settings-toggle-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.app-settings-toggle-track {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 24px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--border-medium);
+  transition: background 0.12s;
+}
+
+.app-settings-toggle[data-checked="true"] .app-settings-toggle-track {
+  background: var(--primary-action-bg);
+}
+
+.app-settings-toggle-knob {
+  display: block;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--control-knob-bg);
+  transition: transform 0.12s ease;
+}
+
+.app-settings-toggle[data-checked="true"] .app-settings-toggle-knob {
+  transform: translateX(16px);
+}
