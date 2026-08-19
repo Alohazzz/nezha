@@ -151,8 +151,10 @@ v1 只把列表字段导入成待办 prompt，点击待办看不到议题完整�
 
 ### 数据 / 迁移
 
-- 不新增 `Task` 字段，无 schema 变更、无迁移脚本；
-  「定稿」仅更新现有 `task.prompt`（持久化走现有 `save_project_tasks`）。
+- 新增可选 `Task.yunxiaoSupplement` 字段（`types.ts` + `storage.rs` 同步，
+  `serde(default)` 兼容旧数据，无迁移脚本）：存「补充表单字段 + 定稿前原始 prompt」，
+  供切回待办时恢复表单与重复定稿不叠加；「定稿」同时更新 `task.prompt` 与
+  `yunxiaoSupplement`（持久化走现有 `save_project_tasks`）。
 - Skill 指令文本与表单字段为代码常量，不入配置。
 
 ### 安全
@@ -190,7 +192,8 @@ v1 只把列表字段导入成待办 prompt，点击待办看不到议题完整�
    Req → grilling，Bug → diagnosing-bugs，Task → 无。
 6. **表单字段**：需求类（Req/Task）= 标题/当前痛点/期望行为/备选方案/补充说明；
    Bug = 标题/问题描述/期望行为/复现步骤/回归信息/补充说明。
-7. **落点**：定稿写回本地任务 prompt（追加云效链接）；讨论结果留会话可回放/导出；
+7. **落点**：定稿写回本地任务 prompt（追加云效链接）并持久化结构化字段
+   （`Task.yunxiaoSupplement`，切回待办恢复表单）；讨论结果留会话可回放/导出；
    不写回云效。
 8. **Task 类别**：复用需求表单，不注入 Skill。
 9. **预填触发**：仅「AI 预填」按钮触发，不自动/不智能触发。
