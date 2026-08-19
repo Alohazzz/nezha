@@ -211,15 +211,27 @@ export function YunxiaoView({
     }
     setProjectLoading(true);
     try {
-      const result = await invoke<YunxiaoPage<YunxiaoProject>>("yunxiao_search_projects", {
-        token,
-        organizationId: orgId,
-        page: 1,
-        perPage: 200,
-      });
-      setCloudProjects(result.items);
-      if (!selectedProjectId && result.items.length > 0) {
-        setSelectedProjectId(result.items[0].id);
+      // 项目列表可能超过单页上限：按 total 翻页聚合，短页作为 x-total 缺失时的兜底终止条件。
+      const perPage = 200;
+      const maxPages = 50;
+      let page = 1;
+      let all: YunxiaoProject[] = [];
+      let total = Infinity;
+      while (page <= maxPages && all.length < total) {
+        const result = await invoke<YunxiaoPage<YunxiaoProject>>("yunxiao_search_projects", {
+          token,
+          organizationId: orgId,
+          page,
+          perPage,
+        });
+        all = [...all, ...result.items];
+        total = result.total;
+        if (result.items.length < perPage) break;
+        page += 1;
+      }
+      setCloudProjects(all);
+      if (!selectedProjectId && all.length > 0) {
+        setSelectedProjectId(all[0].id);
       }
     } catch (e) {
       showToast(t("yunxiao.loadProjectsFailed", { error: String(e) }), "error");
