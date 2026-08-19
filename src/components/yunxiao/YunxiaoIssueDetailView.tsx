@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronLeft, ExternalLink, Play, Sparkles } from "lucide-react";
-import type { AgentType, PermissionMode, Task, YunxiaoWorkitem } from "../../types";
+import type {
+  AgentType,
+  PermissionMode,
+  Task,
+  YunxiaoSupplement,
+  YunxiaoWorkitem,
+} from "../../types";
 import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
 import {
   buildYunxiaoIssueLink,
@@ -14,6 +20,7 @@ import {
   buildSupplementedPrompt,
   categoryToFormKind,
   discussionSkillForCategory,
+  hasSupplementValues,
   ISSUE_FORM_FIELDS,
 } from "./issueForms";
 import { useI18n } from "../../i18n";
@@ -43,7 +50,7 @@ export function YunxiaoIssueDetailView({
   task: Task;
   projectPath: string;
   onBack: () => void;
-  onFinalize: (taskId: string, prompt: string) => void;
+  onFinalize: (taskId: string, prompt: string, supplement: YunxiaoSupplement) => void;
   onStartDiscussion: (
     taskId: string,
     prompt: string,
@@ -57,23 +64,27 @@ export function YunxiaoIssueDetailView({
   const workitemId = task.yunxiaoWorkitemId ?? "";
   const [settings, setSettings] = useState<YunxiaoSettings>(EMPTY_YUNXIAO_SETTINGS);
   const [detail, setDetail] = useState<YunxiaoWorkitem | null>(null);
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>(
+    () => task.yunxiaoSupplement?.fields ?? {},
+  );
   const [prefillState, setPrefillState] = useState<"idle" | "loading" | "failed">("idle");
-  const [finalized, setFinalized] = useState(false);
+  const [finalized, setFinalized] = useState<boolean>(() =>
+    hasSupplementValues(task.yunxiaoSupplement?.fields),
+  );
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(task.projectId) ?? task.agent,
   );
   const [permission, setPermission] = useState<PermissionMode>(task.permissionMode);
   // 待办切换时重置全部议题相关状态（否则组件实例复用导致表单/定稿态串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
-  const originalPromptRef = useRef(task.prompt);
+  const originalPromptRef = useRef(task.yunxiaoSupplement?.originalPrompt ?? task.prompt);
   if (openedTaskId !== task.id) {
     setOpenedTaskId(task.id);
-    originalPromptRef.current = task.prompt;
+    originalPromptRef.current = task.yunxiaoSupplement?.originalPrompt ?? task.prompt;
     setDetail(null);
-    setValues({});
+    setValues(task.yunxiaoSupplement?.fields ?? {});
     setPrefillState("idle");
-    setFinalized(false);
+    setFinalized(hasSupplementValues(task.yunxiaoSupplement?.fields));
     setPermission(task.permissionMode);
     setAgent(getLastYunxiaoAgent(task.projectId) ?? task.agent);
   }
@@ -179,7 +190,10 @@ export function YunxiaoIssueDetailView({
 
   const handleFinalize = useCallback(() => {
     const prompt = buildSupplementedPrompt(formKind, values, originalPromptRef.current, link);
-    onFinalize(task.id, prompt);
+    onFinalize(task.id, prompt, {
+      fields: values,
+      originalPrompt: originalPromptRef.current,
+    });
     setFinalized(true);
     showToast(t("yunxiao.form.finalizeSuccess"), "success");
   }, [formKind, values, task.id, link, onFinalize, showToast, t]);

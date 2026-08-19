@@ -157,6 +157,16 @@ export interface Task {
   yunxiaoWorkitemId?: string;
   /** 导入自云效 Projex 的工作项编号，如 QHDK-29728 */
   yunxiaoSerialNumber?: string;
+  /** 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单 */
+  yunxiaoSupplement?: YunxiaoSupplement;
+}
+
+/** 云效议题定稿数据：切回待办时恢复补充表单（可继续编辑后重新定稿）。 */
+export interface YunxiaoSupplement {
+  /** 补充表单字段（key 与 issueForms 字段 key 对齐） */
+  fields: Record<string, string>;
+  /** 定稿前的原始任务 prompt（重复定稿不叠加） */
+  originalPrompt: string;
 }
 
 // ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────

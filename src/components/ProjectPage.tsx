@@ -5,6 +5,7 @@ import type {
   AgentType,
   PermissionMode,
   TaskStatus,
+  YunxiaoSupplement,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -136,7 +137,7 @@ export function ProjectPage({
     taskId: string,
     updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
   ) => void;
-  onFinalizeYunxiaoTodo: (taskId: string, prompt: string) => void;
+  onFinalizeYunxiaoTodo: (taskId: string, prompt: string, supplement: YunxiaoSupplement) => void;
   onStartYunxiaoDiscussion: (
     taskId: string,
     prompt: string,

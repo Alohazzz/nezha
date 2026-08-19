@@ -16,6 +16,7 @@ import type {
   TaskDisplayWindow,
   SkillHubConfig,
   YunxiaoWorkitem,
+  YunxiaoSupplement,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -1387,11 +1388,17 @@ function App() {
   }
 
   /** 云效详情页「定稿」：把补全后的议题内容写回待办 prompt。 */
-  function handleFinalizeYunxiaoTodo(taskId: string, prompt: string) {
+  function handleFinalizeYunxiaoTodo(
+    taskId: string,
+    prompt: string,
+    supplement: YunxiaoSupplement,
+  ) {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
       if (!task || task.status !== "todo") return prev;
-      const next = prev.map((t) => (t.id === taskId ? { ...t, prompt } : t));
+      const next = prev.map((t) =>
+        t.id === taskId ? { ...t, prompt, yunxiaoSupplement: supplement } : t,
+      );
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });

@@ -55,6 +55,11 @@ export function discussionSkillForCategory(categoryId?: string): "grilling" | "d
   return "none";
 }
 
+/** 定稿数据是否存在有效内容（任一字段非空即视为已定稿）。 */
+export function hasSupplementValues(fields?: Record<string, string>): boolean {
+  return !!fields && Object.values(fields).some((v) => v.trim().length > 0);
+}
+
 /**
  * 定稿 prompt：按表单字段顺序拼「中文标签: 值」，跳过空值；
  * 保留原始议题内容，末尾追加云效链接。

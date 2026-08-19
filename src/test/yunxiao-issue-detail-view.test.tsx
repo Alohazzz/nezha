@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Task, YunxiaoWorkitem } from "../types";
+import type { Task, YunxiaoSupplement, YunxiaoWorkitem } from "../types";
 import { I18nProvider } from "../i18n";
 import { ToastProvider } from "../components/Toast";
 import { YunxiaoIssueDetailView } from "../components/yunxiao/YunxiaoIssueDetailView";
@@ -50,7 +50,7 @@ function baseTask(id: string, workitemId: string): Task {
   };
 }
 
-function view(task: Task) {
+function view(task: Task, onFinalize = vi.fn()) {
   return (
     <I18nProvider>
       <ToastProvider>
@@ -58,7 +58,7 @@ function view(task: Task) {
           task={task}
           projectPath="C:\\proj"
           onBack={vi.fn()}
-          onFinalize={vi.fn()}
+          onFinalize={onFinalize}
           onStartDiscussion={vi.fn()}
         />
       </ToastProvider>
@@ -112,6 +112,28 @@ describe("YunxiaoIssueDetailView 待办切换", () => {
     expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start discussion" }).hasAttribute("disabled")).toBe(
       true,
+    );
+  });
+
+  it("定稿后切回该待办：恢复表单内容与定稿状态", async () => {
+    const onFinalize = vi.fn();
+    const { rerender } = render(view(baseTask("task-a", "workitem-a"), onFinalize));
+
+    await waitFor(() => expect(screen.getByLabelText("Expected behavior")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Expected behavior"), {
+      target: { value: "期望 A" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Finalize" }));
+
+    const supplement = onFinalize.mock.calls[0][2] as YunxiaoSupplement;
+    expect(supplement.fields.expectation).toBe("期望 A");
+
+    // 切走再切回：任务已带上定稿数据（等同从磁盘加载）
+    rerender(view({ ...baseTask("task-a", "workitem-a"), yunxiaoSupplement: supplement }));
+    await waitFor(() => expect(screen.getByLabelText("Expected behavior")).toHaveValue("期望 A"));
+    expect(screen.getByRole("button", { name: "Finalized" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start discussion" }).hasAttribute("disabled")).toBe(
+      false,
     );
   });
 });

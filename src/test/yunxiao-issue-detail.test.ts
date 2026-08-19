@@ -8,6 +8,7 @@ import {
 import {
   buildSupplementedPrompt,
   categoryToFormKind,
+  hasSupplementValues,
 } from "../components/yunxiao/issueForms";
 
 const PROJECT_ID = "07a763450c8733172523320ab6";
@@ -103,6 +104,18 @@ describe("buildSupplementedPrompt", () => {
     expect(prompt).toContain("复现步骤: 运行 scripts/repro.ps1");
     expect(prompt).toContain("回归信息: abc1234 之前是好的");
     expect(prompt).toContain("云效链接：https://example.com/link");
+  });
+});
+
+describe("hasSupplementValues", () => {
+  it("空/undefined 字段返回 false", () => {
+    expect(hasSupplementValues(undefined)).toBe(false);
+    expect(hasSupplementValues({})).toBe(false);
+    expect(hasSupplementValues({ subject: "  " })).toBe(false);
+  });
+
+  it("任一字段非空即返回 true", () => {
+    expect(hasSupplementValues({ subject: "", pain: "有内容" })).toBe(true);
   });
 });
 

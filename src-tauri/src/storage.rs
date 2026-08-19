@@ -1,4 +1,5 @@
 use std::fs;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -86,6 +87,18 @@ pub struct Task {
     /// 导入自云效 Projex 的工作项编号，如 QHDK-29728。
     #[serde(rename = "yunxiaoSerialNumber", default, skip_serializing_if = "Option::is_none")]
     pub yunxiao_serial_number: Option<String>,
+    /// 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单。
+    #[serde(rename = "yunxiaoSupplement", default, skip_serializing_if = "Option::is_none")]
+    pub yunxiao_supplement: Option<YunxiaoSupplement>,
+}
+
+/// 云效议题定稿数据：补充表单字段（key 与前端 issueForms 对齐）+ 定稿前的原始 prompt。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct YunxiaoSupplement {
+    #[serde(default)]
+    pub fields: HashMap<String, String>,
+    #[serde(rename = "originalPrompt", default)]
+    pub original_prompt: String,
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
