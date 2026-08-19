@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task, YunxiaoWorkitem } from "../types";
 import {
+  buildYunxiaoConditions,
   buildYunxiaoPrompt,
   buildYunxiaoTaskName,
   isYunxiaoWorkitemImported,
@@ -73,5 +74,103 @@ describe("isYunxiaoWorkitemImported", () => {
   it("空 id 不匹配任何任务", () => {
     const tasks = [baseTask({ yunxiaoWorkitemId: "741d91e70b392b65ef95604c1f" })];
     expect(isYunxiaoWorkitemImported(tasks, "")).toBe(false);
+  });
+});
+
+describe("buildYunxiaoConditions", () => {
+  it("没有任何过滤条件时返回 undefined", () => {
+    expect(buildYunxiaoConditions({})).toBeUndefined();
+    expect(buildYunxiaoConditions({ query: "  " })).toBeUndefined();
+    expect(
+      buildYunxiaoConditions({ assignedToMe: true, currentUserId: "" }),
+    ).toBeUndefined();
+    expect(buildYunxiaoConditions({ selectedStatusIds: [] })).toBeUndefined();
+  });
+
+  it("搜索词生成 subject CONTAINS 条件并 trim", () => {
+    const conditions = JSON.parse(buildYunxiaoConditions({ query: "  试剂  " })!);
+    expect(conditions.conditionGroups).toHaveLength(1);
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "string",
+        fieldIdentifier: "subject",
+        format: "input",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["试剂"],
+      },
+    ]);
+  });
+
+  it("开启我负责的且存在当前用户 ID 时生成 assignedTo 条件", () => {
+    const conditions = JSON.parse(
+      buildYunxiaoConditions({
+        assignedToMe: true,
+        currentUserId: "642b88712ca4e1cd30de4718",
+      })!,
+    );
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "user",
+        fieldIdentifier: "assignedTo",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["642b88712ca4e1cd30de4718"],
+      },
+    ]);
+  });
+
+  it("状态多选生成 status CONTAINS 条件并保留全部选中 id", () => {
+    const conditions = JSON.parse(
+      buildYunxiaoConditions({ selectedStatusIds: ["100005", "100006"] })!,
+    );
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "status",
+        fieldIdentifier: "status",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["100005", "100006"],
+      },
+    ]);
+  });
+
+  it("三个条件组合时放在同一条件组（AND 语义）", () => {
+    const conditions = JSON.parse(
+      buildYunxiaoConditions({
+        query: "医保",
+        assignedToMe: true,
+        currentUserId: "u-1",
+        selectedStatusIds: ["100005", "100006"],
+      })!,
+    );
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "string",
+        fieldIdentifier: "subject",
+        format: "input",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["医保"],
+      },
+      {
+        className: "user",
+        fieldIdentifier: "assignedTo",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["u-1"],
+      },
+      {
+        className: "status",
+        fieldIdentifier: "status",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["100005", "100006"],
+      },
+    ]);
   });
 });

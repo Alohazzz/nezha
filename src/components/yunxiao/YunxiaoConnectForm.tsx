@@ -20,6 +20,10 @@ export function YunxiaoConnectForm({
   organizationLoading,
   projectLoading,
   saving,
+  currentUserIdInput,
+  onCurrentUserIdChange,
+  currentUserNameInput,
+  onCurrentUserNameChange,
   onFetchOrganizations,
   onFetchProjects,
   onSave,
@@ -35,6 +39,10 @@ export function YunxiaoConnectForm({
   organizationLoading: boolean;
   projectLoading: boolean;
   saving: boolean;
+  currentUserIdInput: string;
+  onCurrentUserIdChange: (v: string) => void;
+  currentUserNameInput: string;
+  onCurrentUserNameChange: (v: string) => void;
   onFetchOrganizations: () => void;
   onFetchProjects: () => void;
   onSave: () => void;
@@ -109,6 +117,27 @@ export function YunxiaoConnectForm({
             />
           </div>
         )}
+        <div style={s.yunxiaoField}>
+          <label style={s.yunxiaoFieldLabel}>{t("yunxiao.currentUserIdLabel")}</label>
+          <input
+            style={s.yunxiaoInput}
+            value={currentUserIdInput}
+            onChange={(e) => onCurrentUserIdChange(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <div style={s.yunxiaoField}>
+          <label style={s.yunxiaoFieldLabel}>{t("yunxiao.currentUserNameLabel")}</label>
+          <input
+            style={s.yunxiaoInput}
+            value={currentUserNameInput}
+            onChange={(e) => onCurrentUserNameChange(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <div style={s.yunxiaoHint}>{t("yunxiao.currentUserHint")}</div>
         <div style={s.yunxiaoFieldRow}>
           <button
             type="button"

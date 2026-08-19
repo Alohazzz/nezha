@@ -410,6 +410,8 @@ pub fn run() {
             app_settings::detect_agent_versions_for_settings,
             app_settings::get_system_fonts,
             yunxiao::yunxiao_list_organizations,
+            yunxiao::yunxiao_get_current_user,
+            yunxiao::yunxiao_list_workitem_statuses,
             yunxiao::yunxiao_search_projects,
             yunxiao::yunxiao_search_workitems,
             notification::get_notifications,

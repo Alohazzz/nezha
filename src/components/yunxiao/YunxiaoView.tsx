@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Loader2, RefreshCw, Search, Settings } from "lucide-react";
+import { Search } from "lucide-react";
 import type {
   Project,
   Task,
@@ -17,7 +17,10 @@ import {
 import { buildYunxiaoTaskName, isYunxiaoWorkitemImported } from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
-import { SelectField } from "./SelectField";
+import { YunxiaoHeader } from "./YunxiaoHeader";
+import { YunxiaoFilterBar } from "./YunxiaoFilterBar";
+import { YunxiaoImportBar } from "./YunxiaoImportBar";
+import { useYunxiaoFilters } from "./useYunxiaoFilters";
 import { YunxiaoConnectForm } from "./YunxiaoConnectForm";
 import { YunxiaoIssueList } from "./YunxiaoIssueList";
 import s from "../../styles";
@@ -64,7 +67,6 @@ export function YunxiaoView({
 
   // 议题列表
   const [category, setCategory] = useState<CategoryKey>("all");
-  const [query, setQuery] = useState("");
   const [issues, setIssues] = useState<YunxiaoWorkitem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -107,6 +109,19 @@ export function YunxiaoView({
     }
   }, [projects, targetProjectId]);
 
+  // 过滤状态（搜索/我负责的/状态多选/当前用户/持久化）下沉到 hook。
+  const statusCategories = useMemo(
+    () => (category === "all" ? ["Req", "Task", "Bug"] : [category]),
+    [category],
+  );
+  const filters = useYunxiaoFilters(
+    settings,
+    configured && !connectMode,
+    statusCategories,
+    setSettings,
+  );
+  const { conditions } = filters;
+
   const loadIssues = useCallback(
     async (nextPage: number, append: boolean) => {
       if (!settings.token || !settings.organizationId || !settings.projectId) return;
@@ -116,14 +131,19 @@ export function YunxiaoView({
         setLoading(true);
       }
       try {
-        const result = await invoke<YunxiaoPage<YunxiaoWorkitem>>("yunxiao_search_workitems", {
+        const args: Record<string, unknown> = {
           token: settings.token,
           organizationId: settings.organizationId,
           projectId: settings.projectId,
           category: category === "all" ? undefined : category,
           page: nextPage,
           perPage: PAGE_SIZE,
-        });
+        };
+        if (conditions) args.conditions = conditions;
+        const result = await invoke<YunxiaoPage<YunxiaoWorkitem>>(
+          "yunxiao_search_workitems",
+          args,
+        );
         setIssues((prev) => (append ? [...prev, ...result.items] : result.items));
         setTotal(result.total);
         setPage(result.page);
@@ -134,7 +154,15 @@ export function YunxiaoView({
         setLoadingMore(false);
       }
     },
-    [settings.token, settings.organizationId, settings.projectId, category, showToast, t],
+    [
+      settings.token,
+      settings.organizationId,
+      settings.projectId,
+      category,
+      conditions,
+      showToast,
+      t,
+    ],
   );
 
   useEffect(() => {
@@ -143,7 +171,7 @@ export function YunxiaoView({
     setTotal(0);
     setPage(0);
     loadIssues(1, false);
-  }, [configured, connectMode, settingsLoaded, category, loadIssues]);
+  }, [configured, connectMode, settingsLoaded, category, conditions, loadIssues]);
 
   const importedIds = useMemo(() => {
     const set = new Set<string>();
@@ -152,16 +180,6 @@ export function YunxiaoView({
     });
     return set;
   }, [tasks]);
-
-  const filteredIssues = useMemo(() => {
-    if (!query.trim()) return issues;
-    const q = query.toLowerCase();
-    return issues.filter(
-      (issue) =>
-        issue.subject.toLowerCase().includes(q) ||
-        issue.serialNumber.toLowerCase().includes(q),
-    );
-  }, [issues, query]);
 
   async function handleFetchOrganizations() {
     const token = tokenInput.trim();
@@ -225,6 +243,8 @@ export function YunxiaoView({
         organizationName: org?.name,
         projectId: selectedProjectId,
         projectName: proj?.name,
+        currentUserId: filters.currentUserIdInput.trim() || undefined,
+        currentUserName: filters.currentUserNameInput.trim() || undefined,
       });
       setSettings(appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS);
       setConnectMode(false);
@@ -252,64 +272,22 @@ export function YunxiaoView({
     }
   }
 
-  const [backHover, setBackHover] = useState(false);
-  const [refreshHover, setRefreshHover] = useState(false);
-  const [settingsHover, setSettingsHover] = useState(false);
   const targetOptions = projects.map((p) => ({ value: p.id, label: p.name }));
 
   return (
     <div style={s.yunxiaoPane}>
-      <div style={s.yunxiaoHeader}>
-        <button
-          type="button"
-          style={backHover ? s.yunxiaoBackBtnHover : s.yunxiaoBackBtn}
-          onClick={onBack}
-          title={t("yunxiao.back")}
-          aria-label={t("yunxiao.back")}
-          onMouseEnter={() => setBackHover(true)}
-          onMouseLeave={() => setBackHover(false)}
-        >
-          <ArrowLeft size={14} strokeWidth={2} />
-        </button>
-        <div>
-          <div style={s.yunxiaoHeaderTitle}>{t("yunxiao.title")}</div>
-          <div style={s.yunxiaoHeaderMeta}>
-            {configured
-              ? `${settings.organizationName ?? settings.organizationId} · ${settings.projectName ?? settings.projectId}`
-              : t("yunxiao.notConnected")}
-          </div>
-        </div>
-        <div style={s.yunxiaoHeaderActions}>
-          {configured && (
-            <button
-              type="button"
-              style={refreshHover ? s.yunxiaoToolbarBtnHover : s.yunxiaoToolbarBtn}
-              onClick={() => loadIssues(1, false)}
-              title={t("yunxiao.refresh")}
-              aria-label={t("yunxiao.refresh")}
-              onMouseEnter={() => setRefreshHover(true)}
-              onMouseLeave={() => setRefreshHover(false)}
-            >
-              {loading ? (
-                <Loader2 size={13} strokeWidth={2} className="spin" />
-              ) : (
-                <RefreshCw size={13} strokeWidth={2} />
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            style={settingsHover ? s.yunxiaoToolbarBtnHover : s.yunxiaoToolbarBtn}
-            onClick={() => setConnectMode(true)}
-            title={t("yunxiao.reconnect")}
-            aria-label={t("yunxiao.reconnect")}
-            onMouseEnter={() => setSettingsHover(true)}
-            onMouseLeave={() => setSettingsHover(false)}
-          >
-            <Settings size={13} strokeWidth={2} />
-          </button>
-        </div>
-      </div>
+      <YunxiaoHeader
+        onBack={onBack}
+        meta={
+          configured
+            ? `${settings.organizationName ?? settings.organizationId} · ${settings.projectName ?? settings.projectId}`
+            : t("yunxiao.notConnected")
+        }
+        configured={configured}
+        refreshLoading={loading}
+        onRefresh={() => loadIssues(1, false)}
+        onReconnect={() => setConnectMode(true)}
+      />
 
       {connectMode || !configured ? (
         <YunxiaoConnectForm
@@ -324,6 +302,10 @@ export function YunxiaoView({
           organizationLoading={organizationLoading}
           projectLoading={projectLoading}
           saving={saving}
+          currentUserIdInput={filters.currentUserIdInput}
+          onCurrentUserIdChange={filters.setCurrentUserIdInput}
+          currentUserNameInput={filters.currentUserNameInput}
+          onCurrentUserNameChange={filters.setCurrentUserNameInput}
           onFetchOrganizations={handleFetchOrganizations}
           onFetchProjects={handleFetchProjects}
           onSave={handleSaveConnection}
@@ -343,28 +325,36 @@ export function YunxiaoView({
                 </button>
               ))}
             </div>
+            <YunxiaoFilterBar
+              assignedToMe={filters.assignedToMe}
+              onToggleAssignedToMe={() => filters.setAssignedToMe((v) => !v)}
+              assignedToMeDisabled={filters.currentUserError}
+              assignedToMeDisabledTitle={
+                filters.currentUserError ? t("yunxiao.currentUserUnresolved") : undefined
+              }
+              statusOptions={filters.statusOptions}
+              selectedStatusIds={filters.selectedStatusIds}
+              onStatusChange={filters.setSelectedStatusIds}
+              statusesLoading={filters.statusesLoading}
+            />
             <div style={s.yunxiaoSearchBox}>
               <Search size={13} strokeWidth={2} color="var(--text-muted)" />
               <input
                 style={s.yunxiaoSearchInput}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                value={filters.query}
+                onChange={(e) => filters.setQuery(e.target.value)}
                 placeholder={t("yunxiao.searchPlaceholder")}
               />
             </div>
             <div style={s.yunxiaoCount}>{t("yunxiao.count", { count: total })}</div>
           </div>
-          <div style={s.yunxiaoToolbar}>
-            <label style={s.yunxiaoFieldLabel}>{t("yunxiao.importToProject")}</label>
-            <SelectField
-              value={targetProjectId}
-              onChange={setTargetProjectId}
-              options={targetOptions}
-              placeholder={t("yunxiao.selectProject")}
-            />
-          </div>
+          <YunxiaoImportBar
+            targetProjectId={targetProjectId}
+            onTargetProjectChange={setTargetProjectId}
+            options={targetOptions}
+          />
           <YunxiaoIssueList
-            issues={filteredIssues}
+            issues={issues}
             total={total}
             loading={loading}
             loadingMore={loadingMore}

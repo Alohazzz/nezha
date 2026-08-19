@@ -64,6 +64,9 @@ export interface YunxiaoSettings {
   organizationName?: string;
   projectId: string;
   projectName?: string;
+  /** 当前令牌所属用户（「我负责的」过滤的身份来源；自动识别或手动兜底）。 */
+  currentUserId?: string;
+  currentUserName?: string;
 }
 
 export const EMPTY_YUNXIAO_SETTINGS: YunxiaoSettings = {

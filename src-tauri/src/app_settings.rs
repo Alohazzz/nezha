@@ -124,6 +124,18 @@ pub struct YunxiaoSettings {
     pub project_id: String,
     #[serde(rename = "projectName", default, skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
+    #[serde(
+        rename = "currentUserId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub current_user_id: Option<String>,
+    #[serde(
+        rename = "currentUserName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub current_user_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -730,6 +742,8 @@ pub async fn save_yunxiao_settings(
     organization_name: Option<String>,
     project_id: String,
     project_name: Option<String>,
+    current_user_id: Option<String>,
+    current_user_name: Option<String>,
 ) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
@@ -742,6 +756,12 @@ pub async fn save_yunxiao_settings(
                 .filter(|s| !s.is_empty()),
             project_id: project_id.trim().to_string(),
             project_name: project_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            current_user_id: current_user_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            current_user_name: current_user_name
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
         };
