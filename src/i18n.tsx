@@ -655,6 +655,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "yunxiao.statusCount": "{count} selected",
     "yunxiao.clear": "Clear",
     "yunxiao.noStatusOptions": "No status options",
+    "yunxiao.retry": "Retry",
     "yunxiao.currentUserUnresolved":
       "Unable to identify current user — set it in connection settings",
     "yunxiao.currentUserIdLabel": "My user ID (optional)",
@@ -1318,6 +1319,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "yunxiao.statusCount": "状态：{count} 项",
     "yunxiao.clear": "清空",
     "yunxiao.noStatusOptions": "暂无状态选项",
+    "yunxiao.retry": "重试",
     "yunxiao.currentUserUnresolved": "无法识别当前用户，请在连接配置中填写",
     "yunxiao.currentUserIdLabel": "我的用户 ID（可选）",
     "yunxiao.currentUserNameLabel": "我的姓名（可选）",

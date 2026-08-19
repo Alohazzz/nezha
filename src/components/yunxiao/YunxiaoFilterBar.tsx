@@ -12,6 +12,8 @@ export function YunxiaoFilterBar({
   selectedStatusIds,
   onStatusChange,
   statusesLoading,
+  statusError,
+  onRetryStatuses,
 }: {
   assignedToMe: boolean;
   onToggleAssignedToMe: () => void;
@@ -21,6 +23,8 @@ export function YunxiaoFilterBar({
   selectedStatusIds: string[];
   onStatusChange: (ids: string[]) => void;
   statusesLoading: boolean;
+  statusError?: string | null;
+  onRetryStatuses?: () => void;
 }) {
   const { t } = useI18n();
 
@@ -48,6 +52,9 @@ export function YunxiaoFilterBar({
         onChange={onStatusChange}
         loading={statusesLoading}
         label={t("yunxiao.statusFilter")}
+        emptyHint={statusError ?? undefined}
+        error={statusError}
+        onRetry={onRetryStatuses}
       />
     </>
   );

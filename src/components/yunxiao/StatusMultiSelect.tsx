@@ -11,12 +11,18 @@ export function StatusMultiSelect({
   onChange,
   loading = false,
   label,
+  emptyHint,
+  error = null,
+  onRetry,
 }: {
   options: YunxiaoStatus[];
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   loading?: boolean;
   label: string;
+  emptyHint?: string;
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -66,7 +72,17 @@ export function StatusMultiSelect({
                 <Loader2 size={14} className="spin" />
               </div>
             ) : options.length === 0 ? (
-              <div style={s.yunxiaoFilterEmpty}>{t("yunxiao.noStatusOptions")}</div>
+              <div style={s.yunxiaoFilterEmpty}>
+                <div>
+                  {t("yunxiao.noStatusOptions")}
+                  {emptyHint ? `（${emptyHint}）` : ""}
+                </div>
+                {error && onRetry && (
+                  <button type="button" style={s.yunxiaoFilterRetry} onClick={onRetry}>
+                    {t("yunxiao.retry")}
+                  </button>
+                )}
+              </div>
             ) : (
               options.map((status) => {
                 const checked = selectedIds.includes(status.id);

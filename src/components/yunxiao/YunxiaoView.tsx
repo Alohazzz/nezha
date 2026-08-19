@@ -336,6 +336,8 @@ export function YunxiaoView({
               selectedStatusIds={filters.selectedStatusIds}
               onStatusChange={filters.setSelectedStatusIds}
               statusesLoading={filters.statusesLoading}
+              statusError={filters.statusError}
+              onRetryStatuses={filters.retryStatuses}
             />
             <div style={s.yunxiaoSearchBox}>
               <Search size={13} strokeWidth={2} color="var(--text-muted)" />

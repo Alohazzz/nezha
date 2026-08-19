@@ -193,6 +193,18 @@ export const yunxiao = {
     fontWeight: 600,
     cursor: "pointer",
   },
+  yunxiaoFilterRetry: {
+    marginTop: 6,
+    padding: "5px 14px",
+    borderRadius: 7,
+    border: "1px solid var(--border-medium)",
+    background: "var(--bg-elevated, var(--bg-card))",
+    color: "var(--accent)",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "background 0.12s, border-color 0.12s",
+  },
   yunxiaoFilterOptions: {
     display: "flex",
     flexDirection: "column" as const,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { YunxiaoStatus, YunxiaoUserRef } from "../../types";
 import {
@@ -28,6 +28,8 @@ export function useYunxiaoFilters(
   const [selectedStatusIds, setSelectedStatusIds] = useState<string[]>([]);
   const [statusOptions, setStatusOptions] = useState<YunxiaoStatus[]>([]);
   const [statusesLoading, setStatusesLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [statusReloadKey, setStatusReloadKey] = useState(0);
   const [currentUser, setCurrentUser] = useState<YunxiaoUserRef | null>(null);
   const [currentUserError, setCurrentUserError] = useState(false);
   const [currentUserIdInput, setCurrentUserIdInput] = useState("");
@@ -147,10 +149,12 @@ export function useYunxiaoFilters(
     if (cached) {
       setStatusOptions(cached);
       setStatusesLoading(false);
+      setStatusError(null);
       return;
     }
     let cancelled = false;
     setStatusesLoading(true);
+    setStatusError(null);
     (async () => {
       try {
         const list = await invoke<YunxiaoStatus[]>("yunxiao_list_workitem_statuses", {
@@ -160,11 +164,15 @@ export function useYunxiaoFilters(
           categories,
         });
         if (cancelled) return;
+        setStatusError(null);
         statusCacheRef.current.set(statusCacheKey, list);
         setStatusOptions(list);
       } catch (e) {
         console.error("[yunxiao] load workitem statuses failed:", e);
-        if (!cancelled) setStatusOptions([]);
+        if (!cancelled) {
+          setStatusOptions([]);
+          setStatusError(String(e));
+        }
       } finally {
         if (!cancelled) setStatusesLoading(false);
       }
@@ -172,7 +180,22 @@ export function useYunxiaoFilters(
     return () => {
       cancelled = true;
     };
-  }, [enabled, settings.token, settings.organizationId, projectId, categories, statusCacheKey]);
+  }, [
+    enabled,
+    settings.token,
+    settings.organizationId,
+    projectId,
+    categories,
+    statusCacheKey,
+    statusReloadKey,
+  ]);
+
+  /** 状态列表加载失败后手动重试（重新触发 effect，绕过失败的空缓存）。 */
+  const retryStatuses = useCallback(() => {
+    setStatusError(null);
+    setStatusesLoading(true);
+    setStatusReloadKey((k) => k + 1);
+  }, []);
 
   const conditions = useMemo(
     () =>
@@ -194,6 +217,8 @@ export function useYunxiaoFilters(
     setSelectedStatusIds,
     statusOptions,
     statusesLoading,
+    statusError,
+    retryStatuses,
     currentUser,
     currentUserError,
     currentUserIdInput,
