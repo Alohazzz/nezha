@@ -17,6 +17,15 @@ export default defineConfig(async () => ({
     port: 1420,
     strictPort: true,
     host: host || false,
+    // 启动时预转换入口链，避免首屏等 transform 瀑布（App.tsx 单文件转换约 16s+）。
+    warmup: {
+      clientFiles: [
+        "src/main.tsx",
+        "src/App.tsx",
+        "src/styles/index.ts",
+        "src/i18n.tsx",
+      ],
+    },
     hmr: host
       ? {
           protocol: "ws",
