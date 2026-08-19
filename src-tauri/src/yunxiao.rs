@@ -126,7 +126,11 @@ pub struct YunxiaoWorkitem {
     pub serial_number: String,
     #[serde(default)]
     pub subject: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_description",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<YunxiaoStatus>,
@@ -239,6 +243,82 @@ fn merge_status_lists(lists: Vec<Vec<YunxiaoStatus>>) -> Vec<YunxiaoStatus> {
         }
     }
     merged
+}
+
+/// 云效描述可能是富文本 JSON（TipTap/Notion 风格）或 HTML：
+/// 递归提取字符串叶子（优先 text/content/value 字段），块级数组按行拼接，
+/// 普通字符串剥离 HTML 标签；非文本值返回 None。
+fn normalize_issue_description(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => {
+            let stripped = strip_html_tags(&s);
+            if stripped.is_empty() {
+                None
+            } else {
+                Some(stripped)
+            }
+        }
+        serde_json::Value::Array(items) => {
+            let lines: Vec<String> = items
+                .iter()
+                .filter_map(|v| normalize_issue_description(v.clone()))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if lines.is_empty() {
+                None
+            } else {
+                Some(lines.join("\n"))
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for key in ["text", "content", "value"] {
+                if let Some(v) = map.get(key) {
+                    if let Some(text) = normalize_issue_description(v.clone()) {
+                        return Some(text);
+                    }
+                }
+            }
+            let parts: Vec<String> = map
+                .iter()
+                .filter_map(|(_, v)| normalize_issue_description(v.clone()))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" "))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 剥离 HTML 标签（不处理属性内 `>` 的极端情况，够用于描述展示）。
+fn strip_html_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+/// description 字段反序列化：兼容字符串 / 富文本 JSON 对象 / 数组 / null。
+fn deserialize_optional_description<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(normalize_issue_description))
 }
 
 /// 解析 GetWorkitem 响应：优先直接解析工作项对象，兼容 `{"result": {...}}` 包裹形态。
@@ -608,5 +688,43 @@ mod tests {
     fn get_workitem_parse_error_on_garbage() {
         assert!(parse_workitem_response(b"not json").is_err());
         assert!(parse_workitem_response(br#"{"success": true}"#).is_err());
+    }
+
+    #[test]
+    fn normalizes_plain_string_description() {
+        assert_eq!(
+            normalize_issue_description(serde_json::json!("plain text")),
+            Some("plain text".to_string())
+        );
+    }
+
+    #[test]
+    fn normalizes_rich_text_json_description() {
+        let json = serde_json::json!({
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "第一行"}]},
+                {"type": "paragraph", "content": [{"type": "text", "text": "第二行"}]}
+            ]
+        });
+        assert_eq!(
+            normalize_issue_description(json).as_deref(),
+            Some("第一行\n第二行")
+        );
+    }
+
+    #[test]
+    fn strips_html_tags_in_description() {
+        assert_eq!(
+            normalize_issue_description(serde_json::json!("<p>hello</p>")),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn deserializes_object_description_to_readable_text() {
+        let json = r#"{"description": {"document": "对象描述"}, "id": "x", "subject": "s"}"#;
+        let item: YunxiaoWorkitem = serde_json::from_str(json).expect("parses");
+        assert_eq!(item.description.as_deref(), Some("对象描述"));
     }
 }

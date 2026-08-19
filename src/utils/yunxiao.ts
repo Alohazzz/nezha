@@ -34,6 +34,63 @@ export function setLastYunxiaoAgent(projectId: string, agent: AgentType): void {
   }
 }
 
+/**
+ * 云效议题描述 → 可读纯文本（与后端 normalize_issue_description 逻辑一致，双保险）：
+ * 富文本 JSON（TipTap/Notion 风格）按段落提取文本；HTML 标签与实体剥离；其余原样返回。
+ */
+export function normalizeIssueDescription(raw: string | undefined | null): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      const text = extractRichText(parsed);
+      if (text.trim()) return text.trim();
+    } catch {
+      // 不是 JSON，落到 HTML 剥离
+    }
+  }
+  return stripHtmlTags(trimmed).trim();
+}
+
+function extractRichText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const lines = value
+      .map(extractRichText)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return lines.join("\n");
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    for (const key of ["text", "content", "value"]) {
+      if (key in obj) {
+        const text = extractRichText(obj[key]).trim();
+        if (text) return text;
+      }
+    }
+    const parts = Object.values(obj)
+      .map(extractRichText)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return parts.join(" ");
+  }
+  return "";
+}
+
+function stripHtmlTags(input: string): string {
+  return input
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 /** 云效 SearchWorkitems conditions 中单条过滤条件（conditionGroups 内同一组为 AND）。 */
 export interface YunxiaoCondition {
   className: string;

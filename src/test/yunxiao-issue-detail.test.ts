@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
+  normalizeIssueDescription,
   setLastYunxiaoAgent,
 } from "../utils/yunxiao";
 import {
@@ -102,5 +103,37 @@ describe("buildSupplementedPrompt", () => {
     expect(prompt).toContain("复现步骤: 运行 scripts/repro.ps1");
     expect(prompt).toContain("回归信息: abc1234 之前是好的");
     expect(prompt).toContain("云效链接：https://example.com/link");
+  });
+});
+
+describe("normalizeIssueDescription", () => {
+  it("普通文本原样返回并 trim", () => {
+    expect(normalizeIssueDescription("  普通描述  ")).toBe("普通描述");
+    expect(normalizeIssueDescription(undefined)).toBe("");
+  });
+
+  it("富文本 JSON 按段落提取文本", () => {
+    const raw = JSON.stringify({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "第一行" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "第二行" }],
+        },
+      ],
+    });
+    expect(normalizeIssueDescription(raw)).toBe("第一行\n第二行");
+  });
+
+  it("HTML 标签与实体剥离", () => {
+    expect(normalizeIssueDescription("<p>你好 &amp; 再见</p>")).toBe("你好 & 再见");
+  });
+
+  it("非法 JSON 原样返回", () => {
+    expect(normalizeIssueDescription("{不是json")).toBe("{不是json");
   });
 });

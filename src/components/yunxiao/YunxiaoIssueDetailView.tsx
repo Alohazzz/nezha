@@ -7,7 +7,7 @@ import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/ty
 import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
-  getYunxiaoPriority,
+  normalizeIssueDescription,
   setLastYunxiaoAgent,
 } from "../../utils/yunxiao";
 import {
@@ -58,7 +58,6 @@ export function YunxiaoIssueDetailView({
   }
   const [settings, setSettings] = useState<YunxiaoSettings>(EMPTY_YUNXIAO_SETTINGS);
   const [detail, setDetail] = useState<YunxiaoWorkitem | null>(null);
-  const [detailState, setDetailState] = useState<"loading" | "loaded" | "failed">("loading");
   const [values, setValues] = useState<Record<string, string>>({});
   const [prefillState, setPrefillState] = useState<"idle" | "loading" | "failed">("idle");
   const [finalized, setFinalized] = useState(false);
@@ -88,7 +87,6 @@ export function YunxiaoIssueDetailView({
         const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
         setSettings(yunxiao);
         if (!yunxiao.token || !yunxiao.organizationId || !workitemId) {
-          setDetailState("failed");
           return;
         }
         const item = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
@@ -98,11 +96,9 @@ export function YunxiaoIssueDetailView({
         });
         if (cancelled) return;
         setDetail(item);
-        setDetailState("loaded");
       } catch (e) {
         if (cancelled) return;
         console.error("[yunxiao-detail] load failed:", e);
-        setDetailState("failed");
       }
     })();
     return () => {
@@ -112,17 +108,13 @@ export function YunxiaoIssueDetailView({
 
   const issueText = useMemo(() => {
     if (detail) {
-      return [detail.serialNumber, detail.subject, detail.description ?? ""]
+      const description = normalizeIssueDescription(detail.description);
+      return [detail.serialNumber, detail.subject, description]
         .filter(Boolean)
         .join("\n\n");
     }
     return task.prompt;
   }, [detail, task.prompt]);
-
-  const priority = detail ? getYunxiaoPriority(detail) : undefined;
-  const createdLabel = detail?.gmtCreate
-    ? new Date(detail.gmtCreate).toLocaleString()
-    : undefined;
 
   const changeField = useCallback((key: string, value: string) => {
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -215,36 +207,6 @@ export function YunxiaoIssueDetailView({
       </div>
 
       <div style={s.yunxiaoDetailBody}>
-        <section style={s.yunxiaoDetailSection}>
-          <div style={s.yunxiaoDetailSectionTitle}>{t("yunxiao.detail.issueSection")}</div>
-          {detailState === "loading" ? (
-            <div style={s.yunxiaoDetailSectionHint}>{t("yunxiao.detail.issueLoading")}</div>
-          ) : (
-            <>
-              {detail && (
-                <div style={s.yunxiaoDetailMetaRow}>
-                  {detail.status?.displayName && (
-                    <span style={s.yunxiaoMetaBadge}>{detail.status.displayName}</span>
-                  )}
-                  {priority && <span style={s.yunxiaoMetaBadge}>{priority}</span>}
-                  {detail.assignedTo?.name && (
-                    <span style={s.yunxiaoMetaBadge}>{detail.assignedTo.name}</span>
-                  )}
-                  {createdLabel && <span>{createdLabel}</span>}
-                </div>
-              )}
-              <div style={s.yunxiaoDetailIssueText}>
-                {detail
-                  ? detail.description?.trim() || detail.subject
-                  : task.prompt}
-              </div>
-              {detailState === "failed" && (
-                <div style={s.yunxiaoDetailError}>{t("yunxiao.detail.issueLoadFailed")}</div>
-              )}
-            </>
-          )}
-        </section>
-
         <section style={s.yunxiaoDetailSection}>
           <div style={s.yunxiaoDetailSectionTitle}>{t("yunxiao.form.title")}</div>
           <div style={s.yunxiaoDetailSectionHint}>{t("yunxiao.form.finalizeHint")}</div>
