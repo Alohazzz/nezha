@@ -1,4 +1,5 @@
 param(
+  [switch]$ForceRestart,
   [switch]$ForceFreshCache,
   [int]$RenderTimeoutSec = 360
 )
@@ -125,6 +126,17 @@ function Probe-Render {
   }
 }
 
+function Test-HealthyRunning {
+  $app = Get-Process -Name nezha -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like '*src-tauri\target\debug*' } | Select-Object -First 1
+  if (-not $app) { return $false }
+  $port = Get-NetTCPConnection -LocalPort $VitePort -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $port) { return $false }
+  $state = Probe-Render
+  return ($state -and $state.rootChildren -gt 0)
+}
+
 function Wait-Rendered([int]$TimeoutSec) {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
@@ -152,6 +164,15 @@ function Wait-Rendered([int]$TimeoutSec) {
 }
 
 Write-Log "repo: $RepoRoot"
+
+# Fast path: reuse a healthy running dev instance instead of a 3-6 min cold start.
+if (-not $ForceRestart -and (Test-HealthyRunning)) {
+  $app = Get-Process -Name nezha -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like '*src-tauri\target\debug*' } | Select-Object -First 1
+  Write-Log "dev already running and rendered (pid $($app.Id)); reusing. Use -ForceRestart to rebuild/relaunch."
+  exit 0
+}
+
 Stop-NezhaProcesses
 Stop-DevChain
 if ($ForceFreshCache) {

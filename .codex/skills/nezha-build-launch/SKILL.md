@@ -15,7 +15,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .codex/skills/nezha-build-la
 
 脚本依次执行：结束冲突的 Nezha 实例 → 启动 dev（隐藏控制台，日志写 `tauri-dev.stdout.log` / `tauri-dev.stderr.log`）→ 等待 vite（1420 端口）与 dev 进程 → 用 WebView2 CDP 验证 React 已挂载（`#root` 有子节点）→ 白屏时自动隔离过期 vite 缓存并重启一次。加 `-ForceFreshCache` 可启动前强制重建缓存；`-RenderTimeoutSec 600` 可覆盖渲染等待上限（默认 360s/轮）。
 
-冷启动很慢是常态：全新 vite 实例要按需转换整个依赖图（App.tsx 单文件约 16s+，全图 3-6 分钟），脚本会在超时前持续探测，不要提前判白屏。
+**快路径（默认）**：dev 已在运行且渲染正常时，脚本直接复用并秒回，不重启。需要强制重新构建/启动时加 `-ForceRestart`。
+
+冷启动慢的根因：全新 vite 实例要按需转换整个依赖图（App.tsx 单文件约 16s+，全图 3-6 分钟）。已在 `vite.config.ts` 配置 `server.warmup.clientFiles` 预转换入口链（main/App/styles/i18n），显著缩短首屏等待；根治方案是把 Shiki/CodeMirror 语言包改成动态 `import()`（见 AGENTS.md 技术债务章节）。脚本会在超时前持续探测，不要提前判白屏。
 
 ## 手动流程
 
