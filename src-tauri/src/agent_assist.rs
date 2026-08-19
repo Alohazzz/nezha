@@ -1,3 +1,5 @@
+use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
@@ -62,9 +64,9 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
     Ok(data)
 }
 
-/// 异步启动命名 agent 子进程。超时后通过 `start_kill()` 终止子进程，
-/// 避免阻塞线程和后台 agent 持续运行（M-2 修复）。
-async fn run_naming_agent_with_timeout(
+/// 异步启动 headless agent 子进程（任务命名 / 议题补充共用）。
+/// 超时后通过 `start_kill()` 终止子进程，避免阻塞线程和后台 agent 持续运行（M-2 修复）。
+async fn run_headless_agent_with_timeout(
     agent: &str,
     project_path: &str,
     prompt: &str,
@@ -319,7 +321,8 @@ pub async fn generate_task_name(
 
     // 4. 调用 agent 子进程（kill-on-timeout）
     let output =
-        run_naming_agent_with_timeout(&agent, &project_path, &full_prompt, NAMING_TIMEOUT).await?;
+        run_headless_agent_with_timeout(&agent, &project_path, &full_prompt, NAMING_TIMEOUT)
+            .await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -341,6 +344,146 @@ pub async fn generate_task_name(
         return Err("Agent returned empty response.".to_string());
     }
     Ok(sanitized)
+}
+
+// ── 议题讨论 Skill 指令（云效 v2 详情页「发起讨论」用）────────────────────────
+
+const GRILLING_INSTRUCTIONS: &str = "请用 grilling 流程走完决策树：一次只问一个问题，等用户回答后再问下一个；每个问题先给出你的推荐答案；能用环境/代码查证的事实先去查证而不是问用户；把每条决策分支走完，依赖关系逐条解决；达成共享理解后产出符合 What/Why/Scope 的 issue 提案；先不要写代码。";
+
+const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；每个结论都要有可复现的证据，不凭感觉猜。";
+
+/// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无。
+pub fn issue_discussion_instructions(category: &str) -> Option<&'static str> {
+    match category.trim().to_lowercase().as_str() {
+        "req" => Some(GRILLING_INSTRUCTIONS),
+        "bug" => Some(DIAGNOSING_BUGS_INSTRUCTIONS),
+        _ => None,
+    }
+}
+
+/// 前端在拼「发起讨论」prompt 时调用，取对应 Skill 的流程指令文本（无则为空串）。
+#[tauri::command]
+pub fn get_issue_discussion_instructions(category: String) -> Result<String, String> {
+    Ok(issue_discussion_instructions(&category).unwrap_or("").to_string())
+}
+
+// ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
+
+const SUPPLEMENT_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_SUPPLEMENT_INPUT_CHARS: usize = 8000;
+
+const SUPPLEMENT_TEMPLATE: &str = r#"你是议题澄清助手。根据下面的原始议题内容，按固定格式把字段补全。
+
+规则：
+1. 只输出一个 JSON 对象，键严格如下（缺失的信息留空字符串 ""，不要编造）：
+   {fields}
+2. JSON 用 <SUPPLEMENT> 与 </SUPPLEMENT> 标签包裹，标签外不要输出任何内容。
+3. 保留原始议题中的事实，不要添加原文没有的信息。
+
+──── 原始议题内容 ────
+{issue_text}
+
+──── 云效链接 ────
+{link}
+"#;
+
+/// 补充表单预填结果：字段 key → 文本值（与前端 issueForms 字段 key 对齐）。
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct IssueSupplement {
+    pub fields: HashMap<String, String>,
+}
+
+fn build_supplement_prompt(kind: &str, issue_text: &str, link: &str) -> String {
+    let fields = if kind == "缺陷类" {
+        "\"subject\": 标题, \"problem\": 问题描述, \"expectation\": 期望行为, \"repro\": 复现步骤, \"regression\": 回归信息, \"notes\": 补充说明"
+    } else {
+        "\"subject\": 标题, \"pain\": 当前痛点, \"expectation\": 期望行为, \"alternative\": 备选方案, \"notes\": 补充说明"
+    };
+    SUPPLEMENT_TEMPLATE
+        .replace("{fields}", fields)
+        .replace("{issue_text}", issue_text)
+        .replace("{link}", link)
+}
+
+fn truncate_supplement_input(text: String) -> String {
+    if text.chars().count() <= MAX_SUPPLEMENT_INPUT_CHARS {
+        text
+    } else {
+        text.chars().take(MAX_SUPPLEMENT_INPUT_CHARS).collect::<String>() + "…"
+    }
+}
+
+/// 提取 `<SUPPLEMENT>...</SUPPLEMENT>` 内 JSON（取最后一对标签，避开 prompt 回显）；
+/// 无标签时回退到整个 stdout 当作 JSON 文本。
+fn extract_supplement_json(stdout: &str) -> String {
+    const OPEN: &str = "<SUPPLEMENT>";
+    const CLOSE: &str = "</SUPPLEMENT>";
+    if let Some(close_pos) = stdout.rfind(CLOSE) {
+        let prefix = &stdout[..close_pos];
+        if let Some(open_start) = prefix.rfind(OPEN) {
+            let inner = &prefix[open_start + OPEN.len()..];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    stdout.trim().to_string()
+}
+
+/// 解析补充结果：仅收集字符串值，跳过 null / 数字 / 嵌套对象（防御模型输出漂移）。
+fn parse_issue_supplement(stdout: &str) -> Result<IssueSupplement, String> {
+    let json_text = extract_supplement_json(stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&json_text).map_err(|e| format!("解析议题补充结果失败: {e}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "解析议题补充结果失败：响应不是 JSON 对象".to_string())?;
+    let mut fields = HashMap::new();
+    for (key, value) in object {
+        if let Some(text) = value.as_str() {
+            fields.insert(key.clone(), text.to_string());
+        }
+    }
+    Ok(IssueSupplement { fields })
+}
+
+/// 轻量 AI 预填议题补充表单：按类型模板生成结构化字段草稿。
+/// project_path 仅作为 headless 进程 cwd，校验规则与 generate_task_name 同级。
+#[tauri::command]
+pub async fn generate_issue_supplement(
+    project_path: String,
+    agent: String,
+    category: String,
+    issue_text: String,
+    link: String,
+) -> Result<IssueSupplement, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {}", agent));
+    }
+    let project_for_validation = project_path.clone();
+    tokio::task::spawn_blocking(move || validate_project_path_for_naming(&project_for_validation))
+        .await
+        .map_err(|e| format!("project_path 校验线程错误: {}", e))??;
+
+    let kind = if category.trim().eq_ignore_ascii_case("bug") {
+        "缺陷类"
+    } else {
+        "需求类"
+    };
+    let truncated = truncate_supplement_input(issue_text);
+    let prompt = build_supplement_prompt(kind, &truncated, link.trim());
+
+    let output =
+        run_headless_agent_with_timeout(&agent, &project_path, &prompt, SUPPLEMENT_TIMEOUT)
+            .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Agent failed: {}{}", stderr, stdout));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    parse_issue_supplement(&raw)
 }
 
 #[cfg(test)]
@@ -446,5 +589,58 @@ mod tests {
     fn build_naming_prompt_without_summary_uses_fallback() {
         let p = build_naming_prompt("写个 hello world", None);
         assert!(p.contains(NAMING_FALLBACK_SUMMARY));
+    }
+
+    #[test]
+    fn issue_instructions_map_req_to_grilling() {
+        let text = issue_discussion_instructions("Req").expect("Req has instructions");
+        assert!(text.contains("grilling"));
+        assert!(text.contains("What/Why/Scope"));
+    }
+
+    #[test]
+    fn issue_instructions_map_bug_to_diagnosing_bugs() {
+        let text = issue_discussion_instructions("Bug").expect("Bug has instructions");
+        assert!(text.contains("diagnosing-bugs"));
+        assert!(text.contains("变红"));
+    }
+
+    #[test]
+    fn issue_instructions_none_for_task_and_unknown() {
+        assert!(issue_discussion_instructions("Task").is_none());
+        assert!(issue_discussion_instructions("").is_none());
+        assert!(issue_discussion_instructions("  ").is_none());
+    }
+
+    #[test]
+    fn parses_supplement_from_tagged_json() {
+        let stdout = "<SUPPLEMENT>\n{\"subject\": \"x\", \"pain\": \"y\"}\n</SUPPLEMENT>";
+        let fields = parse_issue_supplement(stdout).expect("parses").fields;
+        assert_eq!(fields.get("subject").map(String::as_str), Some("x"));
+        assert_eq!(fields.get("pain").map(String::as_str), Some("y"));
+    }
+
+    #[test]
+    fn parses_supplement_from_noisy_stdout_using_last_tag() {
+        let stdout = "user\n...echo...\ncodex\n<SUPPLEMENT>{\"subject\":\"a\",\"expectation\":\"b\"}</SUPPLEMENT>\ntokens used\n12,345\n";
+        let fields = parse_issue_supplement(stdout).expect("parses").fields;
+        assert_eq!(fields.get("subject").map(String::as_str), Some("a"));
+        assert_eq!(fields.get("expectation").map(String::as_str), Some("b"));
+    }
+
+    #[test]
+    fn parses_supplement_raw_json_fallback() {
+        let stdout = "{\"subject\": \"raw\"}";
+        let fields = parse_issue_supplement(stdout).expect("parses").fields;
+        assert_eq!(fields.get("subject").map(String::as_str), Some("raw"));
+    }
+
+    #[test]
+    fn supplement_skips_non_string_values() {
+        let stdout = "<SUPPLEMENT>{\"subject\":\"s\", \"pain\": 123, \"notes\": null}</SUPPLEMENT>";
+        let fields = parse_issue_supplement(stdout).expect("parses").fields;
+        assert_eq!(fields.get("subject").map(String::as_str), Some("s"));
+        assert!(!fields.contains_key("pain"));
+        assert!(!fields.contains_key("notes"));
     }
 }

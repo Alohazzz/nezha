@@ -241,6 +241,27 @@ fn merge_status_lists(lists: Vec<Vec<YunxiaoStatus>>) -> Vec<YunxiaoStatus> {
     merged
 }
 
+/// 解析 GetWorkitem 响应：优先直接解析工作项对象，兼容 `{"result": {...}}` 包裹形态。
+/// 具体返回结构实现时用真实 token 复验（v1 同样以实测为准）。
+fn parse_workitem_response(bytes: &[u8]) -> Result<YunxiaoWorkitem, String> {
+    if let Ok(item) = serde_json::from_slice::<YunxiaoWorkitem>(bytes) {
+        if !item.id.is_empty() {
+            return Ok(item);
+        }
+    }
+    #[derive(Deserialize, Default)]
+    struct WrappedWorkitem {
+        #[serde(default)]
+        result: Option<YunxiaoWorkitem>,
+    }
+    let wrapped: WrappedWorkitem =
+        serde_json::from_slice(bytes).map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    wrapped
+        .result
+        .filter(|item| !item.id.is_empty())
+        .ok_or_else(|| "解析云效工作项详情失败：响应中没有工作项数据".to_string())
+}
+
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
 
 /// 获取当前令牌所属用户（「我负责的」过滤的身份来源）。
@@ -419,6 +440,28 @@ pub async fn yunxiao_list_workitem_statuses(
     Ok(merge_status_lists(lists))
 }
 
+/// 按工作项 ID 获取议题详情（GetWorkitem）。
+/// REST 路径与返回结构以官方文档 + 真实 token 复验为准（仓库惯例）。
+#[tauri::command]
+pub async fn yunxiao_get_workitem(
+    token: String,
+    organization_id: String,
+    workitem_id: String,
+) -> Result<YunxiaoWorkitem, String> {
+    let token = token.trim();
+    let organization_id = organization_id.trim();
+    let workitem_id = workitem_id.trim();
+    if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
+    }
+    let client = build_client()?;
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+    );
+    let bytes = get_yunxiao_json(&client, token, url).await?;
+    parse_workitem_response(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,5 +586,27 @@ mod tests {
         let a = vec![test_status("", "无 ID 状态")];
         let merged = merge_status_lists(vec![a.clone(), a]);
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn parses_get_workitem_direct_response() {
+        let item = parse_workitem_response(WORKITEM_JSON.as_bytes()).expect("direct response parses");
+        assert_eq!(item.id, "741d91e70b392b65ef95604c1f");
+        assert_eq!(item.serial_number, "QHDK-29728");
+        assert_eq!(item.subject, "【芒市医共体】试剂出库查询，过滤框输入字符就报错");
+    }
+
+    #[test]
+    fn parses_get_workitem_wrapped_result_response() {
+        let json = format!(r#"{{"success": true, "result": {WORKITEM_JSON}}}"#);
+        let item = parse_workitem_response(json.as_bytes()).expect("wrapped response parses");
+        assert_eq!(item.id, "741d91e70b392b65ef95604c1f");
+        assert_eq!(item.status.as_ref().unwrap().name, "待处理");
+    }
+
+    #[test]
+    fn get_workitem_parse_error_on_garbage() {
+        assert!(parse_workitem_response(b"not json").is_err());
+        assert!(parse_workitem_response(br#"{"success": true}"#).is_err());
     }
 }

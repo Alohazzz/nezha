@@ -32,6 +32,7 @@ import { quoteFontName } from "./utils/fonts";
 import {
   buildYunxiaoPrompt,
   buildYunxiaoTaskName,
+  getLastYunxiaoAgent,
   isYunxiaoWorkitemImported,
 } from "./utils/yunxiao";
 import { WelcomePage } from "./components/WelcomePage";
@@ -1265,13 +1266,30 @@ function App() {
     if (!targetProject) return false;
     if (isYunxiaoWorkitemImported(tasks, issue.id)) return false;
 
+    // Agent 记忆：上次选择优先；无记忆时回退项目配置默认（再兜底 claude）。
+    const rememberedAgent = getLastYunxiaoAgent(targetProject.id);
+    let agent: AgentType = rememberedAgent ?? "claude";
+    if (!rememberedAgent) {
+      try {
+        const cfg = await invoke<{ agent?: { default?: string } }>("read_project_config", {
+          projectPath: targetProject.path,
+        });
+        const cfgAgent = cfg.agent?.default;
+        if (cfgAgent === "claude" || cfgAgent === "codex" || cfgAgent === "dsh") {
+          agent = cfgAgent;
+        }
+      } catch {
+        // 读取失败保持 claude 兜底，不阻断导入
+      }
+    }
+
     const now = Date.now();
     const task: Task = {
       id: `${now}`,
       projectId: targetProject.id,
       name: buildYunxiaoTaskName(issue),
       prompt: buildYunxiaoPrompt(issue),
-      agent: "claude",
+      agent,
       permissionMode: "ask",
       status: "todo",
       createdAt: now,
@@ -1366,6 +1384,41 @@ function App() {
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
+  }
+
+  /** 云效详情页「定稿」：把补全后的议题内容写回待办 prompt。 */
+  function handleFinalizeYunxiaoTodo(taskId: string, prompt: string) {
+    setTasks((prev) => {
+      const task = prev.find((t) => t.id === taskId);
+      if (!task || task.status !== "todo") return prev;
+      const next = prev.map((t) => (t.id === taskId ? { ...t, prompt } : t));
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+  }
+
+  /** 云效详情页「发起讨论」：先落定稿 prompt + 所选 Agent，再复用 run 链路启动会话。 */
+  function handleStartYunxiaoDiscussion(taskId: string, prompt: string, agent: AgentType) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    setTasks((prev) => {
+      const next = prev.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              prompt,
+              agent,
+              model: agent === t.agent ? t.model : undefined,
+              reasoningEffort: agent === t.agent ? t.reasoningEffort : undefined,
+            }
+          : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    handleRunTodoTask({ ...task, prompt, agent });
   }
 
   async function handleDeleteProject(projectId: string) {
@@ -1632,6 +1685,8 @@ function App() {
               onSubmitTask={(taskInput) => handleSubmitTask(project, taskInput)}
               onRunTodoTask={handleRunTodoTask}
               onUpdateTodo={handleUpdateTodo}
+              onFinalizeYunxiaoTodo={handleFinalizeYunxiaoTodo}
+              onStartYunxiaoDiscussion={handleStartYunxiaoDiscussion}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
               onResumeTaskAndSend={handleResumeTaskAndSend}

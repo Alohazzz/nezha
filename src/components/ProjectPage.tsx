@@ -33,6 +33,7 @@ import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { TodoTaskView } from "./TodoTaskView";
+import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useToast } from "./Toast";
@@ -61,6 +62,8 @@ export function ProjectPage({
   onSubmitTask,
   onRunTodoTask,
   onUpdateTodo,
+  onFinalizeYunxiaoTodo,
+  onStartYunxiaoDiscussion,
   onCancelTask,
   onResumeTask,
   onResumeTaskAndSend,
@@ -133,6 +136,8 @@ export function ProjectPage({
     taskId: string,
     updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
   ) => void;
+  onFinalizeYunxiaoTodo: (taskId: string, prompt: string) => void;
+  onStartYunxiaoDiscussion: (taskId: string, prompt: string, agent: AgentType) => void;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
   /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
@@ -634,11 +639,21 @@ export function ProjectPage({
                 onCacheDraft={handleCacheNewTaskDraft}
               />
             ) : selectedTask.status === ("todo" as TaskStatus) ? (
-              <TodoTaskView
-                task={selectedTask}
-                onRunTodo={onRunTodoTask}
-                onUpdateTodo={onUpdateTodo}
-              />
+              selectedTask.yunxiaoWorkitemId ? (
+                <YunxiaoIssueDetailView
+                  task={selectedTask}
+                  projectPath={project.path}
+                  onBack={onBack}
+                  onFinalize={onFinalizeYunxiaoTodo}
+                  onStartDiscussion={onStartYunxiaoDiscussion}
+                />
+              ) : (
+                <TodoTaskView
+                  task={selectedTask}
+                  onRunTodo={onRunTodoTask}
+                  onUpdateTodo={onUpdateTodo}
+                />
+              )
             ) : null}
           </ErrorBoundary>
 

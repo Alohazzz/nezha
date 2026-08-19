@@ -1,4 +1,38 @@
-import type { Task, YunxiaoWorkitem } from "../types";
+import type { AgentType, Task, YunxiaoWorkitem } from "../types";
+
+const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
+const YUNXIAO_WORKITEM_BASE = "https://devops.aliyun.com/projex";
+
+/**
+ * 云效 Projex 工作项详情页链接。
+ * URL 格式与 v1 项目链接同源（…/projex/project/{projectId}/…）；
+ * 实现时以浏览器真实地址复验，如格式有出入只改这里。
+ */
+export function buildYunxiaoIssueLink(projectId: string, workitemId: string): string {
+  const project = projectId.trim();
+  const workitem = workitemId.trim();
+  if (!project || !workitem) return "";
+  return `${YUNXIAO_WORKITEM_BASE}/project/${project}/workitem/${workitem}`;
+}
+
+/** 读取某项目上次选择的云效 Agent（无记忆或值非法时返回 null）。 */
+export function getLastYunxiaoAgent(projectId: string): AgentType | null {
+  try {
+    const value = localStorage.getItem(`${YUNXIAO_LAST_AGENT_PREFIX}${projectId}`);
+    return value === "claude" || value === "codex" || value === "dsh" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 记录某项目选择的云效 Agent（localStorage 不可用时静默降级）。 */
+export function setLastYunxiaoAgent(projectId: string, agent: AgentType): void {
+  try {
+    localStorage.setItem(`${YUNXIAO_LAST_AGENT_PREFIX}${projectId}`, agent);
+  } catch {
+    // localStorage 不可用（受限 webview 等）时不阻断流程
+  }
+}
 
 /** 云效 SearchWorkitems conditions 中单条过滤条件（conditionGroups 内同一组为 AND）。 */
 export interface YunxiaoCondition {
