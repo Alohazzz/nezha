@@ -665,6 +665,8 @@ export const dialogs = {
   },
   settingsSelectViewport: {
     padding: 0,
+    maxHeight: 320,
+    overflowY: "auto",
   },
   settingsSelectOption: {
     display: "flex",
