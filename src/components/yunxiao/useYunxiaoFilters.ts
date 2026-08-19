@@ -10,6 +10,7 @@ import { buildYunxiaoConditions } from "../../utils/yunxiao";
 
 const YUNXIAO_FILTERS_PREFIX = "nezha:yunxiaoFilters:";
 const SEARCH_DEBOUNCE_MS = 250;
+const FILTER_DEBOUNCE_MS = 300;
 
 /**
  * 云效议题页的过滤状态：搜索防抖、我负责的、状态多选、状态选项缓存、
@@ -25,7 +26,9 @@ export function useYunxiaoFilters(
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [assignedToMe, setAssignedToMe] = useState(false);
+  const [debouncedAssignedToMe, setDebouncedAssignedToMe] = useState(false);
   const [selectedStatusIds, setSelectedStatusIds] = useState<string[]>([]);
+  const [debouncedStatusIds, setDebouncedStatusIds] = useState<string[]>([]);
   const [statusOptions, setStatusOptions] = useState<YunxiaoStatus[]>([]);
   const [statusesLoading, setStatusesLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -43,6 +46,15 @@ export function useYunxiaoFilters(
     const id = window.setTimeout(() => setDebouncedQuery(query.trim()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [query]);
+
+  // 过滤条件（我负责的 / 状态多选）防抖 300ms：合并快速连点产生的重复服务端重查。
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setDebouncedAssignedToMe(assignedToMe);
+      setDebouncedStatusIds(selectedStatusIds);
+    }, FILTER_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [assignedToMe, selectedStatusIds]);
 
   // 手动兜底输入框与设置缓存同步（仅设置变化时覆盖，输入中不受影响）。
   useEffect(() => {
@@ -201,11 +213,11 @@ export function useYunxiaoFilters(
     () =>
       buildYunxiaoConditions({
         query: debouncedQuery,
-        assignedToMe,
+        assignedToMe: debouncedAssignedToMe,
         currentUserId: currentUser?.id,
-        selectedStatusIds,
+        selectedStatusIds: debouncedStatusIds,
       }),
-    [debouncedQuery, assignedToMe, currentUser?.id, selectedStatusIds],
+    [debouncedQuery, debouncedAssignedToMe, currentUser?.id, debouncedStatusIds],
   );
 
   return {
