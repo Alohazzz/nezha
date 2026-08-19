@@ -1,6 +1,7 @@
-import type { AgentType, Task, YunxiaoWorkitem } from "../types";
+import type { AgentType, PermissionMode, Task, YunxiaoWorkitem } from "../types";
 
 const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
+const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
 const YUNXIAO_WORKITEM_BASE = "https://devops.aliyun.com/projex";
 
 /**
@@ -29,6 +30,25 @@ export function getLastYunxiaoAgent(projectId: string): AgentType | null {
 export function setLastYunxiaoAgent(projectId: string, agent: AgentType): void {
   try {
     localStorage.setItem(`${YUNXIAO_LAST_AGENT_PREFIX}${projectId}`, agent);
+  } catch {
+    // localStorage 不可用（受限 webview 等）时不阻断流程
+  }
+}
+
+/** 读取某项目上次选择的云效权限模式（无记忆或值非法时返回 null）。 */
+export function getLastYunxiaoPermission(projectId: string): PermissionMode | null {
+  try {
+    const value = localStorage.getItem(`${YUNXIAO_LAST_PERMISSION_PREFIX}${projectId}`);
+    return value === "ask" || value === "auto_edit" || value === "full_access" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 记录某项目选择的云效权限模式（localStorage 不可用时静默降级）。 */
+export function setLastYunxiaoPermission(projectId: string, mode: PermissionMode): void {
+  try {
+    localStorage.setItem(`${YUNXIAO_LAST_PERMISSION_PREFIX}${projectId}`, mode);
   } catch {
     // localStorage 不可用（受限 webview 等）时不阻断流程
   }

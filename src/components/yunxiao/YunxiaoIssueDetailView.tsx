@@ -13,7 +13,9 @@ import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/ty
 import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
+  getLastYunxiaoPermission,
   normalizeIssueDescription,
+  setLastYunxiaoPermission,
   setLastYunxiaoAgent,
 } from "../../utils/yunxiao";
 import {
@@ -74,7 +76,9 @@ export function YunxiaoIssueDetailView({
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(task.projectId) ?? task.agent,
   );
-  const [permission, setPermission] = useState<PermissionMode>(task.permissionMode);
+  const [permission, setPermission] = useState<PermissionMode>(
+    () => getLastYunxiaoPermission(task.projectId) ?? task.permissionMode,
+  );
   // 待办切换时重置全部议题相关状态（否则组件实例复用导致表单/定稿态串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
   const originalPromptRef = useRef(task.yunxiaoSupplement?.originalPrompt ?? task.prompt);
@@ -85,7 +89,7 @@ export function YunxiaoIssueDetailView({
     setValues(task.yunxiaoSupplement?.fields ?? {});
     setPrefillState("idle");
     setFinalized(hasSupplementValues(task.yunxiaoSupplement?.fields));
-    setPermission(task.permissionMode);
+    setPermission(getLastYunxiaoPermission(task.projectId) ?? task.permissionMode);
     setAgent(getLastYunxiaoAgent(task.projectId) ?? task.agent);
   }
 
@@ -154,8 +158,12 @@ export function YunxiaoIssueDetailView({
   }, [task.projectId]);
 
   const cyclePermission = useCallback(() => {
-    setPermission((prev) => PERMS[(PERMS.indexOf(prev) + 1) % PERMS.length]);
-  }, []);
+    setPermission((prev) => {
+      const next = PERMS[(PERMS.indexOf(prev) + 1) % PERMS.length];
+      setLastYunxiaoPermission(task.projectId, next);
+      return next;
+    });
+  }, [task.projectId]);
 
   const permissionLabel = useCallback(
     (mode: PermissionMode) => {

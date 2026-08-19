@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   buildYunxiaoIssueLink,
+  getLastYunxiaoPermission,
   getLastYunxiaoAgent,
   normalizeIssueDescription,
+  setLastYunxiaoPermission,
   setLastYunxiaoAgent,
 } from "../utils/yunxiao";
 import {
@@ -60,6 +62,25 @@ describe("lastYunxiaoAgent 记忆", () => {
   it("切换项目互不影响", () => {
     setLastYunxiaoAgent("p-1", "dsh");
     expect(getLastYunxiaoAgent("p-2")).toBeNull();
+  });
+});
+
+describe("lastYunxiaoPermission 记忆", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("写入后可读回，且按项目隔离", () => {
+    setLastYunxiaoPermission("p-1", "full_access");
+    setLastYunxiaoPermission("p-2", "ask");
+    expect(getLastYunxiaoPermission("p-1")).toBe("full_access");
+    expect(getLastYunxiaoPermission("p-2")).toBe("ask");
+  });
+
+  it("未写入或写入非法值时返回 null", () => {
+    expect(getLastYunxiaoPermission("p-1")).toBeNull();
+    localStorage.setItem("nezha:lastYunxiaoPermission:p-1", "yolo");
+    expect(getLastYunxiaoPermission("p-1")).toBeNull();
   });
 });
 

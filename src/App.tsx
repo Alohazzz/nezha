@@ -34,6 +34,7 @@ import {
   buildYunxiaoPrompt,
   buildYunxiaoTaskName,
   getLastYunxiaoAgent,
+  getLastYunxiaoPermission,
   isYunxiaoWorkitemImported,
 } from "./utils/yunxiao";
 import { WelcomePage } from "./components/WelcomePage";
@@ -1267,20 +1268,32 @@ function App() {
     if (!targetProject) return false;
     if (isYunxiaoWorkitemImported(tasks, issue.id)) return false;
 
-    // Agent 记忆：上次选择优先；无记忆时回退项目配置默认（再兜底 claude）。
+    // Agent / 权限模式记忆：上次选择优先；无记忆时回退项目配置默认（再兜底 claude/ask）。
     const rememberedAgent = getLastYunxiaoAgent(targetProject.id);
+    const rememberedPermission = getLastYunxiaoPermission(targetProject.id);
     let agent: AgentType = rememberedAgent ?? "claude";
-    if (!rememberedAgent) {
+    let permissionMode: PermissionMode = rememberedPermission ?? "ask";
+    if (!rememberedAgent || !rememberedPermission) {
       try {
-        const cfg = await invoke<{ agent?: { default?: string } }>("read_project_config", {
+        const cfg = await invoke<{
+          agent?: { default?: string; default_permission_mode?: string };
+        }>("read_project_config", {
           projectPath: targetProject.path,
         });
-        const cfgAgent = cfg.agent?.default;
-        if (cfgAgent === "claude" || cfgAgent === "codex" || cfgAgent === "dsh") {
-          agent = cfgAgent;
+        if (!rememberedAgent) {
+          const cfgAgent = cfg.agent?.default;
+          if (cfgAgent === "claude" || cfgAgent === "codex" || cfgAgent === "dsh") {
+            agent = cfgAgent;
+          }
+        }
+        if (!rememberedPermission) {
+          const cfgPerm = cfg.agent?.default_permission_mode;
+          if (cfgPerm === "ask" || cfgPerm === "auto_edit" || cfgPerm === "full_access") {
+            permissionMode = cfgPerm;
+          }
         }
       } catch {
-        // 读取失败保持 claude 兜底，不阻断导入
+        // 读取失败保持兜底，不阻断导入
       }
     }
 
@@ -1291,7 +1304,7 @@ function App() {
       name: buildYunxiaoTaskName(issue),
       prompt: buildYunxiaoPrompt(issue),
       agent,
-      permissionMode: "ask",
+      permissionMode,
       status: "todo",
       createdAt: now,
       updatedAt: now,

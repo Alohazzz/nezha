@@ -87,7 +87,9 @@
 7. **权限模式选择（YOLO）**：讨论区 Agent 选择旁提供权限模式选择
    （Ask → Auto-edit → YOLO，YOLO = `full_access`，即
    `--dangerously-skip-permissions` / `--dangerously-bypass-approvals-and-sandbox`），
-   随发起讨论传入会话；默认沿用任务当前权限模式（导入时 `ask`）。
+   随发起讨论传入会话；**按项目记忆上次选择**（localStorage
+   `nezha:lastYunxiaoPermission:<projectId>`，逻辑与 Agent 记忆一致），
+   新导入议题以其为默认权限；无记忆时回退项目配置 `agent.default_permission_mode`。
 
 ### 明确不做（v2 非目标）
 
@@ -200,8 +202,9 @@ v1 只把列表字段导入成待办 prompt，点击待办看不到议题完整�
 10. **链接**：详情页头「在云效打开」+ 定稿 prompt 追加云效链接。
 11. **Agent 记忆**：选择器放详情页「发起讨论」区；按项目记忆上次选择
     （localStorage），新导入以此为默认；无记忆回退项目配置默认。
-12. **权限模式选择**：讨论区支持选权限模式（Ask / Auto-edit / YOLO=full_access），
-    随发起讨论传入会话，默认沿用任务当前权限。
+12. **权限模式选择 + 记忆**：讨论区支持选权限模式（Ask / Auto-edit / YOLO=full_access），
+    按项目记忆（localStorage），随发起讨论传入会话；新导入以其为默认，
+    无记忆回退项目配置 `default_permission_mode`（逻辑与 Agent 记忆一致）。
 
 ## 附录 B：待评审 / 后续迭代候选
 

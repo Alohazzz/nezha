@@ -136,4 +136,17 @@ describe("YunxiaoIssueDetailView 待办切换", () => {
       false,
     );
   });
+
+  it("权限模式按项目记忆，切换待办后沿用上次选择", async () => {
+    const { rerender } = render(view(baseTask("task-a", "workitem-a")));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    fireEvent.click(screen.getByRole("button", { name: "Auto-edit" }));
+    expect(localStorage.getItem("nezha:lastYunxiaoPermission:p-1")).toBe("full_access");
+
+    // 同项目切到待办 B：权限默认取记忆值（YOLO）
+    rerender(view(baseTask("task-b", "workitem-b")));
+    await waitFor(() => expect(screen.getByRole("button", { name: "YOLO" })).toBeTruthy());
+  });
 });
