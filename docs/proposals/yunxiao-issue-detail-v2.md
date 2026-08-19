@@ -63,7 +63,7 @@
 │                                            [定稿]           │
 ├────────────────────────────────────────────────────────────┤
 │ 讨论（grilling）                                           │
-│ Agent：[Claude Code ▾]                          [发起讨论]   │
+│ Agent：[Claude Code ▾] [Ask ▾]                  [发起讨论]   │
 │ 定稿内容 + Skill 指令（Agent 记忆：下次默认上次选择）      │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -84,6 +84,10 @@
    选定后按项目记忆（localStorage `nezha:lastYunxiaoAgent:<projectId>`），
    下次打开云效待办默认用上次选的；新导入议题也以记忆值为默认 agent
    （替换当前硬编码 claude）；无记忆时回退项目配置 `agent.default`。
+7. **权限模式选择（YOLO）**：讨论区 Agent 选择旁提供权限模式选择
+   （Ask → Auto-edit → YOLO，YOLO = `full_access`，即
+   `--dangerously-skip-permissions` / `--dangerously-bypass-approvals-and-sandbox`），
+   随发起讨论传入会话；默认沿用任务当前权限模式（导入时 `ask`）。
 
 ### 明确不做（v2 非目标）
 
@@ -193,6 +197,8 @@ v1 只把列表字段导入成待办 prompt，点击待办看不到议题完整�
 10. **链接**：详情页头「在云效打开」+ 定稿 prompt 追加云效链接。
 11. **Agent 记忆**：选择器放详情页「发起讨论」区；按项目记忆上次选择
     （localStorage），新导入以此为默认；无记忆回退项目配置默认。
+12. **权限模式选择**：讨论区支持选权限模式（Ask / Auto-edit / YOLO=full_access），
+    随发起讨论传入会话，默认沿用任务当前权限。
 
 ## 附录 B：待评审 / 后续迭代候选
 

@@ -1398,7 +1398,12 @@ function App() {
   }
 
   /** 云效详情页「发起讨论」：先落定稿 prompt + 所选 Agent，再复用 run 链路启动会话。 */
-  function handleStartYunxiaoDiscussion(taskId: string, prompt: string, agent: AgentType) {
+  function handleStartYunxiaoDiscussion(
+    taskId: string,
+    prompt: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
     const project = projects.find((p) => p.id === task.projectId);
@@ -1410,6 +1415,7 @@ function App() {
               ...t,
               prompt,
               agent,
+              permissionMode,
               model: agent === t.agent ? t.model : undefined,
               reasoningEffort: agent === t.agent ? t.reasoningEffort : undefined,
             }
@@ -1418,7 +1424,7 @@ function App() {
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
-    handleRunTodoTask({ ...task, prompt, agent });
+    handleRunTodoTask({ ...task, prompt, agent, permissionMode });
   }
 
   async function handleDeleteProject(projectId: string) {

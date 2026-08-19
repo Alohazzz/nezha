@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ChevronLeft, ExternalLink, Play, Sparkles } from "lucide-react";
-import type { AgentType, Task, YunxiaoWorkitem } from "../../types";
+import type { AgentType, PermissionMode, Task, YunxiaoWorkitem } from "../../types";
 import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
 import {
   buildYunxiaoIssueLink,
@@ -21,6 +21,7 @@ import { useToast } from "../Toast";
 import s from "../../styles";
 
 const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
+const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
 function agentLabel(agent: AgentType): string {
   return agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : "DSH";
@@ -43,7 +44,12 @@ export function YunxiaoIssueDetailView({
   projectPath: string;
   onBack: () => void;
   onFinalize: (taskId: string, prompt: string) => void;
-  onStartDiscussion: (taskId: string, prompt: string, agent: AgentType) => void;
+  onStartDiscussion: (
+    taskId: string,
+    prompt: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) => void;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -64,6 +70,7 @@ export function YunxiaoIssueDetailView({
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(task.projectId) ?? task.agent,
   );
+  const [permission, setPermission] = useState<PermissionMode>(task.permissionMode);
 
   const link = useMemo(
     () =>
@@ -129,6 +136,19 @@ export function YunxiaoIssueDetailView({
     });
   }, [task.projectId]);
 
+  const cyclePermission = useCallback(() => {
+    setPermission((prev) => PERMS[(PERMS.indexOf(prev) + 1) % PERMS.length]);
+  }, []);
+
+  const permissionLabel = useCallback(
+    (mode: PermissionMode) => {
+      if (mode === "full_access") return t("yunxiao.discussion.permYolo");
+      if (mode === "auto_edit") return t("yunxiao.discussion.permAuto");
+      return t("yunxiao.discussion.permAsk");
+    },
+    [t],
+  );
+
   const handlePrefill = useCallback(async () => {
     if (prefillState === "loading") return;
     setPrefillState("loading");
@@ -174,8 +194,8 @@ export function YunxiaoIssueDetailView({
     } catch (e) {
       console.error("[yunxiao-detail] fetch skill instructions failed:", e);
     }
-    onStartDiscussion(task.id, prompt, agent);
-  }, [task.id, task.prompt, detail?.categoryId, formKind, onStartDiscussion, agent]);
+    onStartDiscussion(task.id, prompt, agent, permission);
+  }, [task.id, task.prompt, detail?.categoryId, formKind, onStartDiscussion, agent, permission]);
 
   const hasAnyValue = Object.values(values).some((v) => v.trim().length > 0);
 
@@ -267,6 +287,11 @@ export function YunxiaoIssueDetailView({
             <button type="button" style={s.yunxiaoAgentBadge} onClick={cycleAgent}>
               {agentLabel(agent)}
             </button>
+            {agent !== "dsh" && (
+              <button type="button" style={s.yunxiaoAgentBadge} onClick={cyclePermission}>
+                {permissionLabel(permission)}
+              </button>
+            )}
             <span style={s.yunxiaoSkillBadge}>{t(skillLabelKey(skill))}</span>
           </div>
           {!finalized && (
