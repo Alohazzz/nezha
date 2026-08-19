@@ -55,13 +55,6 @@ export function YunxiaoIssueDetailView({
   const { showToast } = useToast();
 
   const workitemId = task.yunxiaoWorkitemId ?? "";
-  // 定稿基线：任务首次打开时的原始 prompt；重复预填/定稿不会把已补全内容再包一层。
-  const originalPromptRef = useRef(task.prompt);
-  const [openedTaskId, setOpenedTaskId] = useState(task.id);
-  if (openedTaskId !== task.id) {
-    setOpenedTaskId(task.id);
-    originalPromptRef.current = task.prompt;
-  }
   const [settings, setSettings] = useState<YunxiaoSettings>(EMPTY_YUNXIAO_SETTINGS);
   const [detail, setDetail] = useState<YunxiaoWorkitem | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -71,6 +64,19 @@ export function YunxiaoIssueDetailView({
     () => getLastYunxiaoAgent(task.projectId) ?? task.agent,
   );
   const [permission, setPermission] = useState<PermissionMode>(task.permissionMode);
+  // 待办切换时重置全部议题相关状态（否则组件实例复用导致表单/定稿态串台）。
+  const [openedTaskId, setOpenedTaskId] = useState(task.id);
+  const originalPromptRef = useRef(task.prompt);
+  if (openedTaskId !== task.id) {
+    setOpenedTaskId(task.id);
+    originalPromptRef.current = task.prompt;
+    setDetail(null);
+    setValues({});
+    setPrefillState("idle");
+    setFinalized(false);
+    setPermission(task.permissionMode);
+    setAgent(getLastYunxiaoAgent(task.projectId) ?? task.agent);
+  }
 
   const link = useMemo(
     () =>
