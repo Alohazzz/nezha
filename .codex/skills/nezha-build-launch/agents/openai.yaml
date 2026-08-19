@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nezha 构建启动"
+  short_description: "按已验证流程编译并启动 Nezha 桌面 dev 应用，含白屏排障"
+  default_prompt: "Use $nezha-build-launch to build and launch the Nezha desktop app with the verified dev flow."

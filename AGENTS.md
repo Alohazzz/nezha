@@ -21,6 +21,12 @@ pnpm tauri build    # 构建生产环境桌面二进制包
 
 Rust 后端位于 `src-tauri/`，修改后需重启 `tauri dev`。
 
+> **编译 + 启动桌面应用（已验证流程）**：使用项目技能 `nezha-build-launch`
+> （`.codex/skills/nezha-build-launch/`），一键运行
+> `powershell -File .codex/skills/nezha-build-launch/scripts/launch-dev.ps1`。
+> 该流程处理单实例冲突、vite 缓存白屏排障（504 Outdated Optimize Dep）、
+> 就绪与渲染验证；冷启动约 3-6 分钟属正常，详见其 SKILL.md。
+
 ---
 
 ## 架构设计
