@@ -4,13 +4,14 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use tauri::{AppHandle, Manager};
+#[cfg(not(target_os = "windows"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::app_settings::load_settings_internal;
 use crate::TaskManager;
 
 /// 同一任务同一类别两次系统通知之间的最小间隔，防止 ask 模式审批循环刷屏。
-const COOLDOWN_SECS: u64 = 60;
+const COOLDOWN_SECS: u64 = 10;
 
 /// 通知类别（冷却按「任务 × 类别」计数）。
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,7 +101,38 @@ pub fn notify_task_event(
     {
         let _ = app.notification().permission().request();
     }
-    let _ = app.notification().builder().title("Nezha").body(body).show();
+    #[cfg(target_os = "windows")]
+    show_windows_notification(app, body);
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 非 Windows：继续走官方插件；macOS / Linux 点击通知由系统原生激活应用。
+        let _ = app
+            .notification()
+            .builder()
+            .title("Nezha")
+            .body(body)
+            .sound("Default")
+            .show();
+    }
+}
+
+/// Windows：直接使用 tauri-winrt-notification 发 toast（与 notify-rust 内部同源），
+/// 以便挂载点击回调：点击通知 → 恢复并聚焦主窗体。
+/// 显式指定默认通知音（ms-winsoundevent:Notification.Default），避免依赖系统默认行为。
+#[cfg(target_os = "windows")]
+fn show_windows_notification(app: &AppHandle, body: String) {
+    use tauri_winrt_notification::{Sound, Toast};
+
+    let handle = app.clone();
+    let toast = Toast::new(Toast::POWERSHELL_APP_ID)
+        .title("Nezha")
+        .text1(&body)
+        .sound(Some(Sound::Default))
+        .on_activated(move |_| {
+            crate::show_main_window(&handle);
+            Ok(())
+        });
+    let _ = toast.show();
 }
 
 #[cfg(test)]

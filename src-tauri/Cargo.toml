@@ -50,6 +50,7 @@ zstd = "0.13"
 # (两套 watcher/hook 抢写同一批 ~/.nezha 文件)。
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "2"
+tauri-winrt-notification = "0.7"
 
 [profile.dev]
 debug = 0
