@@ -486,6 +486,227 @@ pub async fn generate_issue_supplement(
     parse_issue_supplement(&raw)
 }
 
+// ── 云效回写汇总生成（写回闭环）──────────────────────────────────────────────
+
+const WRITEBACK_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_FACTS_CHARS: usize = 8000;
+
+const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是代码修改总结助手。基于下面的事实（议题信息、补充信息、Git 提交与变更统计），为云效议题撰写一段「修改方案汇总」评论，供团队阅读。
+
+规则：
+1. 只依据给定事实，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
+2. 输出 Markdown，包含：做了什么（方案概述）、关键改动点（可引用 commit 短号/文件）、验证情况（仅当事实中有）。
+3. 语言与议题标题一致（中文议题输出中文）。
+4. 长度 150-400 字，控制在 10 行以内。
+5. 输出放在 <SUMMARY> 与 </SUMMARY> 标签内，标签外不要输出任何内容。
+
+──── 议题 ────
+编号：{serial_number}
+标题：{task_name}
+
+──── 补充信息 ────
+{fields_text}
+
+──── 关联提交 ────
+{commits}
+
+──── 变更统计 ────
+{diff_stat}
+"#;
+
+/// 收集回写汇总的事实骨架（commit 列表 + 变更统计），git 数据保证不幻觉。
+fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, String) {
+    let run = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+
+    let commits = base_branch
+        .and_then(|b| run(&["log", "--format=%h %s", &format!("{b}..HEAD")]))
+        .or_else(|| run(&["log", "--format=%h %s", "-n", "20"]))
+        .unwrap_or_default();
+    let diff_stat = base_branch
+        .and_then(|b| run(&["diff", "--stat", &format!("{b}...HEAD")]))
+        .unwrap_or_default();
+
+    let truncate = |s: String| -> String {
+        if s.chars().count() > MAX_FACTS_CHARS {
+            s.chars().take(MAX_FACTS_CHARS).collect::<String>() + "…（已截断）"
+        } else {
+            s
+        }
+    };
+    (
+        truncate(commits),
+        truncate(diff_stat),
+    )
+}
+
+fn build_writeback_prompt(
+    serial_number: &str,
+    task_name: &str,
+    fields_text: &str,
+    commits: &str,
+    diff_stat: &str,
+) -> String {
+    WRITEBACK_PROMPT_TEMPLATE
+        .replace("{serial_number}", serial_number)
+        .replace("{task_name}", task_name)
+        .replace(
+            "{fields_text}",
+            if fields_text.trim().is_empty() {
+                "（无）"
+            } else {
+                fields_text.trim()
+            },
+        )
+        .replace(
+            "{commits}",
+            if commits.trim().is_empty() {
+                "（无）"
+            } else {
+                commits.trim()
+            },
+        )
+        .replace(
+            "{diff_stat}",
+            if diff_stat.trim().is_empty() {
+                "（无）"
+            } else {
+                diff_stat.trim()
+            },
+        )
+}
+
+/// 提取 `<SUMMARY>...</SUMMARY>` 内文本（取最后一对标签，避开 prompt 回显）。
+fn extract_summary(stdout: &str) -> Option<String> {
+    const OPEN: &str = "<SUMMARY>";
+    const CLOSE: &str = "</SUMMARY>";
+    if let Some(close_pos) = stdout.rfind(CLOSE) {
+        let prefix = &stdout[..close_pos];
+        if let Some(open_start) = prefix.rfind(OPEN) {
+            let inner = &prefix[open_start + OPEN.len()..];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// AI 汇总失败时的纯事实模板回退（用户仍可在预览中编辑后发布）。
+fn build_fallback_summary(
+    serial_number: &str,
+    task_name: &str,
+    commits: &str,
+    diff_stat: &str,
+) -> String {
+    let mut lines = vec![
+        format!("### 修改方案汇总（议题 {serial_number}）"),
+        String::new(),
+        format!("> 标题：{task_name}"),
+        String::new(),
+        "> （AI 汇总生成失败，以下为事实记录，可在预览中补充编辑）".to_string(),
+        String::new(),
+        "#### 关联提交".to_string(),
+    ];
+    if commits.trim().is_empty() {
+        lines.push("（无）".to_string());
+    } else {
+        for line in commits.lines() {
+            if let Some((hash, subject)) = line.split_once(' ') {
+                lines.push(format!("- `{hash}` {subject}"));
+            } else {
+                lines.push(format!("- {line}"));
+            }
+        }
+    }
+    lines.push(String::new());
+    lines.push("#### 变更统计".to_string());
+    if diff_stat.trim().is_empty() {
+        lines.push("（无）".to_string());
+    } else {
+        lines.push(format!("```\n{diff_stat}\n```"));
+    }
+    lines.join("\n")
+}
+
+/// 生成云效回写「修改方案汇总」：git 事实骨架 + headless Agent 润色。
+/// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交。
+#[tauri::command]
+pub async fn generate_yunxiao_writeback_summary(
+    project_path: String,
+    repo_path: Option<String>,
+    serial_number: String,
+    task_name: String,
+    fields_text: String,
+    base_branch: Option<String>,
+    agent: String,
+) -> Result<String, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {}", agent));
+    }
+    let serial_number = serial_number.trim().to_string();
+    if serial_number.is_empty() {
+        return Err("缺少议题编号".to_string());
+    }
+    let project_for_validation = project_path.clone();
+    tokio::task::spawn_blocking(move || validate_project_path_for_naming(&project_for_validation))
+        .await
+        .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
+
+    let cwd = if let Some(repo) = repo_path.as_deref().filter(|r| !r.trim().is_empty()) {
+        let repo_trim = repo.trim();
+        let repo_for_validation = repo_trim.to_string();
+        tokio::task::spawn_blocking(move || {
+            validate_project_path_for_naming(&repo_for_validation)
+        })
+        .await
+        .map_err(|e| format!("repo_path 校验线程错误: {e}"))??;
+        repo_trim.to_string()
+    } else {
+        project_path.clone()
+    };
+
+    let base_branch = base_branch
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty());
+    let cwd_for_facts = cwd.clone();
+    let base_for_facts = base_branch.clone();
+    let (commits, diff_stat) = tokio::task::spawn_blocking(move || {
+        gather_writeback_facts(&cwd_for_facts, base_for_facts.as_deref())
+    })
+    .await
+    .map_err(|e| format!("收集 git 事实线程错误: {e}"))?;
+
+    let prompt = build_writeback_prompt(
+        &serial_number,
+        task_name.trim(),
+        &fields_text,
+        &commits,
+        &diff_stat,
+    );
+    let output = run_headless_agent_with_timeout(&agent, &project_path, &prompt, WRITEBACK_TIMEOUT)
+        .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Agent failed: {}{}", stderr, stdout));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    Ok(extract_summary(&raw).unwrap_or_else(|| {
+        build_fallback_summary(&serial_number, task_name.trim(), &commits, &diff_stat)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

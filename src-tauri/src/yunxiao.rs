@@ -9,16 +9,30 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::path::Path;
 use std::time::Duration;
 
 const API_BASE: &str = "https://openapi-rdc.aliyuncs.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_ISSUE_IMAGES: usize = 20;
+const MAX_COMMENT_CHARS: usize = 20_000;
+const MAX_REPORTED_ERRORS: usize = 5;
 
 fn build_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))
+}
+
+/// 图片下载客户端：允许有限重定向（OSS 签名 URL 常见），最终域名仍走白名单校验。
+fn build_download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))
 }
@@ -142,6 +156,9 @@ pub struct YunxiaoWorkitem {
     pub gmt_create: Option<i64>,
     #[serde(rename = "customFieldValues", default)]
     pub custom_field_values: Vec<YunxiaoCustomFieldValue>,
+    /// 描述正文中的图片数量（详情接口由 parse_workitem_response 从原始描述计算，列表接口为 0）。
+    #[serde(default)]
+    pub image_count: usize,
     #[serde(rename = "categoryId", default, skip_serializing_if = "Option::is_none")]
     pub category_id: Option<String>,
     #[serde(rename = "logicalStatus", default, skip_serializing_if = "Option::is_none")]
@@ -321,25 +338,32 @@ where
     Ok(value.and_then(normalize_issue_description))
 }
 
-/// 解析 GetWorkitem 响应：优先直接解析工作项对象，兼容 `{"result": {...}}` 包裹形态。
-/// 具体返回结构实现时用真实 token 复验（v1 同样以实测为准）。
+/// 解析 GetWorkitem 响应：兼容直接对象与 `{"result": {...}}` 包裹形态；
+/// 顺带从原始描述计算图片数量（供详情页提示「议题含 N 张图片」）。
 fn parse_workitem_response(bytes: &[u8]) -> Result<YunxiaoWorkitem, String> {
-    if let Ok(item) = serde_json::from_slice::<YunxiaoWorkitem>(bytes) {
-        if !item.id.is_empty() {
-            return Ok(item);
+    let mut value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    if value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        if let Some(result) = value.get_mut("result") {
+            value = result.take();
         }
     }
-    #[derive(Deserialize, Default)]
-    struct WrappedWorkitem {
-        #[serde(default)]
-        result: Option<YunxiaoWorkitem>,
+    let mut item: YunxiaoWorkitem = serde_json::from_value(value.clone())
+        .map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    if item.id.is_empty() {
+        return Err("解析云效工作项详情失败：响应中没有工作项数据".to_string());
     }
-    let wrapped: WrappedWorkitem =
-        serde_json::from_slice(bytes).map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
-    wrapped
-        .result
-        .filter(|item| !item.id.is_empty())
-        .ok_or_else(|| "解析云效工作项详情失败：响应中没有工作项数据".to_string())
+    let mut urls = Vec::new();
+    if let Some(description) = value.get("description") {
+        extract_image_urls_from_value(description, &mut urls);
+    }
+    item.image_count = urls.len();
+    Ok(item)
 }
 
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
@@ -542,6 +566,360 @@ pub async fn yunxiao_get_workitem(
     parse_workitem_response(&bytes)
 }
 
+// ── 议题图片提取 / 下载（识图）────────────────────────────────────────────────
+
+/// 图片提取结果：下载成功的本地路径 + 统计（供前端提示部分失败/全部失败）。
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct IssueImagesPrepared {
+    pub paths: Vec<String>,
+    pub total: usize,
+    pub downloaded: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+}
+
+fn push_image_url(urls: &mut Vec<String>, url: &str) {
+    let url = url.trim();
+    if url.is_empty() || urls.iter().any(|u| u == url) {
+        return;
+    }
+    urls.push(url.to_string());
+}
+
+/// 从原始描述（富文本 JSON / HTML / Markdown）递归提取图片 URL，保留出现顺序并去重。
+fn extract_image_urls_from_value(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            for url in extract_image_urls_from_text(s) {
+                push_image_url(out, &url);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                extract_image_urls_from_value(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            // 富文本图片节点：{"type":"image","src"/"url"/"attrs":{"src":...}}
+            let is_image_node =
+                map.get("type").and_then(serde_json::Value::as_str) == Some("image");
+            if is_image_node {
+                for key in ["src", "url", "filePath"] {
+                    if let Some(serde_json::Value::String(u)) = map.get(key) {
+                        push_image_url(out, u);
+                    }
+                }
+                if let Some(attrs) = map.get("attrs") {
+                    for key in ["src", "url"] {
+                        if let Some(serde_json::Value::String(u)) = attrs.get(key) {
+                            push_image_url(out, u);
+                        }
+                    }
+                }
+            }
+            for (_, v) in map {
+                extract_image_urls_from_value(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 从纯文本中提取图片 URL（HTML `<img src>` + Markdown `![alt](url)`）。
+fn extract_image_urls_from_text(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for url in extract_html_img_urls(text) {
+        push_image_url(&mut urls, &url);
+    }
+    for url in extract_markdown_image_urls(text) {
+        push_image_url(&mut urls, &url);
+    }
+    urls
+}
+
+/// 解析 `<img ... src="...">`（大小写不敏感，兼容单双引号）。to_ascii_lowercase 不改变字节长度，
+/// 因此 lower 与原文的字节偏移一一对应。
+fn extract_html_img_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let lower = text.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(rel) = lower[search_from..].find("<img") {
+        let start = search_from + rel;
+        let tag_end = text[start..]
+            .find('>')
+            .map(|i| start + i)
+            .unwrap_or(text.len());
+        let tag = &text[start..tag_end];
+        let tag_lower = &lower[start..tag_end];
+        let mut s = 0;
+        while let Some(src_rel) = tag_lower[s..].find("src") {
+            let src_pos = s + src_rel;
+            let rest = tag[src_pos + 3..].trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let rest = rest.trim_start();
+                if let Some(q) = rest.chars().next() {
+                    if q == '"' || q == '\'' {
+                        if let Some(end) = rest[q.len_utf8()..].find(q) {
+                            let url = &rest[q.len_utf8()..][..end];
+                            push_image_url(&mut urls, url);
+                        }
+                        break;
+                    }
+                }
+            }
+            s = src_pos + 3;
+        }
+        search_from = tag_end;
+    }
+    urls
+}
+
+/// 解析 Markdown `![alt](https://...)`。
+fn extract_markdown_image_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut search_from = 0;
+    while let Some(rel) = text[search_from..].find("![") {
+        let start = search_from + rel;
+        let after = &text[start + 2..];
+        if let Some(close_idx) = after.find(']') {
+            let after_close = after[close_idx + 1..].trim_start();
+            if let Some(rest) = after_close.strip_prefix('(') {
+                if let Some(end) = rest.find(')') {
+                    push_image_url(&mut urls, rest[..end].trim());
+                }
+            }
+        }
+        search_from = start + 2;
+    }
+    urls
+}
+
+/// 图片域名白名单：仅放行阿里云系域名，防 SSRF。
+fn is_allowed_image_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host.ends_with(".aliyuncs.com") || host.ends_with(".alicdn.com") || host.ends_with(".aliyun.com")
+}
+
+/// 校验图片 URL：必须 https 且域名在白名单内。
+fn normalize_image_url(url: &str) -> Option<reqwest::Url> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    if parsed.scheme() != "https" {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if !is_allowed_image_host(&host) {
+        return None;
+    }
+    Some(parsed)
+}
+
+fn image_extension(content_type: &str) -> Option<&'static str> {
+    let ct = content_type.to_ascii_lowercase();
+    if ct.starts_with("image/png") {
+        Some("png")
+    } else if ct.starts_with("image/jpeg") {
+        Some("jpg")
+    } else if ct.starts_with("image/gif") {
+        Some("gif")
+    } else if ct.starts_with("image/webp") {
+        Some("webp")
+    } else if ct.starts_with("image/bmp") {
+        Some("bmp")
+    } else {
+        None
+    }
+}
+
+fn push_reported_error(errors: &mut Vec<String>, message: String) {
+    if errors.len() < MAX_REPORTED_ERRORS {
+        errors.push(message);
+    }
+}
+
+/// 下载单张议题图片：带 token 鉴权 + 域名白名单 + 类型/体积校验。
+async fn download_issue_image(
+    client: &reqwest::Client,
+    token: &str,
+    url: &str,
+) -> Result<(Vec<u8>, String), String> {
+    let parsed =
+        normalize_image_url(url).ok_or_else(|| "图片地址非法（非 https 或非阿里云域名）".to_string())?;
+    let resp = client
+        .get(parsed)
+        .header("x-yunxiao-token", token)
+        .send()
+        .await
+        .map_err(|e| format!("下载图片失败: {e}"))?;
+    let final_host = resp.url().host_str().unwrap_or("").to_string();
+    if !is_allowed_image_host(&final_host) {
+        return Err("图片被重定向到非阿里云域名，已拦截".to_string());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("图片下载 HTTP {}", resp.status()));
+    }
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let ext = image_extension(&content_type)
+        .ok_or_else(|| format!("不支持的图片类型: {}", content_type))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取图片失败: {e}"))?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!("图片超过 10MB（{} 字节）", bytes.len()));
+    }
+    Ok((bytes.to_vec(), ext.to_string()))
+}
+
+/// 发起讨论前调用：拉取议题全量描述 → 提取图片 URL → 下载到 `.nezha/attachments/<taskId>/`。
+/// 返回本地路径与统计；前端据 `failed == total` 决定是否阻断发起。
+#[tauri::command]
+pub async fn yunxiao_prepare_issue_images(
+    token: String,
+    organization_id: String,
+    workitem_id: String,
+    project_path: String,
+    task_id: String,
+) -> Result<IssueImagesPrepared, String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    let workitem_id = workitem_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
+    }
+    let task_id = task_id.trim();
+    if task_id.is_empty()
+        || task_id == "."
+        || task_id == ".."
+        || task_id.contains('/')
+        || task_id.contains('\\')
+    {
+        return Err("非法的任务 ID".to_string());
+    }
+    let project = Path::new(&project_path)
+        .canonicalize()
+        .map_err(|e| format!("项目路径无效: {e}"))?;
+    if !project.is_dir() {
+        return Err("项目路径不是目录".to_string());
+    }
+    let attachments_dir = project.join(".nezha").join("attachments").join(task_id);
+    std::fs::create_dir_all(&attachments_dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+
+    // 1) 拉全量详情原始 JSON（保留富文本/HTML 结构，避免图片被文本化剥掉）
+    let client = build_client()?;
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+    );
+    let bytes = get_yunxiao_json(&client, &token, url).await?;
+    let mut json: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    if json
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        if let Some(result) = json.get_mut("result") {
+            json = result.take();
+        }
+    }
+    let description = json
+        .get("description")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    let mut urls: Vec<String> = Vec::new();
+    extract_image_urls_from_value(&description, &mut urls);
+    if urls.is_empty() {
+        return Ok(IssueImagesPrepared::default());
+    }
+
+    // 2) 逐张下载（带鉴权头），序号命名
+    let download_client = build_download_client()?;
+    let mut result = IssueImagesPrepared {
+        total: urls.len(),
+        ..Default::default()
+    };
+    for (i, url) in urls.into_iter().enumerate() {
+        if i >= MAX_ISSUE_IMAGES {
+            result.skipped += 1;
+            continue;
+        }
+        match download_issue_image(&download_client, &token, &url).await {
+            Ok((data, ext)) => {
+                let filename = format!("image-{:02}.{}", result.downloaded + 1, ext);
+                let file_path = attachments_dir.join(&filename);
+                if let Err(e) = std::fs::write(&file_path, &data) {
+                    result.failed += 1;
+                    push_reported_error(
+                        &mut result.errors,
+                        format!("写入 {filename} 失败: {e}"),
+                    );
+                } else {
+                    result.paths.push(file_path.to_string_lossy().into_owned());
+                    result.downloaded += 1;
+                }
+            }
+            Err(e) => {
+                result.failed += 1;
+                push_reported_error(&mut result.errors, e);
+            }
+        }
+    }
+    Ok(result)
+}
+
+// ── 议题评论回写（闭环）──────────────────────────────────────────────────────
+
+/// 创建工作项评论（CreateWorkitemComment，官方文档已确认）：
+/// `POST /oapi/v1/projex/organizations/{orgId}/workitems/{id}/comments`，
+/// body `{"content": "..."}`，返回 `{"id": "..."}`。路径/返回结构实现时以真实 token 复验。
+#[tauri::command]
+pub async fn yunxiao_create_workitem_comment(
+    token: String,
+    organization_id: String,
+    workitem_id: String,
+    content: String,
+) -> Result<String, String> {
+    let token = token.trim();
+    let organization_id = organization_id.trim();
+    let workitem_id = workitem_id.trim();
+    if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
+    }
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("评论内容不能为空".to_string());
+    }
+    if content.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("评论内容超过 {MAX_COMMENT_CHARS} 字上限"));
+    }
+    let client = build_client()?;
+    let resp = client
+        .post(format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}/comments"
+        ))
+        .header("x-yunxiao-token", token)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "content": content }))
+        .send()
+        .await
+        .map_err(|e| format!("请求云效创建评论失败: {e}"))?;
+    let bytes = read_json_body(resp).await?;
+    #[derive(Deserialize)]
+    struct CommentCreated {
+        id: String,
+    }
+    let created: CommentCreated = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析云效创建评论响应失败: {e}"))?;
+    Ok(created.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,5 +1104,86 @@ mod tests {
         let json = r#"{"description": {"document": "对象描述"}, "id": "x", "subject": "s"}"#;
         let item: YunxiaoWorkitem = serde_json::from_str(json).expect("parses");
         assert_eq!(item.description.as_deref(), Some("对象描述"));
+    }
+
+    #[test]
+    fn extracts_html_img_urls_case_insensitive() {
+        let text = r#"<p>截图如下</p><img src="https://img.alicdn.com/a.png" alt="x"/><IMG src='https://img.alicdn.com/b.jpg'>"#;
+        let urls = extract_image_urls_from_text(text);
+        assert_eq!(
+            urls,
+            vec![
+                "https://img.alicdn.com/a.png",
+                "https://img.alicdn.com/b.jpg"
+            ]
+        );
+    }
+
+    #[test]
+    fn extracts_rich_text_image_nodes() {
+        let json = serde_json::json!({
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": "看下图"}]},
+                {"type": "image", "attrs": {"src": "https://img.alicdn.com/s1.png", "alt": "截图"}},
+                {"type": "image", "src": "https://img.alicdn.com/s2.png"}
+            ]
+        });
+        let mut urls = Vec::new();
+        extract_image_urls_from_value(&json, &mut urls);
+        assert_eq!(
+            urls,
+            vec![
+                "https://img.alicdn.com/s1.png",
+                "https://img.alicdn.com/s2.png"
+            ]
+        );
+    }
+
+    #[test]
+    fn extracts_markdown_images_and_dedups() {
+        let text = "![a](https://img.alicdn.com/m1.png) 和 ![b](https://img.alicdn.com/m1.png)";
+        let urls = extract_image_urls_from_text(text);
+        assert_eq!(urls, vec!["https://img.alicdn.com/m1.png"]);
+    }
+
+    #[test]
+    fn extracts_html_img_inside_rich_text_text_node() {
+        let json = serde_json::json!({
+            "type": "doc",
+            "content": [{"type": "paragraph", "content": [{"type": "text", "text": "<img src=\"https://img.alicdn.com/x.png\">"}]}]
+        });
+        let mut urls = Vec::new();
+        extract_image_urls_from_value(&json, &mut urls);
+        assert_eq!(urls, vec!["https://img.alicdn.com/x.png"]);
+    }
+
+    #[test]
+    fn returns_empty_when_no_images() {
+        let urls = extract_image_urls_from_text("纯文字描述，没有图片");
+        assert!(urls.is_empty());
+        let mut urls = Vec::new();
+        extract_image_urls_from_value(&serde_json::json!({"type": "doc"}), &mut urls);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn image_host_whitelist_checks_scheme_and_domain() {
+        assert!(is_allowed_image_host("img.alicdn.com"));
+        assert!(is_allowed_image_host("yunxiao.oss-cn-hangzhou.aliyuncs.com"));
+        assert!(is_allowed_image_host("devops.aliyun.com"));
+        assert!(!is_allowed_image_host("evil.example.com"));
+        assert!(normalize_image_url("http://img.alicdn.com/a.png").is_none());
+        assert!(normalize_image_url("https://evil.example.com/a.png").is_none());
+        assert!(normalize_image_url("https://img.alicdn.com/a.png").is_some());
+    }
+
+    #[test]
+    fn image_extension_maps_supported_types() {
+        assert_eq!(image_extension("image/png"), Some("png"));
+        assert_eq!(image_extension("image/jpeg"), Some("jpg"));
+        assert_eq!(image_extension("image/webp"), Some("webp"));
+        assert_eq!(image_extension("text/html"), None);
+        assert_eq!(image_extension("application/octet-stream"), None);
     }
 }
