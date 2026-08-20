@@ -10,13 +10,14 @@ export interface IssueFormField {
   labelKey: string;
 }
 
-/** 需求类表单字段：标题 / 当前痛点 / 期望行为 / 备选方案 / 补充说明 */
+/** 需求类表单字段：标题 / 当前痛点 / 期望行为 / 备选方案 / 解决方案 / 补充说明 */
 export const ISSUE_FORM_FIELDS: Record<IssueFormKind, IssueFormField[]> = {
   requirement: [
     { key: "subject", labelKey: "yunxiao.form.subject" },
     { key: "pain", labelKey: "yunxiao.form.pain" },
     { key: "expectation", labelKey: "yunxiao.form.expectation" },
     { key: "alternative", labelKey: "yunxiao.form.alternative" },
+    { key: "solution", labelKey: "yunxiao.form.solution" },
     { key: "notes", labelKey: "yunxiao.form.notes" },
   ],
   bug: [
@@ -25,6 +26,7 @@ export const ISSUE_FORM_FIELDS: Record<IssueFormKind, IssueFormField[]> = {
     { key: "expectation", labelKey: "yunxiao.form.expectation" },
     { key: "repro", labelKey: "yunxiao.form.repro" },
     { key: "regression", labelKey: "yunxiao.form.regression" },
+    { key: "solution", labelKey: "yunxiao.form.solution" },
     { key: "notes", labelKey: "yunxiao.form.notes" },
   ],
 };
@@ -38,6 +40,7 @@ export const ISSUE_FORM_FIELD_LABELS: Record<string, string> = {
   problem: "问题描述",
   repro: "复现步骤",
   regression: "回归信息",
+  solution: "解决方案",
   notes: "补充说明",
 };
 

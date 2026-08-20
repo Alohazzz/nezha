@@ -580,6 +580,7 @@ export const yunxiao = {
     color: "var(--text-secondary)",
   },
   yunxiaoFormInput: {
+    width: "100%",
     border: "1px solid var(--border-medium)",
     borderRadius: 8,
     background: "var(--bg-elevated, var(--bg-panel))",
@@ -592,6 +593,7 @@ export const yunxiao = {
     minHeight: 38,
   },
   yunxiaoFormTextarea: {
+    width: "100%",
     border: "1px solid var(--border-medium)",
     borderRadius: 8,
     background: "var(--bg-elevated, var(--bg-panel))",
