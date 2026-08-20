@@ -10,7 +10,7 @@ use crate::app_settings::load_settings_internal;
 use crate::TaskManager;
 
 /// 同一任务同一类别两次系统通知之间的最小间隔，防止 ask 模式审批循环刷屏。
-const COOLDOWN_SECS: u64 = 60;
+const COOLDOWN_SECS: u64 = 10;
 
 /// 通知类别（冷却按「任务 × 类别」计数）。
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,7 +100,15 @@ pub fn notify_task_event(
     {
         let _ = app.notification().permission().request();
     }
-    let _ = app.notification().builder().title("Nezha").body(body).show();
+    // 显式指定默认通知音：Windows 下映射为 ms-winsoundevent:Notification.Default，
+    // 避免依赖系统/应用默认行为（部分场景 toast 无声音）。
+    let _ = app
+        .notification()
+        .builder()
+        .title("Nezha")
+        .body(body)
+        .sound("Default")
+        .show();
 }
 
 #[cfg(test)]

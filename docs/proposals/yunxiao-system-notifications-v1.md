@@ -31,12 +31,13 @@
 1. **触发事件**：`input_required` / `awaiting_review` →「需要确认」；
    `done` →「已完成」；`failed` →「执行失败」并附失败原因；`cancelled` 不通知。
 2. **窗口条件**：仅当应用窗口未聚焦（含最小化/隐藏）时发送；窗口聚焦时只更新应用内角标。
-3. **去重**：按「任务 × 通知类别」60 秒冷却，避免 ask 模式审批循环刷屏；
+3. **去重**：按「任务 × 通知类别」10 秒冷却，避免 ask 模式审批循环刷屏；
    冷却过后再触发仍会发送（保证隔半小时后的终态不丢）。
 4. **载体**：后端 Rust + 官方 `tauri-plugin-notification`，跨平台原生通知；
    点击通知聚焦并唤起应用窗口（v1 不做跳转任务）。
 5. **设置**：「系统通知」总开关，默认开启，持久化到 `~/.nezha/settings.json`（后端可读）。
-6. **文案**：中文，标题「Nezha」，正文含任务名 + 状态
+6. **提示音**：通知显式携带默认提示音（`ms-winsoundevent:Notification.Default`）。
+7. **文案**：中文，标题「Nezha」，正文含任务名 + 状态
    （如「任务《QHDK-29749 …》需要你的确认」）；任务名由前端在
    `run_task` / `resume_task` 时传入，TaskManager 内存记录。
 
@@ -114,13 +115,14 @@
 
 1. **触发事件**：`input_required` / `awaiting_review` / `done` / `failed` 通知；`cancelled` 不通知。
 2. **窗口条件**：仅窗口未聚焦/最小化/隐藏时发送；聚焦只更新应用内角标。
-3. **去重**：任务 × 类别 60 秒冷却。
+3. **去重**：任务 × 类别 10 秒冷却（首版 60s，按使用反馈下调）。
 4. **载体**：后端 Rust + `tauri-plugin-notification`。
 5. **点击**：v1 只聚焦唤起窗口，不跳转任务。
 6. **设置**：单一「系统通知」总开关，默认开启，持久化 `settings.json`。
-7. **文案**：中文，任务名 + 状态；failed 附失败原因。
-8. **任务名来源**：前端 `run_task` / `resume_task` 传 `task_name`，TaskManager 内存记录。
-9. **流程**：issue-first——先提案 issue，批复后实现；PR 附设置开关截图。
+7. **提示音**：通知显式携带默认提示音。
+8. **文案**：中文，任务名 + 状态；failed 附失败原因。
+9. **任务名来源**：前端 `run_task` / `resume_task` 传 `task_name`，TaskManager 内存记录。
+10. **流程**：issue-first——先提案 issue，批复后实现；PR 附设置开关截图。
 
 ## 附录 B：待评审 / 后续迭代候选
 
@@ -133,7 +135,8 @@
 
 - [ ] `cargo check` / `cargo test` / `pnpm build` / `pnpm lint` / `pnpm test` 通过
 - [ ] 窗口聚焦时不发通知；最小化/切走后 `input_required` / `awaiting_review` / `done` / `failed` 各发一条
-- [ ] 60s 冷却：同任务同类别重复触发不重复弹；冷却后恢复
+- [ ] 10s 冷却：同任务同类别重复触发不重复弹；冷却后恢复
+- [ ] 通知携带提示音（Windows 默认通知音）
 - [ ] 失败通知正文含失败原因；`cancelled` 不弹
 - [ ] 设置开关关闭后不再弹；重启应用保持关闭
 - [ ] 点击通知唤起窗口
