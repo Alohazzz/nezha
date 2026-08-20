@@ -31,6 +31,7 @@ import {
   Trash2,
   AlertTriangle,
   CheckCircle2,
+  Send,
   Terminal as TerminalIcon,
 } from "lucide-react";
 
@@ -94,6 +95,7 @@ export function RunningView({
   onFork,
   onMergeWorktree,
   onDiscardWorktree,
+  onOpenWriteback,
   onOpenWorktreeTerminal,
   onReconnect,
   onMarkDone,
@@ -120,6 +122,7 @@ export function RunningView({
   onFork?: (name: string) => void;
   onMergeWorktree?: () => Promise<void>;
   onDiscardWorktree?: () => Promise<void>;
+  onOpenWriteback?: () => void;
   onOpenWorktreeTerminal?: () => void;
   onReconnect: () => void;
   onMarkDone: () => void;
@@ -534,8 +537,23 @@ export function RunningView({
             <span>
               {worktreeBusy === "discard" ? t("running.discarding") : t("running.discardWorktree")}
             </span>
-          </button>
-        )}
+            </button>
+          )}
+        {!isActive &&
+          task.status === "done" &&
+          task.yunxiaoWorkitemId &&
+          onOpenWriteback &&
+          (task.yunxiaoWrittenBackAt ? (
+            <button type="button" style={s.yunxiaoWritebackBtnDisabled} title={t("yunxiao.writeback.done")}>
+              <CheckCircle2 size={12} strokeWidth={2.5} />
+              <span>{t("yunxiao.writeback.done")}</span>
+            </button>
+          ) : (
+            <button type="button" style={s.yunxiaoWritebackBtn} onClick={onOpenWriteback}>
+              <Send size={12} strokeWidth={2.5} />
+              <span>{t("yunxiao.writeback.button")}</span>
+            </button>
+          ))}
         {!isActive && (sessionPath || resumeSessionId || task.agent === "dsh") && (
           <SessionActionsMenu
             defaultForkName={defaultForkName}

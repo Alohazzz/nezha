@@ -35,8 +35,14 @@ import {
   buildYunxiaoTaskName,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
+  issueTag,
   isYunxiaoWorkitemImported,
 } from "./utils/yunxiao";
+import { buildYunxiaoFieldsText } from "./components/yunxiao/issueForms";
+import {
+  EMPTY_YUNXIAO_SETTINGS,
+  type YunxiaoSettings,
+} from "./components/app-settings/types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -907,6 +913,9 @@ function App() {
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
         baseBranch: task.baseBranch,
+        expectedIssueTag: task.yunxiaoSerialNumber
+          ? issueTag(task.yunxiaoSerialNumber)
+          : undefined,
       });
       // 合并成功后顺手把 worktree 与分支清掉，避免遗留残留
       await invoke("remove_task_worktree", {
@@ -1024,6 +1033,11 @@ function App() {
   }
 
   function handleResumeTask(taskId: string) {
+    // 云效任务恢复：附件目录可能在任务完成/取消时已清理，prompt 里的图片路径可能失效
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (task?.yunxiaoWorkitemId && task.prompt.includes("[Attached images]")) {
+      showToast(t("yunxiao.images.cleanupHint"), "warning");
+    }
     queueResumeTask(taskId);
   }
 
@@ -1447,6 +1461,59 @@ function App() {
     handleRunTodoTask({ ...task, prompt, agent, permissionMode });
   }
 
+  /** 生成云效回写「修改方案汇总」：git 事实骨架 + headless Agent 润色。 */
+  async function handleGenerateYunxiaoWritebackSummary(taskId: string): Promise<string> {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task) throw new Error("Task not found");
+    const project = projects.find((candidate) => candidate.id === task.projectId);
+    if (!project) throw new Error("Project not found");
+    const fieldsText = buildYunxiaoFieldsText(task.yunxiaoSupplement?.fields);
+    const worktreeAlive = !!task.worktreePath && !task.worktreeDiscarded;
+    return invoke<string>("generate_yunxiao_writeback_summary", {
+      projectPath: project.path,
+      repoPath: worktreeAlive ? task.worktreePath : (task.worktreeRepo ?? project.path),
+      serialNumber: task.yunxiaoSerialNumber ?? "",
+      taskName: task.name ?? task.prompt.slice(0, 80),
+      fieldsText,
+      baseBranch: task.baseBranch,
+      // DSH 任务回退用 claude headless 生成汇总（与议题预填一致）
+      agent: task.agent === "codex" ? "codex" : "claude",
+    });
+  }
+
+  /** 把修改方案以评论形式回写云效议题，成功后记录幂等标记。 */
+  async function handleWritebackYunxiao(taskId: string, content: string): Promise<void> {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
+    const project = projects.find((candidate) => candidate.id === task.projectId);
+    if (!project) throw new Error("Project not found");
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    if (!yunxiao.token || !yunxiao.organizationId) {
+      throw new Error(t("yunxiao.notConnected"));
+    }
+    const commentId = await invoke<string>("yunxiao_create_workitem_comment", {
+      token: yunxiao.token,
+      organizationId: yunxiao.organizationId,
+      workitemId: task.yunxiaoWorkitemId,
+      content,
+    });
+    const now = Date.now();
+    setTasks((prev) => {
+      const next = prev.map((candidate) =>
+        candidate.id === taskId
+          ? {
+              ...candidate,
+              yunxiaoWrittenBackAt: now,
+              yunxiaoCommentId: commentId,
+            }
+          : candidate,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+  }
+
   async function handleDeleteProject(projectId: string) {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
@@ -1713,6 +1780,8 @@ function App() {
               onUpdateTodo={handleUpdateTodo}
               onFinalizeYunxiaoTodo={handleFinalizeYunxiaoTodo}
               onStartYunxiaoDiscussion={handleStartYunxiaoDiscussion}
+              onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
+              onWritebackYunxiao={handleWritebackYunxiao}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
               onResumeTaskAndSend={handleResumeTaskAndSend}

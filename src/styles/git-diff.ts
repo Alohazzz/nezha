@@ -391,6 +391,13 @@ export const gitDiff = {
     marginTop: 3,
     paddingLeft: 2,
   },
+  gitChangesCommitHint: {
+    fontSize: 11,
+    color: "var(--text-hint)",
+    marginTop: 3,
+    paddingLeft: 2,
+    fontFamily: "var(--font-mono, monospace)",
+  },
   gitChangesCommitActions: { marginTop: 3, display: "flex" },
   gitChangesCommitBtn: {
     display: "flex",

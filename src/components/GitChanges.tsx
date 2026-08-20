@@ -41,6 +41,8 @@ interface Props {
   projectRoot: string;
   repoPath: string;
   currentTaskCreatedAt: number | null;
+  /** 云效议题关联 tag（如 #QHDK-29312）：提交信息缺 tag 时后端自动追加 */
+  issueTag?: string;
   onFileSelect: (filePath: string, staged: boolean, label: string) => void;
   width?: number;
 }
@@ -53,6 +55,7 @@ export function GitChanges({
   projectRoot,
   repoPath,
   currentTaskCreatedAt,
+  issueTag,
   onFileSelect,
   width = 280,
 }: Props) {
@@ -399,6 +402,7 @@ export function GitChanges({
         projectPath: projectRoot,
         repoPath,
         message: commitMsg.trim(),
+        issueTag,
       });
       if (activeRepoKeyRef.current !== requestRepoKey || commitSequenceRef.current !== sequence) {
         return;
@@ -588,6 +592,9 @@ export function GitChanges({
           </button>
         </div>
         {commitMsgError && <div style={s.gitChangesCommitError}>{t("git.enterCommitMessage")}</div>}
+        {issueTag && (
+          <div style={s.gitChangesCommitHint}>{t("yunxiao.commit.issueTagHint", { tag: issueTag })}</div>
+        )}
         <div style={s.gitChangesCommitActions}>
           <button
             onClick={handleCommit}

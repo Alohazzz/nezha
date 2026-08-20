@@ -35,6 +35,8 @@ import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
+import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
+import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useToast } from "./Toast";
@@ -65,6 +67,8 @@ export function ProjectPage({
   onUpdateTodo,
   onFinalizeYunxiaoTodo,
   onStartYunxiaoDiscussion,
+  onGenerateWritebackSummary,
+  onWritebackYunxiao,
   onCancelTask,
   onResumeTask,
   onResumeTaskAndSend,
@@ -144,6 +148,8 @@ export function ProjectPage({
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
+  onGenerateWritebackSummary: (taskId: string) => Promise<string>;
+  onWritebackYunxiao: (taskId: string, content: string) => Promise<void>;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
   /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
@@ -389,6 +395,72 @@ export function ProjectPage({
 
   const currentTaskCreatedAt = selectedTask?.createdAt ?? null;
 
+  // ── 云效回写弹窗（V3）：生成汇总预览 → 人工确认 → 发布评论 ──────────────
+  const [writebackDialog, setWritebackDialog] = useState<{
+    taskId: string;
+    preview: string;
+    generating: boolean;
+    posting: boolean;
+    error: string | null;
+  } | null>(null);
+
+  const runWritebackGeneration = useCallback(
+    async (taskId: string) => {
+      setWritebackDialog((prev) =>
+        prev && prev.taskId === taskId
+          ? { ...prev, generating: true, error: null }
+          : { taskId, preview: "", generating: true, posting: false, error: null },
+      );
+      try {
+        const summary = await onGenerateWritebackSummary(taskId);
+        setWritebackDialog((prev) =>
+          prev && prev.taskId === taskId
+            ? { ...prev, preview: summary, generating: false }
+            : prev,
+        );
+      } catch (err) {
+        setWritebackDialog((prev) =>
+          prev && prev.taskId === taskId
+            ? { ...prev, generating: false, error: String(err) }
+            : prev,
+        );
+      }
+    },
+    [onGenerateWritebackSummary],
+  );
+
+  const openWriteback = useCallback(
+    (taskId: string) => {
+      void runWritebackGeneration(taskId);
+    },
+    [runWritebackGeneration],
+  );
+
+  const postWriteback = useCallback(async () => {
+    if (!writebackDialog || writebackDialog.posting || writebackDialog.generating) return;
+    const content = writebackDialog.preview.trim();
+    if (!content) {
+      setWritebackDialog((prev) =>
+        prev ? { ...prev, error: t("yunxiao.writeback.empty") } : prev,
+      );
+      return;
+    }
+    setWritebackDialog((prev) =>
+      prev ? { ...prev, posting: true, error: null } : prev,
+    );
+    try {
+      await onWritebackYunxiao(writebackDialog.taskId, content);
+      const serial = projectTasks.find((c) => c.id === writebackDialog.taskId)
+        ?.yunxiaoSerialNumber;
+      showToast(t("yunxiao.writeback.postSuccess", { serial: serial ?? "" }), "success");
+      setWritebackDialog(null);
+    } catch (err) {
+      setWritebackDialog((prev) =>
+        prev ? { ...prev, posting: false, error: String(err) } : prev,
+      );
+    }
+  }, [writebackDialog, onWritebackYunxiao, projectTasks, showToast, t]);
+
   // ── 行级 Review 评论（纯前端内存态，决策 6：不持久化） ─────────────────
   const [reviewComments, setReviewComments] = useState<ReviewComment[]>([]);
   // 发送对话框：待发送的评论 id 集合（open 时由 drawer 传入）。
@@ -398,6 +470,7 @@ export function ProjectPage({
   useEffect(() => {
     setReviewComments([]);
     setSendDialog(null);
+    setWritebackDialog(null);
   }, [project.id]);
 
   const handleCreateComment = useCallback(
@@ -689,6 +762,7 @@ export function ProjectPage({
                   onFork={(name) => onForkTask(task.id, name)}
                   onMergeWorktree={() => onMergeWorktree(task.id)}
                   onDiscardWorktree={() => onDiscardWorktree(task.id)}
+                  onOpenWriteback={() => openWriteback(task.id)}
                   onOpenWorktreeTerminal={
                     worktreePath ? () => handleOpenWorktreeTerminal(worktreePath) : undefined
                   }
@@ -747,6 +821,11 @@ export function ProjectPage({
                 projectRoot={project.path}
                 repoPath={gitContextPath}
                 currentTaskCreatedAt={currentTaskCreatedAt}
+                issueTag={
+                  selectedTask?.yunxiaoSerialNumber
+                    ? issueTag(selectedTask.yunxiaoSerialNumber)
+                    : undefined
+                }
                 onFileSelect={handleDiffFileSelectWithCollapse}
                 width={rightPanelWidth}
               />
@@ -798,6 +877,29 @@ export function ProjectPage({
           onSend={handleSendDialogSend}
         />
       )}
+
+      {writebackDialog &&
+        (() => {
+          const writebackTask = projectTasks.find((c) => c.id === writebackDialog.taskId);
+          return (
+            <YunxiaoWritebackDialog
+              serialNumber={writebackTask?.yunxiaoSerialNumber ?? ""}
+              title={writebackTask?.name ?? writebackTask?.prompt.slice(0, 80) ?? ""}
+              preview={writebackDialog.preview}
+              generating={writebackDialog.generating}
+              posting={writebackDialog.posting}
+              error={writebackDialog.error}
+              onPreviewChange={(value) =>
+                setWritebackDialog((prev) =>
+                  prev ? { ...prev, preview: value } : prev,
+                )
+              }
+              onRegenerate={() => void runWritebackGeneration(writebackDialog.taskId)}
+              onPost={() => void postWriteback()}
+              onClose={() => setWritebackDialog(null)}
+            />
+          );
+        })()}
     </div>
   );
 }

@@ -4,7 +4,10 @@ import {
   buildYunxiaoConditions,
   buildYunxiaoPrompt,
   buildYunxiaoTaskName,
+  ensureIssueTagInMessage,
   isYunxiaoWorkitemImported,
+  issueTag,
+  messageHasIssueTag,
 } from "../utils/yunxiao";
 
 function baseTask(extra: Partial<Task> = {}): Task {
@@ -172,5 +175,39 @@ describe("buildYunxiaoConditions", () => {
         value: ["100005", "100006"],
       },
     ]);
+  });
+});
+
+describe("issueTag", () => {
+  it("编号前补 #", () => {
+    expect(issueTag("QHDK-29312")).toBe("#QHDK-29312");
+  });
+
+  it("已带 # 不重复加", () => {
+    expect(issueTag("#QHDK-29312")).toBe("#QHDK-29312");
+  });
+
+  it("空编号返回空串", () => {
+    expect(issueTag("  ")).toBe("");
+  });
+});
+
+describe("messageHasIssueTag / ensureIssueTagInMessage", () => {
+  it("消息已含 tag（大小写不敏感）时不再追加", () => {
+    expect(messageHasIssueTag("fix: 修复查询报错 #qhdk-29312", "QHDK-29312")).toBe(true);
+    expect(ensureIssueTagInMessage("fix: 修复查询报错 #QHDK-29312", "QHDK-29312")).toBe(
+      "fix: 修复查询报错 #QHDK-29312",
+    );
+  });
+
+  it("缺 tag 时追加到消息末尾", () => {
+    expect(ensureIssueTagInMessage("fix: 修复查询报错", "QHDK-29312")).toBe(
+      "fix: 修复查询报错\n\n#QHDK-29312",
+    );
+  });
+
+  it("空编号视为无需关联", () => {
+    expect(messageHasIssueTag("fix: 任意提交", "")).toBe(true);
+    expect(ensureIssueTagInMessage("fix: 任意提交", "")).toBe("fix: 任意提交");
   });
 });

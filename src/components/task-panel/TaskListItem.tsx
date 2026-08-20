@@ -73,6 +73,13 @@ export const TaskListItem = memo(
           <div style={s.taskCardSub}>
             {t(statusLabelKey(task.status))}
             {task.status === "done" &&
+              task.yunxiaoWorkitemId &&
+              !task.yunxiaoWrittenBackAt && (
+                <span style={s.yunxiaoWritebackBadge}>
+                  {t("yunxiao.writeback.badgePending")}
+                </span>
+              )}
+            {task.status === "done" &&
               task.worktreePath &&
               task.baseBranch &&
               task.additions !== undefined &&
