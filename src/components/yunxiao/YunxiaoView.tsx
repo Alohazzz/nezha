@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Search } from "lucide-react";
 import type {
@@ -6,7 +6,6 @@ import type {
   Task,
   YunxiaoOrganization,
   YunxiaoPage,
-  YunxiaoProject,
   YunxiaoWorkitem,
 } from "../../types";
 import {
@@ -23,6 +22,8 @@ import { YunxiaoImportBar } from "./YunxiaoImportBar";
 import { useYunxiaoFilters } from "./useYunxiaoFilters";
 import { YunxiaoConnectForm } from "./YunxiaoConnectForm";
 import { YunxiaoIssueList } from "./YunxiaoIssueList";
+import { YunxiaoProjectSelect } from "./YunxiaoProjectSelect";
+import { useYunxiaoCloudProjects } from "./useYunxiaoCloudProjects";
 import s from "../../styles";
 
 const PAGE_SIZE = 100;
@@ -60,10 +61,9 @@ export function YunxiaoView({
   const [organizations, setOrganizations] = useState<YunxiaoOrganization[]>([]);
   const [organizationLoading, setOrganizationLoading] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState("");
-  const [cloudProjects, setCloudProjects] = useState<YunxiaoProject[]>([]);
-  const [projectLoading, setProjectLoading] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [saving, setSaving] = useState(false);
+  const { cloudProjects, projectLoading, loadProjects } = useYunxiaoCloudProjects();
 
   // 议题列表
   const [category, setCategory] = useState<CategoryKey>("all");
@@ -209,36 +209,28 @@ export function YunxiaoView({
       showToast(t("yunxiao.selectOrganization"), "warning");
       return;
     }
-    setProjectLoading(true);
-    try {
-      // 项目列表可能超过单页上限：按 total 翻页聚合，短页作为 x-total 缺失时的兜底终止条件。
-      const perPage = 200;
-      const maxPages = 50;
-      let page = 1;
-      let all: YunxiaoProject[] = [];
-      let total = Infinity;
-      while (page <= maxPages && all.length < total) {
-        const result = await invoke<YunxiaoPage<YunxiaoProject>>("yunxiao_search_projects", {
-          token,
-          organizationId: orgId,
-          page,
-          perPage,
-        });
-        all = [...all, ...result.items];
-        total = result.total;
-        if (result.items.length < perPage) break;
-        page += 1;
-      }
-      setCloudProjects(all);
-      if (!selectedProjectId && all.length > 0) {
-        setSelectedProjectId(all[0].id);
-      }
-    } catch (e) {
-      showToast(t("yunxiao.loadProjectsFailed", { error: String(e) }), "error");
-    } finally {
-      setProjectLoading(false);
+    const all = await loadProjects(token, orgId);
+    if (!selectedProjectId && all.length > 0) {
+      setSelectedProjectId(all[0].id);
     }
   }
+
+  // 配置完成后自动拉取项目列表，供议题区下拉直接切换项目（无需进设置）。
+  const loadedCloudOrgRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!configured || connectMode || !settingsLoaded) return;
+    if (!settings.token || !settings.organizationId) return;
+    if (loadedCloudOrgRef.current === settings.organizationId) return;
+    loadedCloudOrgRef.current = settings.organizationId;
+    void loadProjects(settings.token, settings.organizationId);
+  }, [
+    configured,
+    connectMode,
+    settingsLoaded,
+    settings.token,
+    settings.organizationId,
+    loadProjects,
+  ]);
 
   async function handleSaveConnection() {
     if (!tokenInput.trim() || !selectedOrgId || !selectedProjectId) {
@@ -325,6 +317,12 @@ export function YunxiaoView({
       ) : (
         <>
           <div style={s.yunxiaoToolbar}>
+            <YunxiaoProjectSelect
+              settings={settings}
+              cloudProjects={cloudProjects}
+              projectLoading={projectLoading}
+              onSettingsChange={setSettings}
+            />
             <div style={s.yunxiaoTabs}>
               {CATEGORIES.map((c) => (
                 <button

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import * as RadixSelect from "@radix-ui/react-select";
 import { Check, ChevronDown } from "lucide-react";
 import s from "../../styles";
@@ -9,12 +9,14 @@ export function SelectField({
   options,
   placeholder,
   disabled = false,
+  triggerStyle,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
   placeholder: string;
   disabled?: boolean;
+  triggerStyle?: CSSProperties;
 }) {
   const [open, setOpen] = useState(false);
   const current = options.find((o) => o.value === value);
@@ -29,7 +31,7 @@ export function SelectField({
     >
       <RadixSelect.Trigger
         aria-label={current?.label ?? placeholder}
-        style={s.settingsSelectTrigger}
+        style={triggerStyle ?? s.settingsSelectTrigger}
       >
         <RadixSelect.Value placeholder={placeholder}>
           {current ? current.label : undefined}
