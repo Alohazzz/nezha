@@ -25,8 +25,8 @@ import {
   categoryToFormKind,
   discussionSkillForCategory,
   hasSupplementValues,
-  ISSUE_FORM_FIELDS,
 } from "./issueForms";
+import { SupplementFields } from "./SupplementFields";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
 import s from "../../styles";
@@ -323,26 +323,12 @@ export function YunxiaoIssueDetailView({
         <section style={s.yunxiaoDetailSection}>
           <div style={s.yunxiaoDetailSectionTitle}>{t("yunxiao.form.title")}</div>
           <div style={s.yunxiaoDetailSectionHint}>{t("yunxiao.form.finalizeHint")}</div>
-          <div style={s.yunxiaoFormFields}>
-            {ISSUE_FORM_FIELDS[formKind].map((field) => (
-              <label key={field.key} style={s.yunxiaoFormField}>
-                <span style={s.yunxiaoFormFieldLabel}>{t(field.labelKey)}</span>
-                {field.key === "subject" ? (
-                  <input
-                    style={s.yunxiaoFormInput}
-                    value={values[field.key] ?? ""}
-                    onChange={(e) => changeField(field.key, e.target.value)}
-                  />
-                ) : (
-                  <textarea
-                    style={s.yunxiaoFormTextarea}
-                    value={values[field.key] ?? ""}
-                    onChange={(e) => changeField(field.key, e.target.value)}
-                  />
-                )}
-              </label>
-            ))}
-          </div>
+          <SupplementFields
+            formKind={formKind}
+            values={values}
+            projectPath={projectPath}
+            onFieldChange={changeField}
+          />
           {prefillState === "failed" && (
             <div style={s.yunxiaoDetailError}>{t("yunxiao.form.prefillFailedHint")}</div>
           )}

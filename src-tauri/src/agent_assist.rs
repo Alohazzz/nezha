@@ -395,9 +395,9 @@ pub struct IssueSupplement {
 
 fn build_supplement_prompt(kind: &str, issue_text: &str, link: &str) -> String {
     let fields = if kind == "缺陷类" {
-        "\"subject\": 标题, \"problem\": 问题描述, \"expectation\": 期望行为, \"repro\": 复现步骤, \"regression\": 回归信息, \"notes\": 补充说明"
+        "\"subject\": 标题, \"problem\": 问题描述, \"expectation\": 期望行为, \"repro\": 复现步骤, \"regression\": 回归信息, \"solution\": 解决方案, \"notes\": 补充说明"
     } else {
-        "\"subject\": 标题, \"pain\": 当前痛点, \"expectation\": 期望行为, \"alternative\": 备选方案, \"notes\": 补充说明"
+        "\"subject\": 标题, \"pain\": 当前痛点, \"expectation\": 期望行为, \"alternative\": 备选方案, \"solution\": 解决方案, \"notes\": 补充说明"
     };
     SUPPLEMENT_TEMPLATE
         .replace("{fields}", fields)

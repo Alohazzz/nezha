@@ -93,6 +93,7 @@ describe("buildSupplementedPrompt", () => {
         pain: "starred 一多就淹没在列表里",
         expectation: "侧边栏加 toggle，只显示 starred",
         alternative: "按 star 排序而不是筛选",
+        solution: "侧边栏顶部加筛选开关",
         notes: "",
       },
       "原始议题描述……",
@@ -102,6 +103,7 @@ describe("buildSupplementedPrompt", () => {
     expect(prompt).toContain("当前痛点: starred 一多就淹没在列表里");
     expect(prompt).toContain("期望行为: 侧边栏加 toggle，只显示 starred");
     expect(prompt).toContain("备选方案: 按 star 排序而不是筛选");
+    expect(prompt).toContain("解决方案: 侧边栏顶部加筛选开关");
     expect(prompt).not.toContain("补充说明:");
     expect(prompt).toContain("原始议题描述……");
     expect(prompt).toContain("云效链接：https://devops.aliyun.com/projex");
@@ -116,6 +118,7 @@ describe("buildSupplementedPrompt", () => {
         expectation: "切项目后立即显示任务",
         repro: "运行 scripts/repro.ps1",
         regression: "abc1234 之前是好的",
+        solution: "切项目时取消未完成的列表请求",
         notes: "",
       },
       "原文",
@@ -124,6 +127,7 @@ describe("buildSupplementedPrompt", () => {
     expect(prompt).toContain("问题描述: 连续快速切换 5 个项目后列表偶发空白");
     expect(prompt).toContain("复现步骤: 运行 scripts/repro.ps1");
     expect(prompt).toContain("回归信息: abc1234 之前是好的");
+    expect(prompt).toContain("解决方案: 切项目时取消未完成的列表请求");
     expect(prompt).toContain("云效链接：https://example.com/link");
   });
 });
