@@ -257,6 +257,33 @@ export const gitDiff = {
     fontSize: 12,
     fontFamily: "var(--font-mono)",
   },
+  diffCommentBtn: {
+    position: "absolute" as const,
+    left: 2,
+    top: 1,
+    width: 20,
+    height: 20,
+    padding: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "none",
+    borderRadius: 5,
+    background: "var(--primary-action-bg)",
+    color: "var(--primary-action-fg)",
+    cursor: "pointer",
+    zIndex: 2,
+    opacity: 0,
+    pointerEvents: "none" as const,
+    transition: "opacity 0.1s",
+  },
+  diffCommentBtnVisible: {
+    opacity: 1,
+    pointerEvents: "auto" as const,
+  },
+  diffHunkHeaderFlash: {
+    background: "var(--accent-soft)",
+  },
 
   // ── GitChanges discard controls ───────────────────────────────────────────
   gitChangesPanel: {

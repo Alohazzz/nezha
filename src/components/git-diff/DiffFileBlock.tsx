@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileCode } from "lucide-react";
 import s from "../../styles";
 import type { DiffFile, DiffHunk, DiffRow, DiffViewMode } from "./types";
-import { fileDir, fileName, lineMarker, rowTone, statusStyle } from "./parse";
+import { fileDir, fileName, statusStyle } from "./parse";
+import { SplitRows, UnifiedRow, type RowCommentProps } from "./DiffRows";
+import type { DiffCommentDraft, DiffReviewComment } from "./diffReview";
 import { useI18n } from "../../i18n";
 
 function diffStatusLabelKey(status: DiffFile["status"]): string {
@@ -21,148 +22,23 @@ function diffStatusLabelKey(status: DiffFile["status"]): string {
   }
 }
 
-const UNIFIED_GRID: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "56px 56px 24px minmax(0, 1fr)",
-  minHeight: 22,
-  fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
-  lineHeight: "22px",
-};
-
-const SPLIT_CELL_GRID: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "48px 22px minmax(0, 1fr)",
-  minHeight: 22,
-  fontFamily: "var(--font-mono)",
-  fontSize: 12.5,
-  lineHeight: "22px",
-  // 裁剪超长行，避免 whiteSpace:pre 的内容溢出本栏、越过中间分隔线串到另一栏
-  overflow: "hidden",
-};
-
-const SPLIT_PAIR_GRID: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 1px minmax(0, 1fr)",
-};
-
-function UnifiedRow({ row }: { row: DiffRow }) {
-  const tone = rowTone(row.type);
-  return (
-    <div style={{ ...UNIFIED_GRID, background: tone.bg }}>
-      <span style={s.diffLineNumber}>{row.oldLine ?? ""}</span>
-      <span style={s.diffLineNumber}>{row.newLine ?? ""}</span>
-      <span style={{ ...s.diffLineMarker, color: tone.fg, background: tone.markerBg }}>
-        {lineMarker(row.type)}
-      </span>
-      <span style={{ ...s.diffLineContent, color: tone.fg }}>{row.content || " "}</span>
-    </div>
-  );
-}
-
-function SplitCell({ row, side }: { row?: DiffRow; side: "old" | "new" }) {
-  if (!row) {
-    return (
-      <div style={{ ...SPLIT_CELL_GRID, ...s.diffSplitEmpty }}>
-        <span style={s.diffLineNumber} />
-        <span />
-        <span />
-      </div>
-    );
-  }
-  const tone = rowTone(row.type);
-  const lineNumber = side === "old" ? row.oldLine : row.newLine;
-  return (
-    <div style={{ ...SPLIT_CELL_GRID, background: tone.bg }}>
-      <span style={s.diffLineNumber}>{lineNumber ?? ""}</span>
-      <span style={{ ...s.diffLineMarker, color: tone.fg, background: tone.markerBg }}>
-        {lineMarker(row.type)}
-      </span>
-      <span style={{ ...s.diffLineContent, color: tone.fg }}>{row.content || " "}</span>
-    </div>
-  );
-}
-
-function SplitPair({ children }: { children: ReactNode }) {
-  return (
-    <div style={SPLIT_PAIR_GRID}>
-      {children}
-    </div>
-  );
-}
-
-const SPLIT_DIVIDER = (
-  <div style={{ background: "var(--border-dim)" }} aria-hidden />
-);
-
-function SplitRows({ rows }: { rows: DiffRow[] }) {
-  const rendered: ReactNode[] = [];
-
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-
-    if (row.type === "remove") {
-      const removed: DiffRow[] = [];
-      const added: DiffRow[] = [];
-      while (rows[index]?.type === "remove") {
-        removed.push(rows[index]);
-        index += 1;
-      }
-      while (rows[index]?.type === "add") {
-        added.push(rows[index]);
-        index += 1;
-      }
-      index -= 1;
-      const pairCount = Math.max(removed.length, added.length);
-      for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
-        rendered.push(
-          <SplitPair key={`pair-${index}-${pairIndex}`}>
-            <SplitCell row={removed[pairIndex]} side="old" />
-            {SPLIT_DIVIDER}
-            <SplitCell row={added[pairIndex]} side="new" />
-          </SplitPair>,
-        );
-      }
-      continue;
-    }
-
-    if (row.type === "add") {
-      rendered.push(
-        <SplitPair key={`add-${index}`}>
-          <SplitCell side="old" />
-          {SPLIT_DIVIDER}
-          <SplitCell row={row} side="new" />
-        </SplitPair>,
-      );
-      continue;
-    }
-
-    if (row.type === "meta") {
-      rendered.push(
-        <div key={`meta-${index}`} style={s.diffMetaRow}>
-          {row.content}
-        </div>,
-      );
-      continue;
-    }
-
-    rendered.push(
-      <SplitPair key={`context-${index}`}>
-        <SplitCell row={row} side="old" />
-        {SPLIT_DIVIDER}
-        <SplitCell row={row} side="new" />
-      </SplitPair>,
-    );
-  }
-
-  return <>{rendered}</>;
-}
-
-function HunkHeader({ header, split }: { header: string; split: boolean }) {
+function HunkHeader({
+  header,
+  split,
+  hunkIndex,
+  flash,
+}: {
+  header: string;
+  split: boolean;
+  hunkIndex: number;
+  flash: boolean;
+}) {
   return (
     <div
+      data-diff-hunk={hunkIndex}
       style={{
         ...s.diffHunkHeader,
+        ...(flash ? s.diffHunkHeaderFlash : null),
         ...(split
           ? {}
           : {
@@ -191,11 +67,8 @@ function LazyHunkBody({
   rows,
   split,
   initiallyVisible,
-}: {
-  rows: DiffRow[];
-  split: boolean;
-  initiallyVisible: boolean;
-}) {
+  ...commentProps
+}: { rows: DiffRow[]; split: boolean; initiallyVisible: boolean } & RowCommentProps) {
   const [visible, setVisible] = useState(initiallyVisible);
   const hostRef = useRef<HTMLDivElement | null>(null);
 
@@ -227,9 +100,9 @@ function LazyHunkBody({
     <div ref={hostRef} style={{ minHeight: visible ? 0 : placeholderHeight }}>
       {visible ? (
         split ? (
-          <SplitRows rows={rows} />
+          <SplitRows rows={rows} {...commentProps} />
         ) : (
-          rows.map((row, rowIndex) => <UnifiedRow key={rowIndex} row={row} />)
+          rows.map((row, rowIndex) => <UnifiedRow key={rowIndex} row={row} {...commentProps} />)
         )
       ) : (
         <div style={s.diffLazyPlaceholder}>…</div>
@@ -242,29 +115,101 @@ function DiffHunkView({
   hunk,
   split,
   initiallyVisible,
+  hunkIndex,
+  flash,
+  ...commentProps
 }: {
   hunk: DiffHunk;
   split: boolean;
   initiallyVisible: boolean;
-}) {
+  hunkIndex: number;
+  flash: boolean;
+} & RowCommentProps) {
   return (
     <div>
-      <HunkHeader header={hunk.header} split={split} />
-      <LazyHunkBody rows={hunk.rows} split={split} initiallyVisible={initiallyVisible} />
+      <HunkHeader header={hunk.header} split={split} hunkIndex={hunkIndex} flash={flash} />
+      <LazyHunkBody
+        rows={hunk.rows}
+        split={split}
+        initiallyVisible={initiallyVisible}
+        {...commentProps}
+      />
     </div>
   );
 }
 
-export function DiffFileBlock({ file, viewMode }: { file: DiffFile; viewMode: DiffViewMode }) {
+interface JumpRequest {
+  comment: DiffReviewComment;
+  seq: number;
+}
+
+export function DiffFileBlock({
+  file,
+  viewMode,
+  diffKey,
+  allowMentions,
+  onCreateComment,
+  jumpRequest,
+  onJumpHandled,
+}: {
+  file: DiffFile;
+  viewMode: DiffViewMode;
+  diffKey: string;
+  allowMentions: boolean;
+  onCreateComment: (draft: DiffCommentDraft) => void;
+  jumpRequest: JumpRequest | null;
+  onJumpHandled: () => void;
+}) {
   const { t } = useI18n();
   const dir = fileDir(file.displayPath);
   const name = fileName(file.displayPath);
   const isSplit = viewMode === "split";
   const status = statusStyle(file.status);
   const [collapsed, setCollapsed] = useState(false);
+  const [flashHunk, setFlashHunk] = useState<number | null>(null);
+  const flashTimerRef = useRef<number | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // 抽屉跳转：展开文件块 → 滚动到目标行（行未挂载时回退到所在 hunk 头）→ 高亮 hunk。
+  useEffect(() => {
+    if (!jumpRequest || jumpRequest.comment.path !== file.displayPath) return;
+    const line = jumpRequest.comment.startLine;
+    const hunkIndex = file.hunks.findIndex((hunk) =>
+      hunk.rows.some((row) => row.oldLine === line || row.newLine === line),
+    );
+    onJumpHandled();
+    if (hunkIndex === -1) return;
+    setCollapsed(false);
+    setFlashHunk(hunkIndex);
+    if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => setFlashHunk(null), 1600);
+    requestAnimationFrame(() => {
+      const root = rootRef.current;
+      if (!root) return;
+      const rowEl = root.querySelector(
+        `[data-diff-line="${CSS.escape(`${file.displayPath}:${line}`)}"]`,
+      );
+      const hunkEl = root.querySelector(`[data-diff-hunk="${hunkIndex}"]`);
+      (rowEl ?? hunkEl)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [jumpRequest, file.displayPath, file.hunks, onJumpHandled]);
+
+  useEffect(
+    () => () => {
+      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+    },
+    [],
+  );
+
+  const commentProps: RowCommentProps = {
+    displayPath: file.displayPath,
+    diffKey,
+    allowMentions,
+    onCreateComment,
+  };
 
   return (
-    <div style={s.diffFileBlock}>
+    <div ref={rootRef} style={s.diffFileBlock}>
       <button
         type="button"
         style={s.diffFileHeader}
@@ -303,7 +248,9 @@ export function DiffFileBlock({ file, viewMode }: { file: DiffFile; viewMode: Di
             <div style={s.diffFileEmpty}>{t("git.binaryFileNotShown")}</div>
           ) : file.hunks.length === 0 ? (
             <div style={s.diffFileEmpty}>
-              {file.headerLines.length > 0 ? file.headerLines.join("\n") : t("git.noTextualChanges")}
+              {file.headerLines.length > 0
+                ? file.headerLines.join("\n")
+                : t("git.noTextualChanges")}
             </div>
           ) : (
             file.hunks.map((hunk, index) => (
@@ -312,6 +259,9 @@ export function DiffFileBlock({ file, viewMode }: { file: DiffFile; viewMode: Di
                 hunk={hunk}
                 split={isSplit}
                 initiallyVisible={index < 2}
+                hunkIndex={index}
+                flash={flashHunk === index}
+                {...commentProps}
               />
             ))
           )}

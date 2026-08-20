@@ -39,6 +39,7 @@ export function CommentDrawer({
   onDelete,
   onToggleStatus,
   onSend,
+  emptyHint,
 }: {
   comments: ReviewComment[];
   open: boolean;
@@ -48,6 +49,7 @@ export function CommentDrawer({
   onDelete: (id: string) => void;
   onToggleStatus: (id: string) => void;
   onSend: (ids: string[]) => void;
+  emptyHint?: string;
 }) {
   const { t } = useI18n();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -121,7 +123,7 @@ export function CommentDrawer({
       </div>
       <div style={s.rcDrawerList}>
         {comments.length === 0 ? (
-          <div style={s.rcDrawerEmpty}>{t("reviewComments.empty")}</div>
+          <div style={s.rcDrawerEmpty}>{emptyHint ?? t("reviewComments.empty")}</div>
         ) : (
           comments.map((comment) => {
             const isEditing = editingId === comment.id;

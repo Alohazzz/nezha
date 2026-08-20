@@ -21,6 +21,12 @@ export interface ReviewComment {
   /** 创建 / 发送时锚定的任务 id */
   taskId?: string;
   createdAt: number;
+  /**
+   * 是否可用 `@路径:行号` 锚定（默认 true）。
+   * false = 纯文本锚：消息只带 `路径:行号`（removed 行 / commit diff 快照行），
+   * 避免把 agent 引导到工作区内容对不上的位置。
+   */
+  anchorable?: boolean;
 }
 
 /** 创建评论时的输入（锚点 + 正文由编辑器组件计算） */
@@ -30,6 +36,7 @@ export interface CommentDraft {
   endLine: number;
   snippet: string;
   text: string;
+  anchorable?: boolean;
 }
 
 export const MAX_SNIPPET_LINES = 50;
@@ -92,7 +99,8 @@ export function buildCommentMessage(comment: ReviewComment | CommentDraft): stri
     comment.startLine === comment.endLine
       ? `:${comment.startLine}`
       : `:${comment.startLine}-${comment.endLine}`;
-  const ref = `@${comment.path}${range}`;
+  const ref =
+    comment.anchorable === false ? `${comment.path}${range}` : `@${comment.path}${range}`;
   const snippet = comment.snippet
     ? `\`\`\`${fileExtension(comment.path)}\n${comment.snippet}\n\`\`\``
     : "";
