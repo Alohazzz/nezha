@@ -21,6 +21,7 @@ mod pty;
 mod session;
 mod skills;
 mod storage;
+mod system_notify;
 mod subprocess;
 mod usage;
 mod yunxiao;
@@ -38,6 +39,9 @@ pub struct TaskManager {
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
     pub(crate) dsh_sessions: Mutex<HashMap<String, DshSessionInfo>>,
     pub(crate) claimed_session_paths: Mutex<HashSet<String>>,
+    /// 运行中任务的任务名（run_task / resume_task 时由前端传入），
+    /// 供系统通知文案使用；任务退出后保留（数量有限，无清理压力）。
+    pub(crate) task_names: Mutex<HashMap<String, String>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }
@@ -300,6 +304,7 @@ pub fn run() {
             claude_sessions: Mutex::new(HashMap::new()),
             dsh_sessions: Mutex::new(HashMap::new()),
             claimed_session_paths: Mutex::new(HashSet::new()),
+            task_names: Mutex::new(HashMap::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
         })
         .on_window_event(|window, event| {
@@ -324,6 +329,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             hide_main_window,
             update_tray_menu,
@@ -407,6 +413,7 @@ pub fn run() {
             app_settings::save_use_sideloaded_conpty,
             app_settings::save_terminal_scrollback,
             app_settings::save_terminal_copy_on_select,
+            app_settings::save_system_notifications,
             app_settings::save_yunxiao_settings,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
