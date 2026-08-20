@@ -321,7 +321,10 @@ export function YunxiaoView({
               settings={settings}
               cloudProjects={cloudProjects}
               projectLoading={projectLoading}
-              onSettingsChange={setSettings}
+              onSettingsChange={(next) => {
+                setSettings(next);
+                setSelectedProjectId(next.projectId);
+              }}
             />
             <div style={s.yunxiaoTabs}>
               {CATEGORIES.map((c) => (
