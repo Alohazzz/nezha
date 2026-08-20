@@ -716,6 +716,7 @@ function App() {
   function invokeRunTask(task: Task, projectPath: string, images: string[], texts: string[] = []) {
     invoke("run_task", {
       taskId: task.id,
+      taskName: task.name ?? "",
       projectPath,
       prompt: task.prompt,
       agent: task.agent,
@@ -966,6 +967,7 @@ function App() {
   function invokeResumeTask(task: Task, project: Project, sessionId: string) {
     invoke("resume_task", {
       taskId: task.id,
+      taskName: task.name ?? "",
       projectPath: task.worktreePath ?? project.path,
       agent: task.agent,
       sessionId,

@@ -8,6 +8,7 @@
     "core:window:allow-set-theme",
     "core:window:allow-hide",
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "notification:default"
   ]
 }

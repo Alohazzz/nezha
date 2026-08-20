@@ -122,6 +122,46 @@ export function GeneralPanel({
 
   const copyOnSelectOn = copyOnSelect === true;
 
+  // 系统通知开关：与框选复制同款自包含模式（后端持久化到 settings.json）。
+  const [systemNotifications, setSystemNotifications] = useState<boolean | null>(null);
+  const [systemNotificationsBusy, setSystemNotificationsBusy] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AppSettings>("load_app_settings")
+      .then((loaded) => {
+        if (!cancelled) setSystemNotifications(loaded.system_notifications);
+      })
+      .catch(() => {
+        // 读取失败按后端默认值展示,保持开关可操作
+        if (!cancelled) setSystemNotifications(true);
+      })
+      .finally(() => {
+        if (!cancelled) setSystemNotificationsBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSystemNotificationsToggle = async () => {
+    if (systemNotificationsBusy || systemNotifications === null) return;
+    const enabled = !systemNotifications;
+    setSystemNotifications(enabled);
+    setSystemNotificationsBusy(true);
+    try {
+      const next = await invoke<AppSettings>("save_system_notifications", { enabled });
+      setSystemNotifications(next.system_notifications);
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+    } catch {
+      setSystemNotifications(!enabled);
+    } finally {
+      setSystemNotificationsBusy(false);
+    }
+  };
+
+  const systemNotificationsOn = systemNotifications === true;
+
   const conptyOn = sideloadedConpty === true;
   const conptyDisabled = !isConptyEditable || conptyBusy;
   const conptyHint = isConptyEditable
@@ -318,6 +358,29 @@ export function GeneralPanel({
           </span>
         </button>
         <span style={s.settingFieldHint}>{t("appSettings.copyOnSelectHint")}</span>
+      </div>
+
+      <div style={s.settingFieldSpaced}>
+        <label style={s.settingFieldLabel}>{t("appSettings.systemNotifications")}</label>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={systemNotificationsOn}
+          aria-label={t("appSettings.systemNotifications")}
+          disabled={systemNotificationsBusy}
+          data-checked={systemNotificationsOn}
+          data-disabled={systemNotificationsBusy}
+          onClick={() => void handleSystemNotificationsToggle()}
+          className="app-settings-toggle"
+        >
+          <span className="app-settings-toggle-label">
+            {t("appSettings.systemNotificationsToggle")}
+          </span>
+          <span className="app-settings-toggle-track">
+            <span className="app-settings-toggle-knob" />
+          </span>
+        </button>
+        <span style={s.settingFieldHint}>{t("appSettings.systemNotificationsHint")}</span>
       </div>
 
       <div style={s.settingFieldSpaced}>

@@ -47,6 +47,10 @@ fn default_use_sideloaded_conpty() -> bool {
     true
 }
 
+fn default_system_notifications() -> bool {
+    true
+}
+
 /// scrollback 必须在 [500, 5000] 之间且为 500 的倍数；越界或非整步则就近 snap。
 fn clamp_terminal_scrollback(value: u32) -> u32 {
     let clamped = value.clamp(500, 5000);
@@ -168,6 +172,9 @@ pub struct AppSettings {
     /// 回到系统内置 ConPTY。详见 platform/windows.rs::preload_sideloaded_conpty。
     #[serde(default = "default_use_sideloaded_conpty")]
     pub use_sideloaded_conpty: bool,
+    /// Agent 需要确认或任务完成/失败时发送 OS 级系统通知（窗口未聚焦时）。
+    #[serde(default = "default_system_notifications")]
+    pub system_notifications: bool,
     #[serde(default)]
     pub claude_model_catalog: AgentModelCatalog,
     #[serde(default)]
@@ -189,6 +196,7 @@ impl Default for AppSettings {
             terminal_scrollback: default_terminal_scrollback(),
             terminal_copy_on_select: false,
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
+            system_notifications: default_system_notifications(),
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
@@ -567,6 +575,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         terminal_scrollback: clamp_terminal_scrollback(settings.terminal_scrollback),
         terminal_copy_on_select: settings.terminal_copy_on_select,
         use_sideloaded_conpty: settings.use_sideloaded_conpty,
+        system_notifications: settings.system_notifications,
         claude_model_catalog: normalize_catalog(settings.claude_model_catalog),
         codex_model_catalog: normalize_catalog(settings.codex_model_catalog),
         yunxiao: settings.yunxiao,
@@ -591,6 +600,7 @@ fn load_settings_unlocked() -> AppSettings {
             terminal_scrollback: default_terminal_scrollback(),
             terminal_copy_on_select: false,
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
+            system_notifications: default_system_notifications(),
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
@@ -974,6 +984,25 @@ pub async fn save_terminal_copy_on_select(enabled: bool) -> Result<AppSettings, 
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         settings.terminal_copy_on_select = enabled;
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_system_notifications(enabled: bool) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.system_notifications = enabled;
 
         let dir = nezha_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

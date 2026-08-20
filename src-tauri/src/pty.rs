@@ -126,16 +126,36 @@ fn finalize_task_exit(
     }
 
     let status = if exit_ok || had_agent_session { "done" } else { "failed" };
-    let payload = if status == "failed" {
-        let reason = match exit_code {
+    let failure_reason = if status == "failed" {
+        Some(match exit_code {
             Some(code) => format!("Process exited with code {}", code),
             None => "Process exited with non-zero status".to_string(),
-        };
+        })
+    } else {
+        None
+    };
+    let payload = if let Some(reason) = &failure_reason {
         serde_json::json!({ "task_id": task_id, "status": status, "failure_reason": reason })
     } else {
         serde_json::json!({ "task_id": task_id, "status": status })
     };
     let _ = app.emit("task-status", payload);
+    // 任务终态：完成 / 失败发系统通知（cancelled 在前面已提前 return，不通知）。
+    if status == "done" {
+        crate::system_notify::notify_task_event(
+            app,
+            task_id,
+            crate::system_notify::NotifyCategory::Complete,
+            None,
+        );
+    } else {
+        crate::system_notify::notify_task_event(
+            app,
+            task_id,
+            crate::system_notify::NotifyCategory::Failed,
+            failure_reason.as_deref(),
+        );
+    }
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
     crate::event_watcher::cleanup_task_events(task_id);
@@ -795,6 +815,7 @@ pub async fn run_task(
     app: AppHandle,
     task_manager: State<'_, TaskManager>,
     task_id: String,
+    task_name: String,
     project_path: String,
     prompt: String,
     agent: String,
@@ -818,6 +839,10 @@ pub async fn run_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    task_manager
+        .task_names
+        .lock()
+        .insert(task_id.clone(), task_name);
 
     let pair = pty_system()
         .openpty(PtySize {
@@ -1145,6 +1170,7 @@ pub async fn resume_task(
     app: AppHandle,
     task_manager: State<'_, TaskManager>,
     task_id: String,
+    task_name: String,
     project_path: String,
     agent: String,
     session_id: String,
@@ -1167,6 +1193,10 @@ pub async fn resume_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    task_manager
+        .task_names
+        .lock()
+        .insert(task_id.clone(), task_name);
 
     let pair = pty_system()
         .openpty(PtySize {

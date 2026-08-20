@@ -65,6 +65,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.attentionBadgeToggle": "Show pending-confirmation count",
     "appSettings.attentionBadgeHint":
       "Show a yellow count badge on the project rail for tasks awaiting your confirmation. When off, a yellow dot is shown instead.",
+    "appSettings.systemNotifications": "System Notifications",
+    "appSettings.systemNotificationsToggle":
+      "Notify when the agent needs confirmation or a task completes",
+    "appSettings.systemNotificationsHint":
+      "Show OS-level notifications when the window is unfocused and the agent needs your confirmation or a task completes or fails. While the window is focused, only the in-app badge is shown.",
     "appSettings.terminalScrollback": "Terminal Scrollback",
     "appSettings.terminalScrollbackUnit": "lines",
     "appSettings.terminalScrollbackHint":
@@ -810,6 +815,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.attentionBadgeToggle": "显示待确认任务数量",
     "appSettings.attentionBadgeHint":
       "在项目栏为等待你确认的任务显示黄色数量角标。关闭后则显示黄色小圆点。",
+    "appSettings.systemNotifications": "系统通知",
+    "appSettings.systemNotificationsToggle": "Agent 需要确认或任务完成时提醒",
+    "appSettings.systemNotificationsHint":
+      "窗口未聚焦时，Agent 需要确认或任务完成/失败时发送系统通知；窗口聚焦时只显示应用内角标。",
     "appSettings.terminalScrollback": "终端滚动缓冲",
     "appSettings.terminalScrollbackUnit": "行",
     "appSettings.terminalScrollbackHint":

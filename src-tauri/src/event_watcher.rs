@@ -282,6 +282,15 @@ fn emit_active_status(app: &AppHandle, ev: &HookEvent, status: &str) {
         "task-status",
         serde_json::json!({ "task_id": ev.task_id, "status": status }),
     );
+    // Agent 需要用户介入（权限审批 / 提问 / 本轮结束待验收）时触发系统通知。
+    if status == "input_required" || status == "awaiting_review" {
+        crate::system_notify::notify_task_event(
+            app,
+            &ev.task_id,
+            crate::system_notify::NotifyCategory::Confirm,
+            None,
+        );
+    }
 }
 
 /// 任务终态后清理对应目录(由 finalize_task_exit 调用)。

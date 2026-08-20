@@ -88,6 +88,8 @@ export interface AppSettings {
   terminal_copy_on_select: boolean;
   /** Windows：优先使用随包侧载的新版 ConPTY（重启后生效），其余平台无效果 */
   use_sideloaded_conpty: boolean;
+  /** Agent 需要确认或任务完成/失败时发送 OS 系统通知（窗口未聚焦时） */
+  system_notifications: boolean;
   claude_model_catalog: AgentModelCatalog;
   codex_model_catalog: AgentModelCatalog;
   yunxiao: YunxiaoSettings;
@@ -108,6 +110,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminal_scrollback: DEFAULT_TERMINAL_SCROLLBACK,
   terminal_copy_on_select: false,
   use_sideloaded_conpty: true,
+  system_notifications: true,
   claude_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   codex_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   yunxiao: EMPTY_YUNXIAO_SETTINGS,
