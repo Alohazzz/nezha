@@ -490,14 +490,19 @@ pub async fn generate_issue_supplement(
 
 const WRITEBACK_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_FACTS_CHARS: usize = 8000;
+const WRITEBACK_SESSION_BUDGET: usize = 8000;
 
-const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是代码修改总结助手。基于下面的事实（议题信息、补充信息、Git 提交与变更统计），为云效议题撰写一段「修改方案汇总」评论，供团队阅读。
+const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是代码修改总结助手。基于下面的会话过程与事实（议题信息、补充信息、Git 提交与变更统计），为云效议题撰写一段「修改方案汇总」评论，供团队阅读。请按本仓库 PR 描述规范（AGENTS.md 提交与 PR 规范）组织内容。
 
 规则：
-1. 只依据给定事实，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
-2. 输出 Markdown，包含：做了什么（方案概述）、关键改动点（可引用 commit 短号/文件）、验证情况（仅当事实中有）。
+1. 只依据给定事实与会话过程，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
+2. 按 PR 规范的三段结构输出 Markdown：
+   - What（改动方案）：做了什么、关键改动点（可引用 commit 短号/文件）；
+   - Why（动机与取舍）：当前问题/痛点是什么、为什么这样改、相对其他方案的取舍（仅当会话/事实中有依据，不编造）；
+   - Scope（影响面）：涉及哪些模块/文件、是否触碰现有功能或风险点。
+   会话中若有验证/测试过程，最后追加「验证情况」小节。
 3. 语言与议题标题一致（中文议题输出中文）。
-4. 长度 150-400 字，控制在 10 行以内。
+4. 长度 200-500 字，控制在 12 行以内。
 5. 输出放在 <SUMMARY> 与 </SUMMARY> 标签内，标签外不要输出任何内容。
 
 ──── 议题 ────
@@ -506,6 +511,9 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是代码修改总结助手。基�
 
 ──── 补充信息 ────
 {fields_text}
+
+──── 会话过程 ────
+{session_text}
 
 ──── 关联提交 ────
 {commits}
@@ -553,6 +561,7 @@ fn build_writeback_prompt(
     serial_number: &str,
     task_name: &str,
     fields_text: &str,
+    session_text: &str,
     commits: &str,
     diff_stat: &str,
 ) -> String {
@@ -565,6 +574,14 @@ fn build_writeback_prompt(
                 "（无）"
             } else {
                 fields_text.trim()
+            },
+        )
+        .replace(
+            "{session_text}",
+            if session_text.trim().is_empty() {
+                "（无）"
+            } else {
+                session_text.trim()
             },
         )
         .replace(
@@ -639,8 +656,9 @@ fn build_fallback_summary(
     lines.join("\n")
 }
 
-/// 生成云效回写「修改方案汇总」：git 事实骨架 + headless Agent 润色。
-/// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交。
+/// 生成云效回写「修改方案汇总」：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色。
+/// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交；
+/// session_path 缺省或不可读时降级为仅事实模式。
 #[tauri::command]
 pub async fn generate_yunxiao_writeback_summary(
     project_path: String,
@@ -648,6 +666,7 @@ pub async fn generate_yunxiao_writeback_summary(
     serial_number: String,
     task_name: String,
     fields_text: String,
+    session_path: Option<String>,
     base_branch: Option<String>,
     agent: String,
 ) -> Result<String, String> {
@@ -687,10 +706,40 @@ pub async fn generate_yunxiao_writeback_summary(
     .await
     .map_err(|e| format!("收集 git 事实线程错误: {e}"))?;
 
+    // 会话摘要：供「基于会话」撰写汇总；校验失败/文件超限时降级为无会话模式。
+    let session_text = match session_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => {
+            let project_for_session = project_path.clone();
+            let is_codex = agent == "codex";
+            let raw_for_session = raw.to_string();
+            let summary = tokio::task::spawn_blocking(move || {
+                match crate::session::validate_session_path(
+                    &raw_for_session,
+                    &project_for_session,
+                    is_codex,
+                ) {
+                    Ok(canonical) => crate::session::extract_session_summary_text(
+                        &canonical.to_string_lossy(),
+                        WRITEBACK_SESSION_BUDGET,
+                    ),
+                    Err(e) => {
+                        eprintln!("[writeback] session_path 校验失败：{e}");
+                        None
+                    }
+                }
+            })
+            .await
+            .map_err(|e| format!("会话摘要线程错误: {e}"))?;
+            summary.unwrap_or_default()
+        }
+        None => String::new(),
+    };
+
     let prompt = build_writeback_prompt(
         &serial_number,
         task_name.trim(),
         &fields_text,
+        &session_text,
         &commits,
         &diff_stat,
     );
@@ -710,6 +759,29 @@ pub async fn generate_yunxiao_writeback_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writeback_prompt_includes_session_and_pr_sections() {
+        let prompt = build_writeback_prompt(
+            "HJWE-65",
+            "测试议题",
+            "痛点：图片加载慢",
+            "会话摘要：复现了加载慢的问题，定位到资源未压缩",
+            "abc123 压缩图片资源",
+            "1 file changed, 10 insertions(+)",
+        );
+        assert!(prompt.contains("会话过程"));
+        assert!(prompt.contains("会话摘要：复现了加载慢的问题"));
+        assert!(prompt.contains("Why（动机与取舍）"));
+        assert!(prompt.contains("Scope（影响面）"));
+        assert!(prompt.contains("abc123 压缩图片资源"));
+    }
+
+    #[test]
+    fn writeback_prompt_falls_back_to_no_session_markers() {
+        let prompt = build_writeback_prompt("HJWE-65", "测试议题", "", "", "", "");
+        assert!(prompt.contains("（无）"));
+    }
 
     #[test]
     fn extracts_titled_answer_from_wrapped_output() {
