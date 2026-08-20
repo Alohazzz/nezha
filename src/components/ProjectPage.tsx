@@ -27,6 +27,10 @@ import {
   type CommentDraft,
   type ReviewComment,
 } from "./file-viewer/reviewComments";
+import {
+  type DiffCommentDraft,
+  type DiffReviewComment,
+} from "./git-diff/diffReview";
 import { GitChanges } from "./GitChanges";
 import { GitHistory } from "./GitHistory";
 import { GitDiffViewer } from "./GitDiffViewer";
@@ -43,6 +47,15 @@ import { useToast } from "./Toast";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import { resolveProjectGitContext, useGitRoots } from "../hooks/useGitRoots";
 import { useI18n } from "../i18n";
+
+/** 发送目标兜底：存活任务自动判定 → 全死时最近任务（让「恢复会话/新建」入口可达） */
+function fallbackTarget(tasks: Task[]): Task | null {
+  return (
+    resolveTargetTask(tasks) ??
+    [...tasks].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt))[0] ??
+    null
+  );
+}
 import s from "../styles";
 
 export function ProjectPage({
@@ -463,12 +476,15 @@ export function ProjectPage({
 
   // ── 行级 Review 评论（纯前端内存态，决策 6：不持久化） ─────────────────
   const [reviewComments, setReviewComments] = useState<ReviewComment[]>([]);
-  // 发送对话框：待发送的评论 id 集合（open 时由 drawer 传入）。
-  const [sendDialog, setSendDialog] = useState<{ commentIds: string[] } | null>(null);
+  // diff 审核批注（决策 3：独立存储，与文件批注互不干扰；键控粒度见 diffReview.ts）。
+  const [diffComments, setDiffComments] = useState<DiffReviewComment[]>([]);
+  // 发送对话框：待发送的评论（open 时由 drawer 传入）。
+  const [sendDialog, setSendDialog] = useState<{ comments: ReviewComment[] } | null>(null);
 
   // 切项目清空（决策 6：评论是项目会话级产物）。
   useEffect(() => {
     setReviewComments([]);
+    setDiffComments([]);
     setSendDialog(null);
     setWritebackDialog(null);
   }, [project.id]);
@@ -512,22 +528,77 @@ export function ProjectPage({
 
   const handleSendComments = useCallback(
     (commentIds: string[]) => {
-      const ids = commentIds.filter((id) => reviewComments.some((c) => c.id === id));
-      if (ids.length === 0) return;
-      // 默认目标：存活任务自动判定；全死时兜底最近任务（让「恢复会话/新建」入口可达）。
-      const target =
-        resolveTargetTask(projectTasks) ??
-        [...projectTasks].sort(
-          (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt),
-        )[0] ??
-        null;
+      const comments = commentIds
+        .map((id) => reviewComments.find((c) => c.id === id))
+        .filter((c): c is ReviewComment => Boolean(c));
+      if (comments.length === 0) return;
+      const target = fallbackTarget(projectTasks);
       if (!target) {
         showToast(t("reviewComments.noTargetTask"), "warning");
         return;
       }
-      setSendDialog({ commentIds: ids });
+      setSendDialog({ comments });
     },
     [reviewComments, projectTasks, showToast, t],
+  );
+
+  const handleCreateDiffComment = useCallback(
+    (draft: DiffCommentDraft) => {
+      const anchorTask = resolveTargetTask(projectTasks);
+      setDiffComments((prev) => [
+        ...prev,
+        {
+          id: newCommentId(),
+          path: draft.path,
+          startLine: draft.line,
+          endLine: draft.line,
+          snippet: draft.snippet,
+          text: draft.text,
+          status: "open",
+          anchorable: draft.anchorable,
+          diffKey: draft.diffKey,
+          taskId: anchorTask?.id,
+          createdAt: Date.now(),
+        },
+      ]);
+    },
+    [projectTasks],
+  );
+
+  const handleUpdateDiffCommentText = useCallback((id: string, text: string) => {
+    setDiffComments((prev) =>
+      prev.map((comment) => (comment.id === id ? { ...comment, text } : comment)),
+    );
+  }, []);
+
+  const handleDeleteDiffComment = useCallback((id: string) => {
+    setDiffComments((prev) => prev.filter((comment) => comment.id !== id));
+  }, []);
+
+  const handleToggleDiffCommentStatus = useCallback((id: string) => {
+    setDiffComments((prev) =>
+      prev.map((comment) =>
+        comment.id === id
+          ? { ...comment, status: comment.status === "resolved" ? "open" : "resolved" }
+          : comment,
+      ),
+    );
+  }, []);
+
+  const handleSendDiffComments = useCallback(
+    (commentIds: string[]) => {
+      const comments = commentIds
+        .map((id) => diffComments.find((c) => c.id === id))
+        .filter((c): c is DiffReviewComment => Boolean(c));
+      if (comments.length === 0) return;
+      const target = fallbackTarget(projectTasks);
+      if (!target) {
+        showToast(t("reviewComments.noTargetTask"), "warning");
+        return;
+      }
+      setSendDialog({ comments });
+    },
+    [diffComments, projectTasks, showToast, t],
   );
 
   const handleSendDialogSend = useCallback(
@@ -535,9 +606,7 @@ export function ProjectPage({
       if (!sendDialog) return;
       const task = projectTasks.find((candidate) => candidate.id === taskId);
       if (!task) return;
-      const comments = sendDialog.commentIds
-        .map((id) => reviewComments.find((c) => c.id === id))
-        .filter((c): c is ReviewComment => Boolean(c));
+      const comments = sendDialog.comments;
       if (comments.length === 0) return;
       const message = buildBatchMessage(comments);
 
@@ -574,7 +643,7 @@ export function ProjectPage({
       setSendDialog(null);
       showToast(t("reviewComments.sentToast", { count: comments.length, name: task.name ?? task.id }));
     },
-    [sendDialog, projectTasks, reviewComments, onInput, onResumeTaskAndSend, onSubmitTask, subRepoPath, showToast, t],
+    [sendDialog, projectTasks, onInput, onResumeTaskAndSend, onSubmitTask, subRepoPath, showToast, t],
   );
 
   return (
@@ -665,6 +734,12 @@ export function ProjectPage({
                   staged={openDiff.staged}
                   title={openDiff.label}
                   onClose={() => setOpenDiff(null)}
+                  comments={diffComments}
+                  onCreateComment={handleCreateDiffComment}
+                  onUpdateCommentText={handleUpdateDiffCommentText}
+                  onDeleteComment={handleDeleteDiffComment}
+                  onToggleCommentStatus={handleToggleDiffCommentStatus}
+                  onSendComments={handleSendDiffComments}
                 />
               ) : openDiff.kind === "commit-file" ? (
                 <GitDiffViewer
@@ -675,6 +750,12 @@ export function ProjectPage({
                   filePath={openDiff.filePath}
                   title={openDiff.label}
                   onClose={() => setOpenDiff(null)}
+                  comments={diffComments}
+                  onCreateComment={handleCreateDiffComment}
+                  onUpdateCommentText={handleUpdateDiffCommentText}
+                  onDeleteComment={handleDeleteDiffComment}
+                  onToggleCommentStatus={handleToggleDiffCommentStatus}
+                  onSendComments={handleSendDiffComments}
                 />
               ) : (
                 <GitDiffViewer
@@ -684,6 +765,12 @@ export function ProjectPage({
                   commitHash={openDiff.hash}
                   title={openDiff.message}
                   onClose={() => setOpenDiff(null)}
+                  comments={diffComments}
+                  onCreateComment={handleCreateDiffComment}
+                  onUpdateCommentText={handleUpdateDiffCommentText}
+                  onDeleteComment={handleDeleteDiffComment}
+                  onToggleCommentStatus={handleToggleDiffCommentStatus}
+                  onSendComments={handleSendDiffComments}
                 />
               )
             ) : openFiles.length > 0 ? (
@@ -868,9 +955,7 @@ export function ProjectPage({
 
       {sendDialog && (
         <CommentSendDialog
-          comments={sendDialog.commentIds
-            .map((id) => reviewComments.find((c) => c.id === id))
-            .filter((c): c is ReviewComment => Boolean(c))}
+          comments={sendDialog.comments}
           tasks={projectTasks}
           defaultTaskId={resolveTargetTask(projectTasks)?.id ?? null}
           onClose={() => setSendDialog(null)}

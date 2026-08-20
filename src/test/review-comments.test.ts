@@ -58,6 +58,12 @@ describe("review comments — 消息组装", () => {
     expect(batch).toContain("@b.ts:2");
     expect(batch.split("\n\n").length).toBe(2);
   });
+
+  it("anchorable=false 时不带 @ 前缀（纯文本锚）", () => {
+    const msg = buildCommentMessage(comment({ anchorable: false }));
+    expect(msg).not.toContain("@src/foo.ts");
+    expect(msg).toContain("src/foo.ts:12-15");
+  });
 });
 
 describe("review comments — 路径与截断", () => {

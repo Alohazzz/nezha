@@ -1,10 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Columns2, FileCode, Rows3, X } from "lucide-react";
 import { DiffFileBlock } from "./git-diff/DiffFileBlock";
 import { parseDiff } from "./git-diff/parse";
 import type { DiffViewMode } from "./git-diff/types";
+import { CommentDrawer } from "./file-viewer/CommentDrawer";
+import {
+  commentMatchesDiff,
+  diffKeyString,
+  type DiffCommentDraft,
+  type DiffKey,
+  type DiffReviewComment,
+} from "./git-diff/diffReview";
+import type { ReviewComment } from "./file-viewer/reviewComments";
 import { load, save } from "../utils";
 import { useI18n } from "../i18n";
 import s from "../styles";
@@ -21,6 +30,12 @@ interface Props {
   staged?: boolean;
   title: string;
   onClose: () => void;
+  comments: DiffReviewComment[];
+  onCreateComment: (draft: DiffCommentDraft) => void;
+  onUpdateCommentText: (id: string, text: string) => void;
+  onDeleteComment: (id: string) => void;
+  onToggleCommentStatus: (id: string) => void;
+  onSendComments: (ids: string[]) => void;
 }
 
 function ViewToggleButton({
@@ -57,6 +72,12 @@ export function GitDiffViewer({
   staged,
   title,
   onClose,
+  comments,
+  onCreateComment,
+  onUpdateCommentText,
+  onDeleteComment,
+  onToggleCommentStatus,
+  onSendComments,
 }: Props) {
   const { t } = useI18n();
   const [diff, setDiff] = useState<string>("");
@@ -65,6 +86,9 @@ export function GitDiffViewer({
   const [viewMode, setViewMode] = useState<DiffViewMode>(() =>
     load<DiffViewMode>(VIEW_MODE_KEY, "unified"),
   );
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // 抽屉跳转请求（seq 保证同一条目重复点击也触发）。
+  const [jumpReq, setJumpReq] = useState<{ comment: DiffReviewComment; seq: number } | null>(null);
 
   useEffect(() => {
     save(VIEW_MODE_KEY, viewMode);
@@ -126,6 +150,31 @@ export function GitDiffViewer({
     return { parsedFiles: files, totalAdditions: add, totalDeletions: del };
   }, [diff, repoPath]);
 
+  const diffKey: DiffKey = useMemo(() => {
+    if (mode === "commit" && commitHash) return { kind: "commit", commitHash };
+    if (mode === "commit-file" && commitHash && filePath !== undefined) {
+      return { kind: "commit", commitHash, filePath };
+    }
+    if (mode === "file" && filePath !== undefined) {
+      return { kind: "worktree", filePath, staged: staged ?? false };
+    }
+    return { kind: "worktree", filePath: "", staged: false };
+  }, [mode, commitHash, filePath, staged]);
+
+  // 只展示当前 diff 身份下的评论（整仓 commit diff 匹配该 commit 全部文件）。
+  const visibleComments = useMemo(
+    () => comments.filter((c) => commentMatchesDiff(c, diffKey)),
+    [comments, diffKey],
+  );
+
+  // 仅工作区 diff 的行号对应当前文件，允许 @路径:行号 锚定。
+  const allowMentions = mode === "file";
+
+  const handleJumpHandled = useCallback(() => setJumpReq(null), []);
+  const handleJumpToComment = useCallback((comment: ReviewComment) => {
+    setJumpReq((prev) => ({ comment: comment as DiffReviewComment, seq: (prev?.seq ?? 0) + 1 }));
+  }, []);
+
   return (
     <div style={s.diffViewer}>
       <div style={s.diffHeader}>
@@ -181,11 +230,34 @@ export function GitDiffViewer({
         ) : (
           <div style={s.diffFileList}>
             {parsedFiles.map((file, index) => (
-              <DiffFileBlock key={`${file.displayPath}-${index}`} file={file} viewMode={viewMode} />
+              <DiffFileBlock
+                key={`${file.displayPath}-${index}`}
+                file={file}
+                viewMode={viewMode}
+                diffKey={diffKeyString(diffKey)}
+                allowMentions={allowMentions}
+                onCreateComment={onCreateComment}
+                jumpRequest={jumpReq}
+                onJumpHandled={handleJumpHandled}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {visibleComments.length > 0 && (
+        <CommentDrawer
+          comments={visibleComments}
+          open={drawerOpen}
+          onToggleOpen={() => setDrawerOpen((v) => !v)}
+          onJump={handleJumpToComment}
+          onUpdateText={onUpdateCommentText}
+          onDelete={onDeleteComment}
+          onToggleStatus={onToggleCommentStatus}
+          onSend={onSendComments}
+          emptyHint={t("reviewComments.emptyDiff")}
+        />
+      )}
     </div>
   );
 }
