@@ -15,6 +15,7 @@ import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
+  issueTag,
   normalizeIssueDescription,
   setLastYunxiaoPermission,
   setLastYunxiaoAgent,
@@ -224,6 +225,13 @@ export function YunxiaoIssueDetailView({
       console.error("[yunxiao-detail] fetch skill instructions failed:", e);
     }
 
+    // 提交关联议题编号：Agent 直接 commit 时也必须带 #编号，
+    // 云效按提交信息自动关联代码到议题，合并 worktree 前也会校验。
+    const tag = task.yunxiaoSerialNumber ? issueTag(task.yunxiaoSerialNumber) : "";
+    if (tag) {
+      prompt = `${prompt}\n\n---\n所有 git commit message 必须包含议题编号 tag（${tag}，如 \`fix: 修复登录失效 ${tag}\`），云效按提交信息中的编号自动关联代码到议题。`;
+    }
+
     // 议题图片：发起讨论时下载到附件目录，路径拼进 prompt 让 Agent 读原图。
     // 全部失败 → 阻断（图片是议题上下文的一部分）；部分失败 → 跳过并提示。
     if (settings.token && settings.organizationId && workitemId) {
@@ -268,6 +276,7 @@ export function YunxiaoIssueDetailView({
   }, [
     task.id,
     task.prompt,
+    task.yunxiaoSerialNumber,
     detail?.categoryId,
     formKind,
     onStartDiscussion,

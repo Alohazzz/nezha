@@ -145,6 +145,17 @@ fn codex_sessions_roots(project_path: &str) -> Vec<PathBuf> {
             roots.push(home_root);
         }
     }
+    // orca 托管的 codex runtime home（codex 经 orca 运行时，会话实际落在该目录）。
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let orca_root = PathBuf::from(appdata)
+            .join("orca")
+            .join("codex-runtime-home")
+            .join("home")
+            .join("sessions");
+        if !roots.iter().any(|root| root == &orca_root) {
+            roots.push(orca_root);
+        }
+    }
     roots
 }
 

@@ -1469,12 +1469,19 @@ function App() {
     if (!project) throw new Error("Project not found");
     const fieldsText = buildYunxiaoFieldsText(task.yunxiaoSupplement?.fields);
     const worktreeAlive = !!task.worktreePath && !task.worktreeDiscarded;
+    const sessionPath =
+      task.agent === "codex"
+        ? task.codexSessionPath
+        : task.agent === "claude"
+          ? task.claudeSessionPath
+          : undefined;
     return invoke<string>("generate_yunxiao_writeback_summary", {
       projectPath: project.path,
       repoPath: worktreeAlive ? task.worktreePath : (task.worktreeRepo ?? project.path),
       serialNumber: task.yunxiaoSerialNumber ?? "",
       taskName: task.name ?? task.prompt.slice(0, 80),
       fieldsText,
+      sessionPath,
       baseBranch: task.baseBranch,
       // DSH 任务回退用 claude headless 生成汇总（与议题预填一致）
       agent: task.agent === "codex" ? "codex" : "claude",
