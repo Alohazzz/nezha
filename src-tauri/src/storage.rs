@@ -90,6 +90,12 @@ pub struct Task {
     /// 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单。
     #[serde(rename = "yunxiaoSupplement", default, skip_serializing_if = "Option::is_none")]
     pub yunxiao_supplement: Option<YunxiaoSupplement>,
+    /// 修改方案回写云效评论的时间戳（幂等标记，非空即已回写）。
+    #[serde(rename = "yunxiaoWrittenBackAt", default, skip_serializing_if = "Option::is_none")]
+    pub yunxiao_written_back_at: Option<i64>,
+    /// 回写成功后云效返回的评论 ID（审计/追查用）。
+    #[serde(rename = "yunxiaoCommentId", default, skip_serializing_if = "Option::is_none")]
+    pub yunxiao_comment_id: Option<String>,
 }
 
 /// 云效议题定稿数据：补充表单字段（key 与前端 issueForms 对齐）+ 定稿前的原始 prompt。

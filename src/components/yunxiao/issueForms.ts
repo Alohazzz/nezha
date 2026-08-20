@@ -86,3 +86,15 @@ export function buildSupplementedPrompt(
   }
   return lines.join("\n");
 }
+
+/** 定稿补充字段 → 供回写汇总的事实文本（"中文标签: 值"，跳过空值）。 */
+export function buildYunxiaoFieldsText(fields?: Record<string, string>): string {
+  if (!fields) return "";
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    const text = (value ?? "").trim();
+    if (!text) continue;
+    lines.push(`${ISSUE_FORM_FIELD_LABELS[key] ?? key}: ${text}`);
+  }
+  return lines.join("\n");
+}

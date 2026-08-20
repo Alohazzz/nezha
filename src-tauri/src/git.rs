@@ -1031,9 +1031,58 @@ pub async fn git_commit(
     project_path: String,
     repo_path: Option<String>,
     message: String,
+    issue_tag: Option<String>,
 ) -> Result<(), String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let mut message = message;
+    if let Some(tag) = issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if !message.contains(tag) {
+            message = format!("{}\n\n{}", message.trim_end(), tag);
+        }
+    }
     run_git_check(&cwd, &["commit", "-m", &message])
+}
+
+/// 校验 base..branch 范围内所有提交信息包含关联议题 tag（如 `#QHDK-29312`），
+/// 缺失时阻断并列出违规提交，保证云效能按提交信息关联代码。
+fn validate_commits_contain_tag(
+    cwd: &str,
+    base_branch: &str,
+    branch: &str,
+    tag: &str,
+) -> Result<(), String> {
+    let range = format!("{base_branch}..{branch}");
+    let out = run_git(cwd, &["log", "--format=%h%x09%s", &range])?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut missing: Vec<String> = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (hash, subject) = match line.split_once('\t') {
+            Some((h, s)) => (h, s),
+            None => (line, line),
+        };
+        if !subject.contains(tag) {
+            missing.push(format!("{hash} {subject}"));
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let shown = missing.iter().take(10).cloned().collect::<Vec<_>>().join("\n");
+    let more = if missing.len() > 10 {
+        format!("\n… 另有 {} 条提交", missing.len() - 10)
+    } else {
+        String::new()
+    };
+    Err(format!(
+        "合并前校验失败：以下提交信息未包含关联议题 {tag}（云效按提交信息中的 #编号 关联代码）：\n{shown}{more}\n请为这些提交补充议题编号（如 git commit --amend 或新增一条含 {tag} 的提交）后再合并。"
+    ))
 }
 
 fn untracked_files_under_directory<'a>(
@@ -1530,6 +1579,7 @@ pub async fn merge_task_worktree(
     worktree_path: String,
     branch: String,
     base_branch: String,
+    expected_issue_tag: Option<String>,
 ) -> Result<String, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
@@ -1549,6 +1599,12 @@ pub async fn merge_task_worktree(
             return Err(
                 "Worktree has uncommitted changes; commit or stash them before merging".into(),
             );
+        }
+
+        // 0.5) 云效任务：合并前校验分支内全部提交都带 #议题编号
+        if let Some(tag) = expected_issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty())
+        {
+            validate_commits_contain_tag(&cwd, &base_branch, &branch, tag)?;
         }
 
         // 拿主仓当前 HEAD：HEAD == base 时直接 merge，否则用 fetch ff（不切走 HEAD）。

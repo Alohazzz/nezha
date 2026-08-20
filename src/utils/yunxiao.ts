@@ -216,3 +216,24 @@ export function isYunxiaoWorkitemImported(tasks: Task[], workitemId: string): bo
   if (!workitemId) return false;
   return tasks.some((task) => task.yunxiaoWorkitemId === workitemId);
 }
+
+/** 议题编号 → Git 提交关联 tag（如 QHDK-29312 → "#QHDK-29312"）。 */
+export function issueTag(serialNumber: string): string {
+  const serial = serialNumber.trim();
+  if (!serial) return "";
+  return serial.startsWith("#") ? serial : `#${serial}`;
+}
+
+/** 提交信息是否已包含议题 tag（大小写不敏感）。 */
+export function messageHasIssueTag(message: string, serialNumber: string): boolean {
+  const tag = issueTag(serialNumber);
+  if (!tag) return true;
+  return message.toLowerCase().includes(tag.toLowerCase());
+}
+
+/** 提交信息缺 tag 时追加（后端 git_commit 也会兜底，这里给 UI 预览用）。 */
+export function ensureIssueTagInMessage(message: string, serialNumber: string): string {
+  const tag = issueTag(serialNumber);
+  if (!tag || messageHasIssueTag(message, serialNumber)) return message;
+  return `${message.trimEnd()}\n\n${tag}`;
+}

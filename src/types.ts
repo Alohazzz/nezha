@@ -159,6 +159,10 @@ export interface Task {
   yunxiaoSerialNumber?: string;
   /** 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单 */
   yunxiaoSupplement?: YunxiaoSupplement;
+  /** 修改方案已回写云效评论的时间戳（幂等标记，非空即已回写） */
+  yunxiaoWrittenBackAt?: number;
+  /** 回写成功后云效返回的评论 ID（审计/追查用） */
+  yunxiaoCommentId?: string;
 }
 
 /** 云效议题定稿数据：切回待办时恢复补充表单（可继续编辑后重新定稿）。 */
@@ -221,6 +225,8 @@ export interface YunxiaoWorkitem {
   gmtCreate?: number;
   gmtModified?: number;
   customFieldValues: YunxiaoCustomFieldValue[];
+  /** 描述正文中的图片数量（详情接口返回；列表接口为 0） */
+  imageCount?: number;
   categoryId?: string;
   logicalStatus?: string;
   workitemType?: { id: string; name: string };
@@ -232,6 +238,16 @@ export interface YunxiaoPage<T> {
   total: number;
   page: number;
   perPage: number;
+}
+
+/** 云效议题图片准备结果（发起讨论时后端下载到附件目录） */
+export interface YunxiaoIssueImagesPrepared {
+  paths: string[];
+  total: number;
+  downloaded: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
 }
 
 export const PERM_LABELS: Record<PermissionMode, string> = {

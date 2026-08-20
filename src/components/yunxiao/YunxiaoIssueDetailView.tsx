@@ -7,6 +7,7 @@ import type {
   PermissionMode,
   Task,
   YunxiaoSupplement,
+  YunxiaoIssueImagesPrepared,
   YunxiaoWorkitem,
 } from "../../types";
 import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
@@ -222,8 +223,63 @@ export function YunxiaoIssueDetailView({
     } catch (e) {
       console.error("[yunxiao-detail] fetch skill instructions failed:", e);
     }
+
+    // 议题图片：发起讨论时下载到附件目录，路径拼进 prompt 让 Agent 读原图。
+    // 全部失败 → 阻断（图片是议题上下文的一部分）；部分失败 → 跳过并提示。
+    if (settings.token && settings.organizationId && workitemId) {
+      try {
+        const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+          token: settings.token,
+          organizationId: settings.organizationId,
+          workitemId,
+          projectPath,
+          taskId: task.id,
+        });
+        if (images.total > 0) {
+          if (images.paths.length > 0) {
+            prompt = `${prompt}\n\n[Attached images]\n${images.paths.join("\n")}`;
+          }
+          if (images.failed === images.total) {
+            showToast(
+              t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }),
+              "error",
+            );
+            return;
+          }
+          if (images.failed > 0) {
+            showToast(
+              t("yunxiao.images.partial", {
+                failed: images.failed,
+                downloaded: images.downloaded,
+              }),
+              "warning",
+            );
+          } else {
+            showToast(t("yunxiao.images.prepared", { count: images.downloaded }), "success");
+          }
+        }
+      } catch (e) {
+        console.error("[yunxiao-detail] prepare issue images failed:", e);
+        showToast(t("yunxiao.images.allFailed", { error: String(e) }), "error");
+        return;
+      }
+    }
     onStartDiscussion(task.id, prompt, agent, permission);
-  }, [task.id, task.prompt, detail?.categoryId, formKind, onStartDiscussion, agent, permission]);
+  }, [
+    task.id,
+    task.prompt,
+    detail?.categoryId,
+    formKind,
+    onStartDiscussion,
+    agent,
+    permission,
+    settings.token,
+    settings.organizationId,
+    workitemId,
+    projectPath,
+    showToast,
+    t,
+  ]);
 
   const hasAnyValue = Object.values(values).some((v) => v.trim().length > 0);
 
@@ -322,6 +378,11 @@ export function YunxiaoIssueDetailView({
             )}
             <span style={s.yunxiaoSkillBadge}>{t(skillLabelKey(skill))}</span>
           </div>
+          {!!detail?.imageCount && (
+            <div style={s.yunxiaoImageHint}>
+              {t("yunxiao.images.hint", { count: detail.imageCount })}
+            </div>
+          )}
           {!finalized && (
             <div style={s.yunxiaoDetailError}>{t("yunxiao.discussion.finalizeFirst")}</div>
           )}
