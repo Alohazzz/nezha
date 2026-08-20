@@ -22,23 +22,25 @@ export function MentionPopover({
   mentionItems,
   mentionIndex,
   filesLoading,
-  isCrossMode,
-  isCrossLoading,
-  activeCrossProject,
+  isCrossMode = false,
+  isCrossLoading = false,
+  activeCrossProject = null,
   onSelectFile,
   onSelectProject,
   onSetMentionIndex,
+  placement = "above",
 }: {
   mentionSearch: string;
   mentionItems: MentionItem[];
   mentionIndex: number;
   filesLoading: boolean;
-  isCrossMode: boolean;
-  isCrossLoading: boolean;
-  activeCrossProject: CrossProjectRef | null;
+  isCrossMode?: boolean;
+  isCrossLoading?: boolean;
+  activeCrossProject?: CrossProjectRef | null;
   onSelectFile: (file: FileEntry, crossProject?: CrossProjectRef) => void;
-  onSelectProject: (project: Project) => void;
+  onSelectProject?: (project: Project) => void;
   onSetMentionIndex: (index: number) => void;
+  placement?: "above" | "below";
 }) {
   const { t } = useI18n();
   const fileItems = mentionItems.filter(
@@ -49,7 +51,7 @@ export function MentionPopover({
   );
 
   return (
-    <div style={s.mentionDropdown}>
+    <div style={placement === "below" ? s.mentionDropdownBelow : s.mentionDropdown}>
       {/* Cross-project header */}
       {isCrossMode && activeCrossProject && (
         <div style={s.mentionCrossHeader}>
@@ -135,7 +137,7 @@ export function MentionPopover({
                 }}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  onSelectProject(item.project);
+                  onSelectProject?.(item.project);
                 }}
                 onMouseEnter={() => onSetMentionIndex(globalIdx)}
               >

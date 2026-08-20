@@ -604,6 +604,9 @@ export const yunxiao = {
     resize: "vertical" as const,
     minHeight: 64,
   },
+  yunxiaoMentionAnchor: {
+    position: "relative" as const,
+  },
   yunxiaoFormActions: {
     marginTop: 12,
     display: "flex",
