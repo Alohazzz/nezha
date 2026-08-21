@@ -188,20 +188,26 @@ fn user_agent_skills_dir(agent: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(sub))
 }
 
-/// 项目技能的数据目录：`<项目>/.nezha/skill-data/<技能名>/`
-fn skill_data_dir(project_path: &Path, skill_name: &str) -> PathBuf {
-    project_path
-        .join(".nezha")
-        .join("skill-data")
-        .join(skill_name)
+/// 技能数据目录：跟随技能本身，位于技能目录内 `data/`（随技能仓库 git 统一管理）。
+fn skill_data_dir(skill_dir: &Path) -> PathBuf {
+    skill_dir.join("data")
 }
 
-/// 项目技能数据备份根目录：`<项目>/.nezha/skill-backups/<技能名>/`
-fn skill_backup_root(project_path: &Path, skill_name: &str) -> PathBuf {
-    project_path
-        .join(".nezha")
-        .join("skill-backups")
-        .join(skill_name)
+/// 技能数据本地备份根目录（不入技能仓库 git）：`~/.nezha/skill-backups/<技能名>/`
+fn skill_backup_root(skill_name: &str) -> Result<PathBuf, String> {
+    Ok(nezha_dir()?.join("skill-backups").join(skill_name))
+}
+
+/// 从技能目录向上找 git 仓库根（技能仓库）。
+fn find_git_root(start: &Path) -> Option<PathBuf> {
+    let mut cur = Some(start);
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        cur = dir.parent();
+    }
+    None
 }
 
 /// skill_name 必须是单段合法目录名：非空、非 `.` / `..`、不含路径分隔符。
@@ -1415,7 +1421,22 @@ fn resolve_project(project_id: &str) -> Result<(String, PathBuf), String> {
     Ok((project.path.clone(), project_path.to_path_buf()))
 }
 
-/// 查询项目技能的数据目录状态（存在 / 文件数 / 最后修改）。
+/// 从安装记录解析技能目录（target_path，指向技能仓库内的技能文件夹）。
+fn resolve_skill_dir(skill_name: &str, project_id: &str) -> Result<PathBuf, String> {
+    let file = load_installations_internal();
+    let ins = file
+        .installations
+        .iter()
+        .find(|i| i.skill_name == skill_name && i.project_id == project_id)
+        .ok_or_else(|| "技能未安装到该项目".to_string())?;
+    let skill_dir = Path::new(&ins.target_path);
+    if !skill_dir.is_dir() {
+        return Err(format!("技能目录不存在：{}", ins.target_path));
+    }
+    Ok(skill_dir.to_path_buf())
+}
+
+/// 查询技能数据目录状态（存在 / 文件数 / 最后修改）。
 #[tauri::command]
 pub async fn get_skill_data_status(
     skill_name: String,
@@ -1423,8 +1444,8 @@ pub async fn get_skill_data_status(
 ) -> Result<SkillDataStatus, String> {
     tokio::task::spawn_blocking(move || {
         validate_skill_name(&skill_name)?;
-        let (_project_path, project_dir) = resolve_project(&project_id)?;
-        let data_dir = skill_data_dir(&project_dir, &skill_name);
+        let skill_dir = resolve_skill_dir(&skill_name, &project_id)?;
+        let data_dir = skill_data_dir(&skill_dir);
         let exists = data_dir.is_dir();
         Ok(SkillDataStatus {
             data_path: data_dir.to_string_lossy().into_owned(),
@@ -1441,8 +1462,8 @@ pub async fn get_skill_data_status(
     .map_err(|e| e.to_string())?
 }
 
-/// 备份项目技能数据目录到 `<项目>/.nezha/skill-backups/<技能名>/<时间戳>/`，保留最近 5 份。
-/// 返回备份目录路径。
+/// 备份技能数据目录到 `~/.nezha/skill-backups/<技能名>/<时间戳>/`（本地，不入技能仓库 git），
+/// 保留最近 5 份。返回备份目录路径。
 #[tauri::command]
 pub async fn backup_skill_data(
     skill_name: String,
@@ -1450,12 +1471,12 @@ pub async fn backup_skill_data(
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         validate_skill_name(&skill_name)?;
-        let (_project_path, project_dir) = resolve_project(&project_id)?;
-        let data_dir = skill_data_dir(&project_dir, &skill_name);
+        let skill_dir = resolve_skill_dir(&skill_name, &project_id)?;
+        let data_dir = skill_data_dir(&skill_dir);
         if !data_dir.is_dir() {
             return Err("技能数据目录不存在，无需备份".to_string());
         }
-        let backup_root = skill_backup_root(&project_dir, &skill_name);
+        let backup_root = skill_backup_root(&skill_name)?;
         fs::create_dir_all(&backup_root)
             .map_err(|e| format!("Failed to create backup root: {e}"))?;
         let dest = backup_root.join(now_ms().to_string());
@@ -1509,7 +1530,8 @@ fn prune_backups(backup_root: &Path, keep: usize) {
 
 /// 执行技能声明的 `build-command` 重建数据：cwd = 数据目录，
 /// 注入 NEZHA_PROJECT_ROOT / NEZHA_SKILL_DATA_DIR / HIS_REPO 环境变量。
-/// 返回（截断的）命令输出。
+/// 重建成功后把数据目录提交并推送到技能仓库（git 统一管理）。
+/// 返回（截断的）命令输出与 git 结果。
 #[tauri::command]
 pub async fn run_skill_data_build(
     skill_name: String,
@@ -1519,33 +1541,30 @@ pub async fn run_skill_data_build(
 
     let skill_name_for_resolve = skill_name.clone();
     let project_id_for_resolve = project_id.clone();
-    let (project_path, data_dir) = tokio::task::spawn_blocking(
-        move || -> Result<(String, PathBuf), String> {
-            let (project_path, project_dir) = resolve_project(&project_id_for_resolve)?;
-            let data_dir = skill_data_dir(&project_dir, &skill_name_for_resolve);
-            Ok((project_path, data_dir))
-        },
-    )
+    let skill_dir = tokio::task::spawn_blocking(move || {
+        resolve_skill_dir(&skill_name_for_resolve, &project_id_for_resolve)
+    })
     .await
     .map_err(|e| e.to_string())??;
+    let data_dir = skill_data_dir(&skill_dir);
     let data_dir_str = data_dir.to_string_lossy().into_owned();
 
-    let (skill_dir, build_command) =
-        tokio::task::spawn_blocking(move || -> Result<(PathBuf, String), String> {
-            let file = load_installations_internal();
-            let ins = file
-                .installations
-                .iter()
-                .find(|i| i.skill_name == skill_name && i.project_id == project_id)
-                .ok_or_else(|| "技能未安装到该项目".to_string())?;
-            let skill_path = Path::new(&ins.target_path);
-            let content = fs::read_to_string(skill_path.join("SKILL.md"))
+    let project_path = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let (project_path, _project_dir) = resolve_project(&project_id)?;
+        Ok(project_path)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let skill_dir_for_cmd = skill_dir.clone();
+    let build_command =
+        tokio::task::spawn_blocking(move || -> Result<String, String> {
+            let content = fs::read_to_string(skill_dir_for_cmd.join("SKILL.md"))
                 .map_err(|e| format!("读取 SKILL.md 失败: {e}"))?;
             let parsed = parse_frontmatter(&content);
-            let cmd = parsed
+            parsed
                 .build_command
-                .ok_or_else(|| "该技能未声明 build-command，无法自动重建".to_string())?;
-            Ok((skill_path.to_path_buf(), cmd))
+                .ok_or_else(|| "该技能未声明 build-command，无法自动重建".to_string())
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -1589,7 +1608,71 @@ pub async fn run_skill_data_build(
     if !ok {
         return Err(format!("重建数据失败：{}", snippet));
     }
-    Ok(snippet)
+
+    // git 统一管理：把数据目录变更提交并推送到技能仓库
+    let mut report = snippet;
+    if let Some(repo_root) = find_git_root(&skill_dir) {
+        let rel = data_dir
+            .strip_prefix(&repo_root)
+            .unwrap_or(&data_dir)
+            .to_string_lossy()
+            .into_owned();
+        let repo_root_str = repo_root.to_string_lossy().into_owned();
+        let commit_msg = format!("docs({}): rebuild skill data", skill_name);
+        let (ok_add, _out_add, err_add) = run_git(
+            vec![
+                "-C".to_string(),
+                repo_root_str.clone(),
+                "add".to_string(),
+                "--".to_string(),
+                rel.clone(),
+            ],
+            None,
+        )
+        .await?;
+        if !ok_add {
+            report.push_str(&format!("\ngit add 失败：{}", truncate_git_error(&err_add)));
+        } else {
+            let (ok_commit, out_commit, err_commit) = run_git(
+                vec![
+                    "-C".to_string(),
+                    repo_root_str.clone(),
+                    "commit".to_string(),
+                    "-m".to_string(),
+                    commit_msg,
+                ],
+                None,
+            )
+            .await?;
+            let nothing_to_commit = out_commit.contains("nothing to commit")
+                || err_commit.contains("nothing to commit");
+            if !ok_commit && !nothing_to_commit {
+                return Err(format!("提交技能数据失败：{}", truncate_git_error(&err_commit)));
+            }
+            if ok_commit {
+                let (ok_push, _out_push, err_push) = run_git(
+                    vec![
+                        "-C".to_string(),
+                        repo_root_str,
+                        "push".to_string(),
+                        "origin".to_string(),
+                        "HEAD".to_string(),
+                    ],
+                    None,
+                )
+                .await?;
+                let push_note = if ok_push {
+                    "\n已提交并推送到技能仓库".to_string()
+                } else {
+                    format!("\n已提交，但推送失败：{}", truncate_git_error(&err_push))
+                };
+                report.push_str(&push_note);
+            } else {
+                report.push_str("\n技能数据无变更，无需提交");
+            }
+        }
+    }
+    Ok(report)
 }
 
 #[tauri::command]
@@ -1680,12 +1763,8 @@ pub async fn install_skill(
                 return Err(format!("Project path does not exist: {}", project.path));
             }
             resolved_project_id = project.id.clone();
-            // 项目技能统一管理数据目录：`<项目>/.nezha/skill-data/<技能名>/`
-            let data_dir = skill_data_dir(project_path, &skill_name);
-            fs::create_dir_all(&data_dir).map_err(|e| {
-                format!("Failed to create skill data dir {}: {}", data_dir.display(), e)
-            })?;
-            data_path = Some(data_dir.to_string_lossy().into_owned());
+            // 技能数据跟随技能目录 `<技能>/data/`，由技能仓库 git 统一管理（安装时不创建）
+            data_path = Some(skill_data_dir(&skill_canonical).to_string_lossy().into_owned());
             agent_skills_dir(project_path, &agent)
         };
         fs::create_dir_all(&skills_root)
@@ -2126,15 +2205,15 @@ mod tests {
     }
 
     #[test]
-    fn skill_data_dir_follows_nezha_convention() {
-        let project = Path::new("C:\\repo\\hsp");
+    fn skill_data_dir_follows_skill_folder() {
+        let skill = Path::new("C:\\repo\\hsp-skillhub\\his-knowledge-graph");
         assert_eq!(
-            skill_data_dir(project, "his-knowledge-graph"),
-            PathBuf::from("C:\\repo\\hsp\\.nezha\\skill-data\\his-knowledge-graph")
+            skill_data_dir(skill),
+            PathBuf::from("C:\\repo\\hsp-skillhub\\his-knowledge-graph\\data")
         );
         assert_eq!(
-            skill_backup_root(project, "his-knowledge-graph"),
-            PathBuf::from("C:\\repo\\hsp\\.nezha\\skill-backups\\his-knowledge-graph")
+            find_git_root(Path::new("C:\\repo\\hsp-skillhub\\his-knowledge-graph")),
+            None
         );
     }
 
