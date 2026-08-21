@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X, Plus, Trash2, AlertTriangle } from "lucide-react";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
-import type { Project, Skill, SkillInstallation, AgentType } from "../../types";
+import type {
+  Project,
+  Skill,
+  SkillDataStatus,
+  SkillInstallation,
+  AgentType,
+} from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { SkillInstallDialog } from "./SkillInstallDialog";
@@ -34,6 +40,10 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
+  const [dataStatuses, setDataStatuses] = useState<Record<string, SkillDataStatus | null>>({});
+  const [dataLoading, setDataLoading] = useState(false);
+  const [dataBusy, setDataBusy] = useState<string | null>(null);
+  const [dataMessage, setDataMessage] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -47,6 +57,90 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const projectInstallations = useMemo(
+    () => installations.filter((ins) => ins.scope === "project" || ins.projectId !== ""),
+    [installations],
+  );
+
+  useEffect(() => {
+    if (projectInstallations.length === 0) {
+      setDataStatuses({});
+      return;
+    }
+    let cancelled = false;
+    setDataLoading(true);
+    Promise.all(
+      projectInstallations.map((ins) =>
+        invoke<SkillDataStatus>("get_skill_data_status", {
+          skillName: ins.skillName,
+          projectId: ins.projectId,
+        })
+          .then((status) => [ins.projectId, status] as const)
+          .catch(() => [ins.projectId, null] as const),
+      ),
+    )
+      .then((rows) => {
+        if (cancelled) return;
+        const map: Record<string, SkillDataStatus | null> = {};
+        rows.forEach(([pid, status]) => {
+          map[pid] = status;
+        });
+        setDataStatuses(map);
+      })
+      .finally(() => {
+        if (!cancelled) setDataLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectInstallations]);
+
+  const runDataAction = useCallback(
+    async (
+      ins: SkillInstallation,
+      action: "open" | "backup" | "build",
+      status: SkillDataStatus | null,
+    ) => {
+      setDataBusy(ins.projectId);
+      setError(null);
+      setDataMessage(null);
+      try {
+        if (action === "open") {
+          if (!status?.dataPath) throw new Error(t("skill.data.noDataDir"));
+          const project = allProjects.find((p) => p.id === ins.projectId);
+          if (!project) throw new Error("Project not found");
+          await invoke("open_in_system_file_manager", {
+            path: status.dataPath,
+            projectPath: project.path,
+          });
+          setDataMessage(t("skill.data.opened"));
+        } else if (action === "backup") {
+          const backupPath = await invoke<string>("backup_skill_data", {
+            skillName: ins.skillName,
+            projectId: ins.projectId,
+          });
+          setDataMessage(t("skill.data.backupDone", { path: backupPath }));
+        } else {
+          const output = await invoke<string>("run_skill_data_build", {
+            skillName: ins.skillName,
+            projectId: ins.projectId,
+          });
+          setDataMessage(
+            output.trim()
+              ? t("skill.data.buildDoneWithOutput", { output: output.trim() })
+              : t("skill.data.buildDone"),
+          );
+        }
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setDataBusy(null);
+        refresh();
+      }
+    },
+    [allProjects, refresh, t],
+  );
 
   const handleUninstall = useCallback(
     async (ins: SkillInstallation) => {
@@ -184,6 +278,78 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
             })
           )}
         </div>
+
+        {skill.scope === "project" ? (
+          <>
+            <div style={s.skillDialogSectionTitle}>{t("skill.data.title")}</div>
+            {projectInstallations.length === 0 ? (
+              <div style={s.skillDialogEmpty}>{t("skill.data.notInstalled")}</div>
+            ) : dataLoading ? (
+              <div style={s.skillDialogEmpty}>{t("skill.manage.loading")}</div>
+            ) : (
+              <div style={s.skillDataList}>
+                {projectInstallations.map((ins) => {
+                  const project = allProjects.find((p) => p.id === ins.projectId);
+                  const status = dataStatuses[ins.projectId] ?? null;
+                  const busy = dataBusy === ins.projectId;
+                  return (
+                    <div key={`data-${ins.projectId}`} style={s.skillDataRow}>
+                      <div style={s.skillInstallRowMain}>
+                        <div style={s.skillInstallRowTitle}>{project?.name ?? ins.projectId}</div>
+                        <div style={s.skillInstallRowMeta}>
+                          <span style={s.skillInstallRowPath}>
+                            {status?.dataPath ?? ins.dataPath ?? "—"}
+                          </span>
+                        </div>
+                        <div style={s.skillInstallRowMeta}>
+                          {status?.exists ? (
+                            <span>
+                              {t("skill.data.files", { count: status.fileCount })}
+                              {status.lastModified
+                                ? ` · ${t("skill.data.modified", {
+                                    time: new Date(status.lastModified).toLocaleString(),
+                                  })}`
+                                : ""}
+                            </span>
+                          ) : (
+                            <span style={s.skillDataMissing}>{t("skill.data.noDataDir")}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={s.skillDataActions}>
+                        <button
+                          type="button"
+                          style={s.skillDataBtn}
+                          onClick={() => runDataAction(ins, "open", status)}
+                          disabled={busy}
+                        >
+                          {t("skill.data.open")}
+                        </button>
+                        <button
+                          type="button"
+                          style={s.skillDataBtn}
+                          onClick={() => runDataAction(ins, "backup", status)}
+                          disabled={busy || !status?.exists}
+                        >
+                          {busy ? t("skill.data.busy") : t("skill.data.backup")}
+                        </button>
+                        <button
+                          type="button"
+                          style={s.skillDataBtn}
+                          onClick={() => runDataAction(ins, "build", status)}
+                          disabled={busy}
+                        >
+                          {busy ? t("skill.data.busy") : t("skill.data.build")}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {dataMessage ? <div style={s.skillDataMsg}>{dataMessage}</div> : null}
+          </>
+        ) : null}
 
         {error ? <div style={s.skillHubError}>{error}</div> : null}
       </div>

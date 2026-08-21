@@ -68,6 +68,13 @@ pub struct Skill {
     /// frontmatter `scope`：universal = 用户级（所有项目可见）；project = 项目级（装到指定项目）。
     /// 缺省 universal。
     pub scope: String,
+    /// frontmatter `project`：项目技能的目标项目标识（名称/路径关键词），用于安装预选与数据目录归属。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// frontmatter `build-command`：重建技能数据的命令（相对技能目录解析，如 `python scripts/bootstrap.py`），
+    /// 由 Nezha 以数据目录为 cwd、注入 NEZHA_PROJECT_ROOT / NEZHA_SKILL_DATA_DIR 后执行。
+    #[serde(rename = "buildCommand", skip_serializing_if = "Option::is_none")]
+    pub build_command: Option<String>,
     /// frontmatter 解析失败时的错误描述
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_error: Option<String>,
@@ -83,6 +90,9 @@ pub struct SkillInstallation {
     /// "universal" | "project"；旧记录缺省空串按 project 处理
     #[serde(default)]
     pub scope: String,
+    /// 项目技能的数据目录（`<项目>/.nezha/skill-data/<技能名>/`）；universal 安装为 None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_path: Option<String>,
     pub installed_at: i64,
     pub link_path: String,
     pub target_path: String,
@@ -176,6 +186,22 @@ fn user_agent_skills_dir(agent: &str) -> PathBuf {
     crate::platform::home_dir()
         .map(|home| home.join(sub))
         .unwrap_or_else(|| PathBuf::from(sub))
+}
+
+/// 项目技能的数据目录：`<项目>/.nezha/skill-data/<技能名>/`
+fn skill_data_dir(project_path: &Path, skill_name: &str) -> PathBuf {
+    project_path
+        .join(".nezha")
+        .join("skill-data")
+        .join(skill_name)
+}
+
+/// 项目技能数据备份根目录：`<项目>/.nezha/skill-backups/<技能名>/`
+fn skill_backup_root(project_path: &Path, skill_name: &str) -> PathBuf {
+    project_path
+        .join(".nezha")
+        .join("skill-backups")
+        .join(skill_name)
 }
 
 /// skill_name 必须是单段合法目录名：非空、非 `.` / `..`、不含路径分隔符。
@@ -336,6 +362,8 @@ struct ParsedFrontmatter {
     name: Option<String>,
     description: Option<String>,
     scope: Option<String>,
+    project: Option<String>,
+    build_command: Option<String>,
 }
 
 fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
@@ -385,6 +413,8 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
                 "name" => parsed.name = Some(value),
                 "description" => parsed.description = Some(value),
                 "scope" => parsed.scope = Some(value),
+                "project" => parsed.project = Some(value),
+                "build-command" => parsed.build_command = Some(value),
                 _ => {}
             }
             i += 1 + consumed;
@@ -394,6 +424,8 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
                 "name" => parsed.name = Some(value),
                 "description" => parsed.description = Some(value),
                 "scope" => parsed.scope = Some(value),
+                "project" => parsed.project = Some(value),
+                "build-command" => parsed.build_command = Some(value),
                 _ => {}
             }
             i += 1;
@@ -407,12 +439,27 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
 
 fn parse_skill_entry(dir_path: &Path, name: &str) -> Skill {
     let skill_md = dir_path.join("SKILL.md");
-    let (display_name, description, scope, has_error) = match fs::read_to_string(&skill_md) {
+    let (display_name, description, scope, project, build_command, has_error) =
+        match fs::read_to_string(&skill_md) {
         Ok(content) => {
             let parsed = parse_frontmatter(&content);
-            (parsed.name, parsed.description, parsed.scope, None)
+            (
+                parsed.name,
+                parsed.description,
+                parsed.scope,
+                parsed.project,
+                parsed.build_command,
+                None,
+            )
         }
-        Err(e) => (None, None, None, Some(format!("Failed to read SKILL.md: {}", e))),
+        Err(e) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(format!("Failed to read SKILL.md: {}", e)),
+        ),
     };
     Skill {
         name: name.to_string(),
@@ -424,6 +471,8 @@ fn parse_skill_entry(dir_path: &Path, name: &str) -> Skill {
         } else {
             "universal".to_string()
         },
+        project,
+        build_command,
         has_error,
     }
 }
@@ -572,9 +621,12 @@ fn remove_symlink_if_present(link_path: &Path) -> Result<bool, String> {
 // ── 技能仓库来源（本地路径 / git 远端）───────────────────────────────────────
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
+const BUILD_TIMEOUT: Duration = Duration::from_secs(300);
 const SKILL_REPOS_SUBDIR: &str = "skill_repos";
 const SKILL_WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const GIT_ERROR_SNIPPET: usize = 600;
+const BUILD_OUTPUT_SNIPPET: usize = 4000;
+const MAX_BACKUPS: usize = 5;
 
 /// 校验 git 仓库地址：仅允许 https:// 与 git@（ssh）两种形态。
 fn validate_git_url(raw: &str) -> Result<String, String> {
@@ -634,36 +686,42 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
     Ok(data)
 }
 
-/// 参数化运行 git 子进程（不经 shell），超时强制 kill。
-async fn run_git(
+/// 参数化运行子进程（不经 shell），超时强制 kill。
+async fn run_process_with_env(
+    program: String,
     args: Vec<String>,
     current_dir: Option<PathBuf>,
+    envs: Vec<(String, String)>,
+    timeout: Duration,
 ) -> Result<(bool, String, String), String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = tokio::process::Command::new(&program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);
     cmd.args(&args);
     if let Some(dir) = current_dir {
         cmd.current_dir(dir);
+    }
+    for (key, value) in envs {
+        cmd.env(key, value);
     }
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| format!("启动 git 失败: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("启动 {program} 失败: {e}"))?;
     let stdout = child.stdout.take().ok_or("无法读取 git 标准输出")?;
     let stderr = child.stderr.take().ok_or("无法读取 git 错误输出")?;
     let stdout_task = tokio::spawn(read_pipe_to_end(stdout, "标准输出"));
     let stderr_task = tokio::spawn(read_pipe_to_end(stderr, "错误输出"));
 
-    let status = match tokio::time::timeout(GIT_TIMEOUT, child.wait()).await {
-        Ok(result) => result.map_err(|e| format!("git 进程等待失败: {e}"))?,
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(result) => result.map_err(|e| format!("{program} 进程等待失败: {e}"))?,
         Err(_) => {
             let _ = child.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             stdout_task.abort();
             stderr_task.abort();
-            return Err(format!("git 操作超时（{} 秒）", GIT_TIMEOUT.as_secs()));
+            return Err(format!("{program} 超时（{} 秒）", timeout.as_secs()));
         }
     };
     let stdout_data = stdout_task
@@ -677,6 +735,14 @@ async fn run_git(
         String::from_utf8_lossy(&stdout_data).into_owned(),
         String::from_utf8_lossy(&stderr_data).into_owned(),
     ))
+}
+
+/// 参数化运行 git 子进程（不经 shell），超时强制 kill。
+async fn run_git(
+    args: Vec<String>,
+    current_dir: Option<PathBuf>,
+) -> Result<(bool, String, String), String> {
+    run_process_with_env("git".to_string(), args, current_dir, Vec::new(), GIT_TIMEOUT).await
 }
 
 fn truncate_git_error(err: &str) -> String {
@@ -1264,6 +1330,268 @@ pub async fn cleanup_broken_skill_installations() -> Result<usize, String> {
     .map_err(|e| e.to_string())?
 }
 
+// ── 项目技能数据管理（数据统一放在 <项目>/.nezha/skill-data/<技能名>/）─────────
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDataStatus {
+    pub data_path: String,
+    pub exists: bool,
+    pub file_count: usize,
+    pub last_modified: Option<i64>,
+}
+
+fn count_files_in(dir: &Path) -> usize {
+    fn walk(dir: &Path, count: &mut usize, depth: usize) {
+        if depth > 12 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                walk(&path, count, depth + 1);
+            } else {
+                *count += 1;
+            }
+        }
+    }
+    let mut count = 0;
+    walk(dir, &mut count, 0);
+    count
+}
+
+fn latest_mtime_in(dir: &Path) -> Option<i64> {
+    fn walk(dir: &Path, best: &mut Option<i64>, depth: usize) {
+        if depth > 12 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                walk(&path, best, depth + 1);
+            } else if let Ok(modified) = meta.modified() {
+                if let Ok(ts) = modified.duration_since(UNIX_EPOCH) {
+                    let ms = ts.as_millis() as i64;
+                    if best.map(|b| ms > b).unwrap_or(true) {
+                        *best = Some(ms);
+                    }
+                }
+            }
+        }
+    }
+    let mut best = None;
+    walk(dir, &mut best, 0);
+    best
+}
+
+fn resolve_project(project_id: &str) -> Result<(String, PathBuf), String> {
+    let projects = load_projects()?;
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project '{}' not found", project_id))?;
+    let project_path = Path::new(&project.path);
+    if !project_path.is_dir() {
+        return Err(format!("Project path does not exist: {}", project.path));
+    }
+    Ok((project.path.clone(), project_path.to_path_buf()))
+}
+
+/// 查询项目技能的数据目录状态（存在 / 文件数 / 最后修改）。
+#[tauri::command]
+pub async fn get_skill_data_status(
+    skill_name: String,
+    project_id: String,
+) -> Result<SkillDataStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        validate_skill_name(&skill_name)?;
+        let (_project_path, project_dir) = resolve_project(&project_id)?;
+        let data_dir = skill_data_dir(&project_dir, &skill_name);
+        let exists = data_dir.is_dir();
+        Ok(SkillDataStatus {
+            data_path: data_dir.to_string_lossy().into_owned(),
+            exists,
+            file_count: if exists { count_files_in(&data_dir) } else { 0 },
+            last_modified: if exists {
+                latest_mtime_in(&data_dir)
+            } else {
+                None
+            },
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 备份项目技能数据目录到 `<项目>/.nezha/skill-backups/<技能名>/<时间戳>/`，保留最近 5 份。
+/// 返回备份目录路径。
+#[tauri::command]
+pub async fn backup_skill_data(
+    skill_name: String,
+    project_id: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        validate_skill_name(&skill_name)?;
+        let (_project_path, project_dir) = resolve_project(&project_id)?;
+        let data_dir = skill_data_dir(&project_dir, &skill_name);
+        if !data_dir.is_dir() {
+            return Err("技能数据目录不存在，无需备份".to_string());
+        }
+        let backup_root = skill_backup_root(&project_dir, &skill_name);
+        fs::create_dir_all(&backup_root)
+            .map_err(|e| format!("Failed to create backup root: {e}"))?;
+        let dest = backup_root.join(now_ms().to_string());
+        copy_dir_recursive(&data_dir, &dest)?;
+        prune_backups(&backup_root, MAX_BACKUPS);
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| format!("Failed to create {}: {e}", dst.display()))?;
+    let entries =
+        fs::read_dir(src).map_err(|e| format!("Failed to read {}: {e}", src.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let target = dst.join(entry.file_name());
+        if meta.file_type().is_symlink() {
+            // 备份只复制真实文件，跳过软链
+            continue;
+        } else if meta.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)
+                .map_err(|e| format!("Failed to copy {}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// 按目录名（时间戳）升序保留最近 keep 份备份。
+fn prune_backups(backup_root: &Path, keep: usize) {
+    let Ok(entries) = fs::read_dir(backup_root) else {
+        return;
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    let excess = dirs.len().saturating_sub(keep);
+    for dir in dirs.into_iter().take(excess) {
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// 执行技能声明的 `build-command` 重建数据：cwd = 数据目录，
+/// 注入 NEZHA_PROJECT_ROOT / NEZHA_SKILL_DATA_DIR / HIS_REPO 环境变量。
+/// 返回（截断的）命令输出。
+#[tauri::command]
+pub async fn run_skill_data_build(
+    skill_name: String,
+    project_id: String,
+) -> Result<String, String> {
+    validate_skill_name(&skill_name)?;
+
+    let skill_name_for_resolve = skill_name.clone();
+    let project_id_for_resolve = project_id.clone();
+    let (project_path, data_dir) = tokio::task::spawn_blocking(
+        move || -> Result<(String, PathBuf), String> {
+            let (project_path, project_dir) = resolve_project(&project_id_for_resolve)?;
+            let data_dir = skill_data_dir(&project_dir, &skill_name_for_resolve);
+            Ok((project_path, data_dir))
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())??;
+    let data_dir_str = data_dir.to_string_lossy().into_owned();
+
+    let (skill_dir, build_command) =
+        tokio::task::spawn_blocking(move || -> Result<(PathBuf, String), String> {
+            let file = load_installations_internal();
+            let ins = file
+                .installations
+                .iter()
+                .find(|i| i.skill_name == skill_name && i.project_id == project_id)
+                .ok_or_else(|| "技能未安装到该项目".to_string())?;
+            let skill_path = Path::new(&ins.target_path);
+            let content = fs::read_to_string(skill_path.join("SKILL.md"))
+                .map_err(|e| format!("读取 SKILL.md 失败: {e}"))?;
+            let parsed = parse_frontmatter(&content);
+            let cmd = parsed
+                .build_command
+                .ok_or_else(|| "该技能未声明 build-command，无法自动重建".to_string())?;
+            Ok((skill_path.to_path_buf(), cmd))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    // 空格分词；相对路径参数基于技能目录解析
+    let argv: Vec<String> = build_command.split_whitespace().map(str::to_string).collect();
+    if argv.is_empty() {
+        return Err("build-command 为空".to_string());
+    }
+    let program = argv[0].clone();
+    let mut args: Vec<String> = Vec::new();
+    for arg in &argv[1..] {
+        let candidate = Path::new(arg);
+        if candidate.is_relative() && (arg.contains('/') || arg.contains('\\')) {
+            args.push(skill_dir.join(arg).to_string_lossy().into_owned());
+        } else {
+            args.push(arg.clone());
+        }
+    }
+    let envs = vec![
+        ("NEZHA_PROJECT_ROOT".to_string(), project_path.clone()),
+        ("NEZHA_SKILL_DATA_DIR".to_string(), data_dir_str.clone()),
+        ("HIS_REPO".to_string(), project_path),
+    ];
+    let (ok, stdout, stderr) = run_process_with_env(
+        program,
+        args,
+        Some(data_dir.clone()),
+        envs,
+        BUILD_TIMEOUT,
+    )
+    .await?;
+    let combined = format!("{}{}", stdout.trim(), stderr.trim());
+    let snippet = if combined.chars().count() > BUILD_OUTPUT_SNIPPET {
+        let mut s: String = combined.chars().take(BUILD_OUTPUT_SNIPPET).collect();
+        s.push_str("…（已截断）");
+        s
+    } else {
+        combined
+    };
+    if !ok {
+        return Err(format!("重建数据失败：{}", snippet));
+    }
+    Ok(snippet)
+}
+
 #[tauri::command]
 pub async fn install_skill(
     skill_name: String,
@@ -1337,6 +1665,7 @@ pub async fn install_skill(
         // 作用域决定落位：universal → 用户级技能目录（所有项目可见）；
         // project → 指定项目的技能目录。project_id 仅在 project 作用域下有效。
         let resolved_project_id: String;
+        let mut data_path: Option<String> = None;
         let skills_root = if scope == "universal" {
             resolved_project_id = String::new();
             user_agent_skills_dir(&agent)
@@ -1351,6 +1680,12 @@ pub async fn install_skill(
                 return Err(format!("Project path does not exist: {}", project.path));
             }
             resolved_project_id = project.id.clone();
+            // 项目技能统一管理数据目录：`<项目>/.nezha/skill-data/<技能名>/`
+            let data_dir = skill_data_dir(project_path, &skill_name);
+            fs::create_dir_all(&data_dir).map_err(|e| {
+                format!("Failed to create skill data dir {}: {}", data_dir.display(), e)
+            })?;
+            data_path = Some(data_dir.to_string_lossy().into_owned());
             agent_skills_dir(project_path, &agent)
         };
         fs::create_dir_all(&skills_root)
@@ -1382,6 +1717,7 @@ pub async fn install_skill(
                     &resolved_project_id,
                     &agent,
                     &scope,
+                    data_path.as_deref(),
                     &link_path_str,
                     &target_path_str,
                 )?;
@@ -1423,6 +1759,7 @@ pub async fn install_skill(
             &resolved_project_id,
             &agent,
             &scope,
+            data_path.as_deref(),
             &link_path_str,
             &target_path_str,
         )?;
@@ -1609,6 +1946,7 @@ fn upsert_installation(
     project_id: &str,
     agent: &str,
     scope: &str,
+    data_path: Option<&str>,
     link_path: &str,
     target_path: &str,
 ) -> Result<SkillInstallation, String> {
@@ -1630,6 +1968,7 @@ fn upsert_installation(
         project_id: project_id.to_string(),
         agent: agent.to_string(),
         scope: scope.to_string(),
+        data_path: data_path.map(str::to_string),
         installed_at: now,
         link_path: link_path.to_string(),
         target_path: target_path.to_string(),
@@ -1758,6 +2097,45 @@ mod tests {
         assert_eq!(p2.scope, None);
         let p3 = parse_frontmatter("---\nname: foo\nscope: universal\n---\nbody");
         assert_eq!(p3.scope.as_deref(), Some("universal"));
+    }
+
+    #[test]
+    fn parse_frontmatter_project_and_build_command() {
+        let p = parse_frontmatter(
+            "---\nname: kg\nscope: project\nproject: Hsp 2.0\nbuild-command: python scripts/bootstrap.py\n---\nbody",
+        );
+        assert_eq!(p.project.as_deref(), Some("Hsp 2.0"));
+        assert_eq!(
+            p.build_command.as_deref(),
+            Some("python scripts/bootstrap.py")
+        );
+        let dir = std::env::temp_dir().join(format!("nezha-skill-build-test-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: kg\nscope: project\nproject: Hsp 2.0\nbuild-command: python scripts/bootstrap.py\n---\nbody",
+        )
+        .unwrap();
+        let skill = parse_skill_entry(&dir, "kg");
+        assert_eq!(skill.project.as_deref(), Some("Hsp 2.0"));
+        assert_eq!(
+            skill.build_command.as_deref(),
+            Some("python scripts/bootstrap.py")
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skill_data_dir_follows_nezha_convention() {
+        let project = Path::new("C:\\repo\\hsp");
+        assert_eq!(
+            skill_data_dir(project, "his-knowledge-graph"),
+            PathBuf::from("C:\\repo\\hsp\\.nezha\\skill-data\\his-knowledge-graph")
+        );
+        assert_eq!(
+            skill_backup_root(project, "his-knowledge-graph"),
+            PathBuf::from("C:\\repo\\hsp\\.nezha\\skill-backups\\his-knowledge-graph")
+        );
     }
 
     #[test]

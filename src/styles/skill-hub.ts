@@ -852,4 +852,53 @@ export const skillHub = {
     gap: 10,
     flexShrink: 0,
   },
+
+  // ── Skill data management ─────────────────────────────────────────────────
+  skillDataList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+    marginBottom: 10,
+  },
+  skillDataRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "10px 12px",
+    background: "var(--bg-input)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 8,
+  },
+  skillDataActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 0,
+  },
+  skillDataBtn: {
+    padding: "5px 10px",
+    background: "var(--bg-card)",
+    border: "1px solid var(--border-medium)",
+    borderRadius: 7,
+    fontSize: 12,
+    fontWeight: 500,
+    color: "var(--text-secondary)",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  },
+  skillDataMissing: {
+    fontSize: 11.5,
+    color: "var(--warning, var(--text-hint))",
+  },
+  skillDataMsg: {
+    padding: "8px 12px",
+    background: "var(--bg-hover)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 8,
+    fontSize: 12,
+    color: "var(--text-secondary)",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-all" as const,
+    marginBottom: 10,
+  },
 } satisfies Record<string, React.CSSProperties>;

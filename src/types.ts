@@ -376,6 +376,10 @@ export interface Skill {
   path: string;
   /** frontmatter `scope`：universal = 用户级（所有项目可见）；project = 项目级。缺省 universal */
   scope?: "universal" | "project";
+  /** frontmatter `project`：项目技能的目标项目标识（名称/路径关键词），用于安装预选 */
+  project?: string;
+  /** frontmatter `build-command`：重建技能数据的命令（相对技能目录解析） */
+  buildCommand?: string;
   /** frontmatter 解析失败时的错误说明 */
   hasError?: string;
 }
@@ -389,10 +393,20 @@ export interface SkillInstallation {
   agent: AgentType;
   /** "universal" | "project"；旧记录缺省按 project 处理 */
   scope?: string;
+  /** 项目技能的数据目录（`<项目>/.nezha/skill-data/<技能名>/`）；universal 安装无此字段 */
+  dataPath?: string;
   installedAt: number;
   linkPath: string;
   targetPath: string;
   health?: SkillInstallationHealth;
+}
+
+/** 项目技能数据目录状态 */
+export interface SkillDataStatus {
+  dataPath: string;
+  exists: boolean;
+  fileCount: number;
+  lastModified?: number;
 }
 
 export type SkillInstallStrategy = "detect" | "skip" | "overwrite" | "cancel";

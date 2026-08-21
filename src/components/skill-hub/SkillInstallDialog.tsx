@@ -40,7 +40,21 @@ export function SkillInstallDialog({
   onInstalled,
 }: Props) {
   const { t } = useI18n();
-  const [projectId, setProjectId] = useState<string | null>(allProjects[0]?.id ?? null);
+  const [projectId, setProjectId] = useState<string | null>(() => {
+    // frontmatter `project` 声明优先匹配目标项目（名称/路径关键词），否则默认第一个
+    if (skill.project) {
+      const keyword = skill.project.trim();
+      const matched = allProjects.find(
+        (p) =>
+          p.name === keyword ||
+          p.id === keyword ||
+          p.path.includes(keyword) ||
+          keyword.includes(p.name),
+      );
+      if (matched) return matched.id;
+    }
+    return allProjects[0]?.id ?? null;
+  });
   const [agent, setAgent] = useState<AgentType>("claude");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
