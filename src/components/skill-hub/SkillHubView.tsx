@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { Settings as SettingsIcon, Blocks, ExternalLink, AlertCircle, Trash2 } from "lucide-react";
+import {
+  Settings as SettingsIcon,
+  Blocks,
+  ExternalLink,
+  AlertCircle,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import type { Project, Skill, SkillDeleteResult, SkillHubConfig, SkillInstallation } from "../../types";
 import { useI18n } from "../../i18n";
 import { SKILL_HUB_CHANGED_EVENT } from "../app-settings/types";
@@ -24,6 +32,9 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
   const [error, setError] = useState<string | null>(null);
   const [managedSkill, setManagedSkill] = useState<Skill | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const loadSkills = useCallback(() => {
     if (!config?.hubPath) {
@@ -53,6 +64,57 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
     window.addEventListener(SKILL_HUB_CHANGED_EVENT, refresh);
     return () => window.removeEventListener(SKILL_HUB_CHANGED_EVENT, refresh);
   }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listen("skill-hub-changed", () => {
+      if (!cancelled) setRefreshKey((k) => k + 1);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const handleSync = useCallback(async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setError(null);
+    try {
+      await invoke<SkillHubConfig>("sync_skill_source");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSyncing(false);
+      // 让 App 重载配置（含 lastSyncError / lastSyncedCommit），并刷新技能列表
+      window.dispatchEvent(new CustomEvent(SKILL_HUB_CHANGED_EVENT));
+    }
+  }, [syncing]);
+
+  const handleCleanupBroken = useCallback(async () => {
+    if (cleaning) return;
+    setCleaning(true);
+    setError(null);
+    try {
+      const removed = await invoke<number>("cleanup_broken_skill_installations");
+      setActionMessage(
+        removed > 0
+          ? t("skill.hub.cleanupDone", { count: removed })
+          : t("skill.hub.cleanupNone"),
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCleaning(false);
+      setRefreshKey((k) => k + 1);
+    }
+  }, [cleaning, t]);
 
   const installedProjectCounts = useMemo(() => {
     const grouped = new Map<string, Set<string>>();
@@ -115,24 +177,78 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
           <div style={s.skillHubHeaderPath} title={config.hubPath}>
             {shortenPath(config.hubPath)}
           </div>
+          <div style={s.skillHubStatusLine}>
+            <span>
+              {config.source?.sourceType === "git"
+                ? t("skill.hub.sourceGit")
+                : t("skill.hub.sourcePath")}
+            </span>
+            <span title={config.source?.sourceType === "git" ? config.source.url : config.hubPath}>
+              {config.source?.sourceType === "git"
+                ? `${config.source.url ?? ""}${
+                    config.source.branch ? ` · ${config.source.branch}` : ""
+                  }`
+                : config.hubPath}
+            </span>
+            {config.lastSyncedAt ? (
+              <span>
+                {t("skill.hub.lastSyncedAt", {
+                  time: new Date(config.lastSyncedAt).toLocaleString(),
+                })}
+              </span>
+            ) : null}
+            {config.lastSyncedCommit ? (
+              <span>{t("skill.hub.commitAt", { commit: config.lastSyncedCommit.slice(0, 12) })}</span>
+            ) : null}
+            {config.lastSyncError ? (
+              <span style={s.skillHubStatusError}>
+                {t("skill.hub.syncError", { error: config.lastSyncError })}
+              </span>
+            ) : null}
+          </div>
         </div>
-        {config.hubProjectId ? (
+        <div style={s.skillHubHeaderActions}>
           <button
             type="button"
-            style={s.skillHubHeaderBtn}
-            onClick={onEnterSkillHub}
-            title={t("skill.header.openInTaskView")}
+            style={s.skillHubSyncBtn}
+            onClick={handleSync}
+            disabled={syncing}
           >
-            <ExternalLink size={13} strokeWidth={2} />
-            <span>{t("skill.header.openInTaskView")}</span>
+            <RefreshCw size={13} strokeWidth={2} className={syncing ? "spin" : ""} />
+            {syncing ? t("skill.hub.syncing") : t("skill.hub.syncNow")}
           </button>
-        ) : null}
+          {config.hubProjectId ? (
+            <button
+              type="button"
+              style={s.skillHubHeaderBtn}
+              onClick={onEnterSkillHub}
+              title={t("skill.header.openInTaskView")}
+            >
+              <ExternalLink size={13} strokeWidth={2} />
+              <span>{t("skill.header.openInTaskView")}</span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      <div style={s.skillHubMeta}>
-        {loading
-          ? t("skill.list.loading")
-          : t("skill.list.count", { count: skills.length })}
+      <div style={s.skillHubToolbar}>
+        <div style={s.skillHubMeta}>
+          {loading
+            ? t("skill.list.loading")
+            : t("skill.list.count", { count: skills.length })}
+        </div>
+        <div style={s.skillHubToolbarRight}>
+          {actionMessage ? <span style={s.skillHubActionMsg}>{actionMessage}</span> : null}
+          <button
+            type="button"
+            style={s.skillHubCleanupBtn}
+            onClick={handleCleanupBroken}
+            disabled={cleaning}
+          >
+            <Trash2 size={12} strokeWidth={2} />
+            {cleaning ? t("skill.hub.cleaning") : t("skill.hub.cleanupBroken")}
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -192,6 +308,17 @@ function SkillRow({
           {skill.displayName && skill.displayName !== skill.name ? (
             <span style={s.skillRowDirName}>{skill.name}</span>
           ) : null}
+          <span
+            style={
+              skill.scope === "project"
+                ? s.skillScopeBadgeProject
+                : s.skillScopeBadgeUniversal
+            }
+          >
+            {skill.scope === "project"
+              ? t("skill.scope.project")
+              : t("skill.scope.universal")}
+          </span>
         </div>
         {skill.description ? (
           <div style={s.skillRowDesc}>{skill.description}</div>

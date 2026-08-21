@@ -352,19 +352,23 @@ const GRILLING_INSTRUCTIONS: &str = "请用 grilling 流程走完决策树：一
 
 const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；每个结论都要有可复现的证据，不凭感觉猜。";
 
-/// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无。
-pub fn issue_discussion_instructions(category: &str) -> Option<&'static str> {
-    match category.trim().to_lowercase().as_str() {
-        "req" => Some(GRILLING_INSTRUCTIONS),
-        "bug" => Some(DIAGNOSING_BUGS_INSTRUCTIONS),
-        _ => None,
-    }
+const KNOWLEDGE_GRAPH_INSTRUCTION: &str = "另外，开始前先使用 his-knowledge-graph 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关 HIS 模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
+
+/// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无；
+/// Req 与 Bug 都会追加 his-knowledge-graph 技能指令（结合项目知识图谱）。
+pub fn issue_discussion_instructions(category: &str) -> Option<String> {
+    let flow = match category.trim().to_lowercase().as_str() {
+        "req" => GRILLING_INSTRUCTIONS,
+        "bug" => DIAGNOSING_BUGS_INSTRUCTIONS,
+        _ => return None,
+    };
+    Some(format!("{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}"))
 }
 
 /// 前端在拼「发起讨论」prompt 时调用，取对应 Skill 的流程指令文本（无则为空串）。
 #[tauri::command]
 pub fn get_issue_discussion_instructions(category: String) -> Result<String, String> {
-    Ok(issue_discussion_instructions(&category).unwrap_or("").to_string())
+    Ok(issue_discussion_instructions(&category).unwrap_or_default())
 }
 
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
@@ -889,6 +893,7 @@ mod tests {
         let text = issue_discussion_instructions("Req").expect("Req has instructions");
         assert!(text.contains("grilling"));
         assert!(text.contains("What/Why/Scope"));
+        assert!(text.contains("his-knowledge-graph"));
     }
 
     #[test]
@@ -896,6 +901,7 @@ mod tests {
         let text = issue_discussion_instructions("Bug").expect("Bug has instructions");
         assert!(text.contains("diagnosing-bugs"));
         assert!(text.contains("变红"));
+        assert!(text.contains("his-knowledge-graph"));
     }
 
     #[test]
