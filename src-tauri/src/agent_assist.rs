@@ -1,5 +1,6 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
@@ -760,6 +761,234 @@ pub async fn generate_yunxiao_writeback_summary(
     }))
 }
 
+// ── 知识沉淀（云效议题讨论完成后，提取图谱增量并生成审核议题候选）──────────────
+
+const SEDIMENTATION_TIMEOUT: Duration = Duration::from_secs(120);
+const SEDIMENTATION_SESSION_BUDGET: usize = 8000;
+const MAX_SUGGESTION_FIELD_CHARS: usize = 4000;
+
+/// 一条候选知识（对应一个云效审核议题）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSuggestion {
+    pub module: String,
+    pub section: String,
+    pub content: String,
+    pub evidence: String,
+    pub confidence: String,
+    pub suggested_title: String,
+}
+
+const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于下面的会话过程与云效议题信息，对照 HIS 知识图谱，识别「有价值且图谱中没有」的知识，按给定格式输出候选。
+
+先完整阅读下方 <SKILL> 内的技能内容，并严格遵循其判定标准、比对方法与输出格式。
+
+<SKILL>
+{skill_content}
+</SKILL>
+
+──── 云效议题 ────
+编号：{serial_number}
+标题：{task_name}
+链接：{link}
+补充信息：
+{fields_text}
+
+──── 会话过程 ────
+{session_text}
+
+──── 知识图谱数据目录 ────
+{graph_data_dir}
+
+──── 项目根目录 ────
+{project_path}
+
+只输出 <SUGGESTIONS> 与 </SUGGESTIONS> 之间的 JSON 数组，标签外不要输出任何内容。
+"#;
+
+fn build_sedimentation_prompt(
+    skill_content: &str,
+    serial_number: &str,
+    task_name: &str,
+    link: &str,
+    fields_text: &str,
+    session_text: &str,
+    graph_data_dir: &str,
+    project_path: &str,
+) -> String {
+    let placeholder = |s: &str| -> String {
+        if s.trim().is_empty() {
+            "（无）".to_string()
+        } else {
+            s.trim().to_string()
+        }
+    };
+    SEDIMENTATION_PROMPT_TEMPLATE
+        .replace("{skill_content}", skill_content.trim())
+        .replace("{serial_number}", serial_number.trim())
+        .replace("{task_name}", &placeholder(task_name))
+        .replace("{link}", &placeholder(link))
+        .replace("{fields_text}", &placeholder(fields_text))
+        .replace("{session_text}", &placeholder(session_text))
+        .replace("{graph_data_dir}", graph_data_dir.trim())
+        .replace("{project_path}", project_path.trim())
+}
+
+/// 提取 `<SUGGESTIONS>...</SUGGESTIONS>` 内的 JSON 数组并规范化字段。
+fn extract_suggestions(stdout: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
+    const OPEN: &str = "<SUGGESTIONS>";
+    const CLOSE: &str = "</SUGGESTIONS>";
+    let inner = stdout
+        .rfind(CLOSE)
+        .and_then(|close_pos| {
+            let prefix = &stdout[..close_pos];
+            prefix.rfind(OPEN).map(|open_pos| {
+                prefix[open_pos + OPEN.len()..].trim().to_string()
+            })
+        })
+        .ok_or_else(|| "未找到 <SUGGESTIONS> 输出标签".to_string())?;
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(&inner)
+        .map_err(|e| format!("解析候选知识 JSON 失败: {e}"))?;
+    let mut out = Vec::new();
+    for item in parsed {
+        let module = item
+            .get("module")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let section = item
+            .get("section")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if module.is_empty() || section.is_empty() {
+            continue; // 缺关键字段的条目丢弃
+        }
+        let truncate = |s: &str| -> String {
+            let t = s.trim();
+            if t.chars().count() > MAX_SUGGESTION_FIELD_CHARS {
+                t.chars().take(MAX_SUGGESTION_FIELD_CHARS).collect::<String>() + "…"
+            } else {
+                t.to_string()
+            }
+        };
+        out.push(KnowledgeSuggestion {
+            module,
+            section,
+            content: truncate(item.get("content").and_then(serde_json::Value::as_str).unwrap_or("")),
+            evidence: truncate(item.get("evidence").and_then(serde_json::Value::as_str).unwrap_or("")),
+            confidence: item
+                .get("confidence")
+                .and_then(serde_json::Value::as_str)
+                .filter(|c| *c == "confirmed" || *c == "pending")
+                .unwrap_or("pending")
+                .to_string(),
+            suggested_title: truncate(
+                item.get("suggestedTitle")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+            ),
+        });
+    }
+    Ok(out)
+}
+
+/// 生成知识沉淀候选：读取 `knowledge-sedimentation` 技能内容注入 headless prompt，
+/// 基于会话摘要 + 议题信息 + 图谱目录（现场比对）输出结构化候选，供前端预览后创建审核议题。
+#[tauri::command]
+pub async fn generate_knowledge_sedimentation(
+    project_path: String,
+    serial_number: String,
+    task_name: String,
+    fields_text: String,
+    link: String,
+    session_path: Option<String>,
+    agent: String,
+) -> Result<Vec<KnowledgeSuggestion>, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {}", agent));
+    }
+    let project_for_validation = project_path.clone();
+    tokio::task::spawn_blocking(move || validate_project_path_for_naming(&project_for_validation))
+        .await
+        .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
+
+    // 读取 knowledge-sedimentation 技能内容（来自技能库；缺失时提示先同步/安装）
+    let (skill_content, graph_data_dir) =
+        tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
+            let hub = crate::skills::configured_hub_path()
+                .ok_or_else(|| "技能库尚未配置".to_string())?;
+            let skill_md = Path::new(&hub)
+                .join("knowledge-sedimentation")
+                .join("SKILL.md");
+            let content = fs::read_to_string(&skill_md).map_err(|_| {
+                "未找到 knowledge-sedimentation 技能（请先同步技能仓库并安装该项目技能）".to_string()
+            })?;
+            let graph_dir = Path::new(&hub)
+                .join("his-knowledge-graph")
+                .join("data");
+            Ok((content, graph_dir.to_string_lossy().into_owned()))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    // 会话摘要（校验失败/超限时降级为无会话模式）
+    let session_text = match session_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => {
+            let project_for_session = project_path.clone();
+            let is_codex = agent == "codex";
+            let raw_for_session = raw.to_string();
+            let summary = tokio::task::spawn_blocking(move || {
+                match crate::session::validate_session_path(
+                    &raw_for_session,
+                    &project_for_session,
+                    is_codex,
+                ) {
+                    Ok(canonical) => crate::session::extract_session_summary_text(
+                        &canonical.to_string_lossy(),
+                        SEDIMENTATION_SESSION_BUDGET,
+                    ),
+                    Err(e) => {
+                        eprintln!("[sedimentation] session_path 校验失败：{e}");
+                        None
+                    }
+                }
+            })
+            .await
+            .map_err(|e| format!("会话摘要线程错误: {e}"))?;
+            summary.unwrap_or_default()
+        }
+        None => String::new(),
+    };
+
+    let prompt = build_sedimentation_prompt(
+        &skill_content,
+        &serial_number,
+        task_name.trim(),
+        &link,
+        &fields_text,
+        &session_text,
+        &graph_data_dir,
+        &project_path,
+    );
+    let output = run_headless_agent_with_timeout(
+        &agent,
+        &project_path,
+        &prompt,
+        SEDIMENTATION_TIMEOUT,
+    )
+    .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!("Agent failed: {}{}", stderr, stdout));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    extract_suggestions(&raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,5 +1170,47 @@ mod tests {
         assert_eq!(fields.get("subject").map(String::as_str), Some("s"));
         assert!(!fields.contains_key("pain"));
         assert!(!fields.contains_key("notes"));
+    }
+
+    #[test]
+    fn extracts_suggestions_from_tagged_json() {
+        let stdout = "prefix\n<SUGGESTIONS>\n[{\"module\":\"Nto.His.Register\",\"section\":\"业务规则与已知坑\",\"content\":\"规则内容\",\"evidence\":\"代码 Hsp/X.cs 2026-08-21\",\"confidence\":\"confirmed\",\"suggestedTitle\":\"挂号排班占用规则\"}]\n</SUGGESTIONS>\nsuffix";
+        let list = extract_suggestions(stdout).expect("parses");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].module, "Nto.His.Register");
+        assert_eq!(list[0].confidence, "confirmed");
+        assert_eq!(list[0].suggested_title, "挂号排班占用规则");
+    }
+
+    #[test]
+    fn extracts_suggestions_drops_invalid_entries() {
+        let stdout = r#"<SUGGESTIONS>[{"module":"","section":"职责","content":"x"},{"module":"Nto.His.Order","section":"职责","content":"y","confidence":"weird","suggestedTitle":"t"}]</SUGGESTIONS>"#;
+        let list = extract_suggestions(stdout).expect("parses");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].module, "Nto.His.Order");
+        assert_eq!(list[0].confidence, "pending");
+    }
+
+    #[test]
+    fn extract_suggestions_errors_without_tag() {
+        assert!(extract_suggestions("no tags here").is_err());
+    }
+
+    #[test]
+    fn sedimentation_prompt_includes_skill_and_inputs() {
+        let prompt = build_sedimentation_prompt(
+            "技能规则",
+            "QHDK-1",
+            "议题",
+            "链接",
+            "字段",
+            "会话",
+            "C:/data",
+            "C:/proj",
+        );
+        assert!(prompt.contains("技能规则"));
+        assert!(prompt.contains("QHDK-1"));
+        assert!(prompt.contains("C:/data"));
+        assert!(prompt.contains("C:/proj"));
     }
 }

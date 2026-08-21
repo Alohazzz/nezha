@@ -4,6 +4,9 @@ const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
 const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
 const YUNXIAO_WORKITEM_BASE = "https://devops.aliyun.com/projex";
 
+/** 知识沉淀审核议题的目标项目（云效「知识库图谱」项目；可在 YunxiaoSettings.knowledgeBaseProjectId 覆盖）。 */
+export const YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID = "bc826ccda665f0718511440fac";
+
 /**
  * 云效 Projex 工作项详情页链接。
  * URL 格式与 v1 项目链接同源（…/projex/project/{projectId}/…）；
