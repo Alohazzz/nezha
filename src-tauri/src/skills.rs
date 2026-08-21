@@ -22,7 +22,8 @@ use crate::storage::{
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillSource {
-    #[serde(rename = "type")]
+    /// 序列化为 `sourceType`（前端契约）；兼容反序列化旧配置的 `type` 字段。
+    #[serde(alias = "type")]
     pub source_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -762,6 +763,49 @@ fn truncate_git_error(err: &str) -> String {
     }
 }
 
+/// 恢复工作树中被删除的跟踪文件（技能缓存以远端为准：技能目录被误删后，
+/// 同步应能找回；`git pull --ff-only` 对未提交删除是 no-op，必须先恢复）。
+async fn restore_deleted_tracked_files(repo_dir: &Path) -> Result<(), String> {
+    let repo = repo_dir.to_string_lossy().into_owned();
+    let (ok, out, err) = run_git(
+        vec![
+            "-C".to_string(),
+            repo.clone(),
+            "status".to_string(),
+            "--porcelain".to_string(),
+        ],
+        None,
+    )
+    .await?;
+    if !ok {
+        return Err(format!("git status 失败：{}", truncate_git_error(&err)));
+    }
+    let deleted: Vec<String> = out
+        .lines()
+        .filter(|line| line.starts_with(" D "))
+        .map(|line| line[3..].trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+    if deleted.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec![
+        "-C".to_string(),
+        repo,
+        "checkout".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(deleted);
+    let (ok_checkout, _out_checkout, err_checkout) = run_git(args, None).await?;
+    if !ok_checkout {
+        return Err(format!(
+            "恢复已删除的技能文件失败：{}",
+            truncate_git_error(&err_checkout)
+        ));
+    }
+    Ok(())
+}
+
 /// git 源同步：缓存缺失则 shallow clone，存在则 fetch 探测、有变更才 --ff-only pull。
 /// 返回 (hub 目录绝对路径, 当前 commit)。
 async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String> {
@@ -812,6 +856,8 @@ async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String>
             return Err(format!("git clone 失败: {}", truncate_git_error(&err)));
         }
     } else {
+        // 缓存以远端为准：先找回被删除的跟踪文件（如技能目录被误删），再探测远端
+        restore_deleted_tracked_files(&repo_dir).await?;
         let (ok, _out, err) = run_git(
             vec![
                 "-C".to_string(),
@@ -2155,7 +2201,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_source_serializes_with_type_field() {
+    fn skill_source_serializes_as_source_type() {
         let src = SkillSource {
             source_type: "git".to_string(),
             path: None,
@@ -2163,9 +2209,55 @@ mod tests {
             branch: Some("main".to_string()),
         };
         let json = serde_json::to_string(&src).expect("serializes");
-        assert!(json.contains("\"type\":\"git\""));
+        assert!(json.contains("\"sourceType\":\"git\""));
+        assert!(!json.contains("\"type\":\"git\""));
         assert!(json.contains("\"url\":\"https://github.com/x/skills.git\""));
         assert!(json.contains("\"branch\":\"main\""));
+    }
+
+    #[test]
+    fn skill_source_deserializes_legacy_type_field() {
+        // 旧版本配置存的是 `type`，必须兼容读取，否则用户已保存的 git 来源会丢
+        let src: SkillSource =
+            serde_json::from_str(r#"{"type":"git","url":"https://codeup.aliyun.com/x/SkillHub.git"}"#)
+                .expect("legacy source parses");
+        assert_eq!(src.source_type, "git");
+        assert_eq!(
+            src.url.as_deref(),
+            Some("https://codeup.aliyun.com/x/SkillHub.git")
+        );
+    }
+
+    #[test]
+    fn restores_deleted_tracked_files_in_git_repo() {
+        // 回归：技能目录被误删后，同步应能找回（git pull --ff-only 对未提交删除是 no-op）。
+        let dir = std::env::temp_dir().join(format!("nezha-git-restore-{}", now_ms()));
+        let skill = dir.join("skill-a");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "x").unwrap();
+        let run = |args: &[&str]| -> bool {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        if !run(&["init", "-q"]) || !run(&["add", "-A"]) || !run(&["commit", "-q", "-m", "init"])
+        {
+            let _ = fs::remove_dir_all(&dir);
+            return; // git 不可用（如无 user 配置）时跳过
+        }
+        fs::remove_dir_all(&skill).unwrap();
+        assert!(!skill.exists());
+        let restored = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(restore_deleted_tracked_files(&dir));
+        assert!(restored.is_ok(), "restore failed: {restored:?}");
+        assert!(skill.join("SKILL.md").is_file());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
