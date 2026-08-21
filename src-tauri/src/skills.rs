@@ -252,6 +252,11 @@ fn load_hub_config_internal() -> SkillHubConfig {
         .unwrap_or_default()
 }
 
+/// 当前配置的技能库路径（供 agent_assist 读取技能内容，如 knowledge-sedimentation）。
+pub(crate) fn configured_hub_path() -> Option<String> {
+    load_hub_config_internal().hub_path
+}
+
 fn save_hub_config_internal(config: &SkillHubConfig) -> Result<(), String> {
     ensure_nezha_dirs()?;
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;

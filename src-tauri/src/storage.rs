@@ -96,6 +96,9 @@ pub struct Task {
     /// 回写成功后云效返回的评论 ID（审计/追查用）。
     #[serde(rename = "yunxiaoCommentId", default, skip_serializing_if = "Option::is_none")]
     pub yunxiao_comment_id: Option<String>,
+    /// 知识沉淀创建的云效审核议题 ID 列表（幂等标记：非空即已沉淀）。
+    #[serde(rename = "knowledgeIssueIds", default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge_issue_ids: Vec<String>,
 }
 
 /// 云效议题定稿数据：补充表单字段（key 与前端 issueForms 对齐）+ 定稿前的原始 prompt。

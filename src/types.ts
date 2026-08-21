@@ -163,6 +163,25 @@ export interface Task {
   yunxiaoWrittenBackAt?: number;
   /** 回写成功后云效返回的评论 ID（审计/追查用） */
   yunxiaoCommentId?: string;
+  /** 知识沉淀创建的云效审核议题 ID 列表（幂等标记：非空即已沉淀） */
+  knowledgeIssueIds?: string[];
+}
+
+/** 知识沉淀候选：一条对应一个云效审核议题。 */
+export interface KnowledgeSuggestion {
+  module: string;
+  section: string;
+  content: string;
+  evidence: string;
+  confidence: "confirmed" | "pending";
+  suggestedTitle: string;
+}
+
+/** 创建知识沉淀审核议题的结果。 */
+export interface CreateKnowledgeIssueResult {
+  created: boolean;
+  duplicated: boolean;
+  workitemId: string;
 }
 
 /** 云效议题定稿数据：切回待办时恢复补充表单（可继续编辑后重新定稿）。 */

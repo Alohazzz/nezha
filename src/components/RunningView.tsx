@@ -32,6 +32,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Send,
+  Layers,
   Terminal as TerminalIcon,
 } from "lucide-react";
 
@@ -96,6 +97,7 @@ export function RunningView({
   onMergeWorktree,
   onDiscardWorktree,
   onOpenWriteback,
+  onOpenKnowledgeSedimentation,
   onOpenWorktreeTerminal,
   onReconnect,
   onMarkDone,
@@ -123,6 +125,7 @@ export function RunningView({
   onMergeWorktree?: () => Promise<void>;
   onDiscardWorktree?: () => Promise<void>;
   onOpenWriteback?: () => void;
+  onOpenKnowledgeSedimentation?: () => void;
   onOpenWorktreeTerminal?: () => void;
   onReconnect: () => void;
   onMarkDone: () => void;
@@ -552,6 +555,29 @@ export function RunningView({
             <button type="button" style={s.yunxiaoWritebackBtn} onClick={onOpenWriteback}>
               <Send size={12} strokeWidth={2.5} />
               <span>{t("yunxiao.writeback.button")}</span>
+            </button>
+          ))}
+        {!isActive &&
+          task.status === "done" &&
+          task.yunxiaoWorkitemId &&
+          onOpenKnowledgeSedimentation &&
+          ((task.knowledgeIssueIds?.length ?? 0) > 0 ? (
+            <button
+              type="button"
+              style={s.yunxiaoWritebackBtnDisabled}
+              title={t("yunxiao.knowledge.done")}
+            >
+              <Layers size={12} strokeWidth={2.5} />
+              <span>{t("yunxiao.knowledge.done")}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              style={s.yunxiaoWritebackBtn}
+              onClick={onOpenKnowledgeSedimentation}
+            >
+              <Layers size={12} strokeWidth={2.5} />
+              <span>{t("yunxiao.knowledge.button")}</span>
             </button>
           ))}
         {!isActive && (sessionPath || resumeSessionId || task.agent === "dsh") && (

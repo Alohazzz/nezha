@@ -1007,6 +1007,142 @@ pub async fn yunxiao_create_workitem_comment(
     Ok(created.id)
 }
 
+/// 知识沉淀创建的审核议题结果：`duplicated=true` 表示标题已存在（幂等，不重复创建）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateKnowledgeIssueResult {
+    pub created: bool,
+    pub duplicated: bool,
+    pub workitem_id: String,
+}
+
+/// 获取当前令牌用户 ID（创建议题时作为指派人）。
+async fn fetch_current_user_id(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<String, String> {
+    let bytes = get_yunxiao_json(client, token, format!("{API_BASE}/oapi/v1/platform/user")).await?;
+    let user = parse_current_user(&bytes)?;
+    if user.id.is_empty() {
+        return Err("无法获取当前用户 ID".to_string());
+    }
+    Ok(user.id)
+}
+
+/// 获取项目下默认需求工作项类型 ID（CreateWorkitem 必填）。
+async fn fetch_default_req_type_id(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes?category=Req"
+    );
+    let bytes = get_yunxiao_json(client, token, url).await?;
+    let types: Vec<YunxiaoWorkitemType> = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析云效工作项类型失败: {e}"))?;
+    types
+        .iter()
+        .find(|t| t.category_id == "Req")
+        .or_else(|| types.first())
+        .map(|t| t.id.clone())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "目标项目未找到需求工作项类型".to_string())
+}
+
+/// 创建知识沉淀审核议题（CreateWorkitem）：先按标题去重（搜索目标项目最近需求议题，
+/// 标题完全一致视为已存在），未命中才创建。已用真实 token 复验：
+/// body 需 `spaceId` + `assignedTo`（当前用户 id）+ `workitemTypeId`（默认需求类型）。
+#[tauri::command]
+pub async fn yunxiao_create_knowledge_issue(
+    token: String,
+    organization_id: String,
+    project_id: String,
+    subject: String,
+    description: String,
+) -> Result<CreateKnowledgeIssueResult, String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    let project_id = project_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() || project_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或项目 ID".to_string());
+    }
+    let subject = subject.trim().to_string();
+    if subject.is_empty() {
+        return Err("议题标题不能为空".to_string());
+    }
+    if description.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("议题描述超过 {MAX_COMMENT_CHARS} 字上限"));
+    }
+
+    // 1) 去重：搜索项目内最近需求议题，标题完全一致视为已存在
+    let page = yunxiao_search_workitems(
+        token.clone(),
+        organization_id.clone(),
+        project_id.clone(),
+        Some("Req".to_string()),
+        None,
+        Some(1),
+        Some(200),
+    )
+    .await?;
+    if let Some(existing) = page.items.iter().find(|w| w.subject.trim() == subject) {
+        return Ok(CreateKnowledgeIssueResult {
+            created: false,
+            duplicated: true,
+            workitem_id: existing.id.clone(),
+        });
+    }
+
+    // 2) 创建
+    let client = build_client()?;
+    let assigned_to = fetch_current_user_id(&client, &token).await?;
+    let workitem_type_id =
+        fetch_default_req_type_id(&client, &token, &organization_id, &project_id).await?;
+    let resp = client
+        .post(format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems"
+        ))
+        .header("x-yunxiao-token", &token)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "category": "Req",
+            "subject": subject,
+            "description": description,
+            "spaceId": project_id,
+            "assignedTo": assigned_to,
+            "workitemTypeId": workitem_type_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("请求云效创建议题失败: {e}"))?;
+    let bytes = read_json_body(resp).await?;
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析云效创建议题响应失败: {e}"))?;
+    if value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        if let Some(result) = value.get_mut("result") {
+            value = result.take();
+        }
+    }
+    let workitem_id = value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "创建议题响应中没有工作项 ID".to_string())?
+        .to_string();
+    Ok(CreateKnowledgeIssueResult {
+        created: true,
+        duplicated: false,
+        workitem_id,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

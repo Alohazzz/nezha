@@ -28,15 +28,21 @@ import {
   normalizeTaskDisplayWindow,
 } from "./types";
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
-import type { FontFamily } from "./types";
+import type {
+  CreateKnowledgeIssueResult,
+  FontFamily,
+  KnowledgeSuggestion,
+} from "./types";
 import { quoteFontName } from "./utils/fonts";
 import {
+  buildYunxiaoIssueLink,
   buildYunxiaoPrompt,
   buildYunxiaoTaskName,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
   issueTag,
   isYunxiaoWorkitemImported,
+  YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
 import { buildYunxiaoFieldsText } from "./components/yunxiao/issueForms";
 import {
@@ -1523,6 +1529,102 @@ function App() {
     });
   }
 
+  /** 生成知识沉淀候选：读 knowledge-sedimentation 技能，headless 提取图谱增量。 */
+  async function handleGenerateKnowledgeSedimentation(
+    taskId: string,
+  ): Promise<KnowledgeSuggestion[]> {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task) throw new Error("Task not found");
+    const project = projects.find((candidate) => candidate.id === task.projectId);
+    if (!project) throw new Error("Project not found");
+    const fieldsText = buildYunxiaoFieldsText(task.yunxiaoSupplement?.fields);
+    const sessionPath =
+      task.agent === "codex"
+        ? task.codexSessionPath
+        : task.agent === "claude"
+          ? task.claudeSessionPath
+          : undefined;
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    const link =
+      yunxiao.projectId && task.yunxiaoWorkitemId
+        ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
+        : "";
+    return invoke<KnowledgeSuggestion[]>("generate_knowledge_sedimentation", {
+      projectPath: project.path,
+      serialNumber: task.yunxiaoSerialNumber ?? "",
+      taskName: task.name ?? task.prompt.slice(0, 80),
+      fieldsText,
+      link,
+      sessionPath,
+      agent: task.agent === "codex" ? "codex" : "claude",
+    });
+  }
+
+  /** 批量创建知识沉淀审核议题（去重命中不重复建），返回新创建/去重命中的议题 ID。 */
+  async function handleCreateKnowledgeIssues(
+    taskId: string,
+    suggestions: KnowledgeSuggestion[],
+  ): Promise<string[]> {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    if (!yunxiao.token || !yunxiao.organizationId) {
+      throw new Error(t("yunxiao.notConnected"));
+    }
+    const kbProjectId =
+      yunxiao.knowledgeBaseProjectId ?? YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID;
+    const link =
+      yunxiao.projectId && task.yunxiaoWorkitemId
+        ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
+        : "";
+    const createdIds: string[] = [];
+    for (const s of suggestions) {
+      const title = `【知识沉淀】${s.module}-${s.suggestedTitle || s.section}`;
+      const description = [
+        `来源议题：${task.yunxiaoSerialNumber ?? ""} ${link}`,
+        `目标模块卡片：${s.module}（data/modules/${s.module}.md）`,
+        `建议更新段落：${s.section}`,
+        "",
+        s.content,
+        "",
+        `依据：${s.evidence}`,
+        `置信度：${s.confidence === "confirmed" ? "已确认" : "待验证"}`,
+        `审核指引：审核通过后由知识库负责人更新 data/modules/${s.module}.md 并提交（git 统一管理）。`,
+      ].join("\n");
+      const result = await invoke<CreateKnowledgeIssueResult>(
+        "yunxiao_create_knowledge_issue",
+        {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          projectId: kbProjectId,
+          subject: title,
+          description,
+        },
+      );
+      if (result.created) createdIds.push(result.workitemId);
+    }
+    if (createdIds.length > 0) {
+      setTasks((prev) => {
+        const next = prev.map((candidate) =>
+          candidate.id === taskId
+            ? {
+                ...candidate,
+                knowledgeIssueIds: [
+                  ...(candidate.knowledgeIssueIds ?? []),
+                  ...createdIds,
+                ],
+              }
+            : candidate,
+        );
+        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+        return next;
+      });
+    }
+    return createdIds;
+  }
+
   async function handleDeleteProject(projectId: string) {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
@@ -1791,6 +1893,8 @@ function App() {
               onStartYunxiaoDiscussion={handleStartYunxiaoDiscussion}
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
+              onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
+              onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
               onResumeTaskAndSend={handleResumeTaskAndSend}

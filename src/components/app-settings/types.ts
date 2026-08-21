@@ -67,6 +67,8 @@ export interface YunxiaoSettings {
   /** 当前令牌所属用户（「我负责的」过滤的身份来源；自动识别或手动兜底）。 */
   currentUserId?: string;
   currentUserName?: string;
+  /** 知识沉淀审核议题的目标项目（缺省用内置「知识库图谱」项目 id）。 */
+  knowledgeBaseProjectId?: string;
 }
 
 export const EMPTY_YUNXIAO_SETTINGS: YunxiaoSettings = {
