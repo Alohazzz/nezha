@@ -352,7 +352,7 @@ const GRILLING_INSTRUCTIONS: &str = "请用 grilling 流程走完决策树：一
 
 const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；每个结论都要有可复现的证据，不凭感觉猜。";
 
-const KNOWLEDGE_GRAPH_INSTRUCTION: &str = "另外，开始前先使用 his-knowledge-graph 技能：按技能说明打开数据目录（data/index.md 与 modules/），先建立对相关 HIS 模块的认知（职责、代码位置、关键实体、跨模块依赖），再用实际代码验证；讨论/诊断过程中把新确认的知识回写图谱（只写有依据的内容，标注来源与日期）。";
+const KNOWLEDGE_GRAPH_INSTRUCTION: &str = "另外，开始前先使用 his-knowledge-graph 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关 HIS 模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
 
 /// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无；
 /// Req 与 Bug 都会追加 his-knowledge-graph 技能指令（结合项目知识图谱）。
