@@ -505,10 +505,29 @@ fn remove_existing(path: &Path) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.to_string()),
     };
-    if meta.file_type().is_symlink() || meta.is_file() {
+    if meta.file_type().is_symlink() {
+        remove_symlink_path(path).map_err(|e| e.to_string())
+    } else if meta.is_file() {
         fs::remove_file(path).map_err(|e| e.to_string())
     } else {
         fs::remove_dir_all(path).map_err(|e| e.to_string())
+    }
+}
+
+/// 删除软链。Windows 上目录软链必须用 `remove_dir` 移除
+/// （`remove_file` 会返回 `拒绝访问 / os error 5`），Unix 统一走 unlink。
+fn remove_symlink_path(link: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match fs::remove_file(link) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => fs::remove_dir(link),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::remove_file(link)
     }
 }
 
@@ -545,7 +564,7 @@ fn remove_symlink_if_present(link_path: &Path) -> Result<bool, String> {
     if !meta.file_type().is_symlink() {
         return Ok(false);
     }
-    fs::remove_file(link_path)
+    remove_symlink_path(link_path)
         .map_err(|e| format!("Failed to remove symlink {}: {}", link_path.display(), e))?;
     Ok(true)
 }
@@ -1229,7 +1248,7 @@ pub async fn cleanup_broken_skill_installations() -> Result<usize, String> {
             } else {
                 if let Ok(meta) = fs::symlink_metadata(link) {
                     if meta.file_type().is_symlink() {
-                        let _ = fs::remove_file(link);
+                        let _ = remove_symlink_path(link);
                     }
                 }
                 removed += 1;
@@ -1454,7 +1473,7 @@ pub async fn uninstall_skill(
         // 仅当现存的是 symlink 时才删除；普通目录保留以防误删用户内容
         if let Ok(meta) = fs::symlink_metadata(&link_path) {
             if meta.file_type().is_symlink() {
-                fs::remove_file(&link_path).map_err(|e| e.to_string())?;
+                remove_symlink_path(&link_path).map_err(|e| e.to_string())?;
             }
         }
 
@@ -1479,7 +1498,7 @@ pub async fn cleanup_installations_for_project(project_id: String) -> Result<usi
             let link = Path::new(&ins.link_path);
             if let Ok(meta) = fs::symlink_metadata(link) {
                 if meta.file_type().is_symlink() {
-                    let _ = fs::remove_file(link);
+                    let _ = remove_symlink_path(link);
                 }
             }
         }
@@ -1771,5 +1790,23 @@ mod tests {
         let ins: SkillInstallation = serde_json::from_str(json).expect("legacy installation parses");
         assert_eq!(ins.scope, "");
         assert_eq!(ins.project_id, "p1");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn removes_windows_directory_symlink() {
+        // Windows 上 fs::remove_file 删除目录软链会返回「拒绝访问 (os error 5)」，
+        // remove_symlink_path 必须能删掉目录软链（回归：卸载/覆盖/清理全链路共用）。
+        let dir = std::env::temp_dir().join(format!("nezha-remove-symlink-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("link");
+        // 创建目录软链依赖开发者模式/管理员权限；不可用时跳过（本机无法复现该路径）。
+        if std::os::windows::fs::symlink_dir(&dir, &link).is_err() {
+            return;
+        }
+        assert!(fs::symlink_metadata(&link).is_ok());
+        remove_symlink_path(&link).expect("directory symlink should be removable");
+        assert!(fs::symlink_metadata(&link).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
