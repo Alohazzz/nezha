@@ -80,7 +80,20 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
       <div style={s.skillDialogBox}>
         <div style={s.skillDialogHeader}>
           <div style={s.skillDialogHeaderMain}>
-            <div style={s.skillDialogTitle}>{skill.displayName || skill.name}</div>
+            <div style={s.skillDialogTitleRow}>
+              <div style={s.skillDialogTitle}>{skill.displayName || skill.name}</div>
+              <span
+                style={
+                  skill.scope === "project"
+                    ? s.skillScopeBadgeProject
+                    : s.skillScopeBadgeUniversal
+                }
+              >
+                {skill.scope === "project"
+                  ? t("skill.scope.project")
+                  : t("skill.scope.universal")}
+              </span>
+            </div>
             {skill.displayName && skill.displayName !== skill.name ? (
               <div style={s.skillDialogSubtitle}>{skill.name}</div>
             ) : null}
@@ -135,7 +148,10 @@ export function SkillManageDialog({ skill, allProjects, onClose, onChanged }: Pr
           ) : (
             visibleInstallations.map((ins) => {
               const project = allProjects.find((p) => p.id === ins.projectId);
-              const projectName = project?.name ?? ins.projectId;
+              const isUniversal = ins.scope === "universal" || ins.projectId === "";
+              const projectName = isUniversal
+                ? t("skill.manage.globalTarget")
+                : project?.name ?? ins.projectId;
               const broken = ins.health && ins.health !== "ok";
               return (
                 <div key={`${ins.projectId}-${ins.agent}`} style={s.skillInstallRow}>

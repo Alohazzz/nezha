@@ -48,14 +48,25 @@ export function SkillInstallDialog({
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
 
+  // 作用域决定落位：universal 装到用户级技能目录；project 装到指定项目
+  const isUniversal = skill.scope !== "project";
+
   const existingKey = useMemo(
-    () => new Set(existingInstallations.map((ins) => `${ins.projectId}::${ins.agent}`)),
+    () =>
+      new Set(
+        existingInstallations.map((ins) => {
+          const target = ins.scope === "universal" ? "g" : ins.projectId || "p";
+          return `${target}::${ins.agent}`;
+        }),
+      ),
     [existingInstallations],
   );
 
-  const alreadyInstalled = projectId
-    ? existingKey.has(`${projectId}::${agent}`)
-    : false;
+  const alreadyInstalled = isUniversal
+    ? existingKey.has(`g::${agent}`)
+    : projectId
+      ? existingKey.has(`${projectId}::${agent}`)
+      : false;
 
   const filteredProjects = useMemo(() => {
     const q = projectQuery.trim().toLocaleLowerCase();
@@ -71,15 +82,16 @@ export function SkillInstallDialog({
   }
 
   async function runInstall(strategy: SkillInstallStrategy) {
-    if (!projectId) return;
+    if (!isUniversal && !projectId) return;
     setBusy(true);
     setError(null);
     try {
       const result = await invoke<SkillInstallResult>("install_skill", {
         skillName: skill.name,
         skillPath: skill.path,
-        projectId,
+        projectId: isUniversal ? "" : projectId,
         agent,
+        scope: isUniversal ? "universal" : "project",
         strategy,
       });
       if (result.conflict) {
@@ -114,96 +126,105 @@ export function SkillInstallDialog({
 
           <div style={s.skillInstallDialogBody}>
             <div style={s.skillInstallField}>
-              <label style={s.skillInstallLabel}>{t("skill.install.project")}</label>
-              <Popover.Root
-                open={projectOpen}
-                onOpenChange={(open) => {
-                  setProjectOpen(open);
-                  if (open) setProjectQuery("");
-                }}
-              >
-                <Popover.Trigger asChild>
-                  <button type="button" style={s.skillInstallSelectTrigger}>
-                    {selectedProject?.name ?? t("skill.install.chooseProject")}
-                    <ChevronDown size={13} strokeWidth={2.2} color="var(--text-hint)" />
-                  </button>
-                </Popover.Trigger>
-                <Popover.Portal>
-                  <Popover.Content
-                    align="start"
-                    sideOffset={4}
-                    style={s.skillInstallProjectPopoverContent}
+              <label style={s.skillInstallLabel}>
+                {isUniversal ? t("skill.install.global") : t("skill.install.project")}
+              </label>
+              {isUniversal ? (
+                <div style={s.skillInstallNotice}>{t("skill.install.globalHint")}</div>
+              ) : (
+                <>
+                  <Popover.Root
+                    open={projectOpen}
+                    onOpenChange={(open) => {
+                      setProjectOpen(open);
+                      if (open) setProjectQuery("");
+                    }}
                   >
-                    <div style={s.skillInstallProjectSearch}>
-                      <Search
-                        size={13}
-                        strokeWidth={2}
-                        color="var(--text-muted)"
-                        style={s.skillInstallProjectSearchIcon}
-                      />
-                      <input
-                        style={s.skillInstallProjectSearchInput}
-                        value={projectQuery}
-                        onChange={(e) => setProjectQuery(e.target.value)}
-                        placeholder={t("skill.install.searchProject")}
-                        autoFocus
-                      />
-                      {projectQuery ? (
-                        <button
-                          type="button"
-                          style={s.skillInstallProjectSearchClear}
-                          onClick={() => setProjectQuery("")}
-                        >
-                          <X size={11} />
-                        </button>
-                      ) : null}
-                    </div>
-                    <div style={s.skillInstallProjectList}>
-                      {allProjects.length === 0 ? (
-                        <div style={s.skillInstallEmptyOption}>
-                          {t("skill.install.noProjects")}
-                        </div>
-                      ) : filteredProjects.length === 0 ? (
-                        <div style={s.skillInstallEmptyOption}>
-                          {t("skill.install.noMatchingProjects")}
-                        </div>
-                      ) : (
-                        filteredProjects.map((p) => {
-                          const selected = p.id === projectId;
-                          return (
+                    <Popover.Trigger asChild>
+                      <button type="button" style={s.skillInstallSelectTrigger}>
+                        {selectedProject?.name ?? t("skill.install.chooseProject")}
+                        <ChevronDown size={13} strokeWidth={2.2} color="var(--text-hint)" />
+                      </button>
+                    </Popover.Trigger>
+                    <Popover.Portal>
+                      <Popover.Content
+                        align="start"
+                        sideOffset={4}
+                        style={s.skillInstallProjectPopoverContent}
+                      >
+                        <div style={s.skillInstallProjectSearch}>
+                          <Search
+                            size={13}
+                            strokeWidth={2}
+                            color="var(--text-muted)"
+                            style={s.skillInstallProjectSearchIcon}
+                          />
+                          <input
+                            style={s.skillInstallProjectSearchInput}
+                            value={projectQuery}
+                            onChange={(e) => setProjectQuery(e.target.value)}
+                            placeholder={t("skill.install.searchProject")}
+                            autoFocus
+                          />
+                          {projectQuery ? (
                             <button
                               type="button"
-                              key={p.id}
-                              style={
-                                selected
-                                  ? s.skillInstallProjectOptionSelected
-                                  : s.skillInstallProjectOption
-                              }
-                              onClick={() => {
-                                setProjectId(p.id);
-                                setProjectOpen(false);
-                              }}
+                              style={s.skillInstallProjectSearchClear}
+                              onClick={() => setProjectQuery("")}
                             >
-                              <span style={s.skillInstallProjectOptionText}>{p.name}</span>
-                              {selected ? (
-                                <Check size={13} style={s.skillInstallSelectCheck} />
-                              ) : null}
+                              <X size={11} />
                             </button>
-                          );
-                        })
-                      )}
-                      {hasHiddenProjects ? (
-                        <div style={s.skillInstallProjectLimitHint}>
-                          {t("skill.install.projectLimitHint", {
-                            shown: filteredProjects.length,
-                            total: allProjects.length,
-                          })}
+                          ) : null}
                         </div>
-                      ) : null}
-                    </div>
-                  </Popover.Content>
-                </Popover.Portal>
-              </Popover.Root>
+                        <div style={s.skillInstallProjectList}>
+                          {allProjects.length === 0 ? (
+                            <div style={s.skillInstallEmptyOption}>
+                              {t("skill.install.noProjects")}
+                            </div>
+                          ) : filteredProjects.length === 0 ? (
+                            <div style={s.skillInstallEmptyOption}>
+                              {t("skill.install.noMatchingProjects")}
+                            </div>
+                          ) : (
+                            filteredProjects.map((p) => {
+                              const selected = p.id === projectId;
+                              return (
+                                <button
+                                  type="button"
+                                  key={p.id}
+                                  style={
+                                    selected
+                                      ? s.skillInstallProjectOptionSelected
+                                      : s.skillInstallProjectOption
+                                  }
+                                  onClick={() => {
+                                    setProjectId(p.id);
+                                    setProjectOpen(false);
+                                  }}
+                                >
+                                  <span style={s.skillInstallProjectOptionText}>{p.name}</span>
+                                  {selected ? (
+                                    <Check size={13} style={s.skillInstallSelectCheck} />
+                                  ) : null}
+                                </button>
+                              );
+                            })
+                          )}
+                          {hasHiddenProjects ? (
+                            <div style={s.skillInstallProjectLimitHint}>
+                              {t("skill.install.projectLimitHint", {
+                                shown: filteredProjects.length,
+                                total: allProjects.length,
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
+                      </Popover.Content>
+                    </Popover.Portal>
+                  </Popover.Root>
+                  <div style={s.skillInstallNotice}>{t("skill.install.projectHint")}</div>
+                </>
+              )}
             </div>
 
             <div style={s.skillInstallField}>
@@ -245,7 +266,7 @@ export function SkillInstallDialog({
               type="button"
               style={s.modalSaveBtn}
               onClick={() => runInstall("detect")}
-              disabled={busy || !projectId || alreadyInstalled}
+              disabled={busy || (!isUniversal && !projectId) || alreadyInstalled}
             >
               {t("skill.install.confirm")}
             </button>

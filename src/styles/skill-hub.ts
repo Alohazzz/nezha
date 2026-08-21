@@ -241,6 +241,24 @@ export const skillHub = {
     color: "var(--text-hint)",
     fontFamily: "var(--font-mono)",
   },
+  skillScopeBadgeUniversal: {
+    padding: "1px 7px",
+    borderRadius: 999,
+    background: "var(--bg-hover)",
+    color: "var(--text-muted)",
+    fontSize: 10.5,
+    fontWeight: 600,
+    whiteSpace: "nowrap" as const,
+  },
+  skillScopeBadgeProject: {
+    padding: "1px 7px",
+    borderRadius: 999,
+    background: "var(--warning-subtle, var(--bg-hover))",
+    color: "var(--warning, var(--text-secondary))",
+    fontSize: 10.5,
+    fontWeight: 600,
+    whiteSpace: "nowrap" as const,
+  },
   skillRowDesc: {
     fontSize: 12,
     color: "var(--text-secondary)",
@@ -303,6 +321,12 @@ export const skillHub = {
     borderBottom: "1px solid var(--border-dim)",
   },
   skillDialogHeaderMain: { flex: 1, minWidth: 0 },
+  skillDialogTitleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap" as const,
+  },
   skillDialogTitle: { fontSize: 16, fontWeight: 700, color: "var(--text-primary)" },
   skillDialogSubtitle: {
     fontSize: 11.5,

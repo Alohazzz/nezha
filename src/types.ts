@@ -374,6 +374,8 @@ export interface Skill {
   description?: string;
   /** skill 目录绝对路径 */
   path: string;
+  /** frontmatter `scope`：universal = 用户级（所有项目可见）；project = 项目级。缺省 universal */
+  scope?: "universal" | "project";
   /** frontmatter 解析失败时的错误说明 */
   hasError?: string;
 }
@@ -382,8 +384,11 @@ export type SkillInstallationHealth = "ok" | "broken" | "diverged";
 
 export interface SkillInstallation {
   skillName: string;
+  /** 安装目标项目；universal 安装为空串 */
   projectId: string;
   agent: AgentType;
+  /** "universal" | "project"；旧记录缺省按 project 处理 */
+  scope?: string;
   installedAt: number;
   linkPath: string;
   targetPath: string;

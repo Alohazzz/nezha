@@ -65,6 +65,9 @@ pub struct Skill {
     pub description: Option<String>,
     /// skill 目录绝对路径
     pub path: String,
+    /// frontmatter `scope`：universal = 用户级（所有项目可见）；project = 项目级（装到指定项目）。
+    /// 缺省 universal。
+    pub scope: String,
     /// frontmatter 解析失败时的错误描述
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_error: Option<String>,
@@ -74,8 +77,12 @@ pub struct Skill {
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstallation {
     pub skill_name: String,
+    /// 安装目标项目；universal 安装为空串
     pub project_id: String,
     pub agent: String,
+    /// "universal" | "project"；旧记录缺省空串按 project 处理
+    #[serde(default)]
+    pub scope: String,
     pub installed_at: i64,
     pub link_path: String,
     pub target_path: String,
@@ -158,6 +165,17 @@ fn agent_skills_dir(project_path: &Path, agent: &str) -> PathBuf {
         _ => ".claude/skills",
     };
     project_path.join(sub)
+}
+
+/// 用户级 agent 技能目录（所有项目可见）。
+fn user_agent_skills_dir(agent: &str) -> PathBuf {
+    let sub = match agent {
+        "codex" => ".codex/skills",
+        _ => ".claude/skills",
+    };
+    crate::platform::home_dir()
+        .map(|home| home.join(sub))
+        .unwrap_or_else(|| PathBuf::from(sub))
 }
 
 /// skill_name 必须是单段合法目录名：非空、非 `.` / `..`、不含路径分隔符。
@@ -317,6 +335,7 @@ fn fold_lines(lines: &[String]) -> String {
 struct ParsedFrontmatter {
     name: Option<String>,
     description: Option<String>,
+    scope: Option<String>,
 }
 
 fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
@@ -365,6 +384,7 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
             match key {
                 "name" => parsed.name = Some(value),
                 "description" => parsed.description = Some(value),
+                "scope" => parsed.scope = Some(value),
                 _ => {}
             }
             i += 1 + consumed;
@@ -373,6 +393,7 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
             match key {
                 "name" => parsed.name = Some(value),
                 "description" => parsed.description = Some(value),
+                "scope" => parsed.scope = Some(value),
                 _ => {}
             }
             i += 1;
@@ -386,18 +407,23 @@ fn parse_frontmatter(content: &str) -> ParsedFrontmatter {
 
 fn parse_skill_entry(dir_path: &Path, name: &str) -> Skill {
     let skill_md = dir_path.join("SKILL.md");
-    let (display_name, description, has_error) = match fs::read_to_string(&skill_md) {
+    let (display_name, description, scope, has_error) = match fs::read_to_string(&skill_md) {
         Ok(content) => {
             let parsed = parse_frontmatter(&content);
-            (parsed.name, parsed.description, None)
+            (parsed.name, parsed.description, parsed.scope, None)
         }
-        Err(e) => (None, None, Some(format!("Failed to read SKILL.md: {}", e))),
+        Err(e) => (None, None, None, Some(format!("Failed to read SKILL.md: {}", e))),
     };
     Skill {
         name: name.to_string(),
         display_name,
         description,
         path: dir_path.to_string_lossy().into_owned(),
+        scope: if scope.as_deref() == Some("project") {
+            "project".to_string()
+        } else {
+            "universal".to_string()
+        },
         has_error,
     }
 }
@@ -1225,11 +1251,15 @@ pub async fn install_skill(
     skill_path: String,
     project_id: String,
     agent: String,
+    scope: String,
     strategy: String,
 ) -> Result<InstallResult, String> {
     tokio::task::spawn_blocking(move || {
         if !matches!(agent.as_str(), "claude" | "codex") {
             return Err(format!("Unsupported agent: {}", agent));
+        }
+        if !matches!(scope.as_str(), "universal" | "project") {
+            return Err(format!("Unsupported scope: {}", scope));
         }
         if !matches!(
             strategy.as_str(),
@@ -1285,17 +1315,25 @@ pub async fn install_skill(
             ));
         }
 
-        let projects = load_projects()?;
-        let project = projects
-            .iter()
-            .find(|p| p.id == project_id)
-            .ok_or_else(|| format!("Project '{}' not found", project_id))?;
-        let project_path = Path::new(&project.path);
-        if !project_path.is_dir() {
-            return Err(format!("Project path does not exist: {}", project.path));
-        }
-
-        let skills_root = agent_skills_dir(project_path, &agent);
+        // 作用域决定落位：universal → 用户级技能目录（所有项目可见）；
+        // project → 指定项目的技能目录。project_id 仅在 project 作用域下有效。
+        let resolved_project_id: String;
+        let skills_root = if scope == "universal" {
+            resolved_project_id = String::new();
+            user_agent_skills_dir(&agent)
+        } else {
+            let projects = load_projects()?;
+            let project = projects
+                .iter()
+                .find(|p| p.id == project_id)
+                .ok_or_else(|| format!("Project '{}' not found", project_id))?;
+            let project_path = Path::new(&project.path);
+            if !project_path.is_dir() {
+                return Err(format!("Project path does not exist: {}", project.path));
+            }
+            resolved_project_id = project.id.clone();
+            agent_skills_dir(project_path, &agent)
+        };
         fs::create_dir_all(&skills_root)
             .map_err(|e| format!("Failed to create {}: {}", skills_root.display(), e))?;
         let link_path = skills_root.join(&skill_name);
@@ -1322,8 +1360,9 @@ pub async fn install_skill(
                 // 幂等：补全 installations 记录
                 let installation = upsert_installation(
                     &skill_name,
-                    &project_id,
+                    &resolved_project_id,
                     &agent,
+                    &scope,
                     &link_path_str,
                     &target_path_str,
                 )?;
@@ -1362,8 +1401,9 @@ pub async fn install_skill(
 
         let installation = upsert_installation(
             &skill_name,
-            &project_id,
+            &resolved_project_id,
             &agent,
+            &scope,
             &link_path_str,
             &target_path_str,
         )?;
@@ -1398,12 +1438,16 @@ pub async fn uninstall_skill(
             Some(ins) => PathBuf::from(&ins.link_path),
             None => {
                 // 即使没有记录，也尝试按约定路径清理
-                let projects = load_projects()?;
-                let project = projects
-                    .iter()
-                    .find(|p| p.id == project_id)
-                    .ok_or_else(|| format!("Project '{}' not found", project_id))?;
-                agent_skills_dir(Path::new(&project.path), &agent).join(&skill_name)
+                if project_id.is_empty() {
+                    user_agent_skills_dir(&agent).join(&skill_name)
+                } else {
+                    let projects = load_projects()?;
+                    let project = projects
+                        .iter()
+                        .find(|p| p.id == project_id)
+                        .ok_or_else(|| format!("Project '{}' not found", project_id))?;
+                    agent_skills_dir(Path::new(&project.path), &agent).join(&skill_name)
+                }
             }
         };
 
@@ -1509,6 +1553,12 @@ pub async fn delete_skill(skill_name: String, skill_path: String) -> Result<Dele
                 }
             }
         }
+        for agent in ["claude", "codex"] {
+            let link = user_agent_skills_dir(agent).join(&skill_name);
+            if symlink_points_to(&link, &skill_canonical) {
+                candidate_links.insert(link);
+            }
+        }
 
         let mut removed_links = 0usize;
         for link_path in candidate_links {
@@ -1539,6 +1589,7 @@ fn upsert_installation(
     skill_name: &str,
     project_id: &str,
     agent: &str,
+    scope: &str,
     link_path: &str,
     target_path: &str,
 ) -> Result<SkillInstallation, String> {
@@ -1559,6 +1610,7 @@ fn upsert_installation(
         skill_name: skill_name.to_string(),
         project_id: project_id.to_string(),
         agent: agent.to_string(),
+        scope: scope.to_string(),
         installed_at: now,
         link_path: link_path.to_string(),
         target_path: target_path.to_string(),
@@ -1677,5 +1729,47 @@ mod tests {
         assert!(json.contains("\"type\":\"git\""));
         assert!(json.contains("\"url\":\"https://github.com/x/skills.git\""));
         assert!(json.contains("\"branch\":\"main\""));
+    }
+
+    #[test]
+    fn parse_frontmatter_scope() {
+        let p = parse_frontmatter("---\nname: foo\nscope: project\n---\nbody");
+        assert_eq!(p.scope.as_deref(), Some("project"));
+        let p2 = parse_frontmatter("---\nname: foo\n---\nbody");
+        assert_eq!(p2.scope, None);
+        let p3 = parse_frontmatter("---\nname: foo\nscope: universal\n---\nbody");
+        assert_eq!(p3.scope.as_deref(), Some("universal"));
+    }
+
+    #[test]
+    fn parse_skill_entry_defaults_scope_to_universal() {
+        let dir = std::env::temp_dir().join(format!("nezha-skill-scope-test-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "---\nname: foo\n---\nbody").unwrap();
+        let skill = parse_skill_entry(&dir, "foo");
+        assert_eq!(skill.scope, "universal");
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: foo\nscope: project\n---\nbody",
+        )
+        .unwrap();
+        let skill = parse_skill_entry(&dir, "foo");
+        assert_eq!(skill.scope, "project");
+        fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: foo\nscope: weird\n---\nbody",
+        )
+        .unwrap();
+        let skill = parse_skill_entry(&dir, "foo");
+        assert_eq!(skill.scope, "universal");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_installation_deserializes_without_scope() {
+        let json = r#"{"skillName":"s","projectId":"p1","agent":"claude","installedAt":1,"linkPath":"l","targetPath":"t"}"#;
+        let ins: SkillInstallation = serde_json::from_str(json).expect("legacy installation parses");
+        assert_eq!(ins.scope, "");
+        assert_eq!(ins.project_id, "p1");
     }
 }

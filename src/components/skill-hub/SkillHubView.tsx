@@ -308,6 +308,17 @@ function SkillRow({
           {skill.displayName && skill.displayName !== skill.name ? (
             <span style={s.skillRowDirName}>{skill.name}</span>
           ) : null}
+          <span
+            style={
+              skill.scope === "project"
+                ? s.skillScopeBadgeProject
+                : s.skillScopeBadgeUniversal
+            }
+          >
+            {skill.scope === "project"
+              ? t("skill.scope.project")
+              : t("skill.scope.universal")}
+          </span>
         </div>
         {skill.description ? (
           <div style={s.skillRowDesc}>{skill.description}</div>
