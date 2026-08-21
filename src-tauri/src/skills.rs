@@ -537,7 +537,39 @@ fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
+    match std::os::windows::fs::symlink_dir(target, link) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            // os error 1314：创建符号链接需要「开发者模式/管理员」特权。
+            // 回退到目录联接（junction，`mklink /J`）——无需特权、跨卷可用，
+            // 且对 agent/健康检查/卸载与软链行为一致（is_symlink=true、read_link 可解析）。
+            create_junction(target, link)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(windows)]
+fn create_junction(target: &Path, link: &Path) -> std::io::Result<()> {
+    let status = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .status()
+        .map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("启动 mklink 失败: {e}"),
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "mklink /J 创建目录联接失败（请开启开发者模式或以管理员运行，或检查目标卷是否支持联接）",
+        ))
+    }
 }
 
 fn classify_existing(path: &Path) -> Option<(String, Option<String>)> {
@@ -1877,7 +1909,7 @@ pub async fn install_skill(
 
         create_symlink(&skill_canonical, &link_path).map_err(|e| {
             format!(
-                "Failed to create symlink {} -> {}: {}",
+                "Failed to create skill link {} -> {}: {}（Windows 提示没有所需特权时，请开启开发者模式或以管理员运行）",
                 link_path.display(),
                 skill_canonical.display(),
                 e
@@ -2361,6 +2393,33 @@ mod tests {
         assert!(fs::symlink_metadata(&link).is_ok());
         remove_symlink_path(&link).expect("directory symlink should be removable");
         assert!(fs::symlink_metadata(&link).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_fallback_creates_working_link_without_privilege() {
+        // 回归：无开发者模式/管理员权限时 symlink_dir 报 os error 1314，
+        // create_junction（mklink /J）无需特权，且可被 read_link/健康检查/卸载正常处理。
+        let dir = std::env::temp_dir().join(format!("nezha-junction-test-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("link");
+        match create_junction(&dir, &link) {
+            Ok(()) => {
+                let meta = fs::symlink_metadata(&link).expect("junction metadata");
+                assert!(meta.file_type().is_symlink(), "junction 应按 symlink 处理");
+                let target = fs::read_link(&link).expect("junction read_link");
+                assert_eq!(
+                    target.canonicalize().ok(),
+                    Some(dir.canonicalize().expect("dir canonicalize"))
+                );
+                remove_symlink_path(&link).expect("junction removable via remove_symlink_path");
+                assert!(fs::symlink_metadata(&link).is_err());
+            }
+            Err(_) => {
+                // cmd/mklink 不可用（极少数环境）时跳过
+            }
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }
