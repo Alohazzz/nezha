@@ -1,22 +1,38 @@
 import { useCallback, useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, RotateCcw } from "lucide-react";
+import { FolderOpen, GitBranch, RotateCcw } from "lucide-react";
 import { useI18n } from "../../i18n";
 import type { Project, SkillHubConfig, SetSkillHubResult } from "../../types";
 import { SKILL_HUB_CHANGED_EVENT } from "./types";
 import s from "../../styles";
 
+function formatSyncTime(ts?: number): string {
+  if (!ts) return "";
+  return new Date(ts).toLocaleString();
+}
+
+/** 技能库来源配置：本地目录 / git 远端（URL + 可选分支）。 */
 export function SkillsPanel() {
   const { t } = useI18n();
   const [config, setConfig] = useState<SkillHubConfig | null>(null);
   const [hubProjectName, setHubProjectName] = useState<string | null>(null);
+  const [sourceType, setSourceType] = useState<"path" | "git">("path");
+  const [urlText, setUrlText] = useState("");
+  const [branchText, setBranchText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<SkillHubConfig>("get_skill_hub_config")
-      .then((cfg) => setConfig(cfg ?? null))
+      .then((cfg) => {
+        setConfig(cfg ?? null);
+        if (cfg?.source?.sourceType === "git") {
+          setSourceType("git");
+          setUrlText(cfg.source.url ?? "");
+          setBranchText(cfg.source.branch ?? "");
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -38,28 +54,55 @@ export function SkillsPanel() {
     };
   }, [config?.hubProjectId]);
 
+  const applyResult = useCallback((result: SetSkillHubResult) => {
+    setConfig(result.config);
+    setHubProjectName(result.project.name);
+    window.dispatchEvent(
+      new CustomEvent(SKILL_HUB_CHANGED_EVENT, {
+        detail: { projects: result.projects },
+      }),
+    );
+  }, []);
+
   const handlePick = useCallback(async () => {
     setError(null);
     const selected = await openDialog({ directory: true, multiple: false });
     if (!selected) return;
     setBusy(true);
     try {
-      const result = await invoke<SetSkillHubResult>("set_skill_hub_path", {
+      const result = await invoke<SetSkillHubResult>("set_skill_source", {
+        sourceType: "path",
         path: selected as string,
       });
-      setConfig(result.config);
-      setHubProjectName(result.project.name);
-      window.dispatchEvent(
-        new CustomEvent(SKILL_HUB_CHANGED_EVENT, {
-          detail: { projects: result.projects },
-        }),
-      );
+      applyResult(result);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [applyResult]);
+
+  const handleSaveGit = useCallback(async () => {
+    const url = urlText.trim();
+    if (!url) {
+      setError(t("skill.settings.gitUrlRequired"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await invoke<SetSkillHubResult>("set_skill_source", {
+        sourceType: "git",
+        url,
+        branch: branchText.trim() || null,
+      });
+      applyResult(result);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [urlText, branchText, applyResult, t]);
 
   const handleClear = useCallback(async () => {
     setBusy(true);
@@ -68,6 +111,9 @@ export function SkillsPanel() {
       await invoke("clear_skill_hub");
       setConfig(null);
       setHubProjectName(null);
+      setSourceType("path");
+      setUrlText("");
+      setBranchText("");
       window.dispatchEvent(new CustomEvent(SKILL_HUB_CHANGED_EVENT));
     } catch (e) {
       setError(String(e));
@@ -77,42 +123,132 @@ export function SkillsPanel() {
   }, []);
 
   const hubPath = config?.hubPath ?? "";
+  const lastSyncedAt = config?.lastSyncedAt;
+  const commit = config?.lastSyncedCommit;
+  const syncError = config?.lastSyncError;
 
   return (
     <div style={s.skillsPanelBody}>
       <div style={s.skillsPanelField}>
-        <label style={s.skillsPanelLabel}>{t("skill.settings.hubPath")}</label>
-        <div style={s.skillsPanelPathRow}>
-          <div style={s.skillsPanelPathBox}>
-            {hubPath ? (
-              <span style={s.skillsPanelPathText}>{hubPath}</span>
-            ) : (
-              <span style={s.skillsPanelPathEmpty}>{t("skill.settings.notConfigured")}</span>
-            )}
-          </div>
-          <button
-            type="button"
-            style={s.skillsPanelPickBtn}
-            onClick={handlePick}
-            disabled={busy}
-          >
-            <FolderOpen size={13} strokeWidth={2} />
-            {t("skill.settings.choose")}
-          </button>
-          {hubPath ? (
+        <label style={s.skillsPanelLabel}>{t("skill.settings.sourceType")}</label>
+        <div style={s.skillsPanelSourceRow}>
+          <label style={s.skillsPanelRadioLabel}>
+            <input
+              type="radio"
+              name="skillSource"
+              checked={sourceType === "path"}
+              onChange={() => setSourceType("path")}
+              disabled={busy}
+            />
+            {t("skill.settings.sourcePath")}
+          </label>
+          <label style={s.skillsPanelRadioLabel}>
+            <input
+              type="radio"
+              name="skillSource"
+              checked={sourceType === "git"}
+              onChange={() => setSourceType("git")}
+              disabled={busy}
+            />
+            {t("skill.settings.sourceGit")}
+          </label>
+        </div>
+      </div>
+
+      {sourceType === "path" ? (
+        <div style={s.skillsPanelField}>
+          <label style={s.skillsPanelLabel}>{t("skill.settings.hubPath")}</label>
+          <div style={s.skillsPanelPathRow}>
+            <div style={s.skillsPanelPathBox}>
+              {hubPath ? (
+                <span style={s.skillsPanelPathText}>{hubPath}</span>
+              ) : (
+                <span style={s.skillsPanelPathEmpty}>{t("skill.settings.notConfigured")}</span>
+              )}
+            </div>
             <button
               type="button"
-              style={s.skillsPanelClearBtn}
-              onClick={handleClear}
+              style={s.skillsPanelPickBtn}
+              onClick={handlePick}
               disabled={busy}
-              title={t("skill.settings.reset")}
             >
-              <RotateCcw size={13} strokeWidth={2} />
+              <FolderOpen size={13} strokeWidth={2} />
+              {t("skill.settings.choose")}
             </button>
+            {hubPath ? (
+              <button
+                type="button"
+                style={s.skillsPanelClearBtn}
+                onClick={handleClear}
+                disabled={busy}
+                title={t("skill.settings.reset")}
+              >
+                <RotateCcw size={13} strokeWidth={2} />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div style={s.skillsPanelField}>
+          <label style={s.skillsPanelLabel}>{t("skill.settings.gitUrl")}</label>
+          <div style={s.skillsPanelGitRow}>
+            <input
+              style={s.skillsPanelInput}
+              value={urlText}
+              onChange={(event) => setUrlText(event.target.value)}
+              placeholder={t("skill.settings.gitUrlPlaceholder")}
+              spellCheck={false}
+              disabled={busy}
+            />
+            <button
+              type="button"
+              style={busy ? s.skillsPanelSaveBtnDisabled : s.skillsPanelSaveBtn}
+              onClick={handleSaveGit}
+              disabled={busy}
+            >
+              <GitBranch size={13} strokeWidth={2} />
+              {busy ? t("skill.settings.saving") : t("skill.settings.saveAndSync")}
+            </button>
+          </div>
+          <div style={s.skillsPanelGitRow}>
+            <input
+              style={s.skillsPanelInput}
+              value={branchText}
+              onChange={(event) => setBranchText(event.target.value)}
+              placeholder={t("skill.settings.branch")}
+              spellCheck={false}
+              disabled={busy}
+            />
+          </div>
+        </div>
+      )}
+
+      {hubPath ? (
+        <div style={s.skillsPanelStatusRow}>
+          <span style={s.skillsPanelStatusLabel}>{t("skill.settings.resolvedPath")}</span>
+          <span style={s.skillsPanelStatusValue}>{hubPath}</span>
+        </div>
+      ) : null}
+
+      {hubPath ? (
+        <div style={s.skillsPanelStatusRow}>
+          <span style={s.skillsPanelStatusLabel}>{t("skill.settings.lastSync")}</span>
+          <span style={s.skillsPanelStatusValue}>
+            {lastSyncedAt ? formatSyncTime(lastSyncedAt) : t("skill.settings.neverSynced")}
+          </span>
+          {commit ? (
+            <>
+              <span style={s.skillsPanelStatusLabel}>{t("skill.settings.commit")}</span>
+              <span style={s.skillsPanelStatusValue}>{commit.slice(0, 12)}</span>
+            </>
+          ) : null}
+          {syncError ? (
+            <span style={s.skillsPanelStatusError}>
+              {t("skill.settings.syncFailed", { error: syncError })}
+            </span>
           ) : null}
         </div>
-        <span style={s.skillsPanelHint}>{t("skill.settings.hubPathHint")}</span>
-      </div>
+      ) : null}
 
       {hubProjectName ? (
         <div style={s.skillsPanelMetaRow}>

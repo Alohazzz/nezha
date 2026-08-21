@@ -339,10 +339,30 @@ export interface UsageSnapshot {
 
 // ── Skill Hub ────────────────────────────────────────────────────────────────
 
+/** 技能仓库来源：本地目录 path / git 远端 git。 */
+export interface SkillSource {
+  /** 来源类型 */
+  sourceType: "path" | "git";
+  /** 本地目录绝对路径（sourceType = "path"） */
+  path?: string;
+  /** git 远端地址（sourceType = "git"，https:// 或 git@ ssh） */
+  url?: string;
+  /** git 分支（可选，缺省跟随远端默认分支） */
+  branch?: string;
+}
+
 export interface SkillHubConfig {
   hubProjectId?: string;
   hubPath?: string;
   createdAt?: number;
+  /** 技能仓库来源；旧配置缺省时等价于 path（仅 hubPath） */
+  source?: SkillSource;
+  /** 上次同步时间戳（毫秒） */
+  lastSyncedAt?: number;
+  /** 上次同步的 commit hash */
+  lastSyncedCommit?: string;
+  /** 上次同步错误信息（非空 = 同步失败，正在使用缓存） */
+  lastSyncError?: string;
 }
 
 export interface Skill {

@@ -289,6 +289,12 @@ pub fn run() {
             crate::event_watcher::start(app.handle().clone());
             // 文件树的 fs 事件监听(watch_dir/unwatch_dir 的托管状态与防抖线程)
             crate::fs_watcher::init(app);
+            // 技能仓库来源（本地路径文件变更监听 / git 源启动后台同步）
+            crate::skills::init_skill_source_watcher(app);
+            let startup_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::skills::startup_sync(startup_handle).await;
+            });
             // Windows: 创建系统托盘图标(关闭窗口时收起到托盘,而非退出)
             #[cfg(target_os = "windows")]
             setup_tray(app.handle())?;
@@ -437,9 +443,13 @@ pub fn run() {
             hooks::uninstall_hooks,
             skills::get_skill_hub_config,
             skills::set_skill_hub_path,
+            skills::set_skill_source,
+            skills::sync_skill_source,
+            skills::get_skill_source_status,
             skills::clear_skill_hub,
             skills::list_skills,
             skills::list_skill_installations,
+            skills::cleanup_broken_skill_installations,
             skills::install_skill,
             skills::uninstall_skill,
             skills::cleanup_installations_for_project,
