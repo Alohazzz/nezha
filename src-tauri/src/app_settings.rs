@@ -175,6 +175,17 @@ pub struct AppSettings {
     /// Agent 需要确认或任务完成/失败时发送 OS 级系统通知（窗口未聚焦时）。
     #[serde(default = "default_system_notifications")]
     pub system_notifications: bool,
+    /// 轻量 AI 辅助调用（任务命名 / 议题预填 / 汇总 / 知识沉淀 / commit message）
+    /// 使用的模型；None = 跟随 Agent 默认（不传 --model）。
+    #[serde(default)]
+    pub claude_light_model: Option<String>,
+    #[serde(default)]
+    pub codex_light_model: Option<String>,
+    /// 轻量 AI 辅助调用的思考深度；None = 跟随模型默认（不传 effort）。
+    #[serde(default)]
+    pub claude_light_reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub codex_light_reasoning_effort: Option<String>,
     #[serde(default)]
     pub claude_model_catalog: AgentModelCatalog,
     #[serde(default)]
@@ -197,6 +208,10 @@ impl Default for AppSettings {
             terminal_copy_on_select: false,
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
             system_notifications: default_system_notifications(),
+            claude_light_model: None,
+            codex_light_model: None,
+            claude_light_reasoning_effort: None,
+            codex_light_reasoning_effort: None,
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
@@ -208,6 +223,13 @@ impl Default for AppSettings {
 pub struct AgentLaunchSpec {
     pub program: String,
     pub extra_env: Vec<(String, String)>,
+}
+
+/// 轻量 AI 辅助调用的模型配置（来自应用级设置，按 agent 区分）。
+#[derive(Clone, Debug, Default)]
+pub struct LightModelConfig {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
 }
 
 fn get_agent_configured_path(settings: &AppSettings, agent: &str) -> String {
@@ -460,8 +482,37 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
     }
 }
 
-fn get_agent_launch_spec_from_settings(settings: &AppSettings, agent: &str) -> AgentLaunchSpec {
+pub(crate) fn get_agent_launch_spec_from_settings(
+    settings: &AppSettings,
+    agent: &str,
+) -> AgentLaunchSpec {
     resolve_agent_launch_spec_from_path(agent, &get_agent_configured_path(settings, agent))
+}
+
+/// 从设置中读取指定 agent 的轻量 AI 辅助调用模型配置（无配置时为默认空值）。
+pub fn get_light_model_config_from_settings(
+    settings: &AppSettings,
+    agent: &str,
+) -> LightModelConfig {
+    match agent {
+        "codex" => LightModelConfig {
+            model: settings.codex_light_model.clone(),
+            reasoning_effort: settings.codex_light_reasoning_effort.clone(),
+        },
+        _ => LightModelConfig {
+            model: settings.claude_light_model.clone(),
+            reasoning_effort: settings.claude_light_reasoning_effort.clone(),
+        },
+    }
+}
+
+/// 一次性读取 agent 启动规格与轻量模型配置（共享一次设置文件读取）。
+pub fn get_agent_launch_and_light_model(agent: &str) -> (AgentLaunchSpec, LightModelConfig) {
+    let settings = load_settings_internal();
+    (
+        get_agent_launch_spec_from_settings(&settings, agent),
+        get_light_model_config_from_settings(&settings, agent),
+    )
 }
 
 fn normalize_optional_catalog_value(
@@ -576,6 +627,30 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         terminal_copy_on_select: settings.terminal_copy_on_select,
         use_sideloaded_conpty: settings.use_sideloaded_conpty,
         system_notifications: settings.system_notifications,
+        claude_light_model: normalize_optional_catalog_value(
+            settings.claude_light_model,
+            "Claude light model",
+            MAX_MODEL_ID_BYTES,
+        )
+        .unwrap_or_default(),
+        codex_light_model: normalize_optional_catalog_value(
+            settings.codex_light_model,
+            "Codex light model",
+            MAX_MODEL_ID_BYTES,
+        )
+        .unwrap_or_default(),
+        claude_light_reasoning_effort: normalize_optional_catalog_value(
+            settings.claude_light_reasoning_effort,
+            "Claude light reasoning effort",
+            MAX_REASONING_EFFORT_BYTES,
+        )
+        .unwrap_or_default(),
+        codex_light_reasoning_effort: normalize_optional_catalog_value(
+            settings.codex_light_reasoning_effort,
+            "Codex light reasoning effort",
+            MAX_REASONING_EFFORT_BYTES,
+        )
+        .unwrap_or_default(),
         claude_model_catalog: normalize_catalog(settings.claude_model_catalog),
         codex_model_catalog: normalize_catalog(settings.codex_model_catalog),
         yunxiao: settings.yunxiao,
@@ -601,6 +676,10 @@ fn load_settings_unlocked() -> AppSettings {
             terminal_copy_on_select: false,
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
             system_notifications: default_system_notifications(),
+            claude_light_model: None,
+            codex_light_model: None,
+            claude_light_reasoning_effort: None,
+            codex_light_reasoning_effort: None,
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
@@ -738,6 +817,41 @@ pub async fn save_agent_model_catalog(
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         catalog_mut(&mut settings, &agent)?.models = models;
+        save_settings_unlocked(settings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 保存指定 agent 的轻量 AI 辅助调用模型配置（模型 + 思考深度，均可为空）。
+#[tauri::command]
+pub async fn save_light_model_config(
+    agent: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+) -> Result<AppSettings, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {}", agent));
+    }
+    let model = normalize_optional_catalog_value(model, "Light model", MAX_MODEL_ID_BYTES)?;
+    let reasoning_effort = normalize_optional_catalog_value(
+        reasoning_effort,
+        "Light reasoning effort",
+        MAX_REASONING_EFFORT_BYTES,
+    )?;
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        match agent.as_str() {
+            "claude" => {
+                settings.claude_light_model = model;
+                settings.claude_light_reasoning_effort = reasoning_effort;
+            }
+            _ => {
+                settings.codex_light_model = model;
+                settings.codex_light_reasoning_effort = reasoning_effort;
+            }
+        }
         save_settings_unlocked(settings)
     })
     .await
@@ -1255,5 +1369,49 @@ mod model_catalog_tests {
             default_reasoning_effort: None,
         }])
         .is_err());
+    }
+
+    #[test]
+    fn light_model_config_maps_agent_fields() {
+        let mut settings = AppSettings::default();
+        settings.claude_light_model = Some("fast-claude".into());
+        settings.claude_light_reasoning_effort = Some("low".into());
+        settings.codex_light_model = Some("fast-codex".into());
+        settings.codex_light_reasoning_effort = Some("high".into());
+
+        let claude = get_light_model_config_from_settings(&settings, "claude");
+        assert_eq!(claude.model.as_deref(), Some("fast-claude"));
+        assert_eq!(claude.reasoning_effort.as_deref(), Some("low"));
+
+        let codex = get_light_model_config_from_settings(&settings, "codex");
+        assert_eq!(codex.model.as_deref(), Some("fast-codex"));
+        assert_eq!(codex.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn light_model_config_defaults_to_claude_for_unknown_agents() {
+        let mut settings = AppSettings::default();
+        settings.claude_light_model = Some("fast-claude".into());
+        let config = get_light_model_config_from_settings(&settings, "dsh");
+        assert_eq!(config.model.as_deref(), Some("fast-claude"));
+        assert_eq!(config.reasoning_effort, None);
+    }
+
+    #[test]
+    fn normalize_settings_trims_light_model_values_and_rejects_control_chars() {
+        let settings = AppSettings {
+            claude_light_model: Some("  fast-model  ".into()),
+            codex_light_reasoning_effort: Some("  low  ".into()),
+            claude_light_reasoning_effort: Some("bad\ncontrol".into()),
+            ..AppSettings::default()
+        };
+        let normalized = normalize_settings(settings);
+        assert_eq!(normalized.claude_light_model.as_deref(), Some("fast-model"));
+        assert_eq!(
+            normalized.codex_light_reasoning_effort.as_deref(),
+            Some("low")
+        );
+        // 控制字符在加载兜底时被丢弃为 None（保存命令才会返回 Err）
+        assert_eq!(normalized.claude_light_reasoning_effort, None);
     }
 }
