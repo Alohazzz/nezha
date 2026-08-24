@@ -90,9 +90,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.models.title": "Task Models",
     "appSettings.models.description":
       "Models shown on the task creation page. Provider-specific IDs are supported.",
-    "appSettings.models.initialize": "Initialize once",
-    "appSettings.models.initializing": "Initializing...",
-    "appSettings.models.initialized": "Initialized once from Codex {version}",
+    "appSettings.models.sync": "Sync",
+    "appSettings.models.syncing": "Syncing...",
+    "appSettings.models.initialized": "Synced from Codex {version}",
     "appSettings.models.unknownVersion": "(version unknown)",
     "appSettings.models.claudeManual":
       "Claude Code does not expose a stable CLI model list, so this catalog is manual only.",
@@ -910,9 +910,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.models.title": "任务模型",
     "appSettings.models.description":
       "配置任务创建页可选的模型，支持第三方服务的模型 ID、部署名等自定义值。",
-    "appSettings.models.initialize": "仅初始化一次",
-    "appSettings.models.initializing": "初始化中...",
-    "appSettings.models.initialized": "已从 Codex {version} 初始化一次",
+    "appSettings.models.sync": "同步",
+    "appSettings.models.syncing": "同步中...",
+    "appSettings.models.initialized": "已从 Codex {version} 同步",
     "appSettings.models.unknownVersion": "（版本未知）",
     "appSettings.models.claudeManual":
       "Claude Code 暂无稳定的 CLI 模型列表接口，因此这里只支持手工配置。",
