@@ -843,6 +843,32 @@ async fn restore_deleted_tracked_files(repo_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 快进更新缓存仓库到远端状态（缓存以远端为准，只允许 fast-forward）。
+/// 必须强制 `--no-rebase`：用户全局/本地 `pull.rebase=true` 会把 pull 劫持成 rebase，
+/// 而 rebase 拒绝任何未暂存改动，导致「缓存有本地改动」时同步必失败
+/// （git 2.18 实测 `--ff-only` 拦不住 rebase 路径）。
+async fn ff_only_update(repo_dir: &Path) -> Result<(), String> {
+    let repo = repo_dir.to_string_lossy().into_owned();
+    let (ok, _out, err) = run_git(
+        vec![
+            "-C".to_string(),
+            repo,
+            "pull".to_string(),
+            "--no-rebase".to_string(),
+            "--ff-only".to_string(),
+        ],
+        None,
+    )
+    .await?;
+    if !ok {
+        return Err(format!(
+            "git pull --ff-only 失败（缓存有本地改动或已分叉）: {}",
+            truncate_git_error(&err)
+        ));
+    }
+    Ok(())
+}
+
 /// git 源同步：缓存缺失则 shallow clone，存在则 fetch 探测、有变更才 --ff-only pull。
 /// 返回 (hub 目录绝对路径, 当前 commit)。
 async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String> {
@@ -935,22 +961,7 @@ async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String>
             return Err("读取 git 版本信息失败，沿用上次缓存".to_string());
         }
         if head.trim() != fetched.trim() {
-            let (ok_pull, _out_pull, err_pull) = run_git(
-                vec![
-                    "-C".to_string(),
-                    repo_dir_str.clone(),
-                    "pull".to_string(),
-                    "--ff-only".to_string(),
-                ],
-                None,
-            )
-            .await?;
-            if !ok_pull {
-                return Err(format!(
-                    "git pull --ff-only 失败（缓存有本地改动或已分叉）: {}",
-                    truncate_git_error(&err_pull)
-                ));
-            }
+            ff_only_update(&repo_dir).await?;
         }
     }
 
@@ -2294,6 +2305,108 @@ mod tests {
             .block_on(restore_deleted_tracked_files(&dir));
         assert!(restored.is_ok(), "restore failed: {restored:?}");
         assert!(skill.join("SKILL.md").is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ff_only_update_wins_over_pull_rebase_with_dirty_cache() {
+        // 回归：用户全局/本地 `pull.rebase=true` 会把 `git pull --ff-only` 劫持成 rebase，
+        // 而 rebase 拒绝任何未暂存改动，导致「缓存有本地改动」时同步必失败
+        // （git 2.18 实测：--ff-only 拦不住 rebase 路径）。
+        // ff_only_update 必须强制 --no-rebase，让脏文件未被更新触碰时也能快进成功。
+        let dir = std::env::temp_dir().join(format!("nezha-ffonly-rebase-{}", now_ms()));
+        let cache = dir.join("cache");
+        fs::create_dir_all(&dir).unwrap();
+        let run = |cwd: &Path, args: &[&str]| -> Option<std::process::Output> {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .ok()
+        };
+        let ok = |out: &Option<std::process::Output>| {
+            out.as_ref().map(|o| o.status.success()).unwrap_or(false)
+        };
+        let stderr = |out: &Option<std::process::Output>| {
+            out.as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+                .unwrap_or_default()
+        };
+
+        if !ok(&run(&dir, &["init", "-q", "--bare", "remote.git"]))
+            || !ok(&run(&dir, &["clone", "-q", "remote.git", "cache"]))
+        {
+            let _ = fs::remove_dir_all(&dir);
+            return; // git 不可用时跳过
+        }
+
+        // 远端两个提交；缓存落后一个提交
+        fs::write(cache.join("a.txt"), "v1").unwrap();
+        fs::write(cache.join("b.txt"), "b1").unwrap();
+        let add = run(&cache, &["add", "-A"]);
+        assert!(ok(&add), "add failed: {}", stderr(&add));
+        let commit1 = run(
+            &cache,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "c1",
+            ],
+        );
+        assert!(ok(&commit1), "commit failed: {}", stderr(&commit1));
+        let push1 = run(&cache, &["push", "-q", "origin", "HEAD:master"]);
+        assert!(ok(&push1), "push failed: {}", stderr(&push1));
+
+        fs::write(cache.join("a.txt"), "v2").unwrap();
+        let add2 = run(&cache, &["add", "-A"]);
+        assert!(ok(&add2));
+        let commit2 = run(
+            &cache,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "c2",
+            ],
+        );
+        assert!(ok(&commit2), "commit failed: {}", stderr(&commit2));
+        let push2 = run(&cache, &["push", "-q", "origin", "HEAD:master"]);
+        assert!(ok(&push2));
+        let reset = run(&cache, &["reset", "-q", "--hard", "HEAD~1"]);
+        assert!(ok(&reset), "reset failed: {}", stderr(&reset));
+
+        // 复刻报错环境：pull.rebase=true + 缓存有未暂存改动（且未被更新触碰）
+        let cfg = run(&cache, &["config", "pull.rebase", "true"]);
+        assert!(ok(&cfg), "config failed: {}", stderr(&cfg));
+        fs::write(cache.join("b.txt"), "b-dirty").unwrap();
+
+        let updated = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(ff_only_update(&cache));
+        assert!(updated.is_ok(), "ff-only update failed: {updated:?}");
+        let head = run(&cache, &["rev-parse", "HEAD"]);
+        let origin = run(&cache, &["rev-parse", "origin/master"]);
+        assert_eq!(
+            head.map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default()
+                .trim(),
+            origin
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default()
+                .trim(),
+            "cache should be fast-forwarded to remote"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
