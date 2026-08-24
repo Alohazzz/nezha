@@ -184,12 +184,15 @@ export interface CreateKnowledgeIssueResult {
   workitemId: string;
 }
 
-/** 云效议题定稿数据：切回待办时恢复补充表单（可继续编辑后重新定稿）。 */
+/** 云效议题补充表单数据：草稿即随编辑落盘（防抖），切走/重启后重挂载可恢复；
+ *  `finalized` 区分「已定稿」与「仅草稿」，缺省视为有字段即已定稿（兼容旧数据）。 */
 export interface YunxiaoSupplement {
   /** 补充表单字段（key 与 issueForms 字段 key 对齐） */
   fields: Record<string, string>;
   /** 定稿前的原始任务 prompt（重复定稿不叠加） */
   originalPrompt: string;
+  /** 是否已定稿；false=草稿（重挂载可继续编辑，发起讨论仍锁定） */
+  finalized?: boolean;
 }
 
 // ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────
