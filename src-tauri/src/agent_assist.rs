@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::fs;
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
@@ -397,21 +396,58 @@ const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：�
 
 const KNOWLEDGE_GRAPH_INSTRUCTION: &str = "另外，开始前先使用 his-knowledge-graph 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关 HIS 模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
 
+/// 知识沉淀提取规则（替代已废弃的 knowledge-sedimentation 技能，内嵌到提示词）。
+/// 讨论提示词与 headless 降级路径共用，保证判定标准一致。
+const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
+- 按价值排序提取：业务规则/已知坑 > 关键实体/数据表映射 > 模块职责修正/依赖补充 > 验证记录
+- 必须有依据（代码位置 / 文档 / 用户确认）；无依据一律不提取；排除图谱已有内容与纯实现细节
+- 与图谱冲突的结论标注「与现状冲突，需复核」
+- section 限定：定位 / 职责 / 关键实体与数据表 / 依赖与相关模块 / 业务规则与已知坑 / 验证记录
+- confidence：confirmed（已确认）/ pending（待验证）
+- JSON 示例：[{ "module": "Nto.His.Register", "section": "业务规则与已知坑", "content": "…", "evidence": "…", "confidence": "confirmed", "suggestedTitle": "…" }]"#;
+
+/// 讨论/修改过程的工作产物落盘指令：方案汇总 + 知识沉淀候选。
+/// 让 Agent 在会话过程中把产物写到 `.nezha/drafts/<taskId>/`（相对 cwd），
+/// 「回写云效 / 知识沉淀」按钮直接读取，避免点击时重新 headless 生成。
+fn draft_instructions(task_id: &str) -> String {
+    format!(
+        r#"── 工作产物落盘（必须执行）────────────────────────────
+本任务的工作产物需要写入本地临时文件，供任务完成后的「回写云效」与「知识沉淀」直接读取。请在你当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录维护两个文件（目录不存在就先创建）：
+
+1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的「修改方案汇总」：
+   - 讨论/分析得出结论后立即创建并写入；后续结论更新时整体覆盖写，只保留最新版。
+   - 内容需自包含：议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、分析结论、最终修改方案、验证方式与结果、关联 commit（如已提交）。
+   - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。
+
+2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
+   - {knowledge_rules}
+   - 输出 JSON 数组写入该文件，无候选则写 `[]`；只输出 JSON，不要附加说明文字。"#,
+        task_id = task_id,
+        knowledge_rules = KNOWLEDGE_SEDIMENTATION_RULES,
+    )
+}
+
 /// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无；
-/// Req 与 Bug 都会追加 his-knowledge-graph 技能指令（结合项目知识图谱）。
-pub fn issue_discussion_instructions(category: &str) -> Option<String> {
+/// Req 与 Bug 都会追加 his-knowledge-graph 技能指令与工作产物落盘指令。
+pub fn issue_discussion_instructions(category: &str, task_id: &str) -> Option<String> {
     let flow = match category.trim().to_lowercase().as_str() {
         "req" => GRILLING_INSTRUCTIONS,
         "bug" => DIAGNOSING_BUGS_INSTRUCTIONS,
         _ => return None,
     };
-    Some(format!("{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}"))
+    Some(format!(
+        "{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}\n\n{draft}",
+        draft = draft_instructions(task_id)
+    ))
 }
 
 /// 前端在拼「发起讨论」prompt 时调用，取对应 Skill 的流程指令文本（无则为空串）。
 #[tauri::command]
-pub fn get_issue_discussion_instructions(category: String) -> Result<String, String> {
-    Ok(issue_discussion_instructions(&category).unwrap_or_default())
+pub fn get_issue_discussion_instructions(
+    category: String,
+    task_id: String,
+) -> Result<String, String> {
+    Ok(issue_discussion_instructions(&category, &task_id).unwrap_or_default())
 }
 
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
@@ -703,12 +739,15 @@ fn build_fallback_summary(
     lines.join("\n")
 }
 
-/// 生成云效回写「修改方案汇总」：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色。
+/// 生成云效回写「修改方案汇总」：
+/// - 草稿优先：会话中已落盘的 `discussion.md` 直接作为汇总（秒开）；
+/// - 无草稿或 force=true 时：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色。
 /// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交；
 /// session_path 缺省或不可读时降级为仅事实模式。
 #[tauri::command]
 pub async fn generate_yunxiao_writeback_summary(
     project_path: String,
+    task_id: String,
     repo_path: Option<String>,
     serial_number: String,
     task_name: String,
@@ -716,6 +755,7 @@ pub async fn generate_yunxiao_writeback_summary(
     session_path: Option<String>,
     base_branch: Option<String>,
     agent: String,
+    force: Option<bool>,
 ) -> Result<String, String> {
     if !matches!(agent.as_str(), "claude" | "codex") {
         return Err(format!("Unsupported agent: {}", agent));
@@ -728,6 +768,20 @@ pub async fn generate_yunxiao_writeback_summary(
     tokio::task::spawn_blocking(move || validate_project_path_for_naming(&project_for_validation))
         .await
         .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
+
+    // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
+    if !force.unwrap_or(false) {
+        if let Some(draft) = crate::drafts::read_draft_file(
+            &project_path,
+            &task_id,
+            "discussion.md",
+        )
+        .map_err(|e| format!("读取讨论草稿失败: {e}"))?
+        .filter(|s| !s.trim().is_empty())
+        {
+            return Ok(draft);
+        }
+    }
 
     let cwd = if let Some(repo) = repo_path.as_deref().filter(|r| !r.trim().is_empty()) {
         let repo_trim = repo.trim();
@@ -823,11 +877,11 @@ pub struct KnowledgeSuggestion {
 
 const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于下面的会话过程与云效议题信息，对照 HIS 知识图谱，识别「有价值且图谱中没有」的知识，按给定格式输出候选。
 
-先完整阅读下方 <SKILL> 内的技能内容，并严格遵循其判定标准、比对方法与输出格式。
+严格遵循下方 <KNOWLEDGE_RULES> 内的提取规则，并按其判定标准、比对方法与输出格式输出。
 
-<SKILL>
-{skill_content}
-</SKILL>
+<KNOWLEDGE_RULES>
+{knowledge_rules}
+</KNOWLEDGE_RULES>
 
 ──── 云效议题 ────
 编号：{serial_number}
@@ -849,7 +903,7 @@ const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于
 "#;
 
 fn build_sedimentation_prompt(
-    skill_content: &str,
+    knowledge_rules: &str,
     serial_number: &str,
     task_name: &str,
     link: &str,
@@ -866,7 +920,7 @@ fn build_sedimentation_prompt(
         }
     };
     SEDIMENTATION_PROMPT_TEMPLATE
-        .replace("{skill_content}", skill_content.trim())
+        .replace("{knowledge_rules}", knowledge_rules.trim())
         .replace("{serial_number}", serial_number.trim())
         .replace("{task_name}", &placeholder(task_name))
         .replace("{link}", &placeholder(link))
@@ -876,20 +930,9 @@ fn build_sedimentation_prompt(
         .replace("{project_path}", project_path.trim())
 }
 
-/// 提取 `<SUGGESTIONS>...</SUGGESTIONS>` 内的 JSON 数组并规范化字段。
-fn extract_suggestions(stdout: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
-    const OPEN: &str = "<SUGGESTIONS>";
-    const CLOSE: &str = "</SUGGESTIONS>";
-    let inner = stdout
-        .rfind(CLOSE)
-        .and_then(|close_pos| {
-            let prefix = &stdout[..close_pos];
-            prefix.rfind(OPEN).map(|open_pos| {
-                prefix[open_pos + OPEN.len()..].trim().to_string()
-            })
-        })
-        .ok_or_else(|| "未找到 <SUGGESTIONS> 输出标签".to_string())?;
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(&inner)
+/// 解析候选知识 JSON 数组并规范化字段（模块/段落缺失的条目丢弃）。
+fn parse_suggestions_json(inner: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
+    let parsed: Vec<serde_json::Value> = serde_json::from_str(inner)
         .map_err(|e| format!("解析候选知识 JSON 失败: {e}"))?;
     let mut out = Vec::new();
     for item in parsed {
@@ -937,17 +980,47 @@ fn extract_suggestions(stdout: &str) -> Result<Vec<KnowledgeSuggestion>, String>
     Ok(out)
 }
 
-/// 生成知识沉淀候选：读取 `knowledge-sedimentation` 技能内容注入 headless prompt，
-/// 基于会话摘要 + 议题信息 + 图谱目录（现场比对）输出结构化候选，供前端预览后创建审核议题。
+/// 提取 `<SUGGESTIONS>...</SUGGESTIONS>` 内的 JSON 数组并规范化字段。
+fn extract_suggestions(stdout: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
+    const OPEN: &str = "<SUGGESTIONS>";
+    const CLOSE: &str = "</SUGGESTIONS>";
+    let inner = stdout
+        .rfind(CLOSE)
+        .and_then(|close_pos| {
+            let prefix = &stdout[..close_pos];
+            prefix.rfind(OPEN).map(|open_pos| {
+                prefix[open_pos + OPEN.len()..].trim().to_string()
+            })
+        })
+        .ok_or_else(|| "未找到 <SUGGESTIONS> 输出标签".to_string())?;
+    parse_suggestions_json(&inner)
+}
+
+/// 解析草稿 `knowledge.json`：直接 JSON 数组，或带 `<SUGGESTIONS>` 标签（兼容 headless 输出）。
+fn parse_knowledge_suggestions(raw: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('[') {
+        parse_suggestions_json(trimmed)
+    } else {
+        extract_suggestions(raw)
+    }
+}
+
+/// 生成知识沉淀候选：
+/// - 草稿优先：会话收尾时已落盘的 `knowledge.json` 直接作为候选（秒开）；
+/// - 无草稿 / 解析失败 / force=true 时：内置提取规则 + headless 重新提取
+///   （knowledge-sedimentation 技能已废弃，规则内嵌，不再读取技能仓库）。
 #[tauri::command]
 pub async fn generate_knowledge_sedimentation(
     project_path: String,
+    task_id: String,
     serial_number: String,
     task_name: String,
     fields_text: String,
     link: String,
     session_path: Option<String>,
     agent: String,
+    force: Option<bool>,
 ) -> Result<Vec<KnowledgeSuggestion>, String> {
     if !matches!(agent.as_str(), "claude" | "codex") {
         return Err(format!("Unsupported agent: {}", agent));
@@ -957,24 +1030,34 @@ pub async fn generate_knowledge_sedimentation(
         .await
         .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
 
-    // 读取 knowledge-sedimentation 技能内容（来自技能库；缺失时提示先同步/安装）
-    let (skill_content, graph_data_dir) =
-        tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
-            let hub = crate::skills::configured_hub_path()
-                .ok_or_else(|| "技能库尚未配置".to_string())?;
-            let skill_md = Path::new(&hub)
-                .join("knowledge-sedimentation")
-                .join("SKILL.md");
-            let content = fs::read_to_string(&skill_md).map_err(|_| {
-                "未找到 knowledge-sedimentation 技能（请先同步技能仓库并安装该项目技能）".to_string()
-            })?;
-            let graph_dir = Path::new(&hub)
-                .join("his-knowledge-graph")
-                .join("data");
-            Ok((content, graph_dir.to_string_lossy().into_owned()))
+    // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
+    if !force.unwrap_or(false) {
+        if let Some(raw) = crate::drafts::read_draft_file(
+            &project_path,
+            &task_id,
+            "knowledge.json",
+        )
+        .map_err(|e| format!("读取知识沉淀草稿失败: {e}"))?
+        .filter(|s| !s.trim().is_empty())
+        {
+            if let Ok(suggestions) = parse_knowledge_suggestions(&raw) {
+                return Ok(suggestions);
+            }
+            eprintln!("[sedimentation] draft knowledge.json parse failed, falling back to headless");
+        }
+    }
+
+    // 降级路径的图谱数据目录（his-knowledge-graph 仍保留；缺失时降级为无目录提示）。
+    let graph_data_dir =
+        tokio::task::spawn_blocking(move || -> String {
+            crate::skills::configured_hub_path()
+                .map(|hub| Path::new(&hub).join("his-knowledge-graph").join("data"))
+                .filter(|p| p.is_dir())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "（无）".to_string())
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?;
 
     // 会话摘要（校验失败/超限时降级为无会话模式）
     let session_text = match session_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -1006,7 +1089,7 @@ pub async fn generate_knowledge_sedimentation(
     };
 
     let prompt = build_sedimentation_prompt(
-        &skill_content,
+        KNOWLEDGE_SEDIMENTATION_RULES,
         &serial_number,
         task_name.trim(),
         &link,
@@ -1161,25 +1244,46 @@ mod tests {
 
     #[test]
     fn issue_instructions_map_req_to_grilling() {
-        let text = issue_discussion_instructions("Req").expect("Req has instructions");
+        let text = issue_discussion_instructions("Req", "task-123").expect("Req has instructions");
         assert!(text.contains("grilling"));
         assert!(text.contains("What/Why/Scope"));
         assert!(text.contains("his-knowledge-graph"));
+        assert!(text.contains(".nezha/drafts/task-123/discussion.md"));
+        assert!(text.contains(".nezha/drafts/task-123/knowledge.json"));
+        assert!(text.contains("知识沉淀规则"));
     }
 
     #[test]
     fn issue_instructions_map_bug_to_diagnosing_bugs() {
-        let text = issue_discussion_instructions("Bug").expect("Bug has instructions");
+        let text = issue_discussion_instructions("Bug", "task-123").expect("Bug has instructions");
         assert!(text.contains("diagnosing-bugs"));
         assert!(text.contains("变红"));
         assert!(text.contains("his-knowledge-graph"));
+        assert!(text.contains("discussion.md"));
     }
 
     #[test]
     fn issue_instructions_none_for_task_and_unknown() {
-        assert!(issue_discussion_instructions("Task").is_none());
-        assert!(issue_discussion_instructions("").is_none());
-        assert!(issue_discussion_instructions("  ").is_none());
+        assert!(issue_discussion_instructions("Task", "task-123").is_none());
+        assert!(issue_discussion_instructions("", "task-123").is_none());
+        assert!(issue_discussion_instructions("  ", "task-123").is_none());
+    }
+
+    #[test]
+    fn parses_knowledge_suggestions_from_plain_json_array() {
+        let raw = r#"[{"module":"Nto.His.Register","section":"业务规则与已知坑","content":"规则","evidence":"代码","confidence":"confirmed","suggestedTitle":"挂号规则"}]"#;
+        let suggestions = parse_knowledge_suggestions(raw).expect("parses");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].module, "Nto.His.Register");
+        assert_eq!(suggestions[0].confidence, "confirmed");
+    }
+
+    #[test]
+    fn parses_knowledge_suggestions_from_tagged_output() {
+        let raw = "<SUGGESTIONS>[{\"module\":\"M\",\"section\":\"职责\",\"content\":\"c\",\"evidence\":\"e\",\"confidence\":\"pending\",\"suggestedTitle\":\"t\"}]</SUGGESTIONS>";
+        let suggestions = parse_knowledge_suggestions(raw).expect("parses");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].module, "M");
     }
 
     #[test]

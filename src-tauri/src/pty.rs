@@ -142,6 +142,16 @@ fn finalize_task_exit(
     let _ = app.emit("task-status", payload);
     // 任务终态：完成 / 失败发系统通知（cancelled 在前面已提前 return，不通知）。
     if status == "done" {
+        // 收拢 Agent 在有效工作目录（可能是 worktree）下写的草稿到项目根，
+        // 使「回写云效 / 知识沉淀」的读取位置与 worktree 生命周期解耦。
+        let real_path = {
+            let tm = app.state::<TaskManager>();
+            let guard = tm.task_real_paths.lock();
+            guard.get(task_id).cloned()
+        };
+        if let Some(real_path) = real_path {
+            let _ = crate::drafts::gather_task_drafts(project_path, &real_path, task_id);
+        }
         crate::system_notify::notify_task_event(
             app,
             task_id,
@@ -858,6 +868,7 @@ pub async fn run_task(
     task_id: String,
     task_name: String,
     project_path: String,
+    real_project_path: String,
     prompt: String,
     agent: String,
     permission_mode: String,
@@ -884,6 +895,16 @@ pub async fn run_task(
         .task_names
         .lock()
         .insert(task_id.clone(), task_name);
+    // 真实项目根与有效工作目录（可能是 worktree）都必须是合法绝对路径；
+    // canonicalize 是阻塞 I/O，放进 spawn_blocking。
+    let real_for_validation = real_project_path.clone();
+    tokio::task::spawn_blocking(move || validate_task_project_path(&real_for_validation))
+        .await
+        .map_err(|e| format!("real_project_path 校验线程错误: {e}"))??;
+    task_manager
+        .task_real_paths
+        .lock()
+        .insert(task_id.clone(), real_project_path);
 
     let pair = pty_system()
         .openpty(PtySize {
@@ -1156,6 +1177,22 @@ pub async fn complete_task(
     // 释放已声明的会话路径，确保相同提示词的任务可以重新运行
     release_claimed_session_paths(&task_manager, &task_id);
 
+    // 收拢草稿（Agent 可能写在 worktree 内）到项目根，供回写/沉淀直接读取。
+    let real_path = task_manager
+        .task_real_paths
+        .lock()
+        .get(&task_id)
+        .cloned();
+    if let Some(real_path) = real_path {
+        let effective = project_path.clone();
+        let task_id_for_gather = task_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = crate::drafts::gather_task_drafts(&effective, &real_path, &task_id_for_gather);
+        })
+        .await
+        .map_err(|e| format!("收拢草稿线程错误: {e}"))?;
+    }
+
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "done" }),
@@ -1213,6 +1250,7 @@ pub async fn resume_task(
     task_id: String,
     task_name: String,
     project_path: String,
+    real_project_path: String,
     agent: String,
     session_id: String,
     _prompt: String,
@@ -1238,6 +1276,14 @@ pub async fn resume_task(
         .task_names
         .lock()
         .insert(task_id.clone(), task_name);
+    let real_for_validation = real_project_path.clone();
+    tokio::task::spawn_blocking(move || validate_task_project_path(&real_for_validation))
+        .await
+        .map_err(|e| format!("real_project_path 校验线程错误: {e}"))??;
+    task_manager
+        .task_real_paths
+        .lock()
+        .insert(task_id.clone(), real_project_path);
 
     let pair = pty_system()
         .openpty(PtySize {
