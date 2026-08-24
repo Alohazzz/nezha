@@ -35,6 +35,8 @@ interface TerminalViewProps {
   onRegisterTerminal: (
     writeFn: ((data: string, callback?: () => void) => void) | null,
   ) => number;
+  /** 剪贴板只有图片时把图片 dataURL 保存为附件，返回注入终端的文件路径。 */
+  onSavePastedImage?: (dataUrl: string) => Promise<string>;
   onReady?: (generation: number) => void;
   themeVariant: ThemeVariant;
   terminalFontSize: TerminalFontSize;
@@ -50,6 +52,7 @@ export function TerminalView({
   onInput,
   onResize,
   onRegisterTerminal,
+  onSavePastedImage,
   onReady,
   themeVariant,
   terminalFontSize,
@@ -66,6 +69,7 @@ export function TerminalView({
   const onInputRef = useRef(onInput);
   const onResizeRef = useRef(onResize);
   const onRegisterRef = useRef(onRegisterTerminal);
+  const onSavePastedImageRef = useRef(onSavePastedImage);
   const onReadyRef = useRef(onReady);
   const onSnapshotRef = useRef(onSnapshot);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -77,6 +81,7 @@ export function TerminalView({
   onInputRef.current = onInput;
   onResizeRef.current = onResize;
   onRegisterRef.current = onRegisterTerminal;
+  onSavePastedImageRef.current = onSavePastedImage;
 
   // 仅在 cols/rows 真正变化时回调；否则会触发 resize_pty → SIGWINCH →
   // 下游 TUI（Claude Code / Codex）全屏重绘，导致每次切回都看到一次多余重画。
@@ -172,6 +177,7 @@ export function TerminalView({
     const disposeSmartCopy = attachSmartCopy(term, {
       matchesNewline: (e) => matchesTerminalNewline(e, shiftEnterNewlineRef.current),
       onNewline: () => onInputRef.current(TERMINAL_NEWLINE_SEQUENCE),
+      onPasteImage: onSavePastedImageRef.current,
     });
     // 必须挂在 attachMacWebKitTerminalGuard 之后:guard 的 pointerup(恢复
     // textarea + refocus)先按注册顺序执行,复制动作发生在防线状态复原之后。

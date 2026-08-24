@@ -238,6 +238,35 @@ export interface TerminalKeyOptions {
   matchesNewline?: (e: KeyboardEvent) => boolean;
   /** Called (instead of the default submit) when that combo is pressed. */
   onNewline?: () => void;
+  /**
+   * 剪贴板只有图片（无文本）时调用：把图片 dataURL 保存为附件文件，
+   * 返回要注入终端的文件路径。返回空串则不注入。
+   */
+  onPasteImage?: (dataUrl: string) => Promise<string>;
+}
+
+async function readClipboardImage(): Promise<Blob | null> {
+  const clipboard = navigator.clipboard;
+  if (!clipboard?.read) return null;
+  try {
+    const items = await clipboard.read();
+    for (const item of items) {
+      const imageType = item.types.find((t) => t.startsWith("image/"));
+      if (imageType) return await item.getType(imageType);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 /**
@@ -277,12 +306,25 @@ export function attachSmartCopy(
       (e.key === "v" || e.key === "V")
     ) {
       e.preventDefault();
-      navigator.clipboard
-        .readText()
-        .then((text) => {
-          if (text) terminal.paste(text);
-        })
-        .catch(() => {});
+      void (async () => {
+        const text = await navigator.clipboard.readText().catch(() => "");
+        if (text) {
+          terminal.paste(text);
+          return;
+        }
+        // 剪贴板没有文本但有图片（截图 / 复制的图片）：保存为附件后把路径
+        // 注入输入框，让 CLI 能通过文件工具读到图片内容。
+        if (!keyOptions?.onPasteImage) return;
+        try {
+          const blob = await readClipboardImage();
+          if (!blob) return;
+          const dataUrl = await blobToDataUrl(blob);
+          const path = await keyOptions.onPasteImage(dataUrl);
+          if (path) terminal.paste(path);
+        } catch {
+          // 图片读取 / 保存失败时静默跳过，不打断终端输入
+        }
+      })();
       return false;
     }
 

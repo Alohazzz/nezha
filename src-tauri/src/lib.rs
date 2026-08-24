@@ -356,6 +356,7 @@ pub fn run() {
             pty::resize_pty,
             pty::open_shell,
             pty::kill_shell,
+            pty::save_pasted_image,
             fs::read_dir_entries,
             fs::read_compact_dir_entries,
             fs_watcher::watch_dir,
