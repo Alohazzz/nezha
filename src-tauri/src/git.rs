@@ -280,19 +280,60 @@ fn apply_login_shell_env(cmd: &mut Command) {
     }
 }
 
+/// 拼装 commit message headless 调用的 agent 参数（claude -p / codex exec）。
+/// 轻量模型与思考深度来自应用级设置：None 时不传对应旗标，跟随 CLI 默认。
+fn build_commit_message_agent_args(
+    agent: &str,
+    prompt: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    if agent == "codex" {
+        args.push("exec".into());
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("-c".into());
+            args.push(
+                format!(
+                    "model_reasoning_effort={}",
+                    toml::Value::String(effort.to_string())
+                )
+                .into(),
+            );
+        }
+        args.push(prompt.into());
+    } else {
+        args.extend(["-p", prompt, "--output-format", "text"].map(std::ffi::OsString::from));
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("--effort".into());
+            args.push(effort.into());
+        }
+    }
+    args
+}
+
 fn run_agent_commit_message_command(
     agent: &str,
     project_path: &str,
     prompt: &str,
 ) -> Result<Output, String> {
-    let launch = crate::app_settings::get_agent_launch_spec(agent);
+    let (launch, light) = crate::app_settings::get_agent_launch_and_light_model(agent);
     let mut cmd = Command::new(&launch.program);
     crate::subprocess::configure_background_command(&mut cmd);
-    if agent == "codex" {
-        cmd.args(["exec", prompt]);
-    } else {
-        cmd.args(["-p", prompt, "--output-format", "text"]);
-    }
+    cmd.args(build_commit_message_agent_args(
+        agent,
+        prompt,
+        light.model.as_deref(),
+        light.reasoning_effort.as_deref(),
+    ));
     cmd.current_dir(project_path);
     cmd.stdin(Stdio::null());
     apply_login_shell_env(&mut cmd);
@@ -1769,10 +1810,10 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        dir_is_git_repo, discover_git_roots_blocking, git_has_head, git_worktree_root,
-        is_protected_project_relative_path, list_untracked_files, parse_porcelain_z_status,
-        path_to_string, resolve_repo_path_blocking, run_git_check, untracked_files_under_directory,
-        GitFileChange,
+        build_commit_message_agent_args, dir_is_git_repo, discover_git_roots_blocking,
+        git_has_head, git_worktree_root, is_protected_project_relative_path,
+        list_untracked_files, parse_porcelain_z_status, path_to_string, resolve_repo_path_blocking,
+        run_git_check, untracked_files_under_directory, GitFileChange,
     };
     use std::{
         fs,
@@ -2054,5 +2095,35 @@ mod tests {
             list_untracked_files(&repo_path).unwrap(),
             vec!["new-file.txt".to_string()]
         );
+    }
+
+    #[test]
+    fn commit_message_args_include_light_model_and_effort() {
+        let args =
+            build_commit_message_agent_args("claude", "msg", Some("fast-model"), Some("low"));
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
+        assert!(args.windows(2).any(|w| w == ["--effort", "low"]));
+
+        let args =
+            build_commit_message_agent_args("codex", "msg", Some("fast-model"), Some("high"));
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["-c", "model_reasoning_effort=\"high\""])
+        );
+        assert_eq!(args.last(), Some(&"msg"));
+    }
+
+    #[test]
+    fn commit_message_args_without_light_config_match_previous_flags() {
+        let args = build_commit_message_agent_args("claude", "msg", None, None);
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args, vec!["-p", "msg", "--output-format", "text"]);
+
+        let args = build_commit_message_agent_args("codex", "msg", None, None);
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args, vec!["exec", "msg"]);
     }
 }

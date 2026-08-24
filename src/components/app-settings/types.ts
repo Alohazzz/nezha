@@ -92,6 +92,12 @@ export interface AppSettings {
   use_sideloaded_conpty: boolean;
   /** Agent 需要确认或任务完成/失败时发送 OS 系统通知（窗口未聚焦时） */
   system_notifications: boolean;
+  /** 轻量 AI 辅助调用（任务命名/议题预填/汇总/知识沉淀/commit message）使用的模型；null = 跟随 Agent 默认 */
+  claude_light_model: string | null;
+  codex_light_model: string | null;
+  /** 轻量 AI 辅助调用的思考深度；null = 跟随模型默认 */
+  claude_light_reasoning_effort: string | null;
+  codex_light_reasoning_effort: string | null;
   claude_model_catalog: AgentModelCatalog;
   codex_model_catalog: AgentModelCatalog;
   yunxiao: YunxiaoSettings;
@@ -113,6 +119,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminal_copy_on_select: false,
   use_sideloaded_conpty: true,
   system_notifications: true,
+  claude_light_model: null,
+  codex_light_model: null,
+  claude_light_reasoning_effort: null,
+  codex_light_reasoning_effort: null,
   claude_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   codex_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   yunxiao: EMPTY_YUNXIAO_SETTINGS,

@@ -1,10 +1,67 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
+
+/// 拼装 headless agent 子进程参数（claude -p / codex exec）。
+/// 轻量模型与思考深度来自应用级设置：None 时不传对应旗标，跟随 CLI 默认。
+fn build_headless_agent_args(
+    agent: &str,
+    prompt: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
+    if agent == "codex" {
+        args.extend(
+            ["exec", "--sandbox", "read-only", "--ephemeral", "-c", "approval_policy=\"never\""]
+                .map(OsString::from),
+        );
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("-c".into());
+            args.push(
+                format!(
+                    "model_reasoning_effort={}",
+                    toml::Value::String(effort.to_string())
+                )
+                .into(),
+            );
+        }
+        args.push(prompt.into());
+    } else {
+        args.extend(
+            [
+                "-p",
+                prompt,
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "plan",
+                "--tools",
+                "",
+                "--no-session-persistence",
+            ]
+            .map(OsString::from),
+        );
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("--effort".into());
+            args.push(effort.into());
+        }
+    }
+    args
+}
 
 const NAMING_PROMPT_TEMPLATE: &str = r#"You are a task title generator. Given the original task prompt below and (when available) the session execution summary, produce a single short title for this task.
 
@@ -73,34 +130,19 @@ async fn run_headless_agent_with_timeout(
     prompt: &str,
     timeout_dur: Duration,
 ) -> Result<Output, String> {
-    let launch = crate::app_settings::get_agent_launch_spec(agent);
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from_settings(&settings, agent);
+    let light = crate::app_settings::get_light_model_config_from_settings(&settings, agent);
     let login_env: Vec<(String, String)> = crate::app_settings::get_login_shell_env().to_vec();
 
     let mut cmd = tokio::process::Command::new(&launch.program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);
-    if agent == "codex" {
-        cmd.args([
-            "exec",
-            "--sandbox",
-            "read-only",
-            "--ephemeral",
-            "-c",
-            "approval_policy=\"never\"",
-            prompt,
-        ]);
-    } else {
-        cmd.args([
-            "-p",
-            prompt,
-            "--output-format",
-            "text",
-            "--permission-mode",
-            "plan",
-            "--tools",
-            "",
-            "--no-session-persistence",
-        ]);
-    }
+    cmd.args(build_headless_agent_args(
+        agent,
+        prompt,
+        light.model.as_deref(),
+        light.reasoning_effort.as_deref(),
+    ));
     cmd.current_dir(project_path);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
@@ -1212,5 +1254,66 @@ mod tests {
         assert!(prompt.contains("QHDK-1"));
         assert!(prompt.contains("C:/data"));
         assert!(prompt.contains("C:/proj"));
+    }
+
+    #[test]
+    fn headless_args_claude_include_light_model_and_effort() {
+        let args =
+            build_headless_agent_args("claude", "prompt text", Some("fast-model"), Some("low"));
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
+        assert!(args.windows(2).any(|w| w == ["--effort", "low"]));
+        assert!(args.contains(&"prompt text"));
+    }
+
+    #[test]
+    fn headless_args_codex_include_light_model_and_effort() {
+        let args =
+            build_headless_agent_args("codex", "prompt text", Some("fast-model"), Some("high"));
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["-c", "model_reasoning_effort=\"high\""])
+        );
+        // 轻量模型旗标必须位于 positional prompt 之前
+        let model_pos = args.iter().position(|a| *a == "fast-model").unwrap();
+        let prompt_pos = args.iter().position(|a| *a == "prompt text").unwrap();
+        assert!(model_pos < prompt_pos);
+    }
+
+    #[test]
+    fn headless_args_without_light_config_match_previous_flags() {
+        let args = build_headless_agent_args("claude", "prompt text", None, None);
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            vec![
+                "-p",
+                "prompt text",
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "plan",
+                "--tools",
+                "",
+                "--no-session-persistence",
+            ]
+        );
+
+        let args = build_headless_agent_args("codex", "prompt text", None, None);
+        let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            vec![
+                "exec",
+                "--sandbox",
+                "read-only",
+                "--ephemeral",
+                "-c",
+                "approval_policy=\"never\"",
+                "prompt text",
+            ]
+        );
     }
 }

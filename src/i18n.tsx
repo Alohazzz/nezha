@@ -110,6 +110,17 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.models.remove": "Remove model",
     "appSettings.models.invalid":
       "Each model needs a unique, non-empty ID without control characters.",
+    "appSettings.lightModel.title": "Light AI Model",
+    "appSettings.lightModel.description":
+      "Model used by lightweight helper calls (task naming, issue-form prefill, writeback summary, knowledge sedimentation, commit message). Unset follows the agent default.",
+    "appSettings.lightModel.modelField": "Model",
+    "appSettings.lightModel.followDefault": "Follow agent default",
+    "appSettings.lightModel.effortField": "Thinking depth",
+    "appSettings.lightModel.followModelDefault": "Follow model default",
+    "appSettings.lightModel.effortHint":
+      "Only available after choosing a model. A small model with a low thinking depth makes helper calls noticeably faster.",
+    "appSettings.lightModel.modelHint":
+      "When unset, behavior is unchanged and the agent default model is used.",
     "appSettings.configFile": "Configuration File",
     "appSettings.autoDetect": "Auto Detect",
     "appSettings.detecting": "Detecting...",
@@ -916,6 +927,15 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.models.effortsPlaceholder": "low, medium, high",
     "appSettings.models.remove": "移除模型",
     "appSettings.models.invalid": "每个模型都需要唯一且非空的 ID，且不能包含控制字符。",
+    "appSettings.lightModel.title": "轻量 AI 调用模型",
+    "appSettings.lightModel.description":
+      "任务命名、议题表单预填、修改方案汇总、知识沉淀、commit message 等轻量辅助调用使用的模型；留空则跟随智能体默认。",
+    "appSettings.lightModel.modelField": "模型",
+    "appSettings.lightModel.followDefault": "跟随 Agent 默认",
+    "appSettings.lightModel.effortField": "思考深度",
+    "appSettings.lightModel.followModelDefault": "跟随模型默认",
+    "appSettings.lightModel.effortHint": "选择模型后可配置；小模型配合低思考深度可明显加快辅助调用。",
+    "appSettings.lightModel.modelHint": "未配置时与现状一致，使用智能体默认模型。",
     "appSettings.configFile": "配置文件",
     "appSettings.autoDetect": "自动检测",
     "appSettings.detecting": "检测中...",
