@@ -719,11 +719,18 @@ function App() {
     setHubMode(false);
   }
 
-  function invokeRunTask(task: Task, projectPath: string, images: string[], texts: string[] = []) {
+  function invokeRunTask(
+    task: Task,
+    projectPath: string,
+    images: string[],
+    texts: string[] = [],
+    realProjectPath: string,
+  ) {
     invoke("run_task", {
       taskId: task.id,
       taskName: task.name ?? "",
       projectPath,
+      realProjectPath,
       prompt: task.prompt,
       agent: task.agent,
       permissionMode: task.permissionMode,
@@ -872,6 +879,7 @@ function App() {
       worktreePath ?? project.path,
       images,
       texts,
+      project.path,
     );
   }
 
@@ -895,7 +903,7 @@ function App() {
     });
     tm.resetTaskTerminal(task.id);
     updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
-    invokeRunTask(task, task.worktreePath ?? project.path, []);
+    invokeRunTask(task, task.worktreePath ?? project.path, [], [], project.path);
   }
 
   function markTaskWorktreeDiscarded(taskId: string) {
@@ -975,6 +983,7 @@ function App() {
       taskId: task.id,
       taskName: task.name ?? "",
       projectPath: task.worktreePath ?? project.path,
+      realProjectPath: project.path,
       agent: task.agent,
       sessionId,
       prompt: task.prompt,
@@ -1492,8 +1501,11 @@ function App() {
     handleRunTodoTask({ ...task, prompt, agent, permissionMode });
   }
 
-  /** 生成云效回写「修改方案汇总」：git 事实骨架 + headless Agent 润色。 */
-  async function handleGenerateYunxiaoWritebackSummary(taskId: string): Promise<string> {
+  /** 生成云效回写「修改方案汇总」：优先读取会话中落盘的讨论草稿，无草稿时 headless 生成。 */
+  async function handleGenerateYunxiaoWritebackSummary(
+    taskId: string,
+    force = false,
+  ): Promise<string> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task) throw new Error("Task not found");
     const project = projects.find((candidate) => candidate.id === task.projectId);
@@ -1508,6 +1520,7 @@ function App() {
           : undefined;
     return invoke<string>("generate_yunxiao_writeback_summary", {
       projectPath: project.path,
+      taskId,
       repoPath: worktreeAlive ? task.worktreePath : (task.worktreeRepo ?? project.path),
       serialNumber: task.yunxiaoSerialNumber ?? "",
       taskName: task.name ?? task.prompt.slice(0, 80),
@@ -1516,6 +1529,7 @@ function App() {
       baseBranch: task.baseBranch,
       // DSH 任务回退用 claude headless 生成汇总（与议题预填一致）
       agent: task.agent === "codex" ? "codex" : "claude",
+      force,
     });
   }
 
@@ -1552,9 +1566,10 @@ function App() {
     });
   }
 
-  /** 生成知识沉淀候选：读 knowledge-sedimentation 技能，headless 提取图谱增量。 */
+  /** 生成知识沉淀候选：优先读取会话收尾时落盘的知识草稿，无草稿时内置规则 headless 提取。 */
   async function handleGenerateKnowledgeSedimentation(
     taskId: string,
+    force = false,
   ): Promise<KnowledgeSuggestion[]> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task) throw new Error("Task not found");
@@ -1575,12 +1590,14 @@ function App() {
         : "";
     return invoke<KnowledgeSuggestion[]>("generate_knowledge_sedimentation", {
       projectPath: project.path,
+      taskId,
       serialNumber: task.yunxiaoSerialNumber ?? "",
       taskName: task.name ?? task.prompt.slice(0, 80),
       fieldsText,
       link,
       sessionPath,
       agent: task.agent === "codex" ? "codex" : "claude",
+      force,
     });
   }
 

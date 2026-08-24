@@ -293,6 +293,7 @@ export function YunxiaoIssueDetailView({
       const category = detail?.categoryId ?? (formKind === "bug" ? "Bug" : "Req");
       const instructions = await invoke<string>("get_issue_discussion_instructions", {
         category,
+        taskId: task.id,
       });
       if (instructions.trim()) {
         prompt = `${base}\n\n---\n${instructions.trim()}`;

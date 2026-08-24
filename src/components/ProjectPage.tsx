@@ -167,9 +167,12 @@ export function ProjectPage({
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
-  onGenerateWritebackSummary: (taskId: string) => Promise<string>;
+  onGenerateWritebackSummary: (taskId: string, force?: boolean) => Promise<string>;
   onWritebackYunxiao: (taskId: string, content: string) => Promise<void>;
-  onGenerateKnowledgeSedimentation: (taskId: string) => Promise<KnowledgeSuggestion[]>;
+  onGenerateKnowledgeSedimentation: (
+    taskId: string,
+    force?: boolean,
+  ) => Promise<KnowledgeSuggestion[]>;
   onCreateKnowledgeIssues: (
     taskId: string,
     suggestions: KnowledgeSuggestion[],
@@ -429,14 +432,14 @@ export function ProjectPage({
   } | null>(null);
 
   const runWritebackGeneration = useCallback(
-    async (taskId: string) => {
+    async (taskId: string, force = false) => {
       setWritebackDialog((prev) =>
         prev && prev.taskId === taskId
           ? { ...prev, generating: true, error: null }
           : { taskId, preview: "", generating: true, posting: false, error: null },
       );
       try {
-        const summary = await onGenerateWritebackSummary(taskId);
+        const summary = await onGenerateWritebackSummary(taskId, force);
         setWritebackDialog((prev) =>
           prev && prev.taskId === taskId
             ? { ...prev, preview: summary, generating: false }
@@ -496,7 +499,7 @@ export function ProjectPage({
   } | null>(null);
 
   const openKnowledgeSedimentation = useCallback(
-    (taskId: string) => {
+    (taskId: string, force = false) => {
       setKnowledgeDialog({
         taskId,
         suggestions: [],
@@ -505,7 +508,7 @@ export function ProjectPage({
         error: null,
         selected: new Set(),
       });
-      onGenerateKnowledgeSedimentation(taskId)
+      onGenerateKnowledgeSedimentation(taskId, force)
         .then((suggestions) => {
           setKnowledgeDialog((prev) =>
             prev && prev.taskId === taskId
@@ -1064,7 +1067,7 @@ export function ProjectPage({
                   prev ? { ...prev, preview: value } : prev,
                 )
               }
-              onRegenerate={() => void runWritebackGeneration(writebackDialog.taskId)}
+              onRegenerate={() => void runWritebackGeneration(writebackDialog.taskId, true)}
               onPost={() => void postWriteback()}
               onClose={() => setWritebackDialog(null)}
             />
@@ -1101,7 +1104,7 @@ export function ProjectPage({
                   return { ...prev, suggestions };
                 })
               }
-              onRegenerate={() => openKnowledgeSedimentation(knowledgeDialog.taskId)}
+              onRegenerate={() => openKnowledgeSedimentation(knowledgeDialog.taskId, true)}
               onCreate={() => void createKnowledgeIssues()}
               onClose={() => setKnowledgeDialog(null)}
             />

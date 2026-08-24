@@ -9,6 +9,7 @@ mod agent_assist;
 mod analytics;
 mod app_settings;
 mod config;
+mod drafts;
 mod dsh;
 mod event_watcher;
 mod fs;
@@ -42,6 +43,9 @@ pub struct TaskManager {
     /// 运行中任务的任务名（run_task / resume_task 时由前端传入），
     /// 供系统通知文案使用；任务退出后保留（数量有限，无清理压力）。
     pub(crate) task_names: Mutex<HashMap<String, String>>,
+    /// 任务对应的真实项目根路径（run_task / resume_task 时由前端传入，
+    /// 用于任务收尾时把 worktree 内的草稿收拢到项目根）。
+    pub(crate) task_real_paths: Mutex<HashMap<String, String>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }
@@ -317,6 +321,7 @@ pub fn run() {
             dsh_sessions: Mutex::new(HashMap::new()),
             claimed_session_paths: Mutex::new(HashSet::new()),
             task_names: Mutex::new(HashMap::new()),
+            task_real_paths: Mutex::new(HashMap::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
         })
         .on_window_event(|window, event| {
