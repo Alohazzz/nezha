@@ -1439,6 +1439,29 @@ function App() {
     });
   }
 
+  /** 云效详情页「草稿」：AI 预填/编辑后防抖落盘，切走再回来（组件重挂载）时恢复；
+   *  finalized 保持 false，直到用户显式定稿。 */
+  function handleYunxiaoDraftChange(taskId: string, fields: Record<string, string>) {
+    setTasks((prev) => {
+      const task = prev.find((t) => t.id === taskId);
+      if (!task || task.status !== "todo") return prev;
+      const next = prev.map((t) =>
+        t.id === taskId
+          ? {
+              ...t,
+              yunxiaoSupplement: {
+                fields,
+                originalPrompt: t.yunxiaoSupplement?.originalPrompt ?? t.prompt,
+                finalized: false,
+              },
+            }
+          : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+  }
+
   /** 云效详情页「发起讨论」：先落定稿 prompt + 所选 Agent，再复用 run 链路启动会话。 */
   function handleStartYunxiaoDiscussion(
     taskId: string,
@@ -1890,6 +1913,7 @@ function App() {
               onRunTodoTask={handleRunTodoTask}
               onUpdateTodo={handleUpdateTodo}
               onFinalizeYunxiaoTodo={handleFinalizeYunxiaoTodo}
+              onYunxiaoDraftChange={handleYunxiaoDraftChange}
               onStartYunxiaoDiscussion={handleStartYunxiaoDiscussion}
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}

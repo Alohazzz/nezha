@@ -81,6 +81,7 @@ export function ProjectPage({
   onRunTodoTask,
   onUpdateTodo,
   onFinalizeYunxiaoTodo,
+  onYunxiaoDraftChange,
   onStartYunxiaoDiscussion,
   onGenerateWritebackSummary,
   onWritebackYunxiao,
@@ -159,6 +160,7 @@ export function ProjectPage({
     updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
   ) => void;
   onFinalizeYunxiaoTodo: (taskId: string, prompt: string, supplement: YunxiaoSupplement) => void;
+  onYunxiaoDraftChange: (taskId: string, fields: Record<string, string>) => void;
   onStartYunxiaoDiscussion: (
     taskId: string,
     prompt: string,
@@ -892,6 +894,7 @@ export function ProjectPage({
                   projectPath={project.path}
                   onBack={onBack}
                   onFinalize={onFinalizeYunxiaoTodo}
+                  onDraftChange={onYunxiaoDraftChange}
                   onStartDiscussion={onStartYunxiaoDiscussion}
                 />
               ) : (

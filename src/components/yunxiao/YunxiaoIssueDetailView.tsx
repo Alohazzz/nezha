@@ -33,6 +33,13 @@ import s from "../../styles";
 
 const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
+/** 表单草稿防抖落盘间隔（AGENTS.md：同一 projectId 连续写入需 300-500ms 防抖）。 */
+const DRAFT_PERSIST_DEBOUNCE_MS = 400;
+
+/** 定稿判定：显式 finalized 优先；旧数据缺省按「有字段即已定稿」兼容。 */
+function isSupplementFinalized(supplement?: YunxiaoSupplement): boolean {
+  return supplement?.finalized ?? hasSupplementValues(supplement?.fields);
+}
 
 function agentLabel(agent: AgentType): string {
   return agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : "DSH";
@@ -48,12 +55,14 @@ export function YunxiaoIssueDetailView({
   task,
   projectPath,
   onBack,
+  onDraftChange,
   onFinalize,
   onStartDiscussion,
 }: {
   task: Task;
   projectPath: string;
   onBack: () => void;
+  onDraftChange: (taskId: string, fields: Record<string, string>) => void;
   onFinalize: (taskId: string, prompt: string, supplement: YunxiaoSupplement) => void;
   onStartDiscussion: (
     taskId: string,
@@ -71,9 +80,11 @@ export function YunxiaoIssueDetailView({
   const [values, setValues] = useState<Record<string, string>>(
     () => task.yunxiaoSupplement?.fields ?? {},
   );
+  // values 的 ref 镜像：异步回调（预填完成）或组件卸载后仍能读到/写出最新草稿。
+  const valuesRef = useRef(values);
   const [prefillState, setPrefillState] = useState<"idle" | "loading" | "failed">("idle");
   const [finalized, setFinalized] = useState<boolean>(() =>
-    hasSupplementValues(task.yunxiaoSupplement?.fields),
+    isSupplementFinalized(task.yunxiaoSupplement),
   );
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(task.projectId) ?? task.agent,
@@ -89,11 +100,58 @@ export function YunxiaoIssueDetailView({
     originalPromptRef.current = task.yunxiaoSupplement?.originalPrompt ?? task.prompt;
     setDetail(null);
     setValues(task.yunxiaoSupplement?.fields ?? {});
+    valuesRef.current = task.yunxiaoSupplement?.fields ?? {};
     setPrefillState("idle");
-    setFinalized(hasSupplementValues(task.yunxiaoSupplement?.fields));
+    setFinalized(isSupplementFinalized(task.yunxiaoSupplement));
     setPermission(getLastYunxiaoPermission(task.projectId) ?? task.permissionMode);
     setAgent(getLastYunxiaoAgent(task.projectId) ?? task.agent);
   }
+
+  // ── 草稿防抖落盘 ────────────────────────────────────────────────────────────
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDraftRef = useRef<{ taskId: string; fields: Record<string, string> } | null>(null);
+
+  const flushDraft = useCallback(() => {
+    if (draftTimerRef.current !== null) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+    const pending = pendingDraftRef.current;
+    pendingDraftRef.current = null;
+    if (pending) onDraftChange(pending.taskId, pending.fields);
+  }, [onDraftChange]);
+
+  const scheduleDraftPersist = useCallback(
+    (taskId: string, fields: Record<string, string>) => {
+      // 切到另一任务后立即编辑：先把上一个任务挂起的草稿落盘，避免被本次替换丢失。
+      if (pendingDraftRef.current && pendingDraftRef.current.taskId !== taskId) {
+        flushDraft();
+      }
+      pendingDraftRef.current = { taskId, fields };
+      if (draftTimerRef.current !== null) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        draftTimerRef.current = null;
+        flushDraft();
+      }, DRAFT_PERSIST_DEBOUNCE_MS);
+    },
+    [flushDraft],
+  );
+
+  const flushDraftRef = useRef(flushDraft);
+  flushDraftRef.current = flushDraft;
+  // 组件卸载（如打开文件预览导致主舞台切换）前，把未落盘的草稿写掉。
+  useEffect(() => () => flushDraftRef.current(), []);
+
+  // 草稿由 App 层异步写回 task（预填完成/防抖落盘）；本组件已挂载时把最新落盘字段
+  // 同步回表单，覆盖「预填期间切走再切回，task 先于组件收到草稿」的时序。
+  useEffect(() => {
+    if (openedTaskId !== task.id) return;
+    const fields = task.yunxiaoSupplement?.fields ?? {};
+    if (JSON.stringify(fields) === JSON.stringify(valuesRef.current)) return;
+    valuesRef.current = fields;
+    setValues(fields);
+    setFinalized(isSupplementFinalized(task.yunxiaoSupplement));
+  }, [task.yunxiaoSupplement, task.id, openedTaskId]);
 
   const link = useMemo(
     () =>
@@ -146,10 +204,16 @@ export function YunxiaoIssueDetailView({
     return task.prompt;
   }, [detail, task.prompt]);
 
-  const changeField = useCallback((key: string, value: string) => {
-    setValues((prev) => ({ ...prev, [key]: value }));
-    setFinalized(false);
-  }, []);
+  const changeField = useCallback(
+    (key: string, value: string) => {
+      const next = { ...valuesRef.current, [key]: value };
+      valuesRef.current = next;
+      setValues(next);
+      setFinalized(false);
+      scheduleDraftPersist(task.id, next);
+    },
+    [task.id, scheduleDraftPersist],
+  );
 
   const cycleAgent = useCallback(() => {
     setAgent((prev) => {
@@ -190,19 +254,31 @@ export function YunxiaoIssueDetailView({
           link,
         },
       );
-      setValues((prev) => ({ ...prev, ...result.fields }));
+      const next = { ...valuesRef.current, ...result.fields };
+      valuesRef.current = next;
+      setValues(next);
+      // 立即落盘（不走防抖）：即使组件已因切到文件预览而卸载，App 层回调仍会写入。
+      pendingDraftRef.current = { taskId: task.id, fields: next };
+      flushDraft();
       setPrefillState("idle");
     } catch (e) {
       setPrefillState("failed");
       showToast(t("yunxiao.form.prefillFailed", { error: String(e) }), "error");
     }
-  }, [prefillState, projectPath, agent, formKind, issueText, link, showToast, t]);
+  }, [prefillState, projectPath, agent, formKind, issueText, link, showToast, t, task.id, flushDraft]);
 
   const handleFinalize = useCallback(() => {
+    // 先取消挂起的草稿写入，避免它以 finalized=false 覆盖本次定稿。
+    if (draftTimerRef.current !== null) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+    pendingDraftRef.current = null;
     const prompt = buildSupplementedPrompt(formKind, values, originalPromptRef.current, link);
     onFinalize(task.id, prompt, {
       fields: values,
       originalPrompt: originalPromptRef.current,
+      finalized: true,
     });
     setFinalized(true);
     showToast(t("yunxiao.form.finalizeSuccess"), "success");

@@ -101,13 +101,16 @@ pub struct Task {
     pub knowledge_issue_ids: Vec<String>,
 }
 
-/// 云效议题定稿数据：补充表单字段（key 与前端 issueForms 对齐）+ 定稿前的原始 prompt。
+/// 云效议题补充表单数据：字段随草稿防抖落盘；finalized 区分「已定稿」与「仅草稿」。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct YunxiaoSupplement {
     #[serde(default)]
     pub fields: HashMap<String, String>,
     #[serde(rename = "originalPrompt", default)]
     pub original_prompt: String,
+    /// 是否已定稿；旧数据缺省为 None，前端按「有字段即已定稿」兼容。
+    #[serde(rename = "finalized", default, skip_serializing_if = "Option::is_none")]
+    pub finalized: Option<bool>,
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────

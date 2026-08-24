@@ -50,7 +50,7 @@ function baseTask(id: string, workitemId: string): Task {
   };
 }
 
-function view(task: Task, onFinalize = vi.fn()) {
+function view(task: Task, onFinalize = vi.fn(), onDraftChange = vi.fn()) {
   return (
     <I18nProvider>
       <ToastProvider>
@@ -58,6 +58,7 @@ function view(task: Task, onFinalize = vi.fn()) {
           task={task}
           projectPath="C:\\proj"
           onBack={vi.fn()}
+          onDraftChange={onDraftChange}
           onFinalize={onFinalize}
           onStartDiscussion={vi.fn()}
         />
@@ -80,6 +81,11 @@ describe("YunxiaoIssueDetailView 待办切换", () => {
       }
       if (command === "get_issue_discussion_instructions") {
         return Promise.resolve("");
+      }
+      if (command === "generate_issue_supplement") {
+        return Promise.resolve({
+          fields: { subject: "预填标题", expectation: "预填期望" },
+        });
       }
       return Promise.resolve(null);
     });
@@ -127,6 +133,7 @@ describe("YunxiaoIssueDetailView 待办切换", () => {
 
     const supplement = onFinalize.mock.calls[0][2] as YunxiaoSupplement;
     expect(supplement.fields.expectation).toBe("期望 A");
+    expect(supplement.finalized).toBe(true);
 
     // 切走再切回：任务已带上定稿数据（等同从磁盘加载）
     rerender(view({ ...baseTask("task-a", "workitem-a"), yunxiaoSupplement: supplement }));
@@ -134,6 +141,79 @@ describe("YunxiaoIssueDetailView 待办切换", () => {
     expect(screen.getByRole("button", { name: "Finalized" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Start discussion" }).hasAttribute("disabled")).toBe(
       false,
+    );
+  });
+
+  it("AI 预填后草稿立即落盘：未定稿切走再回来（重挂载）也能恢复内容", async () => {
+    const onDraftChange = vi.fn();
+    const { rerender } = render(view(baseTask("task-a", "workitem-a"), vi.fn(), onDraftChange));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "AI prefill" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "AI prefill" }));
+
+    // 预填完成即落盘（不走防抖）
+    await waitFor(() => expect(onDraftChange).toHaveBeenCalled());
+    const fields = onDraftChange.mock.calls[0][1] as Record<string, string>;
+    expect(fields.subject).toBe("预填标题");
+
+    // 模拟切到文件预览再回来：详情页重挂载，任务已带上未定稿的草稿数据
+    rerender(
+      view(
+        {
+          ...baseTask("task-a", "workitem-a"),
+          yunxiaoSupplement: {
+            fields,
+            originalPrompt: "议题 A 的本地 prompt",
+            finalized: false,
+          },
+        },
+        vi.fn(),
+        onDraftChange,
+      ),
+    );
+    await waitFor(() => expect(screen.getByLabelText("Subject")).toHaveValue("预填标题"));
+    // 未定稿：可继续编辑/定稿，但发起讨论仍锁定
+    expect(screen.getByRole("button", { name: "Finalize" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start discussion" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+  });
+
+  it("编辑字段后防抖落盘草稿（finalized=false），定稿前发起讨论保持锁定", async () => {
+    const onDraftChange = vi.fn();
+    render(view(baseTask("task-a", "workitem-a"), vi.fn(), onDraftChange));
+
+    await waitFor(() => expect(screen.getByLabelText("Expected behavior")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Expected behavior"), {
+      target: { value: "期望 A" },
+    });
+
+    await waitFor(() => expect(onDraftChange).toHaveBeenCalled(), { timeout: 2000 });
+    const args = onDraftChange.mock.calls[0] as [string, Record<string, string>];
+    expect(args[0]).toBe("task-a");
+    expect(args[1].expectation).toBe("期望 A");
+  });
+
+  it("预填未完成时切走再切回：组件已挂载但 task 先收到草稿，表单同步最新字段", async () => {
+    const { rerender } = render(view(baseTask("task-a", "workitem-a")));
+    await waitFor(() => expect(screen.getByLabelText("Expected behavior")).toBeTruthy());
+
+    // 旧实例的预填完成把草稿写回 task（组件仍挂载，task prop 更新）
+    rerender(
+      view({
+        ...baseTask("task-a", "workitem-a"),
+        yunxiaoSupplement: {
+          fields: { subject: "预填标题", expectation: "预填期望" },
+          originalPrompt: "议题 A 的本地 prompt",
+          finalized: false,
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.getByLabelText("Expected behavior")).toHaveValue("预填期望"));
+    expect(screen.getByLabelText("Subject")).toHaveValue("预填标题");
+    // 未定稿：发起讨论仍锁定
+    expect(screen.getByRole("button", { name: "Start discussion" }).hasAttribute("disabled")).toBe(
+      true,
     );
   });
 
