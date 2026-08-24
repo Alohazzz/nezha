@@ -173,29 +173,34 @@ fn save_task_images(
     fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     for (i, data_url) in images.iter().enumerate() {
-        // 解析 "data:image/png;base64,<data>" 格式
-        let comma = data_url.find(',').ok_or("invalid image data URL")?;
-        let header = &data_url[..comma];
-        let b64 = &data_url[comma + 1..];
-        let ext = if header.contains("jpeg") || header.contains("jpg") {
-            "jpg"
-        } else if header.contains("gif") {
-            "gif"
-        } else if header.contains("webp") {
-            "webp"
-        } else {
-            "png"
-        };
-        use base64::Engine;
-        let data = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .map_err(|e| e.to_string())?;
+        let (data, ext) = decode_image_data_url(data_url)?;
         let filename = format!("{}.{}", i, ext);
         let file_path = attachments_dir.join(&filename);
         fs::write(&file_path, &data).map_err(|e| e.to_string())?;
         paths.push(file_path.to_string_lossy().into_owned());
     }
     Ok(paths)
+}
+
+/// 解析 "data:image/png;base64,<data>" 格式，返回解码后的字节与扩展名。
+fn decode_image_data_url(data_url: &str) -> Result<(Vec<u8>, &'static str), String> {
+    let comma = data_url.find(',').ok_or("invalid image data URL")?;
+    let header = &data_url[..comma];
+    let b64 = &data_url[comma + 1..];
+    let ext = if header.contains("jpeg") || header.contains("jpg") {
+        "jpg"
+    } else if header.contains("gif") {
+        "gif"
+    } else if header.contains("webp") {
+        "webp"
+    } else {
+        "png"
+    };
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| e.to_string())?;
+    Ok((data, ext))
 }
 
 fn save_task_texts(
@@ -809,6 +814,42 @@ mod fork_command_tests {
 }
 
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
+
+/// 保存运行中任务终端里粘贴的剪贴板图片（data URL → `.nezha/attachments/<taskId>/`），
+/// 返回文件绝对路径，供前端把路径注入 CLI 输入框。
+#[tauri::command]
+pub async fn save_pasted_image(
+    project_path: String,
+    task_id: String,
+    data_url: String,
+) -> Result<String, String> {
+    validate_task_project_path(&project_path)?;
+    // task_id 会拼进附件目录名：拒绝路径分隔符，防目录穿越。
+    if task_id.is_empty()
+        || task_id.contains('/')
+        || task_id.contains('\\')
+        || task_id.contains("..")
+    {
+        return Err("Invalid task id".to_string());
+    }
+    let project_path = project_path.clone();
+    let task_id = task_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let (data, ext) = decode_image_data_url(&data_url)?;
+        let attachments_dir = task_attachments_dir(&project_path, &task_id);
+        fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let file_path = attachments_dir.join(format!("pasted_{}.{}", millis, ext));
+        fs::write(&file_path, &data).map_err(|e| e.to_string())?;
+        Ok(file_path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r)
+}
 
 #[tauri::command]
 pub async fn run_task(

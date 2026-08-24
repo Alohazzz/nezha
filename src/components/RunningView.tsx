@@ -757,6 +757,13 @@ export function RunningView({
             onInput={onInput}
             onResize={onResize}
             onRegisterTerminal={onRegisterTerminal}
+            onSavePastedImage={(dataUrl) =>
+              invoke<string>("save_pasted_image", {
+                projectPath,
+                taskId: task.id,
+                dataUrl,
+              })
+            }
             onReady={onTerminalReady}
             onSnapshot={onSnapshot}
             themeVariant={themeVariant}
