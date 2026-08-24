@@ -43,6 +43,8 @@ export interface AgentModelOption {
   label?: string;
   reasoningEfforts: string[];
   defaultReasoningEffort?: string;
+  /** 模型来源：undefined/null = 手动添加；"file" = codex 配置文件同步；"rpc" = codex model/list 同步 */
+  source?: string | null;
 }
 
 export interface AgentModelCatalog {

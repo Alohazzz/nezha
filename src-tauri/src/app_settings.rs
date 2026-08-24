@@ -66,6 +66,8 @@ const MAX_MODEL_ID_BYTES: usize = 1024;
 const MAX_MODEL_LABEL_BYTES: usize = 256;
 const MAX_REASONING_EFFORTS: usize = 32;
 const MAX_REASONING_EFFORT_BYTES: usize = 128;
+/// Codex 模型目录自动同步的过期阈值：超过该时长后打开设置页/启动时自动重同步。
+const CODEX_MODEL_SYNC_TTL_MS: i64 = 6 * 60 * 60 * 1000;
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -88,6 +90,10 @@ pub struct AgentModelOption {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_reasoning_effort: Option<String>,
+    /// 模型来源：None = 手动添加；Some("file") = 由 codex models 配置文件同步；
+    /// Some("rpc") = 由 codex model/list 同步。用于同步时「替换旧同步结果、保留手动项」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -594,12 +600,14 @@ fn normalize_model_options(models: Vec<AgentModelOption>) -> Result<Vec<AgentMod
                 reasoning_efforts.push(default_effort.clone());
             }
         }
+        let source = normalize_optional_catalog_value(option.source, "Model source", 16)?;
 
         normalized.push(AgentModelOption {
             model: model.to_string(),
             label,
             reasoning_efforts,
             default_reasoning_effort,
+            source,
         });
     }
     Ok(normalized)
@@ -940,6 +948,7 @@ fn parse_codex_model_option(value: &Value) -> Option<AgentModelOption> {
         label,
         reasoning_efforts,
         default_reasoning_effort,
+        source: Some("rpc".to_string()),
     })
 }
 
@@ -980,8 +989,138 @@ fn discover_codex_model_options(
     normalize_model_options(models)
 }
 
+/// 解析 codex models 配置文件（model_catalog_json 指向的 JSON）中的单条模型。
+/// 兼容 slug / model / id、display_name / displayName、
+/// supported_reasoning_levels[].effort / supportedReasoningEfforts[]、
+/// default_reasoning_level / defaultReasoningEffort 等字段命名差异。
+fn parse_catalog_file_model(value: &Value) -> Option<AgentModelOption> {
+    let model = value
+        .get("slug")
+        .or_else(|| value.get("model"))
+        .or_else(|| value.get("id"))
+        .and_then(Value::as_str)?
+        .trim();
+    if model.is_empty() {
+        return None;
+    }
+
+    let label = value
+        .get("display_name")
+        .or_else(|| value.get("displayName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|label| !label.is_empty() && *label != model)
+        .map(str::to_string);
+
+    let reasoning_efforts = value
+        .get("supported_reasoning_levels")
+        .or_else(|| value.get("supportedReasoningEfforts"))
+        .and_then(Value::as_array)
+        .map(|efforts| {
+            efforts
+                .iter()
+                .filter_map(|effort| {
+                    effort
+                        .as_str()
+                        .or_else(|| effort.get("effort").and_then(Value::as_str))
+                        .or_else(|| effort.get("reasoningEffort").and_then(Value::as_str))
+                })
+                .map(str::trim)
+                .filter(|effort| !effort.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let default_reasoning_effort = value
+        .get("default_reasoning_level")
+        .or_else(|| value.get("defaultReasoningEffort"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .map(str::to_string);
+
+    Some(AgentModelOption {
+        model: model.to_string(),
+        label,
+        reasoning_efforts,
+        default_reasoning_effort,
+        source: Some("file".to_string()),
+    })
+}
+
+/// 从 codex models 配置文件读取模型列表。
+/// 路径优先取 ~/.codex/config.toml 的 model_catalog_json，缺省回退 ~/.codex/models.json。
+/// 文件不存在或解析不出模型时返回 Ok(None)，由调用方回退到 RPC。
+fn discover_codex_models_from_catalog_file() -> Result<Option<Vec<AgentModelOption>>, String> {
+    let home = crate::platform::home_dir()
+        .ok_or_else(|| "Cannot find home directory".to_string())?;
+    let config_path = home.join(".codex").join("config.toml");
+    let catalog_path = if config_path.exists() {
+        let raw = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Cannot read ~/.codex/config.toml: {}", e))?;
+        toml::from_str::<toml::Value>(&raw)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("model_catalog_json")
+                    .and_then(toml::Value::as_str)
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string)
+            })
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex").join("models.json"))
+    } else {
+        home.join(".codex").join("models.json")
+    };
+
+    if !catalog_path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&catalog_path).map_err(|e| {
+        format!(
+            "Cannot read codex model catalog {}: {}",
+            catalog_path.display(),
+            e
+        )
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "Cannot parse codex model catalog {}: {}",
+            catalog_path.display(),
+            e
+        )
+    })?;
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("Codex model catalog {} has no models array.", catalog_path.display()))?;
+    let options: Vec<AgentModelOption> = models.iter().filter_map(parse_catalog_file_model).collect();
+    if options.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(normalize_model_options(options)?))
+}
+
+/// 合并同步结果与现有目录：替换上一次的同步项，保留手动添加（source=None）
+/// 且未被本次同步覆盖的模型。
+fn merge_synced_models(
+    discovered: Vec<AgentModelOption>,
+    existing: &[AgentModelOption],
+) -> Vec<AgentModelOption> {
+    let synced_ids: Vec<String> = discovered.iter().map(|m| m.model.clone()).collect();
+    let mut merged = discovered;
+    for existing in existing.iter().cloned() {
+        if existing.source.is_none() && !synced_ids.iter().any(|id| *id == existing.model) {
+            merged.push(existing);
+        }
+    }
+    merged
+}
+
 #[tauri::command]
-pub async fn initialize_agent_model_catalog(
+pub async fn refresh_agent_model_catalog(
     agent: String,
     task_manager: State<'_, TaskManager>,
 ) -> Result<AppSettings, String> {
@@ -991,20 +1130,25 @@ pub async fn initialize_agent_model_catalog(
                 .to_string(),
         );
     }
-    let settings = load_settings_internal();
-    if settings.codex_model_catalog.initialized {
-        return Ok(settings);
-    }
 
-    // 初始化应严格使用刚保存的 Codex 路径；丢弃可能由用量面板基于旧路径启动的实例。
-    // 先从锁内 take，再在锁外 drop（Drop 会 kill + wait，不能持锁做进程 I/O）。
-    let stale_rpc = task_manager.codex_rpc.lock().take();
-    drop(stale_rpc);
-    let codex_rpc = Arc::clone(&task_manager.codex_rpc);
-    let discovered =
-        tokio::task::spawn_blocking(move || discover_codex_model_options(codex_rpc))
-            .await
-            .map_err(|e| e.to_string())??;
+    let file_models = tokio::task::spawn_blocking(discover_codex_models_from_catalog_file)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (discovered, _source) = match file_models {
+        Ok(Some(models)) => (models, "file"),
+        _ => {
+            // 初始化应严格使用刚保存的 Codex 路径；丢弃可能由用量面板基于旧路径启动的实例。
+            // 先从锁内 take，再在锁外 drop（Drop 会 kill + wait，不能持锁做进程 I/O）。
+            let stale_rpc = task_manager.codex_rpc.lock().take();
+            drop(stale_rpc);
+            let codex_rpc = Arc::clone(&task_manager.codex_rpc);
+            let models =
+                tokio::task::spawn_blocking(move || discover_codex_model_options(codex_rpc))
+                    .await
+                    .map_err(|e| e.to_string())??;
+            (models, "rpc")
+        }
+    };
     if discovered.is_empty() {
         return Err("Codex returned no models; the catalog was left unchanged.".to_string());
     }
@@ -1015,17 +1159,10 @@ pub async fn initialize_agent_model_catalog(
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         let catalog = catalog_mut(&mut settings, "codex")?;
-        if catalog.initialized {
-            return Ok(settings);
-        }
-
-        let mut merged = catalog.models.clone();
-        for option in discovered {
-            if !merged.iter().any(|existing| existing.model == option.model) {
-                merged.push(option);
-            }
-        }
-        catalog.models = normalize_model_options(merged)?;
+        catalog.models = normalize_model_options(merge_synced_models(
+            discovered,
+            &catalog.models,
+        ))?;
         catalog.initialized = true;
         catalog.initialized_at = Some(chrono::Utc::now().timestamp_millis());
         catalog.source_version = source_version;
@@ -1033,6 +1170,36 @@ pub async fn initialize_agent_model_catalog(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 应用启动后台调用：仅当存在 codex models 配置文件且目录未初始化/过期时，
+/// 只读文件做一次轻量同步（不 spawn codex 进程）。失败静默，设置页可重试。
+pub fn sync_codex_catalog_from_file_if_due() {
+    let Ok(Some(models)) = discover_codex_models_from_catalog_file() else {
+        return;
+    };
+    let _guard = settings_lock().lock();
+    let mut settings = load_settings_unlocked();
+    let Ok(catalog) = catalog_mut(&mut settings, "codex") else {
+        return;
+    };
+    let due = if catalog.initialized {
+        match catalog.initialized_at {
+            Some(at) => chrono::Utc::now().timestamp_millis() - at > CODEX_MODEL_SYNC_TTL_MS,
+            None => false,
+        }
+    } else {
+        true
+    };
+    if !due {
+        return;
+    }
+    if let Ok(merged) = normalize_model_options(merge_synced_models(models, &catalog.models)) {
+        catalog.models = merged;
+        catalog.initialized = true;
+        catalog.initialized_at = Some(chrono::Utc::now().timestamp_millis());
+        let _ = save_settings_unlocked(settings);
+    }
 }
 
 #[tauri::command]
@@ -1343,6 +1510,7 @@ mod model_catalog_tests {
             label: Some("  Production  ".to_string()),
             reasoning_efforts: vec!["low".to_string(), "high".to_string()],
             default_reasoning_effort: None,
+            source: None,
         }])
         .expect("provider model should be accepted");
 
@@ -1360,6 +1528,7 @@ mod model_catalog_tests {
             label: None,
             reasoning_efforts: vec![],
             default_reasoning_effort: None,
+            source: None,
         };
         assert!(normalize_model_options(vec![duplicate.clone(), duplicate]).is_err());
         assert!(normalize_model_options(vec![AgentModelOption {
@@ -1367,6 +1536,7 @@ mod model_catalog_tests {
             label: None,
             reasoning_efforts: vec![],
             default_reasoning_effort: None,
+            source: None,
         }])
         .is_err());
     }
@@ -1413,5 +1583,83 @@ mod model_catalog_tests {
         );
         // 控制字符在加载兜底时被丢弃为 None（保存命令才会返回 Err）
         assert_eq!(normalized.claude_light_reasoning_effort, None);
+    }
+
+    #[test]
+    fn parses_catalog_file_model_with_snake_case_fields() {
+        let value = json!({
+            "slug": "Kimi-K3",
+            "display_name": "Kimi-K3",
+            "default_reasoning_level": "high",
+            "supported_reasoning_levels": [
+                { "effort": "low", "description": "Fast" },
+                { "effort": "high", "description": "Deep" }
+            ]
+        });
+
+        let parsed = parse_catalog_file_model(&value).expect("file model should parse");
+        assert_eq!(parsed.model, "Kimi-K3");
+        assert_eq!(parsed.source.as_deref(), Some("file"));
+        assert_eq!(parsed.reasoning_efforts, vec!["low", "high"]);
+        assert_eq!(parsed.default_reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn parses_catalog_file_model_with_camel_case_fallback() {
+        let value = json!({
+            "model": "gpt-x",
+            "displayName": "GPT X",
+            "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": ["low", "medium"]
+        });
+
+        let parsed = parse_catalog_file_model(&value).expect("file model should parse");
+        assert_eq!(parsed.model, "gpt-x");
+        assert_eq!(parsed.source.as_deref(), Some("file"));
+        assert_eq!(parsed.reasoning_efforts, vec!["low", "medium"]);
+        assert_eq!(parsed.default_reasoning_effort.as_deref(), Some("medium"));
+    }
+
+    #[test]
+    fn sync_merge_replaces_synced_models_and_keeps_manual_ones() {
+        let synced = vec![
+            AgentModelOption {
+                model: "Kimi-K3".into(),
+                label: None,
+                reasoning_efforts: vec!["low".into(), "high".into()],
+                default_reasoning_effort: Some("high".into()),
+                source: Some("file".into()),
+            },
+            AgentModelOption {
+                model: "new-model".into(),
+                label: None,
+                reasoning_efforts: vec![],
+                default_reasoning_effort: None,
+                source: Some("file".into()),
+            },
+        ];
+        let existing = vec![
+            // 上一次同步进来的模型：本次已从配置文件移除，应被替换掉
+            AgentModelOption {
+                model: "removed-model".into(),
+                label: None,
+                reasoning_efforts: vec![],
+                default_reasoning_effort: None,
+                source: Some("file".into()),
+            },
+            // 手动添加的模型：应保留
+            AgentModelOption {
+                model: "manual-model".into(),
+                label: Some("Manual".into()),
+                reasoning_efforts: vec![],
+                default_reasoning_effort: None,
+                source: None,
+            },
+        ];
+
+        let merged = merge_synced_models(synced, &existing);
+        let ids: Vec<&str> = merged.iter().map(|m| m.model.as_str()).collect();
+        assert_eq!(ids, vec!["Kimi-K3", "new-model", "manual-model"]);
+        assert!(!ids.contains(&"removed-model"));
     }
 }

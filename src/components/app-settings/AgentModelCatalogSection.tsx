@@ -15,6 +15,9 @@ interface EditableModel extends AgentModelOption {
   key: string;
 }
 
+/** Codex 模型目录自动同步的过期阈值：超过后打开设置页自动重同步。 */
+const CODEX_MODEL_SYNC_TTL_MS = 6 * 60 * 60 * 1000;
+
 function getCatalog(settings: AppSettings, agent: AgentKey): AgentModelCatalog {
   return agent === "claude" ? settings.claude_model_catalog : settings.codex_model_catalog;
 }
@@ -26,8 +29,16 @@ function serializeModels(models: AgentModelOption[]): string {
       label: model.label?.trim() || undefined,
       reasoningEfforts: model.reasoningEfforts.map((effort) => effort.trim()).filter(Boolean),
       defaultReasoningEffort: model.defaultReasoningEffort,
+      source: model.source ?? undefined,
     })),
   );
+}
+
+/** Codex 目录是否需要自动同步：未初始化，或距上次同步超过 TTL。 */
+function shouldAutoSyncCodex(catalog: AgentModelCatalog): boolean {
+  if (!catalog.initialized) return true;
+  if (!catalog.initializedAt) return false;
+  return Date.now() - catalog.initializedAt > CODEX_MODEL_SYNC_TTL_MS;
 }
 
 export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
@@ -41,9 +52,11 @@ export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [initializing, setInitializing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 每次挂载只自动同步一次（未初始化或过期），避免与 CHANGED 事件互相触发死循环。
+  const autoSyncRanRef = useRef(false);
 
   const toEditable = useCallback(
     (options: AgentModelOption[]): EditableModel[] =>
@@ -80,6 +93,17 @@ export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
     return () => window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, load);
   }, [load]);
 
+  // codex：打开设置页时自动同步 models 配置文件中的模型（未初始化/过期才触发）。
+  // 经 ref 调用 handleSync，避免 effect 依赖每次渲染变化的不稳定函数造成循环。
+  const handleSyncRef = useRef<() => void>(() => {});
+  handleSyncRef.current = handleSync;
+  useEffect(() => {
+    if (agentKey !== "codex" || loading || autoSyncRanRef.current) return;
+    if (!shouldAutoSyncCodex(catalog)) return;
+    autoSyncRanRef.current = true;
+    handleSyncRef.current();
+  }, [agentKey, catalog, loading]);
+
   const invalidModelIndexes = useMemo(() => {
     const invalid = new Set<number>();
     const seen = new Map<string, number>();
@@ -115,7 +139,7 @@ export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
     [models],
   );
   const dirty = serializeModels(normalizedModels) !== serializeModels(originalModels);
-  const canSave = dirty && invalidModelIndexes.size === 0 && !saving && !initializing;
+  const canSave = dirty && invalidModelIndexes.size === 0 && !saving && !syncing;
 
   function updateModel(index: number, patch: Partial<AgentModelOption>) {
     setModels((current) =>
@@ -157,16 +181,16 @@ export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
     }
   }
 
-  async function handleInitialize() {
-    if (agentKey !== "codex" || catalog.initialized || invalidModelIndexes.size > 0) return;
-    setInitializing(true);
+  async function handleSync() {
+    if (agentKey !== "codex" || syncing || invalidModelIndexes.size > 0) return;
+    setSyncing(true);
     setError(null);
     setSaved(false);
     try {
       if (dirty) {
         await persistModels(false);
       }
-      const settings = await invoke<AppSettings>("initialize_agent_model_catalog", {
+      const settings = await invoke<AppSettings>("refresh_agent_model_catalog", {
         agent: agentKey,
       });
       applySettings(settings);
@@ -174,7 +198,7 @@ export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
     } catch (reason) {
       setError(String(reason));
     } finally {
-      setInitializing(false);
+      setSyncing(false);
     }
   }
 
@@ -186,21 +210,19 @@ export function AgentModelCatalogSection({ agentKey }: { agentKey: AgentKey }) {
           <span style={s.agentModelDescription}>{t("appSettings.models.description")}</span>
         </div>
         <div style={s.agentModelActions}>
-          {agentKey === "codex" && !catalog.initialized && (
+          {agentKey === "codex" && (
             <button
               type="button"
               style={
-                initializing || loading || invalidModelIndexes.size > 0
+                syncing || loading || invalidModelIndexes.size > 0
                   ? s.agentModelSecondaryButtonDisabled
                   : s.agentModelSecondaryButton
               }
-              disabled={initializing || loading || invalidModelIndexes.size > 0}
-              onClick={handleInitialize}
+              disabled={syncing || loading || invalidModelIndexes.size > 0}
+              onClick={handleSync}
             >
               <Sparkles size={12} />
-              {initializing
-                ? t("appSettings.models.initializing")
-                : t("appSettings.models.initialize")}
+              {syncing ? t("appSettings.models.syncing") : t("appSettings.models.sync")}
             </button>
           )}
           <button

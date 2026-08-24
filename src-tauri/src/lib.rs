@@ -295,6 +295,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 crate::skills::startup_sync(startup_handle).await;
             });
+            // 后台轻量同步 codex 模型目录（只读 model_catalog_json 配置文件，
+            // 不 spawn codex 进程；未配置文件时静默跳过）。
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                crate::app_settings::sync_codex_catalog_from_file_if_due();
+            });
             // Windows: 创建系统托盘图标(关闭窗口时收起到托盘,而非退出)
             #[cfg(target_os = "windows")]
             setup_tray(app.handle())?;
@@ -413,7 +419,7 @@ pub fn run() {
             app_settings::save_dsh_settings,
             app_settings::save_agent_model_catalog,
             app_settings::save_light_model_config,
-            app_settings::initialize_agent_model_catalog,
+            app_settings::refresh_agent_model_catalog,
             app_settings::save_send_shortcut,
             app_settings::save_shift_enter_newline,
             app_settings::save_claude_force_default_tui,
