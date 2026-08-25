@@ -17,6 +17,7 @@ import type {
   SkillHubConfig,
   YunxiaoWorkitem,
   YunxiaoSupplement,
+  YunxiaoWritebackResult,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -1533,8 +1534,14 @@ function App() {
     });
   }
 
-  /** 把修改方案以评论形式回写云效议题，成功后记录幂等标记。 */
-  async function handleWritebackYunxiao(taskId: string, content: string): Promise<void> {
+  /**
+   * 提交总结回写云效议题：评论先发布（后端剥离评分小节），再把「价值评分」写入议题字段。
+   * 返回回写结果（字段写入状态与警告），成功后记录幂等标记。
+   */
+  async function handleWritebackYunxiao(
+    taskId: string,
+    content: string,
+  ): Promise<YunxiaoWritebackResult> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
     const project = projects.find((candidate) => candidate.id === task.projectId);
@@ -1544,7 +1551,7 @@ function App() {
     if (!yunxiao.token || !yunxiao.organizationId) {
       throw new Error(t("yunxiao.notConnected"));
     }
-    const commentId = await invoke<string>("yunxiao_create_workitem_comment", {
+    const result = await invoke<YunxiaoWritebackResult>("yunxiao_writeback_with_score", {
       token: yunxiao.token,
       organizationId: yunxiao.organizationId,
       workitemId: task.yunxiaoWorkitemId,
@@ -1557,12 +1564,35 @@ function App() {
           ? {
               ...candidate,
               yunxiaoWrittenBackAt: now,
-              yunxiaoCommentId: commentId,
+              yunxiaoCommentId: result.commentId,
             }
           : candidate,
       );
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
+    });
+    return result;
+  }
+
+  /** 补写云效议题「价值评分」字段（评论已发布但字段写入失败时的重试入口，不重复发评论）。 */
+  async function handleRetryWritebackScoreField(
+    taskId: string,
+    value: number,
+  ): Promise<void> {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
+    const project = projects.find((candidate) => candidate.id === task.projectId);
+    if (!project) throw new Error("Project not found");
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    if (!yunxiao.token || !yunxiao.organizationId) {
+      throw new Error(t("yunxiao.notConnected"));
+    }
+    await invoke("yunxiao_write_score_field", {
+      token: yunxiao.token,
+      organizationId: yunxiao.organizationId,
+      workitemId: task.yunxiaoWorkitemId,
+      value,
     });
   }
 
@@ -1934,6 +1964,7 @@ function App() {
               onStartYunxiaoDiscussion={handleStartYunxiaoDiscussion}
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
+              onRetryWritebackScoreField={handleRetryWritebackScoreField}
               onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
               onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
               onCancelTask={handleCancelTask}

@@ -8,9 +8,12 @@
 //! v1 只做只读查询（组织 / 项目 / 工作项），不做写回云效。
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::Duration;
+
+use parking_lot::Mutex;
 
 const API_BASE: &str = "https://openapi-rdc.aliyuncs.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -174,6 +177,43 @@ pub struct YunxiaoWorkitemType {
     #[serde(rename = "categoryId", default)]
     pub category_id: String,
 }
+
+/// 工作项类型字段配置（GET .../workitemTypes/{typeId}/fields 的数组元素）。
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct YunxiaoFieldConfig {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// 按名称「价值评分」查找字段 ID（名称是 issue-value-scoring 技能与云效字段配置的约定）。
+fn find_value_score_field_id(configs: &[YunxiaoFieldConfig]) -> Option<&str> {
+    configs
+        .iter()
+        .find(|c| c.name == "价值评分")
+        .map(|c| c.id.as_str())
+        .filter(|id| !id.is_empty())
+}
+
+/// UpdateWorkitem 请求体：字段 ID 直接作为顶层 key，value 为字符串（官方文档格式）。
+fn build_update_field_payload(field_id: &str, value: i32) -> serde_json::Value {
+    serde_json::json!({ field_id: value.to_string() })
+}
+
+/// 从工作项详情 JSON 中提取项目（space）与工作项类型 ID，供字段配置查询使用。
+fn extract_workitem_placements(workitem: &serde_json::Value) -> Option<(String, String)> {
+    let project_id = workitem.get("space")?.get("id")?.as_str()?;
+    let type_id = workitem.get("workitemType")?.get("id")?.as_str()?;
+    if project_id.is_empty() || type_id.is_empty() {
+        return None;
+    }
+    Some((project_id.to_string(), type_id.to_string()))
+}
+
+/// 「价值评分」字段 ID 的内存缓存（org, project, workitemType → fieldId），避免每次发布都查字段配置。
+static VALUE_SCORE_FIELD_ID_CACHE: LazyLock<Mutex<HashMap<(String, String, String), String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 分页结果：items 来自响应体数组，total 来自响应头 x-total（缺失时回落到本页数量）。
 #[derive(Serialize, Clone, Debug)]
@@ -987,6 +1027,24 @@ pub async fn yunxiao_create_workitem_comment(
         return Err(format!("评论内容超过 {MAX_COMMENT_CHARS} 字上限"));
     }
     let client = build_client()?;
+    post_workitem_comment(
+        &client,
+        &token,
+        &organization_id,
+        &workitem_id,
+        &content,
+    )
+    .await
+}
+
+/// POST 创建评论（CreateWorkitemComment），返回评论 ID。
+async fn post_workitem_comment(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+    content: &str,
+) -> Result<String, String> {
     let resp = client
         .post(format!(
             "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}/comments"
@@ -1005,6 +1063,210 @@ pub async fn yunxiao_create_workitem_comment(
     let created: CommentCreated = serde_json::from_slice(&bytes)
         .map_err(|e| format!("解析云效创建评论响应失败: {e}"))?;
     Ok(created.id)
+}
+
+/// 提交总结回写结果：评论必然已发布；评分字段写入状态与警告分开返回。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct YunxiaoWritebackResult {
+    pub comment_id: String,
+    /// 解析出的评分指数（四舍五入），无评分小节时为 None。
+    pub score_value: Option<i32>,
+    /// 「价值评分」字段是否写入成功。
+    pub field_written: bool,
+    /// 非阻断警告（评分缺失 / 字段未找到 / 字段写入失败）。
+    pub warning: Option<String>,
+}
+
+/// 提交总结回写：先发布评论（剥离评分小节），再把「价值评分」写入议题字段。
+/// 评论发布后字段写入失败不阻断（返回 warning，前端提供「补写字段」入口）。
+#[tauri::command]
+pub async fn yunxiao_writeback_with_score(
+    token: String,
+    organization_id: String,
+    workitem_id: String,
+    content: String,
+) -> Result<YunxiaoWritebackResult, String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    let workitem_id = workitem_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
+    }
+    let (comment_text, score_section) =
+        crate::value_score::strip_value_score_section(content.trim());
+    if comment_text.is_empty() {
+        return Err("评论内容不能为空".to_string());
+    }
+    if comment_text.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("评论内容超过 {MAX_COMMENT_CHARS} 字上限"));
+    }
+    let score_value = score_section
+        .as_deref()
+        .and_then(crate::value_score::parse_value_score_index)
+        .map(|v| v.round() as i32);
+
+    // 1) 评论先发布（评分小节不随评论发布）
+    let client = build_client()?;
+    let comment_id = post_workitem_comment(
+        &client,
+        &token,
+        &organization_id,
+        &workitem_id,
+        &comment_text,
+    )
+    .await?;
+
+    // 2) 评分写入议题字段（失败不阻断，返回 warning）
+    let Some(score_value) = score_value else {
+        return Ok(YunxiaoWritebackResult {
+            comment_id,
+            score_value: None,
+            field_written: false,
+            warning: Some("未检测到价值评分小节，未写入议题字段".to_string()),
+        });
+    };
+    match write_value_score_field(&client, &token, &organization_id, &workitem_id, score_value)
+        .await
+    {
+        Ok(()) => Ok(YunxiaoWritebackResult {
+            comment_id,
+            score_value: Some(score_value),
+            field_written: true,
+            warning: None,
+        }),
+        Err(warning) => Ok(YunxiaoWritebackResult {
+            comment_id,
+            score_value: Some(score_value),
+            field_written: false,
+            warning: Some(warning),
+        }),
+    }
+}
+
+/// 补写「价值评分」字段（评论已发布但字段写入失败时的重试入口，不重复发评论）。
+#[tauri::command]
+pub async fn yunxiao_write_score_field(
+    token: String,
+    organization_id: String,
+    workitem_id: String,
+    value: i32,
+) -> Result<(), String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    let workitem_id = workitem_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
+    }
+    let client = build_client()?;
+    write_value_score_field(&client, &token, &organization_id, &workitem_id, value).await
+}
+
+/// 自动探测「价值评分」字段并写入（字段不存在 / 探测失败返回 Err，由调用方转成 warning）。
+async fn write_value_score_field(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+    value: i32,
+) -> Result<(), String> {
+    let (project_id, workitem_type_id) =
+        fetch_workitem_placements(client, token, organization_id, workitem_id).await?;
+    let field_id = fetch_value_score_field_id(
+        client,
+        token,
+        organization_id,
+        &project_id,
+        &workitem_type_id,
+    )
+    .await
+    .ok_or_else(|| "议题类型未配置「价值评分」字段".to_string())?;
+    update_workitem_field(
+        client,
+        token,
+        organization_id,
+        workitem_id,
+        &field_id,
+        value,
+    )
+    .await
+}
+
+/// 拉取工作项详情并提取项目 / 类型 ID（字段配置查询的前置）。
+async fn fetch_workitem_placements(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+) -> Result<(String, String), String> {
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+    );
+    let bytes = get_yunxiao_json(client, token, url).await?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    if value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        if let Some(result) = value.get_mut("result") {
+            value = result.take();
+        }
+    }
+    extract_workitem_placements(&value).ok_or_else(|| "工作项详情缺少项目或类型信息".to_string())
+}
+
+/// 查询工作项类型的字段配置，按名称找「价值评分」字段（带进程内缓存）。
+async fn fetch_value_score_field_id(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+    workitem_type_id: &str,
+) -> Option<String> {
+    let key = (
+        organization_id.to_string(),
+        project_id.to_string(),
+        workitem_type_id.to_string(),
+    );
+    if let Some(cached) = VALUE_SCORE_FIELD_ID_CACHE.lock().get(&key) {
+        return Some(cached.clone());
+    }
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes/{workitem_type_id}/fields"
+    );
+    let bytes = get_yunxiao_json(client, token, url).await.ok()?;
+    let configs: Vec<YunxiaoFieldConfig> = serde_json::from_slice(&bytes).ok()?;
+    let found = find_value_score_field_id(&configs).map(str::to_string);
+    if let Some(id) = found.clone() {
+        VALUE_SCORE_FIELD_ID_CACHE.lock().insert(key, id);
+    }
+    found
+}
+
+/// PUT 更新工作项字段（UpdateWorkitem，官方文档格式 `{"fieldId": "value"}`）。
+async fn update_workitem_field(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+    field_id: &str,
+    value: i32,
+) -> Result<(), String> {
+    let resp = client
+        .put(format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+        ))
+        .header("x-yunxiao-token", token)
+        .header("Content-Type", "application/json")
+        .json(&build_update_field_payload(field_id, value))
+        .send()
+        .await
+        .map_err(|e| format!("请求云效更新字段失败: {e}"))?;
+    let _ = read_json_body(resp).await?;
+    Ok(())
 }
 
 /// 知识沉淀创建的审核议题结果：`duplicated=true` 表示标题已存在（幂等，不重复创建）。
@@ -1444,5 +1706,55 @@ mod tests {
         assert_eq!(extract_file_identifier("https://img.alicdn.com/a.png"), None);
         assert_eq!(extract_file_identifier("https://devops.aliyun.com/projex/api/workitem/file/url?fileIdentifier="), None);
         assert_eq!(extract_file_identifier(""), None);
+    }
+
+    // 来自真实字段配置接口（GET .../workitemTypes/{typeId}/fields）的结构（节选）。
+    const FIELDS_JSON: &str = r#"[
+      {"name": "标题", "format": "string", "id": "subject"},
+      {"name": "优先级", "format": "list", "id": "priority"},
+      {"name": "价值评分", "format": "int", "id": "0db46aead43554e949958fff95"}
+    ]"#;
+
+    #[test]
+    fn finds_value_score_field_by_name() {
+        let configs: Vec<YunxiaoFieldConfig> = serde_json::from_str(FIELDS_JSON).unwrap();
+        assert_eq!(
+            find_value_score_field_id(&configs),
+            Some("0db46aead43554e949958fff95")
+        );
+    }
+
+    #[test]
+    fn returns_none_when_value_score_field_missing() {
+        let configs: Vec<YunxiaoFieldConfig> =
+            serde_json::from_str(r#"[{"name": "标题", "format": "string", "id": "subject"}]"#)
+                .unwrap();
+        assert_eq!(find_value_score_field_id(&configs), None);
+    }
+
+    #[test]
+    fn update_payload_uses_field_id_as_top_level_key() {
+        let payload = build_update_field_payload("0db46aead43554e949958fff95", 50);
+        assert_eq!(
+            payload,
+            serde_json::json!({"0db46aead43554e949958fff95": "50"})
+        );
+    }
+
+    #[test]
+    fn extracts_project_and_type_ids_from_workitem() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"id": "e9aceaf1424c1560d20bb75250",
+                "space": {"name": "Hsp 2.0", "id": "07a763450c8733172523320ab6"},
+                "workitemType": {"name": "产品类需求", "id": "9uy29901re573f561d69jn40"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            extract_workitem_placements(&json),
+            Some((
+                "07a763450c8733172523320ab6".to_string(),
+                "9uy29901re573f561d69jn40".to_string()
+            ))
+        );
     }
 }

@@ -26,6 +26,7 @@ mod storage;
 mod system_notify;
 mod subprocess;
 mod usage;
+mod value_score;
 mod yunxiao;
 
 use session::{ClaudeSessionInfo, CodexSessionInfo, DshSessionInfo};
@@ -463,6 +464,8 @@ pub fn run() {
             yunxiao::yunxiao_get_workitem,
             yunxiao::yunxiao_prepare_issue_images,
             yunxiao::yunxiao_create_workitem_comment,
+            yunxiao::yunxiao_writeback_with_score,
+            yunxiao::yunxiao_write_score_field,
             yunxiao::yunxiao_create_knowledge_issue,
             agent_assist::generate_yunxiao_writeback_summary,
             agent_assist::generate_knowledge_sedimentation,

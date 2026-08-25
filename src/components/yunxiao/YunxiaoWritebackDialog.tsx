@@ -7,27 +7,41 @@ export function YunxiaoWritebackDialog({
   serialNumber,
   title,
   preview,
+  scoreSection,
   generating,
   posting,
   error,
+  warning,
+  fieldRetrying,
+  retryScoreValue,
+  posted,
   onPreviewChange,
   onRegenerate,
   onPost,
+  onRetryField,
   onClose,
 }: {
   serialNumber: string;
   title: string;
   preview: string;
+  scoreSection: string | null;
   generating: boolean;
   posting: boolean;
   error: string | null;
+  warning: string | null;
+  fieldRetrying: boolean;
+  retryScoreValue: number | null;
+  posted: boolean;
   onPreviewChange: (value: string) => void;
   onRegenerate: () => void;
   onPost: () => void;
+  onRetryField: () => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const canPost = !generating && !posting && preview.trim().length > 0;
+  const canPost = !generating && !posting && !posted && preview.trim().length > 0;
+  const canRetryField =
+    retryScoreValue != null && !generating && !posting && !fieldRetrying && posted;
 
   return (
     <div style={s.yunxiaoWritebackBackdrop} onPointerDown={posting ? undefined : onClose}>
@@ -54,6 +68,31 @@ export function YunxiaoWritebackDialog({
           disabled={generating}
           onChange={(event) => onPreviewChange(event.target.value)}
         />
+        {scoreSection && (
+          <div style={s.yunxiaoWritebackScoreBlock}>
+            <div style={s.yunxiaoWritebackScoreTitle}>
+              {t("yunxiao.writeback.scoreTitle")}
+            </div>
+            <pre style={s.yunxiaoWritebackScorePre}>{scoreSection}</pre>
+          </div>
+        )}
+        {warning && (
+          <div style={s.yunxiaoWritebackError}>
+            {warning}
+            {canRetryField && (
+              <button
+                type="button"
+                style={s.yunxiaoWritebackRetryBtn}
+                onClick={onRetryField}
+                disabled={fieldRetrying}
+              >
+                {fieldRetrying
+                  ? t("yunxiao.writeback.fieldRetrying")
+                  : t("yunxiao.writeback.retryField", { value: retryScoreValue ?? "" })}
+              </button>
+            )}
+          </div>
+        )}
         {error && <div style={s.yunxiaoWritebackError}>{error}</div>}
         <div style={s.yunxiaoWritebackActions}>
           <button
@@ -70,7 +109,7 @@ export function YunxiaoWritebackDialog({
             type="button"
             style={s.yunxiaoWritebackSecondaryBtn}
             onClick={onRegenerate}
-            disabled={generating || posting}
+            disabled={generating || posting || posted}
             title={t("yunxiao.writeback.regenerate")}
           >
             <Sparkles size={12} strokeWidth={2.5} className={generating ? "spin" : ""} />
