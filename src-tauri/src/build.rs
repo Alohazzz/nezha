@@ -185,7 +185,13 @@ fn git_branches(dir: &str) -> Vec<String> {
 fn git_dirty(dir: &str) -> bool {
     // 忽略子模块改动：子仓库常因本地改动/commit 指针不同导致主仓库误报脏。
     // 叶仓库（无子模块）此开关为 no-op，仍能反映自身真实改动。
-    if let Ok(out) = run_git_in(dir, &["status", "--porcelain", "--ignore-submodules=all"]) {
+    // 再忽略未跟踪文件（--untracked-files=no）：未跟踪/未纳入 Git 的内容不参与 `git pull --ff-only`，
+    // 不能因为工作区里有本地生成物（如构建产物）就把整个仓库误判为脏并阻断拉取。
+    // 只有受跟踪文件的改动/暂存改动才真正可能阻碍快进合并。
+    if let Ok(out) = run_git_in(
+        dir,
+        &["status", "--porcelain", "--ignore-submodules=all", "--untracked-files=no"],
+    ) {
         !String::from_utf8_lossy(&out.stdout).trim().is_empty()
     } else {
         false
@@ -1037,4 +1043,90 @@ pub fn cancel_build(build_id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_running_builds() -> Result<Vec<String>, String> {
     Ok(running_builds().lock().unwrap().keys().cloned().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use super::git_dirty;
+
+    struct TempRepo {
+        path: PathBuf,
+    }
+
+    impl TempRepo {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("nezha-build-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            let out = Command::new("git").arg("init").arg(&path).output().unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            for (k, v) in [("user.email", "test@test.test"), ("user.name", "test")] {
+                let o = Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["config", k, v])
+                    .output()
+                    .unwrap();
+                assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+            }
+            Self { path }
+        }
+
+        fn dir(&self) -> &str {
+            self.path.to_str().unwrap()
+        }
+
+        fn git(&self, args: &[&str]) {
+            let o = Command::new("git")
+                .arg("-C")
+                .arg(&self.path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    // 未跟踪（未纳入 Git）的内容不应当把仓库判脏：`git pull --ff-only` 不会被它们阻断。
+    #[test]
+    fn git_dirty_ignores_untracked_files() {
+        let repo = TempRepo::new();
+        std::fs::write(repo.path.join("tracked.txt"), "hello").unwrap();
+        repo.git(&["add", "tracked.txt"]);
+        repo.git(&["commit", "-m", "init"]);
+
+        // 只加一个未跟踪文件（本地生成物，不在 Git 上）
+        std::fs::write(repo.path.join("local-only.txt"), "not on git").unwrap();
+
+        assert!(!git_dirty(repo.dir()));
+    }
+
+    // 受跟踪文件的改动/暂存改动仍会判脏——这些才可能真正阻碍快进合并。
+    #[test]
+    fn git_dirty_still_detects_tracked_changes() {
+        let repo = TempRepo::new();
+        std::fs::write(repo.path.join("tracked.txt"), "hello").unwrap();
+        repo.git(&["add", "tracked.txt"]);
+        repo.git(&["commit", "-m", "init"]);
+
+        // 修改受跟踪文件
+        std::fs::write(repo.path.join("tracked.txt"), "changed").unwrap();
+        assert!(git_dirty(repo.dir()));
+
+        // 暂存后仍为脏
+        repo.git(&["add", "tracked.txt"]);
+        assert!(git_dirty(repo.dir()));
+    }
 }
