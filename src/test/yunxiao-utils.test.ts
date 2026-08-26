@@ -8,6 +8,7 @@ import {
   isYunxiaoWorkitemImported,
   issueTag,
   messageHasIssueTag,
+  splitValueScoreSection,
 } from "../utils/yunxiao";
 
 function baseTask(extra: Partial<Task> = {}): Task {
@@ -209,5 +210,56 @@ describe("messageHasIssueTag / ensureIssueTagInMessage", () => {
   it("空编号视为无需关联", () => {
     expect(messageHasIssueTag("fix: 任意提交", "")).toBe(true);
     expect(ensureIssueTagInMessage("fix: 任意提交", "")).toBe("fix: 任意提交");
+  });
+});
+
+describe("splitValueScoreSection", () => {
+  it("从中间剥离评分小节并解析核心指数", () => {
+    const text = [
+      "开头总结",
+      "",
+      "## 价值评分（issue-value-scoring · 2026-08-24）",
+      "",
+      "- 核心指数：**12.0** = (2 × 3 × 4) ÷ 2",
+      "",
+      "## 结尾备注",
+      "",
+      "补充说明",
+    ].join("\n");
+    const result = splitValueScoreSection(text);
+    expect(result.comment).toBe("开头总结\n\n## 结尾备注\n\n补充说明");
+    expect(result.scoreSection?.startsWith("## 价值评分")).toBe(true);
+    expect(result.scoreValue).toBe(12);
+  });
+
+  it("解析 Bug 优先指数", () => {
+    const text = [
+      "## 价值评分（issue-value-scoring · 2026-08-24）",
+      "",
+      "- 优先指数：**54.0** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0（无绕行）",
+      "",
+      "- 定级：**P1**（修复成本 4）",
+    ].join("\n");
+    expect(splitValueScoreSection(text).scoreValue).toBe(54);
+  });
+
+  it("无评分小节时原样返回", () => {
+    const result = splitValueScoreSection("只有评论内容");
+    expect(result.comment).toBe("只有评论内容");
+    expect(result.scoreSection).toBeNull();
+    expect(result.scoreValue).toBeNull();
+  });
+
+  it("小节在末尾时评论只保留前文", () => {
+    const text = [
+      "开头总结",
+      "",
+      "## 价值评分（issue-value-scoring · 2026-08-24）",
+      "",
+      "- 核心指数：**3.5** = (1 × 2 × 3) ÷ 2",
+    ].join("\n");
+    const result = splitValueScoreSection(text);
+    expect(result.comment).toBe("开头总结");
+    expect(result.scoreValue).toBe(3.5);
   });
 });

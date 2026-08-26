@@ -3,6 +3,7 @@ import type { AgentType, PermissionMode, Task, YunxiaoWorkitem } from "../types"
 const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
 const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
 const YUNXIAO_WORKITEM_BASE = "https://devops.aliyun.com/projex";
+const VALUE_SCORE_SECTION_HEADER = "## 价值评分";
 
 /** 知识沉淀审核议题的目标项目（云效「知识库图谱」项目；可在 YunxiaoSettings.knowledgeBaseProjectId 覆盖）。 */
 export const YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID = "bc826ccda665f0718511440fac";
@@ -239,4 +240,54 @@ export function ensureIssueTagInMessage(message: string, serialNumber: string): 
   const tag = issueTag(serialNumber);
   if (!tag || messageHasIssueTag(message, serialNumber)) return message;
   return `${message.trimEnd()}\n\n${tag}`;
+}
+
+/** splitValueScoreSection 的返回：评论正文 + 只读评分小节 + 解析出的指数。 */
+export interface SplitValueScoreSection {
+  comment: string;
+  scoreSection: string | null;
+  scoreValue: number | null;
+}
+
+/**
+ * 把回写内容拆成「评论正文」与「价值评分小节」两部分，并解析核心指数（Req）/优先指数（Bug）。
+ * 评分小节从 `## 价值评分` 标题行起，到下一个 `## ` 标题或文本末尾止。
+ */
+export function splitValueScoreSection(text: string): SplitValueScoreSection {
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.startsWith(VALUE_SCORE_SECTION_HEADER));
+  if (start === -1) {
+    return { comment: text.trim(), scoreSection: null, scoreValue: null };
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].startsWith("## ")) {
+      end = i;
+      break;
+    }
+  }
+  const section = lines.slice(start, end).join("\n").trim();
+  const before = lines.slice(0, start).join("\n").trimEnd();
+  const after = lines.slice(end).join("\n").trimStart();
+  const comment = [before, after].filter((part) => part.length > 0).join("\n\n");
+  return {
+    comment,
+    scoreSection: section.length > 0 ? section : null,
+    scoreValue: section.length > 0 ? parseValueScoreIndex(section) : null,
+  };
+}
+
+function parseValueScoreIndex(section: string): number | null {
+  for (const rawLine of section.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const match = line.match(/^-\s*(?:核心指数|优先指数)[:：]\s*(.*)$/);
+    if (!match) continue;
+    const rest = match[1].replace(/\*/g, "").trim();
+    const number = rest.match(/-?\d+(?:\.\d+)?/);
+    if (number) {
+      const value = Number(number[0]);
+      if (Number.isFinite(value)) return value;
+    }
+  }
+  return null;
 }

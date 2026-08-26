@@ -272,6 +272,17 @@ export interface YunxiaoIssueImagesPrepared {
   errors: string[];
 }
 
+/** 云效提交总结回写结果：评论必已发布；价值评分字段写入状态与警告分开返回。 */
+export interface YunxiaoWritebackResult {
+  commentId: string;
+  /** 解析出的评分指数（四舍五入），无评分小节时为 null */
+  scoreValue: number | null;
+  /** 「价值评分」字段是否写入成功 */
+  fieldWritten: boolean;
+  /** 非阻断警告（评分缺失 / 字段未找到 / 字段写入失败） */
+  warning: string | null;
+}
+
 export const PERM_LABELS: Record<PermissionMode, string> = {
   ask: "Ask Permission",
   auto_edit: "Auto-edit",

@@ -13,6 +13,7 @@ import type {
   TaskDisplayWindow,
   FontFamily,
   KnowledgeSuggestion,
+  YunxiaoWritebackResult,
 } from "../types";
 import { TaskPanel } from "./TaskPanel";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
@@ -43,7 +44,7 @@ import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
-import { issueTag } from "../utils/yunxiao";
+import { issueTag, splitValueScoreSection } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useToast } from "./Toast";
@@ -86,6 +87,7 @@ export function ProjectPage({
   onStartYunxiaoDiscussion,
   onGenerateWritebackSummary,
   onWritebackYunxiao,
+  onRetryWritebackScoreField,
   onGenerateKnowledgeSedimentation,
   onCreateKnowledgeIssues,
   onCancelTask,
@@ -169,7 +171,11 @@ export function ProjectPage({
     permissionMode: PermissionMode,
   ) => void;
   onGenerateWritebackSummary: (taskId: string, force?: boolean) => Promise<string>;
-  onWritebackYunxiao: (taskId: string, content: string) => Promise<void>;
+  onWritebackYunxiao: (
+    taskId: string,
+    content: string,
+  ) => Promise<YunxiaoWritebackResult>;
+  onRetryWritebackScoreField: (taskId: string, value: number) => Promise<void>;
   onGenerateKnowledgeSedimentation: (
     taskId: string,
     force?: boolean,
@@ -430,14 +436,35 @@ export function ProjectPage({
     generating: boolean;
     posting: boolean;
     error: string | null;
+    warning: string | null;
+    retryScoreValue: number | null;
+    fieldRetrying: boolean;
+    posted: boolean;
   } | null>(null);
 
   const runWritebackGeneration = useCallback(
     async (taskId: string, force = false) => {
       setWritebackDialog((prev) =>
         prev && prev.taskId === taskId
-          ? { ...prev, generating: true, error: null }
-          : { taskId, preview: "", generating: true, posting: false, error: null },
+          ? {
+              ...prev,
+              generating: true,
+              error: null,
+              warning: null,
+              fieldRetrying: false,
+              posted: false,
+            }
+          : {
+              taskId,
+              preview: "",
+              generating: true,
+              posting: false,
+              error: null,
+              warning: null,
+              retryScoreValue: null,
+              fieldRetrying: false,
+              posted: false,
+            },
       );
       try {
         const summary = await onGenerateWritebackSummary(taskId, force);
@@ -477,10 +504,28 @@ export function ProjectPage({
       prev ? { ...prev, posting: true, error: null } : prev,
     );
     try {
-      await onWritebackYunxiao(writebackDialog.taskId, content);
+      const result = await onWritebackYunxiao(writebackDialog.taskId, content);
       const serial = projectTasks.find((c) => c.id === writebackDialog.taskId)
         ?.yunxiaoSerialNumber;
       showToast(t("yunxiao.writeback.postSuccess", { serial: serial ?? "" }), "success");
+      if (result.warning && result.scoreValue != null && !result.fieldWritten) {
+        // 评论已发布但字段写入失败：留在弹窗里，提供「补写字段」重试入口
+        setWritebackDialog((prev) =>
+          prev
+            ? {
+                ...prev,
+                posting: false,
+                posted: true,
+                warning: result.warning,
+                retryScoreValue: result.scoreValue,
+              }
+            : prev,
+        );
+        return;
+      }
+      if (result.warning) {
+        showToast(result.warning, "warning");
+      }
       setWritebackDialog(null);
     } catch (err) {
       setWritebackDialog((prev) =>
@@ -488,6 +533,31 @@ export function ProjectPage({
       );
     }
   }, [writebackDialog, onWritebackYunxiao, projectTasks, showToast, t]);
+
+  const retryWritebackScoreField = useCallback(async () => {
+    if (!writebackDialog || writebackDialog.retryScoreValue == null) return;
+    setWritebackDialog((prev) =>
+      prev ? { ...prev, fieldRetrying: true, warning: null } : prev,
+    );
+    try {
+      await onRetryWritebackScoreField(
+        writebackDialog.taskId,
+        writebackDialog.retryScoreValue,
+      );
+      showToast(t("yunxiao.writeback.fieldRetried"), "success");
+      setWritebackDialog(null);
+    } catch (err) {
+      setWritebackDialog((prev) =>
+        prev
+          ? {
+              ...prev,
+              fieldRetrying: false,
+              warning: t("yunxiao.writeback.fieldRetryFailed", { error: String(err) }),
+            }
+          : prev,
+      );
+    }
+  }, [writebackDialog, onRetryWritebackScoreField, showToast, t]);
 
   // ── 知识沉淀弹窗：headless 提取候选 → 逐条编辑/勾选 → 批量创建云效审核议题 ──
   const [knowledgeDialog, setKnowledgeDialog] = useState<{
@@ -1086,19 +1156,33 @@ export function ProjectPage({
       {writebackDialog &&
         (() => {
           const writebackTask = projectTasks.find((c) => c.id === writebackDialog.taskId);
+          const split = splitValueScoreSection(writebackDialog.preview);
           return (
             <YunxiaoWritebackDialog
               serialNumber={writebackTask?.yunxiaoSerialNumber ?? ""}
               title={writebackTask?.name ?? writebackTask?.prompt.slice(0, 80) ?? ""}
-              preview={writebackDialog.preview}
+              preview={split.comment}
+              scoreSection={split.scoreSection}
               generating={writebackDialog.generating}
               posting={writebackDialog.posting}
               error={writebackDialog.error}
+              warning={writebackDialog.warning}
+              fieldRetrying={writebackDialog.fieldRetrying}
+              retryScoreValue={writebackDialog.retryScoreValue}
+              posted={writebackDialog.posted}
               onPreviewChange={(value) =>
                 setWritebackDialog((prev) =>
-                  prev ? { ...prev, preview: value } : prev,
+                  prev
+                    ? {
+                        ...prev,
+                        preview: split.scoreSection
+                          ? `${value}\n\n${split.scoreSection}`
+                          : value,
+                      }
+                    : prev,
                 )
               }
+              onRetryField={() => void retryWritebackScoreField()}
               onRegenerate={() => void runWritebackGeneration(writebackDialog.taskId, true)}
               onPost={() => void postWriteback()}
               onClose={() => setWritebackDialog(null)}

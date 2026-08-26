@@ -810,6 +810,15 @@ pub async fn generate_yunxiao_writeback_summary(
         }
     }
 
+    // 重新生成（force=true）会跳过草稿走 headless 润色，这里先把草稿里的
+    // 「价值评分」小节保留下来，生成后原样拼回（评分只读、随议题字段回写，不随评论发布）。
+    let preserved_score_section = crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
+        .ok()
+        .flatten()
+        .and_then(|draft| {
+            crate::value_score::extract_value_score_section(&draft).map(str::to_string)
+        });
+
     let cwd = if let Some(repo) = repo_path.as_deref().filter(|r| !r.trim().is_empty()) {
         let repo_trim = repo.trim();
         let repo_for_validation = repo_trim.to_string();
@@ -879,9 +888,13 @@ pub async fn generate_yunxiao_writeback_summary(
         return Err(format!("Agent failed: {}{}", stderr, stdout));
     }
     let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(extract_summary(&raw).unwrap_or_else(|| {
+    let summary = extract_summary(&raw).unwrap_or_else(|| {
         build_fallback_summary(&serial_number, task_name.trim(), &commits, &diff_stat)
-    }))
+    });
+    Ok(crate::value_score::reappend_value_score_section(
+        &summary,
+        preserved_score_section.as_deref(),
+    ))
 }
 
 // ── 知识沉淀（云效议题讨论完成后，提取图谱增量并生成审核议题候选）──────────────
