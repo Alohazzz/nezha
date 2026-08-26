@@ -386,7 +386,7 @@ export function BuildPanel({
     setError("");
     setStatusText("分析中…");
     try {
-      await invoke("analyze_build", { projectPath, options: {} });
+      await invoke("analyze_build", { projectPath, options: { selected: Array.from(selectedRef.current) } });
       await load();
       setStatusText("计划已生成");
     } catch (e) {
@@ -533,6 +533,7 @@ export function BuildPanel({
     const channel = new Channel<string>();
     channel.onmessage = (data) => appendLog(data);
     const options = {
+      selected: Array.from(selectedRef.current),
       include,
       continue_on_error: true,
       skip_external_check: config?.skip_external_check ?? false,

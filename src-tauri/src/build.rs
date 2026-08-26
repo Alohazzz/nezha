@@ -112,6 +112,9 @@ pub struct RunBuildOptions {
     pub skip_restore: bool,
     #[serde(default)]
     pub skip_clean: bool,
+    /// Selected git repo names (build scope). Empty = full solution.
+    #[serde(default)]
+    pub selected: Vec<String>,
 }
 
 fn validate_project_path(project_path: &str) -> Result<(), String> {
@@ -690,6 +693,9 @@ pub async fn run_build(
     if !cfg.platform.is_empty() {
         cmd.arg("-Platform").arg(&cfg.platform);
     }
+    if !options.selected.is_empty() {
+        cmd.arg("-SelectedRepos").arg(options.selected.join(","));
+    }
     let max_parallel = cfg.max_parallel.clamp(1, 8);
     cmd.arg("-MaxParallel").arg(max_parallel.to_string());
     cmd.current_dir(&project_path)
@@ -802,6 +808,9 @@ pub async fn analyze_build(
         }
         if !cfg.platform.is_empty() {
             cmd.arg("-Platform").arg(&cfg.platform);
+        }
+        if !options.selected.is_empty() {
+            cmd.arg("-SelectedRepos").arg(options.selected.join(","));
         }
         cmd.current_dir(&project_path);
         let out = cmd.output().map_err(|e| format!("analyze failed: {e}"))?;
