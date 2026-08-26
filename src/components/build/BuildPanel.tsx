@@ -367,8 +367,12 @@ export function BuildPanel({
       setStatusText(`切换 ${repo.name} → ${branch}…`);
       try {
         await invoke("build_checkout_branch", { projectPath, repoPath: repo.path, branch });
-        const fresh = await invoke<BuildRepo[]>("discover_build_repos", { projectPath });
-        setRepos(fresh);
+        // 只原地更新被切换的仓库，不重跑全量仓库发现：
+        // discover_build_repos 会把所有仓库的所有分支重新加载一遍，且未走 load 的 visible 过滤，
+        // 会让隐藏的子模块（如 DrugInOut/Term 之外的那些）也跟着重新冒出来。
+        setRepos((prev) =>
+          prev.map((r) => (r.path === repo.path ? { ...r, branch } : r)),
+        );
         setStatusText(`已切换到 ${repo.name}@${branch}`);
       } catch (e) {
         setError(String(e));
