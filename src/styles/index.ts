@@ -1,6 +1,7 @@
 import type React from "react";
 
 import { common } from "./common";
+import { build } from "./build";
 import { dialogs } from "./dialogs";
 import { font } from "./font";
 import { gitDiff } from "./git-diff";
@@ -16,6 +17,7 @@ import { yunxiao } from "./yunxiao";
 
 const s = {
   ...layout,
+  ...build,
   ...panels,
   ...terminal,
   ...dialogs,
@@ -34,6 +36,7 @@ export default s;
 
 export {
   common,
+  build,
   dialogs,
   font,
   gitDiff,

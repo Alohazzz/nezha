@@ -34,6 +34,7 @@ import {
 } from "./git-diff/diffReview";
 import { GitChanges } from "./GitChanges";
 import { GitHistory } from "./GitHistory";
+import { BuildPanel } from "./build/BuildPanel";
 import { GitDiffViewer } from "./GitDiffViewer";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
@@ -976,7 +977,7 @@ export function ProjectPage({
         )}
       </div>
 
-      {rightPanel && (
+      {rightPanel && rightPanel !== "build" && (
         <div style={s.rightPanelWrap}>
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           {rightPanel === "files" && (
@@ -1019,6 +1020,37 @@ export function ProjectPage({
           )}
         </div>
       )}
+
+      {/* BuildPanel 始终挂载（非激活时隐藏），避免切换右面板后状态丢失 */}
+      <div
+        style={{
+          ...s.rightPanelWrap,
+          display: rightPanel === "build" ? "flex" : "none",
+        }}
+      >
+        <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
+        <ErrorBoundary label="构建">
+          <BuildPanel
+            projectPath={project.path}
+            width={rightPanelWidth}
+            onCreateFixTask={(t) =>
+              onSubmitTask({
+                prompt: t.prompt,
+                agent: t.agent as AgentType,
+                permissionMode: t.permissionMode as PermissionMode,
+                model: undefined,
+                reasoningEffort: undefined,
+                images: [],
+                texts: [],
+                immediate: true,
+                launchMode: t.launchMode,
+                baseBranch: t.baseBranch,
+                repoPath: t.repoPath,
+              })
+            }
+          />
+        </ErrorBoundary>
+      </div>
 
       <RightToolbar
         activePanel={rightPanel}

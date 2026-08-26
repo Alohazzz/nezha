@@ -8,6 +8,7 @@ use usage::CodexRpcClient;
 mod agent_assist;
 mod analytics;
 mod app_settings;
+mod build;
 mod config;
 mod drafts;
 mod dsh;
@@ -407,6 +408,23 @@ pub fn run() {
             git::remove_task_worktree,
             git::worktree_diff_stats,
             analytics::read_session_metrics,
+            build::read_build_config,
+            build::write_build_config,
+            build::discover_build_repos,
+            build::build_pull_repos,
+            build::build_checkout_branch,
+            build::read_build_state,
+            build::write_build_state,
+            build::read_build_plan,
+            build::read_build_output_progress,
+            build::read_build_fix_status,
+            build::write_build_fix_status,
+            build::export_build_errors,
+            build::run_build,
+            build::analyze_build,
+            build::compute_incremental_include,
+            build::cancel_build,
+            build::get_running_builds,
             session::read_session_messages,
             session::export_session_markdown,
             config::init_project_config,
