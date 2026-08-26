@@ -6,6 +6,21 @@ use std::process::{Output, Stdio};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+fn kill_process_tree(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+    }
+}
+
 /// 拼装 headless agent 子进程参数（claude -p / codex exec）。
 /// 轻量模型与思考深度来自应用级设置：None 时不传对应旗标，跟随 CLI 默认。
 fn build_headless_agent_args(
@@ -13,6 +28,7 @@ fn build_headless_agent_args(
     prompt: &str,
     model: Option<&str>,
     reasoning_effort: Option<&str>,
+    allow_read_tools: bool,
 ) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
     if agent == "codex" {
@@ -37,19 +53,13 @@ fn build_headless_agent_args(
         args.push(prompt.into());
     } else {
         args.extend(
-            [
-                "-p",
-                prompt,
-                "--output-format",
-                "text",
-                "--permission-mode",
-                "plan",
-                "--tools",
-                "",
-                "--no-session-persistence",
-            ]
-            .map(OsString::from),
+            ["-p", prompt, "--output-format", "text", "--permission-mode", "plan"]
+                .map(OsString::from),
         );
+        if !allow_read_tools {
+            args.extend(["--tools", ""].map(OsString::from));
+        }
+        args.push("--no-session-persistence".into());
         if let Some(model) = model {
             args.push("--model".into());
             args.push(model.into());
@@ -128,6 +138,8 @@ async fn run_headless_agent_with_timeout(
     project_path: &str,
     prompt: &str,
     timeout_dur: Duration,
+    allow_read_tools: bool,
+    reasoning_effort_override: Option<&str>,
 ) -> Result<Output, String> {
     let settings = crate::app_settings::load_settings_internal();
     let launch = crate::app_settings::get_agent_launch_spec_from_settings(&settings, agent);
@@ -136,11 +148,13 @@ async fn run_headless_agent_with_timeout(
 
     let mut cmd = tokio::process::Command::new(&launch.program);
     crate::subprocess::configure_background_tokio_command(&mut cmd);
+    let reasoning = reasoning_effort_override.or(light.reasoning_effort.as_deref());
     cmd.args(build_headless_agent_args(
         agent,
         prompt,
         light.model.as_deref(),
-        light.reasoning_effort.as_deref(),
+        reasoning,
+        allow_read_tools,
     ));
     cmd.current_dir(project_path);
     cmd.stdin(Stdio::null());
@@ -175,6 +189,9 @@ async fn run_headless_agent_with_timeout(
         Ok(result) => result.map_err(|e| format!("Agent wait error: {}", e))?,
         Err(_) => {
             let _ = child.start_kill();
+            if let Some(pid) = child.id() {
+                kill_process_tree(pid);
+            }
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             stdout_task.abort();
             stderr_task.abort();
@@ -363,7 +380,7 @@ pub async fn generate_task_name(
 
     // 4. 调用 agent 子进程（kill-on-timeout）
     let output =
-        run_headless_agent_with_timeout(&agent, &project_path, &full_prompt, NAMING_TIMEOUT)
+        run_headless_agent_with_timeout(&agent, &project_path, &full_prompt, NAMING_TIMEOUT, false, None)
             .await?;
 
     if !output.status.success() {
@@ -396,6 +413,15 @@ const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：�
 
 const KNOWLEDGE_GRAPH_INSTRUCTION: &str = "另外，开始前先使用 his-knowledge-graph 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关 HIS 模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
 
+/// 价值评分技能指令：讨论/分析得出结论后，用 issue-value-scoring 技能产出「价值评分」
+/// 小节并追加到 discussion.md，供回写云效写「价值评分」字段（Req 核心指数 / Bug 优先指数）。
+const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论后，使用 issue-value-scoring 技能对议题做价值评分，并把 `## 价值评分` 小节追加到 discussion.md 末尾（供回写云效写「价值评分」字段，Req 写核心指数、Bug 写优先指数）。评分小节固定格式如下（按议题类别只输出对应的一行指数，其余行不要输出）：
+## 价值评分
+- 议题类别：Req（或 Bug）
+- 核心指数：**50** = (价值 4 × 机会 5 × 影响 5) ÷ 工作量等级 2
+- 优先指数：**54** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0
+- 一句话结论：高价值低成本，值得立即做。"#;
+
 /// 知识沉淀提取规则（替代已废弃的 knowledge-sedimentation 技能，内嵌到提示词）。
 /// 讨论提示词与 headless 降级路径共用，保证判定标准一致。
 const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
@@ -417,6 +443,7 @@ fn draft_instructions(task_id: &str) -> String {
 1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的「修改方案汇总」：
    - 讨论/分析得出结论后立即创建并写入；后续结论更新时整体覆盖写，只保留最新版。
    - 内容需自包含：议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、分析结论、最终修改方案、验证方式与结果、关联 commit（如已提交）。
+   - 末尾追加 `## 价值评分` 小节（见上方价值评分指令）：Req 写核心指数、Bug 写优先指数，并附一句话结论；回写云效时该小节写入议题「价值评分」字段，不随评论发布。
    - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。
 
 2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
@@ -436,7 +463,7 @@ pub fn issue_discussion_instructions(category: &str, task_id: &str) -> Option<St
         _ => return None,
     };
     Some(format!(
-        "{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}\n\n{draft}",
+        "{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}\n{VALUE_SCORE_INSTRUCTION}\n\n{draft}",
         draft = draft_instructions(task_id)
     ))
 }
@@ -558,7 +585,7 @@ pub async fn generate_issue_supplement(
     let prompt = build_supplement_prompt(kind, &truncated, link.trim());
 
     let output =
-        run_headless_agent_with_timeout(&agent, &project_path, &prompt, SUPPLEMENT_TIMEOUT)
+        run_headless_agent_with_timeout(&agent, &project_path, &prompt, SUPPLEMENT_TIMEOUT, false, None)
             .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -844,7 +871,7 @@ pub async fn generate_yunxiao_writeback_summary(
         &commits,
         &diff_stat,
     );
-    let output = run_headless_agent_with_timeout(&agent, &project_path, &prompt, WRITEBACK_TIMEOUT)
+    let output = run_headless_agent_with_timeout(&agent, &project_path, &prompt, WRITEBACK_TIMEOUT, false, None)
         .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1103,6 +1130,8 @@ pub async fn generate_knowledge_sedimentation(
         &project_path,
         &prompt,
         SEDIMENTATION_TIMEOUT,
+        false,
+        None,
     )
     .await?;
     if !output.status.success() {
@@ -1248,6 +1277,8 @@ mod tests {
         assert!(text.contains("grilling"));
         assert!(text.contains("What/Why/Scope"));
         assert!(text.contains("his-knowledge-graph"));
+        assert!(text.contains("issue-value-scoring"));
+        assert!(text.contains("## 价值评分"));
         assert!(text.contains(".nezha/drafts/task-123/discussion.md"));
         assert!(text.contains(".nezha/drafts/task-123/knowledge.json"));
         assert!(text.contains("知识沉淀规则"));
@@ -1259,6 +1290,8 @@ mod tests {
         assert!(text.contains("diagnosing-bugs"));
         assert!(text.contains("变红"));
         assert!(text.contains("his-knowledge-graph"));
+        assert!(text.contains("issue-value-scoring"));
+        assert!(text.contains("优先指数"));
         assert!(text.contains("discussion.md"));
     }
 
