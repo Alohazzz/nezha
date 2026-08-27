@@ -10,7 +10,17 @@ import type {
   YunxiaoIssueImagesPrepared,
   YunxiaoWorkitem,
 } from "../../types";
-import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
+import {
+  isAgentEnabled,
+  firstEnabledAgent,
+  cycleEnabledAgent,
+  type AgentEnabledState,
+} from "../../types";
+import {
+  EMPTY_YUNXIAO_SETTINGS,
+  type AppSettings,
+  type YunxiaoSettings,
+} from "../app-settings/types";
 import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
@@ -31,7 +41,6 @@ import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
 import s from "../../styles";
 
-const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 /** 表单草稿防抖落盘间隔（AGENTS.md：同一 projectId 连续写入需 300-500ms 防抖）。 */
 const DRAFT_PERSIST_DEBOUNCE_MS = 400;
@@ -92,6 +101,7 @@ export function YunxiaoIssueDetailView({
   const [permission, setPermission] = useState<PermissionMode>(
     () => getLastYunxiaoPermission(task.projectId) ?? task.permissionMode,
   );
+  const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
   // 待办切换时重置全部议题相关状态（否则组件实例复用导致表单/定稿态串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
   const originalPromptRef = useRef(task.yunxiaoSupplement?.originalPrompt ?? task.prompt);
@@ -106,6 +116,12 @@ export function YunxiaoIssueDetailView({
     setPermission(getLastYunxiaoPermission(task.projectId) ?? task.permissionMode);
     setAgent(getLastYunxiaoAgent(task.projectId) ?? task.agent);
   }
+
+  // 若当前 Agent 已禁用（例如上次记忆/任务自身指向禁用 Agent），回退到第一个启用的 Agent。
+  useEffect(() => {
+    if (isAgentEnabled(agentSettings, agent)) return;
+    setAgent(firstEnabledAgent(agentSettings));
+  }, [agent, agentSettings]);
 
   // ── 草稿防抖落盘 ────────────────────────────────────────────────────────────
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -170,10 +186,11 @@ export function YunxiaoIssueDetailView({
     let cancelled = false;
     (async () => {
       try {
-        const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+        const appSettings = await invoke<AppSettings>("load_app_settings");
         if (cancelled) return;
         const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
         setSettings(yunxiao);
+        setAgentSettings(appSettings);
         if (!yunxiao.token || !yunxiao.organizationId || !workitemId) {
           return;
         }
@@ -217,11 +234,11 @@ export function YunxiaoIssueDetailView({
 
   const cycleAgent = useCallback(() => {
     setAgent((prev) => {
-      const next = AGENTS[(AGENTS.indexOf(prev) + 1) % AGENTS.length];
+      const next = cycleEnabledAgent(prev, agentSettings);
       setLastYunxiaoAgent(task.projectId, next);
       return next;
     });
-  }, [task.projectId]);
+  }, [agentSettings, task.projectId]);
 
   const cyclePermission = useCallback(() => {
     setPermission((prev) => {

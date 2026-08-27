@@ -84,6 +84,10 @@ export interface AppSettings {
   codex_path: string;
   dsh_path: string;
   dsh_profile: string;
+  /** 是否启用该 Agent：禁用后不出现在「发起/运行任务」的 Agent 选择器中，但仍保留设置页入口 */
+  claude_enabled: boolean;
+  codex_enabled: boolean;
+  dsh_enabled: boolean;
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
   claude_force_default_tui: boolean;
@@ -114,6 +118,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   codex_path: "",
   dsh_path: "",
   dsh_profile: "cc-tui",
+  claude_enabled: true,
+  codex_enabled: true,
+  dsh_enabled: true,
   send_shortcut: DEFAULT_SEND_SHORTCUT,
   terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,
   claude_force_default_tui: true,

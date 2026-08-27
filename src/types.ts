@@ -301,6 +301,53 @@ export function permissionModeLabel(
   return PERM_LABELS[mode];
 }
 
+/** Agent 启用状态的最小形状（兼容 AppSettings 及后端返回的子集）。 */
+export interface AgentEnabledState {
+  claude_enabled?: boolean;
+  codex_enabled?: boolean;
+  dsh_enabled?: boolean;
+}
+
+/** 「发起/运行任务」的 Agent 下拉展示顺序（保持既有视觉排序）。 */
+export const AGENT_DISPLAY_ORDER: AgentType[] = ["claude", "codex", "dsh"];
+/** 默认/回退 Agent 的优先级：Codex 优先，其次 Claude，最后 DSH。 */
+export const AGENT_FALLBACK_ORDER: AgentType[] = ["codex", "claude", "dsh"];
+
+export function isAgentEnabled(
+  settings: AgentEnabledState | null | undefined,
+  agent: AgentType,
+): boolean {
+  if (!settings) return true;
+  switch (agent) {
+    case "claude":
+      return settings.claude_enabled !== false;
+    case "codex":
+      return settings.codex_enabled !== false;
+    default:
+      return settings.dsh_enabled !== false;
+  }
+}
+
+export function enabledAgentTypes(settings: AgentEnabledState | null | undefined): AgentType[] {
+  return AGENT_DISPLAY_ORDER.filter((agent) => isAgentEnabled(settings, agent));
+}
+
+export function firstEnabledAgent(settings: AgentEnabledState | null | undefined): AgentType {
+  return AGENT_FALLBACK_ORDER.find((agent) => isAgentEnabled(settings, agent)) ?? "codex";
+}
+
+/** 当前 Agent 已禁用时跳到第一个启用项；否则按展示顺序取下一个启用项。 */
+export function cycleEnabledAgent(
+  current: AgentType,
+  settings: AgentEnabledState | null | undefined,
+): AgentType {
+  const enabled = enabledAgentTypes(settings);
+  if (enabled.length === 0) return current;
+  const index = enabled.indexOf(current);
+  if (index === -1) return enabled[0];
+  return enabled[(index + 1) % enabled.length];
+}
+
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: "Todo",
   pending: "Pending",

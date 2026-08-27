@@ -19,7 +19,6 @@ import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
 
-const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
 function agentLabel(agent: AgentType): string {
@@ -86,6 +85,7 @@ export function AgentPermSelector({
   saveAsTodoDisabledReason,
   sendShortcutKeys,
   modelSelector,
+  enabledAgents,
   onSetAgent,
   onSetPermMode,
   onTogglePlanMode,
@@ -100,6 +100,7 @@ export function AgentPermSelector({
   saveAsTodoDisabledReason?: string;
   sendShortcutKeys: string[];
   modelSelector?: ReactNode;
+  enabledAgents: AgentType[];
   onSetAgent: (agent: AgentType) => void;
   onSetPermMode: (mode: PermissionMode) => void;
   onTogglePlanMode: () => void;
@@ -200,7 +201,7 @@ export function AgentPermSelector({
           <Select.Portal>
             <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
               <Select.Viewport>
-                {AGENTS.map((item) => (
+                {enabledAgents.map((item) => (
                   <Select.Item
                     key={item}
                     value={item}

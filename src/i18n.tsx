@@ -137,6 +137,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.claudeForceDefaultTuiToggleLabel": "Always launch with tui=default",
     "appSettings.claudeForceDefaultTuiHint":
       'Inject --settings with tui="default" so Claude uses the classic main-screen renderer instead of fullscreen. Recommended to avoid fullscreen side-effects in some terminals (CJK clipboard corruption, mouse-wheel hijacking). Requires Claude Code v2.1.110+.',
+    "appSettings.agentEnabled": "Enable Agent",
+    "appSettings.agentEnabledToggleLabel": "Use this agent",
+    "appSettings.agentEnabledHint":
+      "Disabled agents are hidden from the agent picker in new-task and other launch entry points, but stay configurable here.",
+    "appSettings.agentEnabledLastOne": "At least one agent must stay enabled.",
     "appSettings.nezhaDescription": "Desktop task manager for AI coding agents",
     "appSettings.version": "Version",
     "appSettings.github": "GitHub",
@@ -957,6 +962,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.claudeForceDefaultTuiToggleLabel": "始终以 tui=default 启动",
     "appSettings.claudeForceDefaultTuiHint":
       '通过 --settings 注入 tui="default"，强制 Claude 走 classic 主屏渲染，避开 fullscreen 在部分终端的副作用（CJK 复制乱码、滚轮被劫持等）。需要 Claude Code v2.1.110+。',
+    "appSettings.agentEnabled": "启用 Agent",
+    "appSettings.agentEnabledToggleLabel": "使用此 Agent",
+    "appSettings.agentEnabledHint":
+      "禁用后将从新建任务等发起入口的 Agent 列表中隐藏，但仍可在本页重新启用。",
+    "appSettings.agentEnabledLastOne": "至少需要保留一个启用的 Agent。",
     "appSettings.nezhaDescription": "轻量级跨平台 AI IDE",
     "appSettings.version": "版本",
     "appSettings.github": "GitHub",

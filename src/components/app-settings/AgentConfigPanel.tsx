@@ -5,6 +5,7 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { AgentModelCatalogSection } from "./AgentModelCatalogSection";
 import { AgentPathSection } from "./AgentPathSection";
+import { AgentEnabledSection } from "./AgentEnabledSection";
 import { LightModelSection } from "./LightModelSection";
 import type { AgentKey } from "./types";
 import type { ThemeVariant } from "../../types";
@@ -149,6 +150,7 @@ export function AgentConfigPanel({
       <div style={s.agentConfigBody}>
         {!editing && (
           <>
+            <AgentEnabledSection agentKey={agentKey} />
             <AgentPathSection agentKey={agentKey} />
             <AgentModelCatalogSection agentKey={agentKey} />
             <LightModelSection agentKey={agentKey} />

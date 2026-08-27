@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { TriangleAlert, Sparkles } from "lucide-react";
 import type { Project, AgentType, PermissionMode, GitRoot } from "../types";
+import { isAgentEnabled, firstEnabledAgent, enabledAgentTypes } from "../types";
 import {
   APP_SETTINGS_CHANGED_EVENT,
   DEFAULT_APP_SETTINGS,
@@ -105,7 +106,7 @@ export function NewTaskView({
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
-  const [agent, setAgent] = useState<AgentType>(initialDraft?.agent ?? "claude");
+  const [agent, setAgent] = useState<AgentType>(initialDraft?.agent ?? "codex");
   const [permMode, setPermMode] = useState<PermissionMode>(initialDraft?.permMode ?? "ask");
   const [model, setModel] = useState<string | undefined>(initialDraft?.model);
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(
@@ -265,6 +266,13 @@ export function NewTaskView({
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
+
+  // 若当前 Agent 已被禁用（例如项目 config 默认/上次草稿指向禁用的 Agent），
+  // 自动回退到第一个启用的 Agent，避免选择器出现“选中但没有选项”的悬空态。
+  useEffect(() => {
+    if (isAgentEnabled(appSettings, agent)) return;
+    setAgent(firstEnabledAgent(appSettings));
+  }, [appSettings, agent]);
 
   const [hasMdFile, setHasMdFile] = useState<boolean | null>(null);
 
@@ -636,6 +644,7 @@ export function NewTaskView({
         {/* Toolbar */}
         <AgentPermSelector
           agent={agent}
+          enabledAgents={enabledAgentTypes(appSettings)}
           permMode={permMode}
           planMode={planMode}
           isEmpty={isEmpty}

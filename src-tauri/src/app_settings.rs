@@ -51,6 +51,10 @@ fn default_system_notifications() -> bool {
     true
 }
 
+fn default_agent_enabled() -> bool {
+    true
+}
+
 /// scrollback 必须在 [500, 5000] 之间且为 500 的倍数；越界或非整步则就近 snap。
 fn clamp_terminal_scrollback(value: u32) -> u32 {
     let clamped = value.clamp(500, 5000);
@@ -158,6 +162,14 @@ pub struct AppSettings {
     pub dsh_path: String,
     #[serde(default = "default_dsh_profile")]
     pub dsh_profile: String,
+    /// 是否启用该 Agent：禁用后不再出现在「发起/运行任务」的 Agent 选择器中，
+    /// 但仍保留设置页入口以便重新启用（至少保持一个启用）。
+    #[serde(default = "default_agent_enabled")]
+    pub claude_enabled: bool,
+    #[serde(default = "default_agent_enabled")]
+    pub codex_enabled: bool,
+    #[serde(default = "default_agent_enabled")]
+    pub dsh_enabled: bool,
     #[serde(default = "default_send_shortcut")]
     pub send_shortcut: String,
     #[serde(default = "default_shift_enter_newline")]
@@ -207,6 +219,9 @@ impl Default for AppSettings {
             codex_path: String::new(),
             dsh_path: String::new(),
             dsh_profile: default_dsh_profile(),
+            claude_enabled: default_agent_enabled(),
+            codex_enabled: default_agent_enabled(),
+            dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
             claude_force_default_tui: default_claude_force_default_tui(),
@@ -628,6 +643,9 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         } else {
             settings.dsh_profile
         },
+        claude_enabled: settings.claude_enabled,
+        codex_enabled: settings.codex_enabled,
+        dsh_enabled: settings.dsh_enabled,
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
         claude_force_default_tui: settings.claude_force_default_tui,
@@ -677,6 +695,9 @@ fn load_settings_unlocked() -> AppSettings {
             codex_path: detect_path("codex"),
             dsh_path: detect_path("dsh"),
             dsh_profile: default_dsh_profile(),
+            claude_enabled: default_agent_enabled(),
+            codex_enabled: default_agent_enabled(),
+            dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
             claude_force_default_tui: default_claude_force_default_tui(),
@@ -789,6 +810,40 @@ pub async fn save_dsh_settings(dsh_path: String, dsh_profile: String) -> Result<
         let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
         atomic_write(&path, &raw)?;
         Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 按 Agent 启用/禁用。禁用时严禁关掉最后一个启用的 Agent，否则发起任务的选择器会为空。
+#[tauri::command]
+pub async fn save_agent_enabled(agent: String, enabled: bool) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+
+        let enabled_count = [
+            settings.claude_enabled,
+            settings.codex_enabled,
+            settings.dsh_enabled,
+        ]
+        .iter()
+        .filter(|&&value| value)
+        .count();
+
+        let field = match agent.as_str() {
+            "claude" => &mut settings.claude_enabled,
+            "codex" => &mut settings.codex_enabled,
+            "dsh" => &mut settings.dsh_enabled,
+            _ => return Err(format!("Unsupported agent: {}", agent)),
+        };
+
+        if !enabled && *field && enabled_count <= 1 {
+            return Err("At least one agent must remain enabled.".to_string());
+        }
+
+        *field = enabled;
+        save_settings_unlocked(settings)
     })
     .await
     .map_err(|e| e.to_string())?
