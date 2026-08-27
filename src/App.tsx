@@ -1719,9 +1719,6 @@ function App() {
   async function handleProcessBackfillDraft(sourceTask: Task): Promise<void> {
     const project = projects.find((p) => p.id === sourceTask.projectId);
     if (!project) return;
-    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
-    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
-    if (!yunxiao.token || !yunxiao.organizationId || !yunxiao.projectId) return;
 
     const effectivePath = sourceTask.worktreePath ?? project.path;
     const draft = await invoke<BackfillIssueRequest | null>("read_backfill_draft", {
@@ -1729,6 +1726,11 @@ function App() {
       taskId: sourceTask.id,
     });
     if (!draft) return;
+
+    // 检出草稿后才读云效设置（避免每个活跃任务反复 invoke）。
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    if (!yunxiao.token || !yunxiao.organizationId || !yunxiao.projectId) return;
 
     try {
       const created = await invoke<{
