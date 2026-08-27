@@ -424,7 +424,7 @@ const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论�
 
 /// 补录议题技能指令：讨论/执行中发现需要新立项的问题时，提示用户手工调用
 /// `yunxiao-backfill-issue` 技能补录议题（Skill 负责盘问，Nezha 持有 token 创建）。
-const BACKFILL_SKILL_INSTRUCTION: &str = "此外，在讨论/执行过程中，如果发现一个不属于当前议题、需要单独新立项的问题，可以提示用户手工调用 yunxiao-backfill-issue 技能补录议题：它会总结上下文、判定缺陷/需求、按模板盘问并生成预览，确认后由 Nezha 创建云效议题并自动生成绑定待办。不要未经用户确认就自动立项。";
+const BACKFILL_SKILL_INSTRUCTION: &str = "此外，在讨论/执行过程中，如果发现一个不属于当前议题、需要单独新立项的问题，可以提示用户手工调用 yunxiao-backfill-issue 技能补录议题：它会总结上下文、判定缺陷/需求、按模板盘问并生成预览，确认后由 Nezha 创建云效议题并自动生成绑定待办。不要未经用户确认就自动立项。\n写补录请求文件 backfill-issue.json 时，目录名必须是你当前任务 id（读取环境变量 $NEZHA_TASK_ID，禁止自造 task_id），即 `.nezha/drafts/{NEZHA_TASK_ID}/backfill-issue.json`，与 discussion.md / knowledge.json 放同一目录；否则 Nezha 的补录侦测匹配不到本任务，不会创建议题与待办。";
 
 /// 知识沉淀提取规则（替代已废弃的 knowledge-sedimentation 技能，内嵌到提示词）。
 /// 讨论提示词与 headless 降级路径共用，保证判定标准一致。
@@ -1299,6 +1299,10 @@ mod tests {
         assert!(text.contains(".nezha/drafts/task-123/discussion.md"));
         assert!(text.contains(".nezha/drafts/task-123/knowledge.json"));
         assert!(text.contains("知识沉淀规则"));
+        // 补录议题落盘必须使用真实任务 id（环境变量），不允许自造 task_id。
+        assert!(text.contains("NEZHA_TASK_ID"));
+        assert!(text.contains(".nezha/drafts/{NEZHA_TASK_ID}/backfill-issue.json"));
+        assert!(text.contains("禁止自造"));
     }
 
     #[test]
@@ -1412,8 +1416,13 @@ mod tests {
 
     #[test]
     fn headless_args_claude_include_light_model_and_effort() {
-        let args =
-            build_headless_agent_args("claude", "prompt text", Some("fast-model"), Some("low"));
+        let args = build_headless_agent_args(
+            "claude",
+            "prompt text",
+            Some("fast-model"),
+            Some("low"),
+            false,
+        );
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
         assert!(args.windows(2).any(|w| w == ["--effort", "low"]));
@@ -1422,8 +1431,13 @@ mod tests {
 
     #[test]
     fn headless_args_codex_include_light_model_and_effort() {
-        let args =
-            build_headless_agent_args("codex", "prompt text", Some("fast-model"), Some("high"));
+        let args = build_headless_agent_args(
+            "codex",
+            "prompt text",
+            Some("fast-model"),
+            Some("high"),
+            false,
+        );
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
         assert!(
@@ -1438,7 +1452,7 @@ mod tests {
 
     #[test]
     fn headless_args_without_light_config_match_previous_flags() {
-        let args = build_headless_agent_args("claude", "prompt text", None, None);
+        let args = build_headless_agent_args("claude", "prompt text", None, None, false);
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(
             args,
@@ -1455,7 +1469,7 @@ mod tests {
             ]
         );
 
-        let args = build_headless_agent_args("codex", "prompt text", None, None);
+        let args = build_headless_agent_args("codex", "prompt text", None, None, false);
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(
             args,

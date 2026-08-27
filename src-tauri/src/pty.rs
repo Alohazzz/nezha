@@ -278,14 +278,21 @@ fn setup_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", "truecolor");
 }
 
-/// 注入 Nezha hook 守卫所需的环境变量。
-/// hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作,
-/// 用户在 Nezha 之外手动跑 agent 时这些变量缺失,脚本立即 exit 0。
-fn setup_nezha_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str) {
-    if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
-        cmd.env("NEZHA_TASK_ID", task_id);
-        cmd.env("NEZHA_EVENT_DIR", dir.to_string_lossy().as_ref());
-        cmd.env("NEZHA_AGENT", agent);
+/// 向 Agent 进程注入 Nezha 上下文。
+/// - `NEZHA_TASK_ID` / `NEZHA_AGENT`：任何启动都注入，供 Agent 识别当前任务 id ——
+///   backfill 补录议题与工作产物草稿（`.nezha/drafts/<taskId>/`）都依赖它，避免
+///   Agent 因拿不到真实 task_id 而自造目录名导致 Nezha 侦测匹配不到。
+/// - `NEZHA_EVENT_DIR`：仅 hook 可信时注入事件上报目录，避免旧版但已安装 hook 的
+///   agent 与轮询会话发现并行重复上报（见 run_task / resume_task / fork 注释）。
+///   hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作，缺 EVENT_DIR 时
+///   脚本内部校验直接 exit 0，不会重复上报。
+fn setup_nezha_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, use_hooks: bool) {
+    cmd.env("NEZHA_TASK_ID", task_id);
+    cmd.env("NEZHA_AGENT", agent);
+    if use_hooks {
+        if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
+            cmd.env("NEZHA_EVENT_DIR", dir.to_string_lossy().as_ref());
+        }
     }
 }
 
@@ -686,9 +693,7 @@ fn spawn_fork_task_process(
     };
     command.cwd(project_path);
     setup_env(&mut command);
-    if use_hooks {
-        setup_nezha_env(&mut command, task_id, agent);
-    }
+    setup_nezha_env(&mut command, task_id, agent, use_hooks);
     for (key, value) in &launch.extra_env {
         command.env(key, value);
     }
@@ -1052,9 +1057,7 @@ pub async fn run_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    if use_hooks {
-        setup_nezha_env(&mut cmd, &task_id, &agent);
-    }
+    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks);
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -1360,9 +1363,7 @@ pub async fn resume_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    if use_hooks {
-        setup_nezha_env(&mut cmd, &task_id, &agent);
-    }
+    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks);
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }

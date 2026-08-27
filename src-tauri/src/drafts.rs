@@ -94,6 +94,53 @@ pub(crate) fn read_draft_file(
     Ok(Some(content))
 }
 
+/// 列出某个草稿根下所有补录议题草稿：返回 `(task_id, 文件原始内容)` 列表，按 task_id 排序。
+///
+/// 补录侦测的全局扫描兜底：即使 Agent 因为拿不到真实 task_id 而自造了目录名，
+/// 只要文件仍位于 `<project>/.nezha/drafts/<task_id>/backfill-issue.json`，就能被定位到。
+/// 目录名越界 / 非法 / 超限一律跳过，不抛错。
+pub(crate) fn list_backfill_drafts(project_path: &str) -> Result<Vec<(String, String)>, String> {
+    let root = Path::new(project_path);
+    if !root.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project root: {}", e))?;
+    let drafts_dir = canonical_root.join(".nezha").join("drafts");
+    if !drafts_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&drafts_dir)
+        .map_err(|e| format!("Failed to read drafts dir: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read draft entry: {}", e))?;
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let task_id = entry.file_name().to_string_lossy().into_owned();
+        // 防目录穿越：task_id 只允许作为目录名；非法则跳过，不读取。
+        if validate_task_id(&task_id).is_err() {
+            continue;
+        }
+        let file = entry.path().join("backfill-issue.json");
+        if !file.is_file() {
+            continue;
+        }
+        let meta =
+            fs::metadata(&file).map_err(|e| format!("Failed to read draft metadata: {}", e))?;
+        if meta.len() > MAX_DRAFT_READ_BYTES {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&file).map_err(|e| format!("Failed to read draft: {}", e))?;
+        out.push((task_id, content));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
 /// 删除某个任务目录下的草稿文件（仅限白名单，供补录议题消费成功后清理，保证幂等）。
 pub(crate) fn remove_draft_file(
     project_path: &str,
@@ -240,5 +287,36 @@ mod tests {
         assert!(!gather_task_drafts(other.to_str().unwrap(), proj.to_str().unwrap(), "t1").unwrap());
         let _ = fs::remove_dir_all(&proj);
         let _ = fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn list_backfill_drafts_scans_dirs_and_skips_invalid() {
+        let proj = temp_project("list_backfill");
+        let t1 = task_drafts_dir(proj.to_str().unwrap(), "t1");
+        let t2 = task_drafts_dir(proj.to_str().unwrap(), "t2");
+        fs::create_dir_all(&t1).unwrap();
+        fs::create_dir_all(&t2).unwrap();
+        fs::write(t1.join("backfill-issue.json"), r#"{"category":"Bug","subject":"a"}"#).unwrap();
+        fs::write(
+            t2.join("backfill-issue.json"),
+            r#"{"category":"Req","subject":"b"}"#,
+        )
+        .unwrap();
+        // 无 backfill 文件的目录应被忽略。
+        fs::create_dir_all(proj.join(".nezha").join("drafts").join("junk")).unwrap();
+
+        let entries = list_backfill_drafts(proj.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(names, vec!["t1", "t2"]);
+        assert!(entries[0].1.contains("\"Bug\""));
+        assert!(entries[1].1.contains("\"Req\""));
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn list_backfill_drafts_missing_root_returns_empty() {
+        let proj = temp_project("list_backfill_empty");
+        assert!(list_backfill_drafts(proj.to_str().unwrap()).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&proj);
     }
 }

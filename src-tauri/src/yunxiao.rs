@@ -1577,22 +1577,31 @@ pub async fn yunxiao_create_backfill_issue(
     })
 }
 
-/// 读取某个任务目录下的补录议题草稿（`backfill-issue.json`），解析为请求。
-/// 前端在运行中的云效任务上轮询该命令，检出后调 `yunxiao_create_backfill_issue`。
+/// 扫描项目草稿根下的补录议题草稿（`.nezha/drafts/*/backfill-issue.json`）。
+///
+/// 补录侦测用它做全局兜底：不要求目录名等于某个「已知」task id——Agent 即便自造了目录名，
+/// 只要文件在 `.nezha/drafts/` 下就能被找到；
+/// 目录名（`task_id`）仅作为匹配活跃任务的提示，匹配不到时由前端按项目内唯一活跃任务回落。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BackfillDraftEntry {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub request: BackfillIssueRequest,
+}
+
 #[tauri::command]
-pub async fn read_backfill_draft(
-    project_path: String,
-    task_id: String,
-) -> Result<Option<BackfillIssueRequest>, String> {
-    let content = crate::drafts::read_draft_file(&project_path, &task_id, "backfill-issue.json")?;
-    match content {
-        Some(raw) => {
-            let req: BackfillIssueRequest = serde_json::from_str(&raw)
-                .map_err(|e| format!("解析 backfill-issue.json 失败: {e}"))?;
-            Ok(Some(req))
+pub async fn list_backfill_drafts(project_path: String) -> Result<Vec<BackfillDraftEntry>, String> {
+    let entries = crate::drafts::list_backfill_drafts(&project_path)?;
+    let mut out = Vec::new();
+    for (task_id, raw) in entries {
+        match serde_json::from_str::<BackfillIssueRequest>(&raw) {
+            Ok(request) => out.push(BackfillDraftEntry { task_id, request }),
+            Err(e) => eprintln!(
+                "[backfill] 解析 backfill-issue.json 失败 task_id={task_id}: {e}"
+            ),
         }
-        None => Ok(None),
     }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1971,7 +1980,7 @@ mod tests {
             source_note: Some("来源议题：QHDK-29728".to_string()),
         };
         let desc = build_backfill_description(&request);
-        assert!(desc.contains("## 缺陷描述\n医保主表合同单位回写后主表不匹配。"));
+        assert!(desc.contains("## 缺陷描述\n合同单位回写后主表不匹配。"));
         assert!(desc.contains("## 发生频率\n必现"));
         assert!(!desc.contains("影响范围"));
         assert!(desc.ends_with("来源议题：QHDK-29728"));

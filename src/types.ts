@@ -254,6 +254,12 @@ export interface BackfillContentSection {
   text: string;
 }
 
+/** list_backfill_drafts 返回项：目录名（task_id 提示，可能自造）+ 解析后的请求。 */
+export interface BackfillDraftEntry {
+  taskId: string;
+  request: BackfillIssueRequest;
+}
+
 /** 云效 Projex 工作项（议题），字段与 SearchWorkitems 响应对齐 */
 export interface YunxiaoWorkitem {
   id: string;
