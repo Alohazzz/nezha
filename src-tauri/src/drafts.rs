@@ -94,6 +94,26 @@ pub(crate) fn read_draft_file(
     Ok(Some(content))
 }
 
+/// 删除某个任务目录下的草稿文件（仅限白名单，供补录议题消费成功后清理，保证幂等）。
+pub(crate) fn remove_draft_file(
+    project_path: &str,
+    task_id: &str,
+    file_name: &str,
+) -> Result<bool, String> {
+    let target = validate_draft_file(project_path, task_id, file_name)?;
+    if !target.exists() {
+        return Ok(false);
+    }
+    fs::remove_file(&target).map_err(|e| format!("Failed to remove draft file: {}", e))?;
+    Ok(true)
+}
+
+/// Tauri 命令：删除补录议题草稿（消费成功后调用，避免重复创建）。
+#[tauri::command]
+pub async fn clear_backfill_draft(project_path: String, task_id: String) -> Result<bool, String> {
+    remove_draft_file(&project_path, &task_id, "backfill-issue.json")
+}
+
 /// 任务收尾时把 Agent 写在「有效工作目录」（可能是 worktree）下的草稿收拢到项目根。
 ///
 /// - 有效路径与项目根一致（无 worktree）时是 no-op；
