@@ -1469,6 +1469,20 @@ fn build_backfill_description(request: &BackfillIssueRequest) -> String {
     parts.join("\n\n")
 }
 
+/// CreateWorkitem 的自定义字段为扁平对象 `{fieldId: 选项id}`（实测确认，非数组结构）。
+fn build_create_custom_field_values(
+    custom_fields: &[YunxiaoCustomFieldValue],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for field in custom_fields {
+        // list 字段取第一个选项的 identifier（模板里 options[].identifier = 真实 option id）作为写入值。
+        if let Some(value) = field.values.iter().find_map(|v| v.identifier.clone()) {
+            map.insert(field.field_id.clone(), serde_json::Value::String(value));
+        }
+    }
+    map
+}
+
 /// 创建「补录议题」：按类别（Req/Bug）取工作项类型，正文由内容段拼装，基础字段经
 /// `customFieldValues` 透传（字段 ID / 选项标识由模板配置驱动，避免硬编码）。
 #[tauri::command]
@@ -1517,21 +1531,10 @@ pub async fn yunxiao_create_backfill_issue(
         "workitemTypeId": workitem_type_id,
     });
     if !request.custom_fields.is_empty() {
-        let cf: Vec<serde_json::Value> = request
-            .custom_fields
-            .iter()
-            .map(|field| {
-                serde_json::json!({
-                    "fieldId": field.field_id,
-                    "fieldName": field.field_name,
-                    "values": field.values.iter().map(|v| serde_json::json!({
-                        "identifier": v.identifier.clone().unwrap_or_default(),
-                        "displayValue": v.display_value.clone().unwrap_or_default(),
-                    })).collect::<Vec<_>>(),
-                })
-            })
-            .collect();
-        body["customFieldValues"] = serde_json::Value::Array(cf);
+        let cf = build_create_custom_field_values(&request.custom_fields);
+        if !cf.is_empty() {
+            body["customFieldValues"] = serde_json::Value::Object(cf);
+        }
     }
 
     let resp = client
@@ -1972,5 +1975,37 @@ mod tests {
         assert!(desc.contains("## 发生频率\n必现"));
         assert!(!desc.contains("影响范围"));
         assert!(desc.ends_with("来源议题：QHDK-29728"));
+    }
+
+    #[test]
+    fn build_create_custom_field_values_uses_flat_fieldid_map() {
+        let fields = vec![
+            YunxiaoCustomFieldValue {
+                field_id: "priority".to_string(),
+                field_name: "优先级".to_string(),
+                values: vec![YunxiaoCustomFieldEntry {
+                    identifier: Some("5461a5b1d0ae12fcdf98b048bb".to_string()),
+                    display_value: Some("中".to_string()),
+                }],
+            },
+            YunxiaoCustomFieldValue {
+                field_id: "12870b90729a20c378a99c9463".to_string(),
+                field_name: "来源".to_string(),
+                values: vec![YunxiaoCustomFieldEntry {
+                    identifier: Some("内部反馈".to_string()),
+                    display_value: Some("内部反馈".to_string()),
+                }],
+            },
+            // 空值字段应被跳过
+            YunxiaoCustomFieldValue {
+                field_id: "empty".to_string(),
+                field_name: "空".to_string(),
+                values: vec![],
+            },
+        ];
+        let map = build_create_custom_field_values(&fields);
+        assert_eq!(map.get("priority").and_then(|v| v.as_str()), Some("5461a5b1d0ae12fcdf98b048bb"));
+        assert_eq!(map.get("12870b90729a20c378a99c9463").and_then(|v| v.as_str()), Some("内部反馈"));
+        assert!(!map.contains_key("empty"));
     }
 }
