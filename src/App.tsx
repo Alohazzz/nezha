@@ -19,6 +19,7 @@ import type {
   YunxiaoSupplement,
   YunxiaoWritebackResult,
   AgentEnabledState,
+  BackfillIssueRequest,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -341,6 +342,12 @@ function App() {
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // 补录议题轮询：tasks 与 handler 的最新引用 + 处理中任务去重集合（防重叠/陈旧闭包）。
+  const tasksRef = useRef<Task[]>([]);
+  const backfillHandlerRef = useRef<((t: Task) => Promise<void>) | null>(null);
+  const backfillProcessingRef = useRef<Set<string>>(new Set());
+  tasksRef.current = tasks;
+  backfillHandlerRef.current = handleProcessBackfillDraft;
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
@@ -1707,6 +1714,104 @@ function App() {
     }
     return createdIds;
   }
+
+  /** 检测某运行中任务的补录议题草稿，有则建云效议题 Y + 绑定待办任务，并清草稿（幂等）。 */
+  async function handleProcessBackfillDraft(sourceTask: Task): Promise<void> {
+    const project = projects.find((p) => p.id === sourceTask.projectId);
+    if (!project) return;
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    if (!yunxiao.token || !yunxiao.organizationId || !yunxiao.projectId) return;
+
+    const effectivePath = sourceTask.worktreePath ?? project.path;
+    const draft = await invoke<BackfillIssueRequest | null>("read_backfill_draft", {
+      projectPath: effectivePath,
+      taskId: sourceTask.id,
+    });
+    if (!draft) return;
+
+    try {
+      const created = await invoke<{
+        created: boolean;
+        workitemId: string;
+        serialNumber?: string;
+      }>("yunxiao_create_backfill_issue", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        projectId: yunxiao.projectId,
+        request: draft,
+      });
+      if (!created.created) return;
+
+      const now = Date.now();
+      const name = `${created.serialNumber ? `${created.serialNumber} ` : ""}${draft.subject}`.trim();
+      const bodyLines = draft.contentSections
+        .filter((s) => s.text.trim())
+        .map((s) => `${s.label}：${s.text.trim()}`);
+      const prompt = [
+        draft.subject,
+        ...bodyLines,
+        "---",
+        `云效议题：${created.serialNumber ?? ""}`,
+        `来源任务：${sourceTask.name ?? sourceTask.prompt.slice(0, 80)}`,
+        `来源议题 ID：${sourceTask.yunxiaoWorkitemId ?? ""}`,
+        `议题 ID：${created.workitemId}`,
+      ].join("\n");
+      const task: Task = {
+        id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+        projectId: sourceTask.projectId,
+        name,
+        prompt,
+        agent: sourceTask.agent,
+        permissionMode: sourceTask.permissionMode,
+        status: "todo",
+        createdAt: now,
+        updatedAt: now,
+        yunxiaoWorkitemId: created.workitemId,
+        yunxiaoSerialNumber: created.serialNumber,
+        derivedFromTaskId: sourceTask.id,
+        derivedFromWorkitemId: sourceTask.yunxiaoWorkitemId,
+      };
+      let added = false;
+      setTasks((prev) => {
+        if (prev.some((candidate) => candidate.yunxiaoWorkitemId === created.workitemId)) {
+          return prev;
+        }
+        added = true;
+        const next = [task, ...prev];
+        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+        return next;
+      });
+      await invoke("clear_backfill_draft", {
+        projectPath: effectivePath,
+        taskId: sourceTask.id,
+      }).catch(() => {});
+      if (added) {
+        showToast("已补录云效议题并生成绑定待办");
+      }
+    } catch {
+      // 创建失败/网络错误：保留草稿，后续轮询重试
+    }
+  }
+
+  // 云效任务运行中轮询补录议题草稿：检出即建 Y + 待办（近实时，不依赖任务收尾）。
+  useEffect(() => {
+    const BACKFILL_POLL_MS = 4000;
+    const id = window.setInterval(() => {
+      const current = tasksRef.current;
+      const handler = backfillHandlerRef.current;
+      if (!handler) return;
+      for (const t of current) {
+        if (!isActiveTaskStatus(t.status)) continue;
+        if (backfillProcessingRef.current.has(t.id)) continue;
+        backfillProcessingRef.current.add(t.id);
+        handler(t)
+          .catch(() => {})
+          .finally(() => backfillProcessingRef.current.delete(t.id));
+      }
+    }, BACKFILL_POLL_MS);
+    return () => window.clearInterval(id);
+  }, []);
 
   async function handleDeleteProject(projectId: string) {
     const project = projects.find((p) => p.id === projectId);

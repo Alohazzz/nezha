@@ -1574,6 +1574,24 @@ pub async fn yunxiao_create_backfill_issue(
     })
 }
 
+/// 读取某个任务目录下的补录议题草稿（`backfill-issue.json`），解析为请求。
+/// 前端在运行中的云效任务上轮询该命令，检出后调 `yunxiao_create_backfill_issue`。
+#[tauri::command]
+pub async fn read_backfill_draft(
+    project_path: String,
+    task_id: String,
+) -> Result<Option<BackfillIssueRequest>, String> {
+    let content = crate::drafts::read_draft_file(&project_path, &task_id, "backfill-issue.json")?;
+    match content {
+        Some(raw) => {
+            let req: BackfillIssueRequest = serde_json::from_str(&raw)
+                .map_err(|e| format!("解析 backfill-issue.json 失败: {e}"))?;
+            Ok(Some(req))
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
