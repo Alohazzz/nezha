@@ -1,11 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import type { AgentType, PermissionMode } from "../../types";
+import { cycleEnabledAgent, type AgentEnabledState } from "../../types";
 import { permissionModeLabel } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
-const AGENTS: AgentType[] = ["claude", "codex", "dsh"];
 const PERMS: PermissionMode[] = ["ask", "auto_edit", "full_access"];
 
 export function TaskEditDialog({
@@ -25,6 +26,19 @@ export function TaskEditDialog({
   const [editPrompt, setEditPrompt] = useState(initialPrompt);
   const [editAgent, setEditAgent] = useState<AgentType>(initialAgent);
   const [editPermMode, setEditPermMode] = useState<PermissionMode>(initialPermMode);
+  const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AgentEnabledState>("load_app_settings")
+      .then((loaded) => {
+        if (!cancelled) setAgentSettings(loaded);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <>
@@ -52,7 +66,7 @@ export function TaskEditDialog({
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button
           style={{ ...s.toolbarBtn, fontSize: 12 }}
-          onClick={() => setEditAgent(AGENTS[(AGENTS.indexOf(editAgent) + 1) % AGENTS.length])}
+          onClick={() => setEditAgent(cycleEnabledAgent(editAgent, agentSettings))}
         >
           {editAgent === "claude" ? "Claude Code" : editAgent === "dsh" ? "DSH" : "Codex"}
         </button>

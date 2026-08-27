@@ -8,6 +8,7 @@ import {
   DEFAULT_APP_SETTINGS,
   type AppSettings,
 } from "./types";
+import { AgentEnabledSection } from "./AgentEnabledSection";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -138,6 +139,7 @@ export function DshSettingsSection() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 18 }}>
+      <AgentEnabledSection agentKey="dsh" />
       {error && <div style={{ color: "var(--danger)", fontSize: 12.5 }}>{error}</div>}
 
       <div

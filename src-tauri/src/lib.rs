@@ -442,6 +442,7 @@ pub fn run() {
             app_settings::save_app_settings,
             app_settings::save_agent_paths,
             app_settings::save_dsh_settings,
+            app_settings::save_agent_enabled,
             app_settings::save_agent_model_catalog,
             app_settings::save_light_model_config,
             app_settings::refresh_agent_model_catalog,

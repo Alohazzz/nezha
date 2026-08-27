@@ -18,6 +18,7 @@ import type {
   YunxiaoWorkitem,
   YunxiaoSupplement,
   YunxiaoWritebackResult,
+  AgentEnabledState,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -27,6 +28,8 @@ import {
   clampTerminalScrollback,
   DEFAULT_TASK_DISPLAY_WINDOW,
   normalizeTaskDisplayWindow,
+  firstEnabledAgent,
+  isAgentEnabled,
 } from "./types";
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
 import type {
@@ -1300,10 +1303,10 @@ function App() {
     if (!targetProject) return false;
     if (isYunxiaoWorkitemImported(tasks, issue.id)) return false;
 
-    // Agent / 权限模式记忆：上次选择优先；无记忆时回退项目配置默认（再兜底 claude/ask）。
+    // Agent / 权限模式记忆：上次选择优先；无记忆时回退项目配置默认（再兜底 codex/ask）。
     const rememberedAgent = getLastYunxiaoAgent(targetProject.id);
     const rememberedPermission = getLastYunxiaoPermission(targetProject.id);
-    let agent: AgentType = rememberedAgent ?? "claude";
+    let agent: AgentType = rememberedAgent ?? "codex";
     let permissionMode: PermissionMode = rememberedPermission ?? "ask";
     if (!rememberedAgent || !rememberedPermission) {
       try {
@@ -1327,6 +1330,16 @@ function App() {
       } catch {
         // 读取失败保持兜底，不阻断导入
       }
+    }
+
+    // 若最终选中的 Agent 已被禁用（应用级设置），回退到第一个启用的 Agent。
+    try {
+      const appSettings = await invoke<AgentEnabledState>("load_app_settings");
+      if (!isAgentEnabled(appSettings, agent)) {
+        agent = firstEnabledAgent(appSettings);
+      }
+    } catch {
+      // 读取失败保持兜底，不阻断导入
     }
 
     const now = Date.now();
