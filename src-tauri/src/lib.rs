@@ -470,6 +470,8 @@ pub fn run() {
             yunxiao::yunxiao_create_knowledge_issue,
             yunxiao::yunxiao_create_backfill_issue,
             yunxiao::list_backfill_drafts,
+            yunxiao::read_backfill_consumed,
+            yunxiao::write_backfill_consumed,
             drafts::clear_backfill_draft,
             agent_assist::generate_yunxiao_writeback_summary,
             agent_assist::generate_knowledge_sedimentation,

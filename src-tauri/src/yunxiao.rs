@@ -1604,6 +1604,36 @@ pub async fn list_backfill_drafts(project_path: String) -> Result<Vec<BackfillDr
     Ok(out)
 }
 
+/// 补录消费标记：记录已创建的「来源+内容签名」，供前端做幂等去重（防止同一草稿重复建议题）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BackfillConsumedMark {
+    pub signature: String,
+    #[serde(rename = "workitemId")]
+    pub workitem_id: String,
+}
+
+#[tauri::command]
+pub async fn read_backfill_consumed(
+    project_path: String,
+    task_id: String,
+) -> Result<Option<BackfillConsumedMark>, String> {
+    let mark = crate::drafts::read_backfill_consumed(&project_path, &task_id)?;
+    Ok(mark.map(|(signature, workitem_id)| BackfillConsumedMark {
+        signature,
+        workitem_id,
+    }))
+}
+
+#[tauri::command]
+pub async fn write_backfill_consumed(
+    project_path: String,
+    task_id: String,
+    signature: String,
+    workitem_id: String,
+) -> Result<(), String> {
+    crate::drafts::write_backfill_consumed(&project_path, &task_id, &signature, &workitem_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 const ALLOWED_DRAFT_FILES: &[&str] = &["discussion.md", "knowledge.json", "backfill-issue.json"];
 /// 单文件读取大小上限（草稿是提示词引导的小文件；超限视为异常跳过）。
 const MAX_DRAFT_READ_BYTES: u64 = 2 * 1024 * 1024;
+/// 补录议题消费标记（幂等去重）：记录已创建的「来源+内容签名」，防止同一补录草稿被重复建议题。
+const BACKFILL_CONSUMED_FILE: &str = "backfill-issue.consumed";
 
 /// task_id 会拼进草稿目录名：拒绝路径分隔符与 `..`，防目录穿越。
 fn validate_task_id(task_id: &str) -> Result<(), String> {
@@ -139,6 +141,67 @@ pub(crate) fn list_backfill_drafts(project_path: &str) -> Result<Vec<(String, St
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
+}
+
+/// 补录消费标记文件路径：`<project>/.nezha/drafts/<task_id>/backfill-issue.consumed`。
+/// 复用 task_id 校验与项目根约束，避免目录穿越；标记文件由 Nezha 管理，Agent 不写入。
+fn backfill_consumed_path(project_path: &str, task_id: &str) -> Result<PathBuf, String> {
+    validate_task_id(task_id)?;
+    let root = Path::new(project_path);
+    if !root.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project root: {}", e))?;
+    let dir = task_drafts_dir(&canonical_root, task_id);
+    Ok(dir.join(BACKFILL_CONSUMED_FILE))
+}
+
+/// 读取某任务草稿目录下的补录消费标记：返回 (signature, workitem_id)，无标记返回 None。
+pub(crate) fn read_backfill_consumed(
+    project_path: &str,
+    task_id: &str,
+) -> Result<Option<(String, String)>, String> {
+    let target = backfill_consumed_path(project_path, task_id)?;
+    if !target.exists() {
+        return Ok(None);
+    }
+    let raw =
+        fs::read_to_string(&target).map_err(|e| format!("Failed to read consumed marker: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Parse consumed marker failed: {e}"))?;
+    let signature = v
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let workitem_id = v
+        .get("workitemId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if signature.is_empty() || workitem_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((signature, workitem_id)))
+}
+
+/// 写入某任务草稿目录下的补录消费标记（幂等）。
+pub(crate) fn write_backfill_consumed(
+    project_path: &str,
+    task_id: &str,
+    signature: &str,
+    workitem_id: &str,
+) -> Result<(), String> {
+    let target = backfill_consumed_path(project_path, task_id)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create draft dir: {}", e))?;
+    }
+    let body = serde_json::json!({ "signature": signature, "workitemId": workitem_id });
+    fs::write(&target, serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Failed to write consumed marker: {}", e))?;
+    Ok(())
 }
 
 /// 删除某个任务目录下的草稿文件（仅限白名单，供补录议题消费成功后清理，保证幂等）。
@@ -317,6 +380,30 @@ mod tests {
     fn list_backfill_drafts_missing_root_returns_empty() {
         let proj = temp_project("list_backfill_empty");
         assert!(list_backfill_drafts(proj.to_str().unwrap()).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn backfill_consumed_marker_roundtrip() {
+        let proj = temp_project("consumed");
+        let dir = task_drafts_dir(proj.to_str().unwrap(), "t1");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(read_backfill_consumed(proj.to_str().unwrap(), "t1").unwrap().is_none());
+        write_backfill_consumed(proj.to_str().unwrap(), "t1", "sig-abc", "wi-1").unwrap();
+        let mark = read_backfill_consumed(proj.to_str().unwrap(), "t1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(mark, ("sig-abc".to_string(), "wi-1".to_string()));
+        // 不同目录互不干扰
+        assert!(read_backfill_consumed(proj.to_str().unwrap(), "t2").unwrap().is_none());
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn backfill_consumed_marker_rejects_bad_task_id() {
+        let proj = temp_project("consumed_bad");
+        assert!(write_backfill_consumed(proj.to_str().unwrap(), "../t1", "s", "w").is_err());
+        assert!(read_backfill_consumed(proj.to_str().unwrap(), "../t1").is_err());
         let _ = fs::remove_dir_all(&proj);
     }
 }

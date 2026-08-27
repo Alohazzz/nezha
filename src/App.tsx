@@ -311,6 +311,23 @@ function getInitialFontFamily(key: string, fallback: FontFamily): FontFamily {
   return quoteFontName(stored);
 }
 
+/** 补录议题幂等签名：来源任务 + 来源议题 + 类别 + 标题 + 内容段 + 自定义字段。
+ *  用于跨轮询/重复写入的「同一补录草稿不重复建」去重。 */
+function deriveBackfillSignature(sourceTask: Task, draft: BackfillIssueRequest): string {
+  const sections = draft.contentSections.map((s) => `${s.label}=${s.text}`).join("\n");
+  const fields = draft.customFields
+    .map((f) => `${f.fieldId}=${f.values.map((v) => v.identifier ?? "").join(",")}`)
+    .join("\n");
+  return [
+    sourceTask.id,
+    sourceTask.yunxiaoWorkitemId ?? "",
+    draft.category,
+    draft.subject,
+    sections,
+    fields,
+  ].join("|");
+}
+
 function App() {
   const { showToast } = useToast();
   const { t } = useI18n();
@@ -1728,6 +1745,20 @@ function App() {
     const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
     if (!yunxiao.token || !yunxiao.organizationId || !yunxiao.projectId) return;
 
+    const signature = deriveBackfillSignature(sourceTask, draft);
+    // 幂等：若同一来源+内容签名已创建过，则只清掉重新出现的草稿，不再重复建议题。
+    const consumed = await invoke<{ signature: string; workitemId: string } | null>(
+      "read_backfill_consumed",
+      { projectPath: effectivePath, taskId: draftTaskId },
+    ).catch(() => null);
+    if (consumed && consumed.signature === signature) {
+      await invoke("clear_backfill_draft", {
+        projectPath: effectivePath,
+        taskId: draftTaskId,
+      }).catch(() => {});
+      return;
+    }
+
     try {
       const created = await invoke<{
         created: boolean;
@@ -1740,6 +1771,13 @@ function App() {
         request: draft,
       });
       if (!created.created) return;
+      // 记录消费标记（幂等），即使 Agent 之后重复写入同一内容也不会再建。
+      await invoke("write_backfill_consumed", {
+        projectPath: effectivePath,
+        taskId: draftTaskId,
+        signature,
+        workitemId: created.workitemId,
+      }).catch(() => {});
 
       const now = Date.now();
       const name = `${created.serialNumber ? `${created.serialNumber} ` : ""}${draft.subject}`.trim();
