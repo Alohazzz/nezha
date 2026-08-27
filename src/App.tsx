@@ -20,6 +20,7 @@ import type {
   YunxiaoWritebackResult,
   AgentEnabledState,
   BackfillIssueRequest,
+  BackfillDraftEntry,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -344,10 +345,10 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   // 补录议题轮询：tasks 与 handler 的最新引用 + 处理中任务去重集合（防重叠/陈旧闭包）。
   const tasksRef = useRef<Task[]>([]);
-  const backfillHandlerRef = useRef<((t: Task) => Promise<void>) | null>(null);
+  const backfillHandlerRef = useRef<(() => Promise<void>) | null>(null);
   const backfillProcessingRef = useRef<Set<string>>(new Set());
   tasksRef.current = tasks;
-  backfillHandlerRef.current = handleProcessBackfillDraft;
+  backfillHandlerRef.current = handleScanBackfillDrafts;
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
@@ -1715,18 +1716,13 @@ function App() {
     return createdIds;
   }
 
-  /** 检测某运行中任务的补录议题草稿，有则建云效议题 Y + 绑定待办任务，并清草稿（幂等）。 */
-  async function handleProcessBackfillDraft(sourceTask: Task): Promise<void> {
-    const project = projects.find((p) => p.id === sourceTask.projectId);
-    if (!project) return;
-
-    const effectivePath = sourceTask.worktreePath ?? project.path;
-    const draft = await invoke<BackfillIssueRequest | null>("read_backfill_draft", {
-      projectPath: effectivePath,
-      taskId: sourceTask.id,
-    });
-    if (!draft) return;
-
+  /** 消费一份已读到的补录议题草稿：建云效议题 Y + 绑定待办任务，并按草稿实际目录清草稿（幂等）。 */
+  async function processBackfillDraft(
+    sourceTask: Task,
+    draft: BackfillIssueRequest,
+    draftTaskId: string,
+    effectivePath: string,
+  ): Promise<void> {
     // 检出草稿后才读云效设置（避免每个活跃任务反复 invoke）。
     const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
     const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
@@ -1786,7 +1782,7 @@ function App() {
       });
       await invoke("clear_backfill_draft", {
         projectPath: effectivePath,
-        taskId: sourceTask.id,
+        taskId: draftTaskId,
       }).catch(() => {});
       if (added) {
         showToast("已补录云效议题并生成绑定待办");
@@ -1796,21 +1792,50 @@ function App() {
     }
   }
 
+  /** 云效任务运行中轮询补录议题草稿：按「有效路径（worktree ?? 项目根）」扫描 backfill-issue.json，检出即建 Y + 待办。 */
+  async function handleScanBackfillDrafts(): Promise<void> {
+    const current = tasksRef.current;
+    // 按有效路径分组活跃任务，便于定位草稿实际落盘位置（工作树或项目根）。
+    const byEffectivePath = new Map<string, Task[]>();
+    for (const t of current) {
+      if (!isActiveTaskStatus(t.status)) continue;
+      const project = projects.find((p) => p.id === t.projectId);
+      if (!project) continue;
+      const eff = t.worktreePath ?? project.path;
+      const arr = byEffectivePath.get(eff) ?? [];
+      arr.push(t);
+      byEffectivePath.set(eff, arr);
+    }
+    for (const [effectivePath, activeTasks] of byEffectivePath) {
+      const entries = await invoke<BackfillDraftEntry[]>("list_backfill_drafts", {
+        projectPath: effectivePath,
+      }).catch(() => []);
+      for (const entry of entries) {
+        // 匹配来源任务：目录名 == 活跃任务 id；否则项目内唯一活跃任务回落（覆盖 Agent 自造目录名）。
+        let sourceTask = activeTasks.find((t) => t.id === entry.taskId);
+        if (!sourceTask && activeTasks.length === 1) sourceTask = activeTasks[0];
+        if (!sourceTask) {
+          console.warn(`[backfill] 无法匹配补录草稿到活跃任务：${entry.taskId} @ ${effectivePath}`);
+          continue;
+        }
+        const key = `${effectivePath}:${entry.taskId}`;
+        if (backfillProcessingRef.current.has(key)) continue;
+        backfillProcessingRef.current.add(key);
+        processBackfillDraft(sourceTask, entry.request, entry.taskId, effectivePath)
+          .catch(() => {})
+          .finally(() => backfillProcessingRef.current.delete(key));
+      }
+    }
+  }
+
   // 云效任务运行中轮询补录议题草稿：检出即建 Y + 待办（近实时，不依赖任务收尾）。
   useEffect(() => {
     const BACKFILL_POLL_MS = 4000;
     const id = window.setInterval(() => {
-      const current = tasksRef.current;
       const handler = backfillHandlerRef.current;
       if (!handler) return;
-      for (const t of current) {
-        if (!isActiveTaskStatus(t.status)) continue;
-        if (backfillProcessingRef.current.has(t.id)) continue;
-        backfillProcessingRef.current.add(t.id);
-        handler(t)
-          .catch(() => {})
-          .finally(() => backfillProcessingRef.current.delete(t.id));
-      }
+      handler()
+        .catch(() => {});
     }, BACKFILL_POLL_MS);
     return () => window.clearInterval(id);
   }, []);

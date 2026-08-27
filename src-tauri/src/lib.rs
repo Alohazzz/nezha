@@ -469,7 +469,7 @@ pub fn run() {
             yunxiao::yunxiao_write_score_field,
             yunxiao::yunxiao_create_knowledge_issue,
             yunxiao::yunxiao_create_backfill_issue,
-            yunxiao::read_backfill_draft,
+            yunxiao::list_backfill_drafts,
             drafts::clear_backfill_draft,
             agent_assist::generate_yunxiao_writeback_summary,
             agent_assist::generate_knowledge_sedimentation,
