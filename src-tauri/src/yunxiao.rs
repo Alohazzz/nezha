@@ -1440,6 +1440,7 @@ pub struct BackfillIssueRequest {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct CreateBackfillIssueResult {
     pub created: bool,
+    #[serde(rename = "workitemId")]
     pub workitem_id: String,
     #[serde(rename = "serialNumber", default, skip_serializing_if = "Option::is_none")]
     pub serial_number: Option<String>,
@@ -1602,6 +1603,36 @@ pub async fn list_backfill_drafts(project_path: String) -> Result<Vec<BackfillDr
         }
     }
     Ok(out)
+}
+
+/// 补录消费标记：记录已创建的「来源+内容签名」，供前端做幂等去重（防止同一草稿重复建议题）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BackfillConsumedMark {
+    pub signature: String,
+    #[serde(rename = "workitemId")]
+    pub workitem_id: String,
+}
+
+#[tauri::command]
+pub async fn read_backfill_consumed(
+    project_path: String,
+    task_id: String,
+) -> Result<Option<BackfillConsumedMark>, String> {
+    let mark = crate::drafts::read_backfill_consumed(&project_path, &task_id)?;
+    Ok(mark.map(|(signature, workitem_id)| BackfillConsumedMark {
+        signature,
+        workitem_id,
+    }))
+}
+
+#[tauri::command]
+pub async fn write_backfill_consumed(
+    project_path: String,
+    task_id: String,
+    signature: String,
+    workitem_id: String,
+) -> Result<(), String> {
+    crate::drafts::write_backfill_consumed(&project_path, &task_id, &signature, &workitem_id)
 }
 
 #[cfg(test)]
@@ -2016,5 +2047,18 @@ mod tests {
         assert_eq!(map.get("priority").and_then(|v| v.as_str()), Some("5461a5b1d0ae12fcdf98b048bb"));
         assert_eq!(map.get("12870b90729a20c378a99c9463").and_then(|v| v.as_str()), Some("内部反馈"));
         assert!(!map.contains_key("empty"));
+    }
+
+    #[test]
+    fn create_backfill_issue_result_serializes_workitemid_camelcase() {
+        let result = CreateBackfillIssueResult {
+            created: true,
+            workitem_id: "wi-123".to_string(),
+            serial_number: Some("QHDK-123".to_string()),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"workitemId\":\"wi-123\""));
+        assert!(json.contains("\"serialNumber\":\"QHDK-123\""));
+        assert!(!json.contains("workitem_id"));
     }
 }
