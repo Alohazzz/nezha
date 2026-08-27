@@ -1291,26 +1291,27 @@ async fn fetch_current_user_id(
     Ok(user.id)
 }
 
-/// 获取项目下默认需求工作项类型 ID（CreateWorkitem 必填）。
-async fn fetch_default_req_type_id(
+/// 获取项目下指定类别的工作项类型 ID（CreateWorkitem 必填）。
+async fn fetch_default_workitem_type_id(
     client: &reqwest::Client,
     token: &str,
     organization_id: &str,
     project_id: &str,
+    category: &str,
 ) -> Result<String, String> {
     let url = format!(
-        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes?category=Req"
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes?category={category}"
     );
     let bytes = get_yunxiao_json(client, token, url).await?;
     let types: Vec<YunxiaoWorkitemType> = serde_json::from_slice(&bytes)
         .map_err(|e| format!("解析云效工作项类型失败: {e}"))?;
     types
         .iter()
-        .find(|t| t.category_id == "Req")
+        .find(|t| t.category_id == category)
         .or_else(|| types.first())
         .map(|t| t.id.clone())
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| "目标项目未找到需求工作项类型".to_string())
+        .ok_or_else(|| format!("目标项目未找到 {category} 工作项类型"))
 }
 
 /// 创建知识沉淀审核议题（CreateWorkitem）：先按标题去重（搜索目标项目最近需求议题，
@@ -1360,8 +1361,14 @@ pub async fn yunxiao_create_knowledge_issue(
     // 2) 创建
     let client = build_client()?;
     let assigned_to = fetch_current_user_id(&client, &token).await?;
-    let workitem_type_id =
-        fetch_default_req_type_id(&client, &token, &organization_id, &project_id).await?;
+    let workitem_type_id = fetch_default_workitem_type_id(
+        &client,
+        &token,
+        &organization_id,
+        &project_id,
+        "Req",
+    )
+    .await?;
     let resp = client
         .post(format!(
             "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems"
@@ -1402,6 +1409,168 @@ pub async fn yunxiao_create_knowledge_issue(
         created: true,
         duplicated: false,
         workitem_id,
+    })
+}
+
+// ── 补录议题（backfill skill 驱动）─────────────────────────────────────────────
+
+/// 补录议题的描述内容段（标题 + 正文）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BackfillContentSection {
+    pub label: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+/// 补录议题请求：由 `yunxiao-backfill-issue` skill 盘问后写入 `backfill-issue.json`。
+/// 前端 / 侦测逻辑读取后传给 `yunxiao_create_backfill_issue`。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BackfillIssueRequest {
+    pub category: String,
+    pub subject: String,
+    #[serde(rename = "contentSections", default)]
+    pub content_sections: Vec<BackfillContentSection>,
+    #[serde(rename = "customFields", default)]
+    pub custom_fields: Vec<YunxiaoCustomFieldValue>,
+    #[serde(rename = "sourceNote", default, skip_serializing_if = "Option::is_none")]
+    pub source_note: Option<String>,
+}
+
+/// 补录议题创建结果。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CreateBackfillIssueResult {
+    pub created: bool,
+    pub workitem_id: String,
+    #[serde(rename = "serialNumber", default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<String>,
+}
+
+/// 从补录请求拼 description：按内容段拼接，末尾追加来源行。
+fn build_backfill_description(request: &BackfillIssueRequest) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for section in &request.content_sections {
+        let text = section.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let label = section.label.trim();
+        if label.is_empty() {
+            parts.push(text.to_string());
+        } else {
+            parts.push(format!("## {label}\n{text}"));
+        }
+    }
+    if let Some(note) = request.source_note.as_ref() {
+        let note = note.trim();
+        if !note.is_empty() {
+            parts.push(note.to_string());
+        }
+    }
+    parts.join("\n\n")
+}
+
+/// 创建「补录议题」：按类别（Req/Bug）取工作项类型，正文由内容段拼装，基础字段经
+/// `customFieldValues` 透传（字段 ID / 选项标识由模板配置驱动，避免硬编码）。
+#[tauri::command]
+pub async fn yunxiao_create_backfill_issue(
+    token: String,
+    organization_id: String,
+    project_id: String,
+    request: BackfillIssueRequest,
+) -> Result<CreateBackfillIssueResult, String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    let project_id = project_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() || project_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或项目 ID".to_string());
+    }
+    let category = request.category.trim().to_string();
+    if category != "Req" && category != "Bug" {
+        return Err("议题类别仅支持 Req / Bug".to_string());
+    }
+    let subject = request.subject.trim().to_string();
+    if subject.is_empty() {
+        return Err("议题标题不能为空".to_string());
+    }
+    let description = build_backfill_description(&request);
+    if description.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("议题描述超过 {MAX_COMMENT_CHARS} 字上限"));
+    }
+
+    let client = build_client()?;
+    let assigned_to = fetch_current_user_id(&client, &token).await?;
+    let workitem_type_id = fetch_default_workitem_type_id(
+        &client,
+        &token,
+        &organization_id,
+        &project_id,
+        &category,
+    )
+    .await?;
+
+    let mut body = serde_json::json!({
+        "category": category,
+        "subject": subject,
+        "description": description,
+        "spaceId": project_id,
+        "assignedTo": assigned_to,
+        "workitemTypeId": workitem_type_id,
+    });
+    if !request.custom_fields.is_empty() {
+        let cf: Vec<serde_json::Value> = request
+            .custom_fields
+            .iter()
+            .map(|field| {
+                serde_json::json!({
+                    "fieldId": field.field_id,
+                    "fieldName": field.field_name,
+                    "values": field.values.iter().map(|v| serde_json::json!({
+                        "identifier": v.identifier.clone().unwrap_or_default(),
+                        "displayValue": v.display_value.clone().unwrap_or_default(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        body["customFieldValues"] = serde_json::Value::Array(cf);
+    }
+
+    let resp = client
+        .post(format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems"
+        ))
+        .header("x-yunxiao-token", &token)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求云效创建议题失败: {e}"))?;
+    let bytes = read_json_body(resp).await?;
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析云效创建议题响应失败: {e}"))?;
+    if value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        if let Some(result) = value.get_mut("result") {
+            value = result.take();
+        }
+    }
+    let workitem_id = value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "创建议题响应中没有工作项 ID".to_string())?
+        .to_string();
+    let serial_number = value
+        .get("serialNumber")
+        .and_then(serde_json::Value::as_str)
+        .map(|s| s.to_string());
+    Ok(CreateBackfillIssueResult {
+        created: true,
+        workitem_id,
+        serial_number,
     })
 }
 
@@ -1756,5 +1925,34 @@ mod tests {
                 "9uy29901re573f561d69jn40".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn build_backfill_description_joins_sections_and_appends_source() {
+        let request = BackfillIssueRequest {
+            category: "Bug".to_string(),
+            subject: "医保主表合同单位回写不匹配".to_string(),
+            content_sections: vec![
+                BackfillContentSection {
+                    label: "缺陷描述".to_string(),
+                    text: "合同单位回写后主表不匹配。".to_string(),
+                },
+                BackfillContentSection {
+                    label: "发生频率".to_string(),
+                    text: "必现".to_string(),
+                },
+                BackfillContentSection {
+                    label: "影响范围".to_string(),
+                    text: "".to_string(), // 空段落跳过
+                },
+            ],
+            custom_fields: vec![],
+            source_note: Some("来源议题：QHDK-29728".to_string()),
+        };
+        let desc = build_backfill_description(&request);
+        assert!(desc.contains("## 缺陷描述\n医保主表合同单位回写后主表不匹配。"));
+        assert!(desc.contains("## 发生频率\n必现"));
+        assert!(!desc.contains("影响范围"));
+        assert!(desc.ends_with("来源议题：QHDK-29728"));
     }
 }

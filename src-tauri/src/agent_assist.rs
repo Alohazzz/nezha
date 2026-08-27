@@ -422,6 +422,10 @@ const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论�
 - 优先指数：**54** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0
 - 一句话结论：高价值低成本，值得立即做。"#;
 
+/// 补录议题技能指令：讨论/执行中发现需要新立项的问题时，提示用户手工调用
+/// `yunxiao-backfill-issue` 技能补录议题（Skill 负责盘问，Nezha 持有 token 创建）。
+const BACKFILL_SKILL_INSTRUCTION: &str = "此外，在讨论/执行过程中，如果发现一个不属于当前议题、需要单独新立项的问题，可以提示用户手工调用 yunxiao-backfill-issue 技能补录议题：它会总结上下文、判定缺陷/需求、按模板盘问并生成预览，确认后由 Nezha 创建云效议题并自动生成绑定待办。不要未经用户确认就自动立项。";
+
 /// 知识沉淀提取规则（替代已废弃的 knowledge-sedimentation 技能，内嵌到提示词）。
 /// 讨论提示词与 headless 降级路径共用，保证判定标准一致。
 const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
@@ -463,7 +467,7 @@ pub fn issue_discussion_instructions(category: &str, task_id: &str) -> Option<St
         _ => return None,
     };
     Some(format!(
-        "{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}\n{VALUE_SCORE_INSTRUCTION}\n\n{draft}",
+        "{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}\n{BACKFILL_SKILL_INSTRUCTION}\n{VALUE_SCORE_INSTRUCTION}\n\n{draft}",
         draft = draft_instructions(task_id)
     ))
 }
