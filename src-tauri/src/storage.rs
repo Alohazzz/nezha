@@ -99,6 +99,12 @@ pub struct Task {
     /// 知识沉淀创建的云效审核议题 ID 列表（幂等标记：非空即已沉淀）。
     #[serde(rename = "knowledgeIssueIds", default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge_issue_ids: Vec<String>,
+    /// 起源任务 ID：本任务由哪个任务的讨论/执行中发现的问题补录而来（来源追溯）。
+    #[serde(rename = "derivedFromTaskId", default, skip_serializing_if = "Option::is_none")]
+    pub derived_from_task_id: Option<String>,
+    /// 起源云效议题 ID：补充的议题来自哪个已有议题的讨论发现（来源追溯）。
+    #[serde(rename = "derivedFromWorkitemId", default, skip_serializing_if = "Option::is_none")]
+    pub derived_from_workitem_id: Option<String>,
 }
 
 /// 云效议题补充表单数据：字段随草稿防抖落盘；finalized 区分「已定稿」与「仅草稿」。

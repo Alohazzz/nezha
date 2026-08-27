@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 允许读取/收拢的草稿文件名（白名单，防目录遍历/任意文件读取）。
-const ALLOWED_DRAFT_FILES: &[&str] = &["discussion.md", "knowledge.json"];
+const ALLOWED_DRAFT_FILES: &[&str] = &["discussion.md", "knowledge.json", "backfill-issue.json"];
 /// 单文件读取大小上限（草稿是提示词引导的小文件；超限视为异常跳过）。
 const MAX_DRAFT_READ_BYTES: u64 = 2 * 1024 * 1024;
 

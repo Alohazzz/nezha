@@ -165,6 +165,10 @@ export interface Task {
   yunxiaoCommentId?: string;
   /** 知识沉淀创建的云效审核议题 ID 列表（幂等标记：非空即已沉淀） */
   knowledgeIssueIds?: string[];
+  /** 起源任务 ID：本任务由哪个任务的讨论/执行中发现的问题补录而来（来源追溯） */
+  derivedFromTaskId?: string;
+  /** 起源云效议题 ID：补充的议题来自哪个已有议题的讨论发现（来源追溯） */
+  derivedFromWorkitemId?: string;
 }
 
 /** 知识沉淀候选：一条对应一个云效审核议题。 */
@@ -233,6 +237,21 @@ export interface YunxiaoCustomFieldValue {
   fieldId: string;
   fieldName: string;
   values: YunxiaoCustomFieldEntry[];
+}
+
+/** 云效补录议题请求：由 backfill skill 盘问后写入 backfill-issue.json，Nezha 读取据此创建。 */
+export interface BackfillIssueRequest {
+  category: "Req" | "Bug";
+  subject: string;
+  contentSections: BackfillContentSection[];
+  customFields: YunxiaoCustomFieldValue[];
+  /** 描述末尾的来源行，如「由议题 QHDK-29728 讨论发现」 */
+  sourceNote?: string;
+}
+
+export interface BackfillContentSection {
+  label: string;
+  text: string;
 }
 
 /** 云效 Projex 工作项（议题），字段与 SearchWorkitems 响应对齐 */
