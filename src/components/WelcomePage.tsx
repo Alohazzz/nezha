@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge } from "lucide-react";
 import type {
   Project,
   Task,
@@ -18,6 +18,7 @@ import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import { YunxiaoView } from "./yunxiao/YunxiaoView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
+import { MergeHubView } from "./codeup/MergeHubView";
 import { ProjectListItem } from "./welcome/ProjectListItem";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
@@ -133,7 +134,9 @@ export function WelcomePage({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao">("projects");
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup">(
+    "projects",
+  );
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -183,6 +186,12 @@ export function WelcomePage({
               active={view === "yunxiao"}
               onClick={() => setView("yunxiao")}
             />
+            <SidebarItem
+              icon={<GitMerge size={15} />}
+              label="合并审核"
+              active={view === "codeup"}
+              onClick={() => setView("codeup")}
+            />
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -208,7 +217,9 @@ export function WelcomePage({
           </div>
         </div>
 
-        {view === "yunxiao" ? (
+        {view === "codeup" ? (
+          <MergeHubView onBack={() => setView("projects")} />
+        ) : view === "yunxiao" ? (
           <YunxiaoView
             projects={allProjects}
             tasks={tasks}

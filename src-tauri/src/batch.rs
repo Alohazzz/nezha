@@ -125,6 +125,8 @@ pub async fn create_branch_batch(
             additions: None,
             deletions: None,
             issue_serial_numbers: vec![],
+            mr_id: None,
+            mr_status: None,
         };
 
         let mut batches = load_project_batches(project_id.clone())?;

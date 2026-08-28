@@ -146,6 +146,12 @@ pub struct Batch {
     /// 云效议题编号列表，用于 commit 门禁与回写（如 ["QHDK-29312"]）。
     #[serde(rename = "issueSerialNumbers", default, skip_serializing_if = "Vec::is_empty")]
     pub issue_serial_numbers: Vec<String>,
+    /// Codeup 合并请求 id（提交 MR 成功后回填）。
+    #[serde(rename = "mrId", default, skip_serializing_if = "Option::is_none")]
+    pub mr_id: Option<String>,
+    /// Codeup 合并请求状态（提交后跟随 MR 状态回填）。
+    #[serde(rename = "mrStatus", default, skip_serializing_if = "Option::is_none")]
+    pub mr_status: Option<String>,
 }
 
 /// 云效议题补充表单数据：字段随草稿防抖落盘；finalized 区分「已定稿」与「仅草稿」。
@@ -321,6 +327,8 @@ mod tests {
             additions: Some(312),
             deletions: Some(48),
             issue_serial_numbers: vec!["QHDK-29312".into()],
+            mr_id: None,
+            mr_status: None,
         };
         let json = serde_json::to_string(&batch).unwrap();
         let back: Batch = serde_json::from_str(&json).unwrap();
