@@ -1091,27 +1091,6 @@ export function ProjectPage({
               onChange={setWorktreeScope}
             />
           </div>
-          <div style={s.rpTabs}>
-            {([
-              { key: "files", label: "文件" },
-              { key: "git-changes", label: "变更" },
-              { key: "git-history", label: "历史" },
-              { key: "build", label: "构建" },
-              { key: "branch-batch", label: "PR" },
-            ] as Array<{
-              key: "files" | "git-changes" | "git-history" | "build" | "branch-batch";
-              label: string;
-            }>).map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                style={rightPanel === tab.key ? s.rpTabActive : s.rpTab}
-                onClick={() => handleTogglePanel(tab.key)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
           <div style={s.rpContent}>
           {rightPanel === "files" && (
             <ErrorBoundary label="文件浏览器">
