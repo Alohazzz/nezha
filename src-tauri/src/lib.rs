@@ -8,6 +8,7 @@ use usage::CodexRpcClient;
 mod agent_assist;
 mod analytics;
 mod app_settings;
+mod batch;
 mod build;
 mod config;
 mod drafts;
@@ -382,6 +383,9 @@ pub fn run() {
             agent_assist::generate_task_name,
             agent_assist::generate_issue_supplement,
             agent_assist::get_issue_discussion_instructions,
+            agent_assist::get_merge_code_review_instructions,
+            agent_assist::run_merge_code_review,
+            agent_assist::run_conflict_resolution,
             git::git_status,
             git::git_list_branches,
             git::git_create_branch,
@@ -436,8 +440,22 @@ pub fn run() {
             config::write_agent_config_file,
             storage::load_projects,
             storage::save_projects,
-            storage::load_project_tasks,
-            storage::save_project_tasks,
+    storage::load_project_tasks,
+    storage::save_project_tasks,
+    storage::load_project_batches,
+    storage::save_project_batches,
+    batch::create_branch_batch,
+    batch::list_branch_batches,
+    batch::get_branch_batch,
+    batch::close_branch_batch,
+    batch::merge_branch_batch,
+    git::git_branch_diff_stats,
+    git::git_branch_diff_file,
+    git::git_patch_dependency_check,
+    git::cherry_pick_to_patch,
+    git::list_patch_picks,
+    git::get_conflict_context,
+    git::commit_conflict_resolution,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,

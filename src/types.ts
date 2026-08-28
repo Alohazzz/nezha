@@ -117,6 +117,38 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
+/** 分支批的分支类型：feature=日常开发（自 develop 拉），patch=现场响应，release=上线验收，hotfix=补丁容器。 */
+export type BranchKind = "feature" | "patch" | "release" | "hotfix";
+
+/** 分支批 = 一个可独立验收的 PR（一个批对应一个分支 + 一个 worktree，批内任务顺序共用）。 */
+export interface BranchBatch {
+  id: string;
+  projectId: string;
+  name: string;
+  kind: BranchKind;
+  /** 批的目标分支名（如 feature/batch-p01）。 */
+  branch: string;
+  /** 基础分支（如 develop / release/<v> / master 的 tag），worktree 与分支由此创建。 */
+  baseBranch: string;
+  /** 合并回的目标分支（通常为 develop 或 master）。 */
+  targetBranch: string;
+  /** 该批包含的议题任务 id 列表（顺序即验收批次内任务顺序）。 */
+  taskIds: string[];
+  /** draft | active | review | conflict | merged | closed */
+  status: BranchBatchStatus;
+  createdAt: number;
+  /** 批量合并完成（closed）的时间戳。 */
+  closedAt?: number;
+  /** 相对 baseBranch merge-base 的累计新增行数。 */
+  additions?: number;
+  /** 相对 baseBranch merge-base 的累计删除行数。 */
+  deletions?: number;
+  /** 云效议题编号列表，用于 commit 门禁与回写（如 ["QHDK-29312"]）。 */
+  issueSerialNumbers?: string[];
+}
+
+export type BranchBatchStatus = "draft" | "active" | "review" | "conflict" | "merged" | "closed";
+
 export interface Task {
   id: string;
   projectId: string;
@@ -144,6 +176,10 @@ export interface Task {
   worktreePath?: string;
   worktreeBranch?: string;
   baseBranch?: string;
+  /** 所属分支批 id；非空即该任务属于某个可独立验收批次。 */
+  batchId?: string;
+  /** 该任务所在分支的类型；缺省跟随批或视为 feature。 */
+  branchKind?: BranchKind;
   /** worktree 所属的 sub-repo 路径（多仓库工作区中追踪 worktree 归属于哪个 git 根）。
    *  缺省视为与项目根相同，向后兼容旧 worktree。 */
   worktreeRepo?: string;

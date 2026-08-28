@@ -2,6 +2,7 @@ import type React from "react";
 
 import { common } from "./common";
 import { build } from "./build";
+import { branchBatch } from "./branch-batch";
 import { dialogs } from "./dialogs";
 import { font } from "./font";
 import { gitDiff } from "./git-diff";
@@ -30,6 +31,7 @@ const s = {
   ...skillHub,
   ...reviewComments,
   ...yunxiao,
+  ...branchBatch,
 } satisfies Record<string, React.CSSProperties>;
 
 export default s;
@@ -37,6 +39,7 @@ export default s;
 export {
   common,
   build,
+  branchBatch,
   dialogs,
   font,
   gitDiff,

@@ -72,6 +72,52 @@ fn build_headless_agent_args(
     args
 }
 
+/// 可写版 headless agent 参数（用于 Agent 直接修改文件，如解决合并冲突）。
+fn build_headless_writer_agent_args(
+    agent: &str,
+    prompt: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
+    if agent == "codex" {
+        args.extend(
+            ["exec", "--sandbox", "workspace-write", "-a", "on-request", "--ephemeral", "-c", "approval_policy=\"never\""]
+                .map(OsString::from),
+        );
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("-c".into());
+            args.push(
+                format!(
+                    "model_reasoning_effort={}",
+                    toml::Value::String(effort.to_string())
+                )
+                .into(),
+            );
+        }
+        args.push(prompt.into());
+    } else {
+        args.extend(
+            ["-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits"]
+                .map(OsString::from),
+        );
+        args.push("--no-session-persistence".into());
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("--effort".into());
+            args.push(effort.into());
+        }
+    }
+    args
+}
+
 const NAMING_PROMPT_TEMPLATE: &str = r#"You are a task title generator. Given the original task prompt below and (when available) the session execution summary, produce a single short title for this task.
 
 Rules:
@@ -479,6 +525,209 @@ pub fn get_issue_discussion_instructions(
     task_id: String,
 ) -> Result<String, String> {
     Ok(issue_discussion_instructions(&category, &task_id).unwrap_or_default())
+}
+
+/// 合并代码审查规则（作为可维护的 `merge-code-review` Skill 的默认文本；前端取用并拼进
+/// 审查任务的 prompt，供 Agent 逐项校验批次分支相对 base 的改动）。
+const MERGE_CODE_REVIEW_INSTRUCTIONS: &str = r#"你是合并代码审查助手。请对给定批次的改动（相对 base 分支 base...branch 的 diff）做代码审查校验。
+
+必须逐项检查并按固定格式输出结果：
+1. 命名规范：分支 / commit 是否符合约定。
+2. 提交信息是否带 #议题 编号。
+3. 是否引入合并冲突风险。
+4. 调试残留、临时文件、日志输出。
+5. 改动是否超范围（是否只涉及本批议题）。
+6. 依赖 / 引用是否完整。
+7. 破坏性变更 / 数据库变更是否有说明。
+
+输出要求：只输出结构化 JSON 数组，用 <REVIEW> 与 </REVIEW> 包裹，标签外不要输出其它内容。每一项：
+{"rule": "规则名", "status": "pass|warn|fail", "path": "文件相对路径", "startLine": 数字, "endLine": 数字, "message": "原因/建议"}
+status 取值：pass 通过；warn 需修改；fail 阻止合并。"#;
+
+/// 返回合并代码审查规则文本（供前端拼入审查任务 prompt，以及规则维护入口查看）。
+#[tauri::command]
+pub fn get_merge_code_review_instructions() -> Result<String, String> {
+    Ok(MERGE_CODE_REVIEW_INSTRUCTIONS.to_string())
+}
+
+/// 合并代码审查的单项结果（对应 Skill 约定的 JSON 输出结构）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ReviewFinding {
+    pub rule: String,
+    pub status: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(rename = "startLine", default)]
+    pub start_line: i32,
+    #[serde(rename = "endLine", default)]
+    pub end_line: i32,
+    pub message: String,
+}
+
+fn extract_review_findings(stdout: &str) -> Result<Vec<ReviewFinding>, String> {
+    const OPEN: &str = "<REVIEW>";
+    const CLOSE: &str = "</REVIEW>";
+    if let Some(close_pos) = stdout.rfind(CLOSE) {
+        let prefix = &stdout[..close_pos];
+        if let Some(open_start) = prefix.rfind(OPEN) {
+            let inner = &prefix[open_start + OPEN.len()..];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                return serde_json::from_str(trimmed)
+                    .map_err(|e| format!("解析审查结果失败: {e}"));
+            }
+        }
+    }
+    serde_json::from_str(stdout.trim()).map_err(|e| format!("解析审查结果失败: {e}"))
+}
+
+const REVIEW_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// 运行 Agent 对 base...branch 的改动做合并代码审查，返回结构化结果（path/startLine 供定位）。
+#[tauri::command]
+pub async fn run_merge_code_review(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    base_branch: String,
+    branch: String,
+    agent: String,
+) -> Result<Vec<ReviewFinding>, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {agent}"));
+    }
+    if base_branch.trim().is_empty() || branch.trim().is_empty() {
+        return Err("baseBranch and branch are required".to_string());
+    }
+    let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let wt = worktree_path.clone();
+    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&cwd, &wt))
+        .await
+        .map_err(|e| format!("校验线程错误: {e}"))??;
+
+    // 让 Agent 在图内自行读取 diff（它有 git 权限），再逐项校验。
+    let prompt = format!(
+        "{}\n\n──── 本次需审查的改动 ────\n请先在当前工作区运行 `git diff {base_branch}...{branch}` 查看，再按上述规则逐项校验并输出 <REVIEW> JSON。",
+        MERGE_CODE_REVIEW_INSTRUCTIONS
+    );
+    let output = run_headless_agent_with_timeout(&agent, &worktree_path, &prompt, REVIEW_TIMEOUT, true, None)
+        .await?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    extract_review_findings(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// 可写版 headless agent（Agent 会在 cwd 直接改文件，如解决冲突；带超时与 kill_on_drop）。
+async fn run_headless_writer_agent_with_timeout(
+    agent: &str,
+    cwd: &str,
+    prompt: &str,
+    timeout_dur: Duration,
+) -> Result<Output, String> {
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from_settings(&settings, agent);
+    let light = crate::app_settings::get_light_model_config_from_settings(&settings, agent);
+    let login_env: Vec<(String, String)> = crate::app_settings::get_login_shell_env().to_vec();
+
+    let mut cmd = tokio::process::Command::new(&launch.program);
+    crate::subprocess::configure_background_tokio_command(&mut cmd);
+    cmd.args(build_headless_writer_agent_args(
+        agent,
+        prompt,
+        light.model.as_deref(),
+        light.reasoning_effort.as_deref(),
+    ));
+    cmd.current_dir(cwd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+    for (key, value) in &login_env {
+        cmd.env(key, value);
+    }
+    for (key, value) in &launch.extra_env {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn {agent}: {e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture agent stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture agent stderr".to_string())?;
+
+    let stdout_task = tokio::spawn(read_pipe_to_end(stdout, "stdout"));
+    let stderr_task = tokio::spawn(read_pipe_to_end(stderr, "stderr"));
+
+    let status = match tokio::time::timeout(timeout_dur, child.wait()).await {
+        Ok(result) => result.map_err(|e| format!("Agent wait error: {}", e))?,
+        Err(_) => {
+            let _ = child.start_kill();
+            if let Some(pid) = child.id() {
+                kill_process_tree(pid);
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            stdout_task.abort();
+            stderr_task.abort();
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(format!("解决冲突超时（{} 秒）", timeout_dur.as_secs()));
+        }
+    };
+
+    let stdout_data = stdout_task
+        .await
+        .map_err(|e| format!("Agent stdout task failed: {}", e))??;
+    let stderr_data = stderr_task
+        .await
+        .map_err(|e| format!("Agent stderr task failed: {}", e))??;
+
+    Ok(Output {
+        status,
+        stdout: stdout_data,
+        stderr: stderr_data,
+    })
+}
+
+/// 运行 Agent 在工作区解决合并冲突（草稿式：Agent 修改+add，之后由前端确认才 commit）。
+#[tauri::command]
+pub async fn run_conflict_resolution(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    agent: String,
+) -> Result<String, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {agent}"));
+    }
+    let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let wt = worktree_path.clone();
+    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&cwd, &wt))
+        .await
+        .map_err(|e| format!("校验线程错误: {e}"))??;
+
+    let ctx = crate::git::get_conflict_context(project_path.clone(), repo_path.clone(), worktree_path.clone())
+        .await?;
+    if ctx.conflicted_files.is_empty() {
+        return Ok("没有需要解决的冲突".to_string());
+    }
+    let output = run_headless_writer_agent_with_timeout(&agent, &worktree_path, &ctx.prompt, Duration::from_secs(300)).await?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    // 校验冲突是否已解决：仍有冲突则返回剩余文件。
+    let status = crate::git::run_git(&worktree_path, &["status", "--porcelain"])?;
+    let remaining = crate::git::parse_conflicted_files(&status.stdout);
+    if !remaining.is_empty() {
+        return Err(format!("仍有冲突未解决: {}", remaining.join(", ")));
+    }
+    Ok(format!("已解决 {} 个冲突文件，等你确认后提交", ctx.conflicted_files.len()))
 }
 
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
@@ -1483,5 +1732,24 @@ mod tests {
                 "prompt text",
             ]
         );
+    }
+
+    #[test]
+    fn extracts_review_findings_from_tagged_json() {
+        let stdout = "前言\n<REVIEW>[{\"rule\":\"命名规范\",\"status\":\"fail\",\"path\":\"src/main.rs\",\"startLine\":12,\"endLine\":12,\"message\":\"分支命名不符合约定\"},{\"rule\":\"议题编号\",\"status\":\"pass\",\"path\":\"\",\"startLine\":0,\"endLine\":0,\"message\":\"提交信息含 #123\"}]</REVIEW>\n后记";
+        let findings = extract_review_findings(stdout).unwrap();
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].rule, "命名规范");
+        assert_eq!(findings[0].path, "src/main.rs");
+        assert_eq!(findings[0].start_line, 12);
+        assert_eq!(findings[1].status, "pass");
+    }
+
+    #[test]
+    fn extract_review_findings_falls_back_to_raw_json() {
+        let findings =
+            extract_review_findings("[{\"rule\":\"x\",\"status\":\"warn\",\"message\":\"m\"}]").unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].message, "m");
     }
 }

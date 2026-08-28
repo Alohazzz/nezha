@@ -30,7 +30,7 @@ fn validate_project_path(project_path: &str) -> Result<(), String> {
 
 /// 执行 git 命令并返回原始 Output。
 /// 泛型 S 允许同时接受 `&[&str]` 和 `&[String]`。
-fn run_git<S: AsRef<std::ffi::OsStr>>(
+pub(crate) fn run_git<S: AsRef<std::ffi::OsStr>>(
     project_path: &str,
     args: &[S],
 ) -> Result<std::process::Output, String> {
@@ -212,7 +212,10 @@ fn resolve_repo_path_blocking(
     path_to_string(&repo_canonical)
 }
 
-async fn resolve_repo_path(project_path: &str, repo_path: Option<&str>) -> Result<String, String> {
+pub(crate) async fn resolve_repo_path(
+    project_path: &str,
+    repo_path: Option<&str>,
+) -> Result<String, String> {
     let project_path = project_path.to_string();
     let repo_path = repo_path.map(str::to_string);
     tauri::async_runtime::spawn_blocking(move || {
@@ -247,7 +250,7 @@ fn git_worktree_root(project_path: &str) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-fn path_to_string(path: &Path) -> Result<String, String> {
+pub(crate) fn path_to_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(|path| path.to_string())
         .ok_or_else(|| "Path contains invalid UTF-8".to_string())
@@ -1550,7 +1553,10 @@ fn task_worktree_branch_name(task_id: &str) -> String {
 /// 校验 worktree 路径必须落在 `<repo_root>/.nezha/worktrees/` 之下，
 /// 防止 remove_task_worktree 被传入任意路径。多 sub-repo 项目中 repo_root 为 sub-repo
 /// 根；单仓库时与 project_path 一致（向后兼容旧 worktree 数据）。
-fn ensure_path_under_worktrees_root(repo_root: &str, worktree_path: &str) -> Result<(), String> {
+pub(crate) fn ensure_path_under_worktrees_root(
+    repo_root: &str,
+    worktree_path: &str,
+) -> Result<(), String> {
     let root = Path::new(repo_root)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve repo path: {}", e))?;
@@ -1805,6 +1811,387 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
         *additions += parts[0].parse::<i32>().unwrap_or(0);
         *deletions += parts[1].parse::<i32>().unwrap_or(0);
     }
+}
+
+/// 分支间 diff（base...branch）的单文件增减行数（供合并 Diff 文件列表）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiffFileStat {
+    pub path: String,
+    pub additions: i32,
+    pub deletions: i32,
+}
+
+fn parse_diff_numstat(stdout: &[u8]) -> Vec<DiffFileStat> {
+    let mut files = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        if parts.len() != 3 {
+            continue;
+        }
+        files.push(DiffFileStat {
+            path: parts[2].to_string(),
+            additions: parts[0].parse::<i32>().unwrap_or(0),
+            deletions: parts[1].parse::<i32>().unwrap_or(0),
+        });
+    }
+    files
+}
+
+fn ensure_relative_file_path(file_path: &str) -> Result<(), String> {
+    if file_path.trim().is_empty() {
+        return Err("File path is required".to_string());
+    }
+    let path = Path::new(file_path);
+    if path.is_absolute() || file_path.split('/').any(|seg| seg == "..") {
+        return Err("Invalid file path".to_string());
+    }
+    Ok(())
+}
+
+/// 计算 base 与任意分支之间的 diff（base...branch 三点 diff，等价于相对 merge-base）。
+fn git_branch_diff_stats_blocking(
+    cwd: &str,
+    base_branch: &str,
+    branch: &str,
+) -> Result<Vec<DiffFileStat>, String> {
+    let spec = format!("{}...{}", base_branch.trim(), branch.trim());
+    let output = run_git(cwd, &["diff", "--numstat", &spec])?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(parse_diff_numstat(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn git_branch_diff_stats(
+    project_path: String,
+    repo_path: Option<String>,
+    base_branch: String,
+    branch: String,
+) -> Result<Vec<DiffFileStat>, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    if base_branch.trim().is_empty() || branch.trim().is_empty() {
+        return Err("baseBranch and branch are required".to_string());
+    }
+    tokio::task::spawn_blocking(move || git_branch_diff_stats_blocking(&cwd, &base_branch, &branch))
+        .await
+        .map_err(|e| format!("Diff stats task panicked: {}", e))?
+}
+
+/// 获取 base 与任意分支之间某个文件的统一 diff 文本。
+#[tauri::command]
+pub async fn git_branch_diff_file(
+    project_path: String,
+    repo_path: Option<String>,
+    base_branch: String,
+    branch: String,
+    file_path: String,
+) -> Result<String, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    if base_branch.trim().is_empty() || branch.trim().is_empty() {
+        return Err("baseBranch and branch are required".to_string());
+    }
+    ensure_relative_file_path(&file_path)?;
+    tokio::task::spawn_blocking(move || {
+        let spec = format!("{}...{}", base_branch.trim(), branch.trim());
+        let output = run_git(&cwd, &["diff", &spec, "--", &file_path])?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+        let limit = 500 * 1024;
+        if raw.len() > limit {
+            Ok(raw.chars().take(limit).collect())
+        } else {
+            Ok(raw)
+        }
+    })
+    .await
+    .map_err(|e| format!("Diff file task panicked: {}", e))?
+}
+
+/// 补丁挑拣依赖预检的规划结果：requested commit 及其尚未在目标分支上的前置 commit（含自身）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PatchPickPlan {
+    pub commit: String,
+    pub already_on_target: bool,
+    pub needed: Vec<String>,
+}
+
+/// 对每个请求的 commit，用 `git rev-list <commit> --not HEAD --reverse` 计算需要挑拣的
+/// 依赖序（最旧在前）；已存在于目标分支（HEAD 祖先）则标记 already_on_target 且 needed 为空。
+fn patch_pick_plan_blocking(cwd: &str, commit_hashes: &[String]) -> Result<Vec<PatchPickPlan>, String> {
+    let mut plans = Vec::new();
+    for hash in commit_hashes {
+        let h = hash.trim();
+        if h.is_empty() {
+            continue;
+        }
+        let output = run_git(cwd, &["rev-list", h, "--not", "HEAD", "--reverse"])?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let needed: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        plans.push(PatchPickPlan {
+            commit: h.to_string(),
+            already_on_target: needed.is_empty(),
+            needed,
+        });
+    }
+    Ok(plans)
+}
+
+/// 挑拣前依赖预检：返回每个请求 commit 的“是否已在目标 + 需要的依赖序”，供前端提示“连带挑前置”。
+#[tauri::command]
+pub async fn git_patch_dependency_check(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    commit_hashes: Vec<String>,
+) -> Result<Vec<PatchPickPlan>, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || patch_pick_plan_blocking(&worktree_path, &commit_hashes))
+        .await
+        .map_err(|e| format!("Patch check task panicked: {}", e))?
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CherryPickConflict {
+    pub commit: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CherryPickResult {
+    pub picked: Vec<String>,
+    pub skipped: Vec<String>,
+    pub conflicted: Option<CherryPickConflict>,
+}
+
+/// 把若干 commit 按依赖顺序 `git cherry-pick -x` 到补丁（当前）工作区。
+/// 挑到冲突时停止并返回冲突，让前端可交给「用 Agent 解决冲突」入口。
+#[tauri::command]
+pub async fn cherry_pick_to_patch(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    commit_hashes: Vec<String>,
+) -> Result<CherryPickResult, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || {
+        let plans = patch_pick_plan_blocking(&worktree_path, &commit_hashes)?;
+        let skipped = plans
+            .iter()
+            .filter(|p| p.already_on_target)
+            .map(|p| p.commit.clone())
+            .collect::<Vec<_>>();
+        // 按依赖序（最旧在前）去重合并所有需要的 commit。
+        let mut order: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for plan in &plans {
+            for commit in &plan.needed {
+                if seen.insert(commit.clone()) {
+                    order.push(commit.clone());
+                }
+            }
+        }
+        let mut picked = Vec::new();
+        for commit in &order {
+            let output = run_git(&worktree_path, &["cherry-pick", "-x", commit])?;
+            if !output.status.success() {
+                return Ok(CherryPickResult {
+                    picked,
+                    skipped,
+                    conflicted: Some(CherryPickConflict {
+                        commit: commit.clone(),
+                        message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    }),
+                });
+            }
+            picked.push(commit.clone());
+        }
+        Ok(CherryPickResult {
+            picked,
+            skipped,
+            conflicted: None,
+        })
+    })
+    .await
+    .map_err(|e| format!("Cherry pick task panicked: {}", e))?
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PatchPickEntry {
+    pub source_commit: String,
+    pub picked_commit: String,
+    pub message: String,
+    pub target_branch: String,
+}
+
+/// 解析 `git log` 输出（format: %H%x00%s%x00%b%x1e），抽取带 `cherry-pick -x` 来源的提交。
+fn parse_patch_pick_entries(stdout: &[u8], target_branch: &str) -> Vec<PatchPickEntry> {
+    let mut entries = Vec::new();
+    for record in String::from_utf8_lossy(stdout).split('\u{1e}') {
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(3, '\u{0}');
+        let hash = parts.next().unwrap_or("").trim().to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        let body = parts.next().unwrap_or("").to_string();
+        if hash.is_empty() {
+            continue;
+        }
+        // `cherry-pick -x` 会在 commit 体追加 `(cherry picked from commit <sha>)`。
+        let marker = "(cherry picked from commit ";
+        if let Some(pos) = body.rfind(marker) {
+            let tail = &body[pos + marker.len()..];
+            let source: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit() || *c == '\n' || *c == ')')
+                .filter(|c| *c != '\n' && *c != ')')
+                .take(40)
+                .collect();
+            if source.len() == 40 {
+                entries.push(PatchPickEntry {
+                    source_commit: source,
+                    picked_commit: hash,
+                    message: subject,
+                    target_branch: target_branch.to_string(),
+                });
+            }
+        }
+    }
+    entries
+}
+
+fn list_patch_picks_blocking(cwd: &str) -> Result<Vec<PatchPickEntry>, String> {
+    let branch_out = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if !branch_out.status.success() {
+        return Err(String::from_utf8_lossy(&branch_out.stderr).trim().to_string());
+    }
+    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+    let out = run_git(cwd, &["log", "--reverse", "--format=%H%x00%s%x00%b%x1e"])?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(parse_patch_pick_entries(&out.stdout, &branch))
+}
+
+/// 列出当前补丁分支上所有 `cherry-pick -x` 的来源（commit ↔ 版本矩阵的依据）。
+#[tauri::command]
+pub async fn list_patch_picks(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+) -> Result<Vec<PatchPickEntry>, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || list_patch_picks_blocking(&worktree_path))
+    .await
+    .map_err(|e| format!("List patch picks task panicked: {}", e))?
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConflictContext {
+    pub conflicted_files: Vec<String>,
+    pub prompt: String,
+}
+
+/// 从 `git status --porcelain` 输出中提取处于合并冲突状态的文件（XY 含 'U' 或 AA/DD）。
+pub(crate) fn parse_conflicted_files(stdout: &[u8]) -> Vec<String> {
+    let mut files = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        if line.len() < 4 || line.as_bytes()[2] != b' ' {
+            continue;
+        }
+        let x = line.as_bytes()[0] as char;
+        let y = line.as_bytes()[1] as char;
+        let path = &line[3..];
+        let conflicted = (x == 'U' || y == 'U') || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
+        if conflicted {
+            files.push(path.trim().to_string());
+        }
+    }
+    files
+}
+
+const CONFLICT_RESOLUTION_INSTRUCTIONS: &str = r#"你是合并冲突解决助手。请读取以下合并冲突上下文，产出解决方案。
+
+约束：
+1. 只解决冲突，不要改动无关代码。
+2. 判定哪份是权威（结合两侧分支的意图与 #议题 提交说明）；无法判定时列出两种方案及建议。
+3. 解决流程：修改冲突文件 → git add → 保留 git 冲突标记已清除。
+4. 输出：简明说明每处冲突如何解决 + 改动的文件清单。不要在此提交。"#;
+
+/// 获取补丁（当前）工作区的合并冲突上下文，供「用 Agent 解决冲突」入口组装 prompt。
+#[tauri::command]
+pub async fn get_conflict_context(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+) -> Result<ConflictContext, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || {
+        let status = run_git(&worktree_path, &["status", "--porcelain"])?;
+        if !status.status.success() {
+            return Err(String::from_utf8_lossy(&status.stderr).trim().to_string());
+        }
+        let files = parse_conflicted_files(&status.stdout);
+        let files_list = files.join(", ");
+        let prompt = format!(
+            "{}\n──── 冲突文件 ────\n{}\n──── 冲突状态 ────\n{}",
+            CONFLICT_RESOLUTION_INSTRUCTIONS,
+            files_list,
+            String::from_utf8_lossy(&status.stdout).trim()
+        );
+        Ok(ConflictContext {
+            conflicted_files: files,
+            prompt,
+        })
+    })
+    .await
+    .map_err(|e| format!("Conflict context task panicked: {}", e))?
+}
+
+/// 在 Agent 解决冲突后，暂存全部改动并提交（带可选的 #议题 tag）。
+#[tauri::command]
+pub async fn commit_conflict_resolution(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    message: String,
+    expected_issue_tag: Option<String>,
+) -> Result<String, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    if message.trim().is_empty() {
+        return Err("Commit message is required".to_string());
+    }
+    tokio::task::spawn_blocking(move || {
+        let add = run_git(&worktree_path, &["add", "-A"])?;
+        if !add.status.success() {
+            return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
+        }
+        let mut msg = message.trim().to_string();
+        if let Some(tag) = expected_issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            msg = format!("{msg} {tag}");
+        }
+        let commit = run_git(&worktree_path, &["commit", "-m", &msg])?;
+        if !commit.status.success() {
+            return Err(String::from_utf8_lossy(&commit.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&commit.stdout).trim().to_string())
+    })
+    .await
+    .map_err(|e| format!("Commit conflict task panicked: {}", e))?
 }
 
 #[cfg(test)]
@@ -2125,5 +2512,109 @@ mod tests {
         let args = build_commit_message_agent_args("codex", "msg", None, None);
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(args, vec!["exec", "msg"]);
+    }
+
+    #[test]
+    fn branch_diff_stats_counts_additions_and_deletions() {
+        let dir = std::env::temp_dir().join(format!("nezha-branch-diff-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_string_lossy().into_owned();
+        let run = |args: &[&str]| {
+            let mut cmd = Command::new("git");
+            cmd.args(args).current_dir(&dir);
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        run(&["checkout", "-q", "-b", "base"]);
+        fs::write(dir.join("a.txt"), "line1\nline2\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "base"]);
+        run(&["checkout", "-q", "-b", "feature/x"]);
+        fs::write(dir.join("a.txt"), "line1\nline2\nline3\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "change"]);
+        let stats = super::git_branch_diff_stats_blocking(&dir_str, "base", "feature/x").unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].path, "a.txt");
+        assert_eq!(stats[0].additions, 1);
+        assert_eq!(stats[0].deletions, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn patch_pick_plan_orders_dependencies_oldest_first() {
+        let dir = std::env::temp_dir().join(format!("nezha-pick-plan-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let mut cmd = Command::new("git");
+            cmd.args(args).current_dir(&dir);
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        run(&["checkout", "-q", "-b", "base"]);
+        fs::write(dir.join("a.txt"), "0\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "base"]);
+        run(&["checkout", "-q", "-b", "feature/x"]);
+        fs::write(dir.join("a.txt"), "0\n1\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "one"]);
+        fs::write(dir.join("a.txt"), "0\n1\n2\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "two"]);
+        let second = String::from_utf8_lossy(
+            &Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        run(&["checkout", "-q", "base"]);
+        run(&["checkout", "-q", "-b", "hotfix/2.5.1"]);
+        let dir_str = dir.to_string_lossy().into_owned();
+        let plans = super::patch_pick_plan_blocking(&dir_str, &[second.clone()]).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert!(!plans[0].already_on_target);
+        assert_eq!(plans[0].needed.len(), 2);
+        // 最旧在前：第一个 commit 的 parent 是 base 上的初始提交，第二个是后续。
+        assert_ne!(plans[0].needed[0], plans[0].needed[1]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_patch_pick_entries_extracts_source_sha() {
+        let log = "a1f3c02\0fix: 号源锁定\0\n(cherry picked from commit 9c21ba0000000000000000000000000000000000)\n\x1e\
+                   b77d2f1\0feat: 缴费页\0no marker\n\x1e";
+        let entries = super::parse_patch_pick_entries(log.as_bytes(), "hotfix/2.5.1");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_commit, "9c21ba0000000000000000000000000000000000");
+        assert_eq!(entries[0].picked_commit, "a1f3c02");
+        assert_eq!(entries[0].target_branch, "hotfix/2.5.1");
+    }
+
+    #[test]
+    fn parse_conflicted_files_filters_merge_conflicts() {
+        let status = b"UU file_a.cs\n M file_b.cs\nAA file_c.cs\nDU file_d.cs\n";
+        let files = super::parse_conflicted_files(status);
+        assert_eq!(files, vec!["file_a.cs", "file_c.cs", "file_d.cs"]);
     }
 }
