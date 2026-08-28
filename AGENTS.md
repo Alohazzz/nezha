@@ -228,6 +228,11 @@ commit_message_timeout_secs = 60   # 生成 commit message 的超时秒数（hea
 - **`read_session_messages` 禁止全文件一次性加载**——当前实现对整个 JSONL 文件调用 `fs::read_to_string`，长会话文件可达数百 MB。应改为流式逐行读取或支持分页。
 - **`list_project_files` 应合并 git 命令**——当前执行两次 `git ls-files`（tracked + untracked），可合并为 `git ls-files -c -o --exclude-standard` 一次完成。
 
+### SkillHub说明
+- **如果需要创建技能统一放到SkillHub统一管理**
+地址：C:\Users\SuYi\.nezha\skill_repos\codeup.aliyun.com-641881e9b9581d62e8f8186e-HSP-SkillHub.git
+创建成功后，询问是否提交推送
+
 ### 安全
 
 - **所有接受路径参数的 Tauri 命令必须验证路径合法性**——当前 `fs.rs` 已校验目标路径必须位于项目目录内，`git.rs` 已校验 `project_path` 为合法绝对路径；新增命令继续保持同等级别的路径约束，避免目录遍历。
