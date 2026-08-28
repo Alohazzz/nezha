@@ -265,11 +265,26 @@ export function ProjectPage({
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [worktreeScope, setWorktreeScope] = useState<string>("");
 
-  useEffect(() => {
-    void invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id })
-      .then(setBatches)
-      .catch((e) => console.error("[project] load batches failed:", e));
+  const loadBatches = useCallback(async () => {
+    try {
+      const list = await invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id });
+      setBatches(list);
+    } catch (e) {
+      console.error("[project] load batches failed:", e);
+    }
   }, [project.id]);
+
+  useEffect(() => {
+    void loadBatches();
+  }, [loadBatches]);
+
+  const handleScopeChange = useCallback(
+    (path: string) => {
+      setWorktreeScope(path);
+      void loadBatches();
+    },
+    [loadBatches],
+  );
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const pendingCmdRef = useRef<string | null>(null);
   const prevHadDiffRef = useRef(false);
@@ -1088,7 +1103,7 @@ export function ProjectPage({
             <WorktreeScopeSelect
               options={worktreeOptions}
               value={worktreeScope}
-              onChange={setWorktreeScope}
+              onChange={handleScopeChange}
             />
           </div>
           <div style={s.rpContent}>
@@ -1136,6 +1151,8 @@ export function ProjectPage({
                 projectPath={project.path}
                 projectId={project.id}
                 tasks={projectTasks}
+                worktreeScope={worktreeScope}
+                onScopeChange={handleScopeChange}
                 onClose={() => handleTogglePanel("branch-batch")}
               />
             </ErrorBoundary>

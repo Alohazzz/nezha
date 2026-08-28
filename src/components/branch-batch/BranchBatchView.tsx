@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, RefreshCw, X } from "lucide-react";
 import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
@@ -31,11 +31,15 @@ export function BranchBatchView({
   projectPath,
   projectId,
   tasks,
+  worktreeScope,
+  onScopeChange,
   onClose,
 }: {
   projectPath: string;
   projectId: string;
   tasks: Task[];
+  worktreeScope: string;
+  onScopeChange: (path: string) => void;
   onClose: () => void;
 }) {
   const [batches, setBatches] = useState<BranchBatch[]>([]);
@@ -88,6 +92,16 @@ export function BranchBatchView({
     [projectPath, projectId, load],
   );
 
+  /** 仅展示当前选中 worktree 对应的批（一个批最多一条）。 */
+  const scopedBatches = useMemo(
+    () =>
+      batches.filter((b) => {
+        if (!worktreeScope) return false;
+        return `${projectPath}/.nezha/worktrees/${b.id}` === worktreeScope;
+      }),
+    [batches, worktreeScope, projectPath],
+  );
+
   return (
     <div style={s.bbView}>
       <div style={s.bbHeader}>
@@ -103,8 +117,10 @@ export function BranchBatchView({
       </div>
 
       <div style={s.bbList}>
-        {batches.length === 0 && <div style={s.bbEmpty}>暂无 PR，点击「新建 PR」创建。</div>}
-        {batches.map((batch) => (
+        {scopedBatches.length === 0 && (
+          <div style={s.bbEmpty}>当前 worktree 无关联 PR，点击「新建 PR」创建。</div>
+        )}
+        {scopedBatches.map((batch) => (
           <div key={batch.id} style={s.bbCard}>
             <div style={s.bbCardHead}>
               <span style={s.bbCardTitle}>{batch.name}</span>
@@ -200,7 +216,10 @@ export function BranchBatchView({
           projectId={projectId}
           projectPath={projectPath}
           tasks={tasks}
-          onCreated={(batch) => setBatches((prev) => [...prev, batch])}
+          onCreated={(batch) => {
+            setBatches((prev) => [...prev, batch]);
+            onScopeChange(`${projectPath}/.nezha/worktrees/${batch.id}`);
+          }}
           onClose={() => setShowCreate(false)}
         />
       )}
