@@ -72,7 +72,7 @@ export function CreateBranchBatchDialog({
   return (
     <div style={s.bbDialogOverlay}>
       <div style={s.bbDialog}>
-        <div style={s.bbDialogTitle}>创建分支批（PR 前置创建）</div>
+        <div style={s.bbDialogTitle}>创建 PR</div>
 
         <div style={s.bbField}>
           <span style={s.bbFieldLabel}>批名称</span>

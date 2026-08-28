@@ -1,7 +1,9 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Project,
   Task,
+  BranchBatch,
   AgentType,
   PermissionMode,
   TaskStatus,
@@ -40,6 +42,8 @@ import { GitDiffViewer } from "./GitDiffViewer";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
+import { BranchBatchView } from "./branch-batch/BranchBatchView";
+import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
@@ -258,6 +262,14 @@ export function ProjectPage({
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
+  const [batches, setBatches] = useState<BranchBatch[]>([]);
+  const [worktreeScope, setWorktreeScope] = useState<string>("");
+
+  useEffect(() => {
+    void invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id })
+      .then(setBatches)
+      .catch((e) => console.error("[project] load batches failed:", e));
+  }, [project.id]);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const pendingCmdRef = useRef<string | null>(null);
   const prevHadDiffRef = useRef(false);
@@ -271,6 +283,28 @@ export function ProjectPage({
     [tasks, project.id],
   );
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
+
+  const worktreeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: Array<{ key: string; label: string }> = [{ key: "", label: "主检出" }];
+    for (const task of projectTasks) {
+      if (task.worktreePath && !task.worktreeDiscarded && !seen.has(task.worktreePath)) {
+        seen.add(task.worktreePath);
+        options.push({
+          key: task.worktreePath,
+          label: `WorkTree · ${task.worktreeBranch ?? "?"}`,
+        });
+      }
+    }
+    for (const batch of batches) {
+      if (batch.status === "merged" || batch.status === "closed") continue;
+      const key = `${project.path}/.nezha/worktrees/${batch.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({ key, label: `WorkTree · ${batch.branch}` });
+    }
+    return options;
+  }, [projectTasks, batches, project.path]);
 
   // 工作区项目可能包含多个 sub-repo，selectedRoot.path 为当前活动的 git 根（缺省回落 project.path）。
   const {
@@ -1047,13 +1081,21 @@ export function ProjectPage({
         )}
       </div>
 
-      {rightPanel && rightPanel !== "build" && (
-        <div style={s.rightPanelWrap}>
+      {rightPanel && (
+        <div style={s.rightPanelWrapCol}>
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
+          <div style={s.bbScopeBar}>
+            <WorktreeScopeSelect
+              options={worktreeOptions}
+              value={worktreeScope}
+              onChange={setWorktreeScope}
+            />
+          </div>
+          <div style={s.rpContent}>
           {rightPanel === "files" && (
             <ErrorBoundary label="文件浏览器">
               <FileExplorer
-                projectPath={project.path}
+                projectPath={worktreeScope || project.path}
                 projectName={project.name}
                 onFileSelect={handleFileSelect}
                 active={visible}
@@ -1064,8 +1106,8 @@ export function ProjectPage({
           {rightPanel === "git-changes" && (
             <ErrorBoundary label="Git 变更">
               <GitChanges
-                projectRoot={project.path}
-                repoPath={gitContextPath}
+                projectRoot={worktreeScope || project.path}
+                repoPath={worktreeScope || gitContextPath}
                 currentTaskCreatedAt={currentTaskCreatedAt}
                 issueTag={
                   selectedTask?.yunxiaoSerialNumber
@@ -1080,47 +1122,50 @@ export function ProjectPage({
           {rightPanel === "git-history" && (
             <ErrorBoundary label="Git 历史">
               <GitHistory
-                projectRoot={project.path}
-                repoPath={gitContextPath}
+                projectRoot={worktreeScope || project.path}
+                repoPath={worktreeScope || gitContextPath}
                 onCommitSelect={handleCommitSelectWithCollapse}
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={rightPanelWidth}
               />
             </ErrorBoundary>
           )}
+          {rightPanel === "branch-batch" && (
+            <ErrorBoundary label="创建PR">
+              <BranchBatchView
+                projectPath={project.path}
+                projectId={project.id}
+                tasks={projectTasks}
+                onClose={() => handleTogglePanel("branch-batch")}
+              />
+            </ErrorBoundary>
+          )}
+          {rightPanel === "build" && (
+            <ErrorBoundary label="构建">
+              <BuildPanel
+                projectPath={worktreeScope || project.path}
+                width={rightPanelWidth}
+                onCreateFixTask={(t) =>
+                  onSubmitTask({
+                    prompt: t.prompt,
+                    agent: t.agent as AgentType,
+                    permissionMode: t.permissionMode as PermissionMode,
+                    model: undefined,
+                    reasoningEffort: undefined,
+                    images: [],
+                    texts: [],
+                    immediate: true,
+                    launchMode: t.launchMode,
+                    baseBranch: t.baseBranch,
+                    repoPath: t.repoPath,
+                  })
+                }
+              />
+            </ErrorBoundary>
+          )}
         </div>
-      )}
-
-      {/* BuildPanel 始终挂载（非激活时隐藏），避免切换右面板后状态丢失 */}
-      <div
-        style={{
-          ...s.rightPanelWrap,
-          display: rightPanel === "build" ? "flex" : "none",
-        }}
-      >
-        <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
-        <ErrorBoundary label="构建">
-          <BuildPanel
-            projectPath={project.path}
-            width={rightPanelWidth}
-            onCreateFixTask={(t) =>
-              onSubmitTask({
-                prompt: t.prompt,
-                agent: t.agent as AgentType,
-                permissionMode: t.permissionMode as PermissionMode,
-                model: undefined,
-                reasoningEffort: undefined,
-                images: [],
-                texts: [],
-                immediate: true,
-                launchMode: t.launchMode,
-                baseBranch: t.baseBranch,
-                repoPath: t.repoPath,
-              })
-            }
-          />
-        </ErrorBoundary>
       </div>
+      )}
 
       <RightToolbar
         activePanel={rightPanel}

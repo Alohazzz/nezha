@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitBranch } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud } from "lucide-react";
 import type {
   Project,
   Task,
@@ -17,7 +17,6 @@ import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import { YunxiaoView } from "./yunxiao/YunxiaoView";
-import { BranchBatchView } from "./branch-batch/BranchBatchView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { ProjectListItem } from "./welcome/ProjectListItem";
 import { useI18n, pluralKey } from "../i18n";
@@ -134,7 +133,7 @@ export function WelcomePage({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "branch">("projects");
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao">("projects");
 
   const filtered = useMemo(() => {
     if (!query.trim()) return projects;
@@ -184,12 +183,6 @@ export function WelcomePage({
               active={view === "yunxiao"}
               onClick={() => setView("yunxiao")}
             />
-            <SidebarItem
-              icon={<GitBranch size={15} />}
-              label="分支批"
-              active={view === "branch"}
-              onClick={() => setView("branch")}
-            />
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -215,13 +208,7 @@ export function WelcomePage({
           </div>
         </div>
 
-        {view === "branch" ? (
-          <BranchBatchView
-            projects={allProjects}
-            tasks={tasks}
-            onBack={() => setView("projects")}
-          />
-        ) : view === "yunxiao" ? (
+        {view === "yunxiao" ? (
           <YunxiaoView
             projects={allProjects}
             tasks={tasks}

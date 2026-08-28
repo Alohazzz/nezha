@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Plus, RefreshCw } from "lucide-react";
-import type { BranchBatch, BranchBatchStatus, Project, Task } from "../../types";
+import { Plus, RefreshCw, X } from "lucide-react";
+import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
 import s from "../../styles";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
 import { BranchBatchDiff } from "./BranchBatchDiff";
@@ -28,15 +28,16 @@ function statusStyle(status: BranchBatchStatus) {
 }
 
 export function BranchBatchView({
-  projects,
+  projectPath,
+  projectId,
   tasks,
-  onBack,
+  onClose,
 }: {
-  projects: Project[];
+  projectPath: string;
+  projectId: string;
   tasks: Task[];
-  onBack: () => void;
+  onClose: () => void;
 }) {
-  const [projectId, setProjectId] = useState<string>(projects[0]?.id ?? "");
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [diffBatch, setDiffBatch] = useState<BranchBatch | null>(null);
@@ -44,8 +45,6 @@ export function BranchBatchView({
   const [reviewBatch, setReviewBatch] = useState<BranchBatch | null>(null);
   const [reviewPassed, setReviewPassed] = useState<Set<string>>(() => new Set());
   const [conflictBatch, setConflictBatch] = useState<BranchBatch | null>(null);
-
-  const selectedProject = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
   const load = useCallback(async (pid: string) => {
     if (!pid) return;
@@ -63,67 +62,48 @@ export function BranchBatchView({
 
   const close = useCallback(
     async (batch: BranchBatch, merged: boolean) => {
-      if (!selectedProject) return;
       try {
-        await invoke("close_branch_batch", {
-          projectId: selectedProject.id,
-          batchId: batch.id,
-          merged,
-        });
-        await load(selectedProject.id);
+        await invoke("close_branch_batch", { projectId, batchId: batch.id, merged });
+        await load(projectId);
       } catch (e) {
         console.error("[branch-batch] close failed:", e);
       }
     },
-    [selectedProject, load],
+    [projectId, load],
   );
 
   const merge = useCallback(
     async (batch: BranchBatch) => {
-      if (!selectedProject) return;
       try {
         await invoke<{ message: string; batch: BranchBatch }>("merge_branch_batch", {
-          projectPath: selectedProject.path,
-          projectId: selectedProject.id,
+          projectPath,
+          projectId,
           batchId: batch.id,
         });
-        await load(selectedProject.id);
+        await load(projectId);
       } catch (e) {
         console.error("[branch-batch] merge failed:", e);
       }
     },
-    [selectedProject, load],
+    [projectPath, projectId, load],
   );
 
   return (
     <div style={s.bbView}>
       <div style={s.bbHeader}>
-        <button type="button" style={s.bbBackBtn} onClick={onBack}>
-          <ArrowLeft size={14} />
-          返回
+        <button type="button" style={s.bbBackBtn} onClick={onClose}>
+          <X size={14} />
+          关闭
         </button>
-        <span style={s.bbTitle}>分支批</span>
-        <div style={s.bbOptionGrid}>
-          {projects.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              style={projectId === p.id ? s.bbOptionBtnActive : s.bbOptionBtn}
-              onClick={() => setProjectId(p.id)}
-            >
-              {p.name}
-            </button>
-          ))}
-        </div>
         <div style={s.bbFill} />
         <button type="button" style={s.bbBtnPrimary} onClick={() => setShowCreate(true)}>
           <Plus size={14} />
-          新建批
+          新建 PR
         </button>
       </div>
 
       <div style={s.bbList}>
-        {batches.length === 0 && <div style={s.bbEmpty}>暂无分支批，点击「新建批」创建。</div>}
+        {batches.length === 0 && <div style={s.bbEmpty}>暂无 PR，点击「新建 PR」创建。</div>}
         {batches.map((batch) => (
           <div key={batch.id} style={s.bbCard}>
             <div style={s.bbCardHead}>
@@ -149,10 +129,35 @@ export function BranchBatchView({
               <span>→ {batch.targetBranch}</span>
               <span>{batch.taskIds.length} 个议题</span>
             </div>
+            <div style={s.bbCardSub}>
+              <span style={s.bbCardMono}>worktree: {projectPath}/.nezha/worktrees/{batch.id}</span>
+            </div>
             <div style={s.bbCardActions}>
               <button type="button" style={s.bbBtnGhost} onClick={() => setDiffBatch(batch)}>
                 <RefreshCw size={13} />
                 查看 Diff
+              </button>
+              <button
+                type="button"
+                style={s.bbBtnGhost}
+                onClick={() =>
+                  void navigator.clipboard.writeText(`${projectPath}/.nezha/worktrees/${batch.id}`)
+                }
+              >
+                复制路径
+              </button>
+              <button
+                type="button"
+                style={s.bbBtnGhost}
+                disabled={batch.status === "merged" || batch.status === "closed"}
+                onClick={() =>
+                  void invoke("open_in_system_file_manager", {
+                    path: `${projectPath}/.nezha/worktrees/${batch.id}`,
+                    projectPath,
+                  })
+                }
+              >
+                打开
               </button>
               {batch.status === "active" && (
                 <button type="button" style={s.bbBtnGhost} onClick={() => setReviewBatch(batch)}>
@@ -169,11 +174,7 @@ export function BranchBatchView({
                   解决冲突
                 </button>
               )}
-              <button
-                type="button"
-                style={s.bbBtnGhost}
-                onClick={() => void close(batch, false)}
-              >
+              <button type="button" style={s.bbBtnGhost} onClick={() => void close(batch, false)}>
                 关闭
               </button>
               {batch.status === "active" && (
@@ -194,52 +195,50 @@ export function BranchBatchView({
         ))}
       </div>
 
-      {showCreate && selectedProject && (
+      {showCreate && (
         <CreateBranchBatchDialog
-          projectId={selectedProject.id}
-          projectPath={selectedProject.path}
+          projectId={projectId}
+          projectPath={projectPath}
           tasks={tasks}
           onCreated={(batch) => setBatches((prev) => [...prev, batch])}
           onClose={() => setShowCreate(false)}
         />
       )}
 
-      {diffBatch && selectedProject && (
+      {diffBatch && (
         <BranchBatchDiff
-          projectPath={selectedProject.path}
+          projectPath={projectPath}
           baseBranch={diffBatch.baseBranch}
           branch={diffBatch.branch}
           onClose={() => setDiffBatch(null)}
         />
       )}
 
-      {pickBatch && selectedProject && (
+      {pickBatch && (
         <PatchPickView
-          projectPath={selectedProject.path}
-          worktreePath={`${selectedProject.path}/.nezha/worktrees/${pickBatch.id}`}
+          projectPath={projectPath}
+          worktreePath={`${projectPath}/.nezha/worktrees/${pickBatch.id}`}
           targetBranch={pickBatch.branch}
           onClose={() => setPickBatch(null)}
         />
       )}
 
-      {reviewBatch && selectedProject && (
+      {reviewBatch && (
         <MergeReviewView
-          projectPath={selectedProject.path}
-          worktreePath={`${selectedProject.path}/.nezha/worktrees/${reviewBatch.id}`}
+          projectPath={projectPath}
+          worktreePath={`${projectPath}/.nezha/worktrees/${reviewBatch.id}`}
           baseBranch={reviewBatch.baseBranch}
           branch={reviewBatch.branch}
           agent="claude"
-          onPass={() =>
-            setReviewPassed((prev) => new Set(prev).add(reviewBatch.id))
-          }
+          onPass={() => setReviewPassed((prev) => new Set(prev).add(reviewBatch.id))}
           onClose={() => setReviewBatch(null)}
         />
       )}
 
-      {conflictBatch && selectedProject && (
+      {conflictBatch && (
         <ConflictResolveView
-          projectPath={selectedProject.path}
-          worktreePath={`${selectedProject.path}/.nezha/worktrees/${conflictBatch.id}`}
+          projectPath={projectPath}
+          worktreePath={`${projectPath}/.nezha/worktrees/${conflictBatch.id}`}
           onClose={() => setConflictBatch(null)}
         />
       )}
