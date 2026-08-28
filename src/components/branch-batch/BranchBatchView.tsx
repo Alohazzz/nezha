@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, RefreshCw } from "lucide-react";
 import type { BranchBatch, BranchBatchStatus, Project, Task } from "../../types";
 import s from "../../styles";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
+import { BranchBatchDiff } from "./BranchBatchDiff";
 
 const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   draft: "草稿",
@@ -33,6 +34,7 @@ export function BranchBatchView({
   const [projectId, setProjectId] = useState<string>(projects[0]?.id ?? "");
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [diffBatch, setDiffBatch] = useState<BranchBatch | null>(null);
 
   const selectedProject = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
@@ -49,23 +51,6 @@ export function BranchBatchView({
   useEffect(() => {
     void load(projectId);
   }, [projectId, load]);
-
-  const refreshDiff = useCallback(
-    async (batch: BranchBatch) => {
-      if (!selectedProject) return;
-      const files = await invoke<Array<{ additions: number; deletions: number }>>("git_branch_diff_stats", {
-        projectPath: selectedProject.path,
-        baseBranch: batch.baseBranch,
-        branch: batch.branch,
-      });
-      const additions = files.reduce((a, f) => a + (f.additions || 0), 0);
-      const deletions = files.reduce((a, f) => a + (f.deletions || 0), 0);
-      setBatches((prev) =>
-        prev.map((b) => (b.id === batch.id ? { ...b, additions, deletions } : b)),
-      );
-    },
-    [selectedProject],
-  );
 
   const close = useCallback(
     async (batch: BranchBatch, merged: boolean) => {
@@ -151,9 +136,9 @@ export function BranchBatchView({
               <span>{batch.taskIds.length} 个议题</span>
             </div>
             <div style={s.bbCardActions}>
-              <button type="button" style={s.bbBtnGhost} onClick={() => void refreshDiff(batch)}>
+              <button type="button" style={s.bbBtnGhost} onClick={() => setDiffBatch(batch)}>
                 <RefreshCw size={13} />
-                Diff 计数
+                查看 Diff
               </button>
               <button
                 type="button"
@@ -183,6 +168,15 @@ export function BranchBatchView({
           tasks={tasks}
           onCreated={(batch) => setBatches((prev) => [...prev, batch])}
           onClose={() => setShowCreate(false)}
+        />
+      )}
+
+      {diffBatch && selectedProject && (
+        <BranchBatchDiff
+          projectPath={selectedProject.path}
+          baseBranch={diffBatch.baseBranch}
+          branch={diffBatch.branch}
+          onClose={() => setDiffBatch(null)}
         />
       )}
     </div>
