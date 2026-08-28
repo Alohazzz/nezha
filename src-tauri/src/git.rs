@@ -1907,6 +1907,122 @@ pub async fn git_branch_diff_file(
     .map_err(|e| format!("Diff file task panicked: {}", e))?
 }
 
+/// 补丁挑拣依赖预检的规划结果：requested commit 及其尚未在目标分支上的前置 commit（含自身）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PatchPickPlan {
+    pub commit: String,
+    pub already_on_target: bool,
+    pub needed: Vec<String>,
+}
+
+/// 对每个请求的 commit，用 `git rev-list <commit> --not HEAD --reverse` 计算需要挑拣的
+/// 依赖序（最旧在前）；已存在于目标分支（HEAD 祖先）则标记 already_on_target 且 needed 为空。
+fn patch_pick_plan_blocking(cwd: &str, commit_hashes: &[String]) -> Result<Vec<PatchPickPlan>, String> {
+    let mut plans = Vec::new();
+    for hash in commit_hashes {
+        let h = hash.trim();
+        if h.is_empty() {
+            continue;
+        }
+        let output = run_git(cwd, &["rev-list", h, "--not", "HEAD", "--reverse"])?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let needed: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        plans.push(PatchPickPlan {
+            commit: h.to_string(),
+            already_on_target: needed.is_empty(),
+            needed,
+        });
+    }
+    Ok(plans)
+}
+
+/// 挑拣前依赖预检：返回每个请求 commit 的“是否已在目标 + 需要的依赖序”，供前端提示“连带挑前置”。
+#[tauri::command]
+pub async fn git_patch_dependency_check(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    commit_hashes: Vec<String>,
+) -> Result<Vec<PatchPickPlan>, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || patch_pick_plan_blocking(&worktree_path, &commit_hashes))
+        .await
+        .map_err(|e| format!("Patch check task panicked: {}", e))?
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CherryPickConflict {
+    pub commit: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CherryPickResult {
+    pub picked: Vec<String>,
+    pub skipped: Vec<String>,
+    pub conflicted: Option<CherryPickConflict>,
+}
+
+/// 把若干 commit 按依赖顺序 `git cherry-pick -x` 到补丁（当前）工作区。
+/// 挑到冲突时停止并返回冲突，让前端可交给「用 Agent 解决冲突」入口。
+#[tauri::command]
+pub async fn cherry_pick_to_patch(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    commit_hashes: Vec<String>,
+) -> Result<CherryPickResult, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || {
+        let plans = patch_pick_plan_blocking(&worktree_path, &commit_hashes)?;
+        let skipped = plans
+            .iter()
+            .filter(|p| p.already_on_target)
+            .map(|p| p.commit.clone())
+            .collect::<Vec<_>>();
+        // 按依赖序（最旧在前）去重合并所有需要的 commit。
+        let mut order: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for plan in &plans {
+            for commit in &plan.needed {
+                if seen.insert(commit.clone()) {
+                    order.push(commit.clone());
+                }
+            }
+        }
+        let mut picked = Vec::new();
+        for commit in &order {
+            let output = run_git(&worktree_path, &["cherry-pick", "-x", commit])?;
+            if !output.status.success() {
+                return Ok(CherryPickResult {
+                    picked,
+                    skipped,
+                    conflicted: Some(CherryPickConflict {
+                        commit: commit.clone(),
+                        message: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    }),
+                });
+            }
+            picked.push(commit.clone());
+        }
+        Ok(CherryPickResult {
+            picked,
+            skipped,
+            conflicted: None,
+        })
+    })
+    .await
+    .map_err(|e| format!("Cherry pick task panicked: {}", e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2259,6 +2375,57 @@ mod tests {
         assert_eq!(stats[0].path, "a.txt");
         assert_eq!(stats[0].additions, 1);
         assert_eq!(stats[0].deletions, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn patch_pick_plan_orders_dependencies_oldest_first() {
+        let dir = std::env::temp_dir().join(format!("nezha-pick-plan-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let mut cmd = Command::new("git");
+            cmd.args(args).current_dir(&dir);
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        run(&["checkout", "-q", "-b", "base"]);
+        fs::write(dir.join("a.txt"), "0\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "base"]);
+        run(&["checkout", "-q", "-b", "feature/x"]);
+        fs::write(dir.join("a.txt"), "0\n1\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "one"]);
+        fs::write(dir.join("a.txt"), "0\n1\n2\n").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "two"]);
+        let second = String::from_utf8_lossy(
+            &Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        run(&["checkout", "-q", "base"]);
+        run(&["checkout", "-q", "-b", "hotfix/2.5.1"]);
+        let dir_str = dir.to_string_lossy().into_owned();
+        let plans = super::patch_pick_plan_blocking(&dir_str, &[second.clone()]).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert!(!plans[0].already_on_target);
+        assert_eq!(plans[0].needed.len(), 2);
+        // 最旧在前：第一个 commit 的 parent 是 base 上的初始提交，第二个是后续。
+        assert_ne!(plans[0].needed[0], plans[0].needed[1]);
         let _ = fs::remove_dir_all(&dir);
     }
 }

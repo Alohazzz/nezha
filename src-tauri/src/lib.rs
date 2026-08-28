@@ -447,6 +447,8 @@ pub fn run() {
     batch::close_branch_batch,
     git::git_branch_diff_stats,
     git::git_branch_diff_file,
+    git::git_patch_dependency_check,
+    git::cherry_pick_to_patch,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,
