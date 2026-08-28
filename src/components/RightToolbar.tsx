@@ -29,7 +29,7 @@ export function RightToolbar({
     { key: "git-changes", icon: <GitBranch size={17} />, title: t("toolbar.gitChanges") },
     { key: "git-history", icon: <History size={17} />, title: t("toolbar.gitHistory") },
     { key: "build", icon: <Hammer size={17} />, title: t("toolbar.build") },
-    { key: "branch-batch", icon: <GitPullRequest size={17} />, title: "创建PR" },
+    { key: "branch-batch", icon: <GitPullRequest size={17} />, title: "PR" },
   ];
 
   const footerItems = [
