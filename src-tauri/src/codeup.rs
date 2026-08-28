@@ -435,7 +435,7 @@ pub async fn codeup_list_pending_mrs(
             let wt = if project_path.is_empty() {
                 String::new()
             } else {
-                mr_worktree_path(&project_path, &mr_biz).unwrap_or_default()
+                mr_worktree_path(&project_path, &local_id.to_string()).unwrap_or_default()
             };
             let pulled = !project_path.is_empty()
                 && !wt.is_empty()

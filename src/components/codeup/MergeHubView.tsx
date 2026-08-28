@@ -93,6 +93,10 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
   );
 
   const runReview = useCallback(async (mr: CodeupMr) => {
+    if (!mr.pulled) {
+      setNotice("请先「拉取代码」再执行代码审查。");
+      return;
+    }
     const key = mr.id;
     setReviews((prev) => ({ ...prev, [key]: { running: true, findings: [], error: "" } }));
     try {
@@ -130,6 +134,10 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
   }, []);
 
   const resolveConflicts = useCallback(async (mr: CodeupMr) => {
+    if (!mr.pulled) {
+      setNotice("请先「拉取代码」再处理冲突。");
+      return;
+    }
     setBusyId(mr.id);
     setNotice("");
     try {
@@ -227,7 +235,7 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
               <button
                 type="button"
                 style={s.bbBtnGhost}
-                disabled={reviews[mr.id]?.running || !mr.pulled}
+                disabled={reviews[mr.id]?.running}
                 onClick={() => void runReview(mr)}
               >
                 <Play size={13} />
@@ -237,7 +245,7 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
                 <button
                   type="button"
                   style={s.bbBtnGhost}
-                  disabled={!mr.pulled || busyId === mr.id}
+                  disabled={busyId === mr.id}
                   onClick={() => void resolveConflicts(mr)}
                 >
                   <GitMerge size={13} />
