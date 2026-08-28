@@ -231,6 +231,12 @@ export const layout = {
     position: "relative" as const,
   },
   rightPanelWrap: { position: "relative" as const, display: "flex", flexShrink: 0 },
+  rightPanelWrapCol: {
+    position: "relative" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+    flexShrink: 0,
+  },
   rightPanelResizeHandle: {
     position: "absolute" as const,
     left: 0,
@@ -239,6 +245,35 @@ export const layout = {
     width: 5,
     cursor: "col-resize",
     zIndex: 10,
+  },
+  rpTabs: {
+    display: "flex",
+    gap: 2,
+    padding: "4px 8px",
+    borderBottom: "1px solid var(--border-dim)",
+    flexShrink: 0,
+  },
+  rpTab: {
+    flex: 1,
+    padding: "6px 4px",
+    textAlign: "center" as const,
+    fontSize: 11.5,
+    color: "var(--text-muted)",
+    borderRadius: 7,
+    border: "1px solid transparent",
+    background: "transparent",
+    cursor: "pointer",
+  },
+  rpTabActive: {
+    background: "var(--accent-subtle)",
+    color: "var(--accent)",
+    fontWeight: 700,
+  },
+  rpContent: {
+    flex: 1,
+    minHeight: 0,
+    display: "flex",
+    overflow: "hidden",
   },
   placeholderView: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center" },
 } satisfies Record<string, React.CSSProperties>;

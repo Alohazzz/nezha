@@ -1081,8 +1081,8 @@ export function ProjectPage({
         )}
       </div>
 
-      {rightPanel && rightPanel !== "build" && (
-        <div style={s.rightPanelWrap}>
+      {rightPanel && (
+        <div style={s.rightPanelWrapCol}>
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
             <WorktreeScopeSelect
@@ -1091,6 +1091,28 @@ export function ProjectPage({
               onChange={setWorktreeScope}
             />
           </div>
+          <div style={s.rpTabs}>
+            {([
+              { key: "files", label: "文件" },
+              { key: "git-changes", label: "变更" },
+              { key: "git-history", label: "历史" },
+              { key: "build", label: "构建" },
+              { key: "branch-batch", label: "PR" },
+            ] as Array<{
+              key: "files" | "git-changes" | "git-history" | "build" | "branch-batch";
+              label: string;
+            }>).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                style={rightPanel === tab.key ? s.rpTabActive : s.rpTab}
+                onClick={() => handleTogglePanel(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div style={s.rpContent}>
           {rightPanel === "files" && (
             <ErrorBoundary label="文件浏览器">
               <FileExplorer
@@ -1139,39 +1161,32 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
+          {rightPanel === "build" && (
+            <ErrorBoundary label="构建">
+              <BuildPanel
+                projectPath={worktreeScope || project.path}
+                width={rightPanelWidth}
+                onCreateFixTask={(t) =>
+                  onSubmitTask({
+                    prompt: t.prompt,
+                    agent: t.agent as AgentType,
+                    permissionMode: t.permissionMode as PermissionMode,
+                    model: undefined,
+                    reasoningEffort: undefined,
+                    images: [],
+                    texts: [],
+                    immediate: true,
+                    launchMode: t.launchMode,
+                    baseBranch: t.baseBranch,
+                    repoPath: t.repoPath,
+                  })
+                }
+              />
+            </ErrorBoundary>
+          )}
         </div>
-      )}
-
-      {/* BuildPanel 始终挂载（非激活时隐藏），避免切换右面板后状态丢失 */}
-      <div
-        style={{
-          ...s.rightPanelWrap,
-          display: rightPanel === "build" ? "flex" : "none",
-        }}
-      >
-        <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
-          <ErrorBoundary label="构建">
-            <BuildPanel
-              projectPath={worktreeScope || project.path}
-            width={rightPanelWidth}
-            onCreateFixTask={(t) =>
-              onSubmitTask({
-                prompt: t.prompt,
-                agent: t.agent as AgentType,
-                permissionMode: t.permissionMode as PermissionMode,
-                model: undefined,
-                reasoningEffort: undefined,
-                images: [],
-                texts: [],
-                immediate: true,
-                launchMode: t.launchMode,
-                baseBranch: t.baseBranch,
-                repoPath: t.repoPath,
-              })
-            }
-          />
-        </ErrorBoundary>
       </div>
+      )}
 
       <RightToolbar
         activePanel={rightPanel}
