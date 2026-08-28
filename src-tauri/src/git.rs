@@ -1810,6 +1810,103 @@ fn accumulate_numstat(stdout: &[u8], additions: &mut i32, deletions: &mut i32) {
     }
 }
 
+/// 分支间 diff（base...branch）的单文件增减行数（供合并 Diff 文件列表）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiffFileStat {
+    pub path: String,
+    pub additions: i32,
+    pub deletions: i32,
+}
+
+fn parse_diff_numstat(stdout: &[u8]) -> Vec<DiffFileStat> {
+    let mut files = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        if parts.len() != 3 {
+            continue;
+        }
+        files.push(DiffFileStat {
+            path: parts[2].to_string(),
+            additions: parts[0].parse::<i32>().unwrap_or(0),
+            deletions: parts[1].parse::<i32>().unwrap_or(0),
+        });
+    }
+    files
+}
+
+fn ensure_relative_file_path(file_path: &str) -> Result<(), String> {
+    if file_path.trim().is_empty() {
+        return Err("File path is required".to_string());
+    }
+    let path = Path::new(file_path);
+    if path.is_absolute() || file_path.split('/').any(|seg| seg == "..") {
+        return Err("Invalid file path".to_string());
+    }
+    Ok(())
+}
+
+/// 计算 base 与任意分支之间的 diff（base...branch 三点 diff，等价于相对 merge-base）。
+fn git_branch_diff_stats_blocking(
+    cwd: &str,
+    base_branch: &str,
+    branch: &str,
+) -> Result<Vec<DiffFileStat>, String> {
+    let spec = format!("{}...{}", base_branch.trim(), branch.trim());
+    let output = run_git(cwd, &["diff", "--numstat", &spec])?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(parse_diff_numstat(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn git_branch_diff_stats(
+    project_path: String,
+    repo_path: Option<String>,
+    base_branch: String,
+    branch: String,
+) -> Result<Vec<DiffFileStat>, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    if base_branch.trim().is_empty() || branch.trim().is_empty() {
+        return Err("baseBranch and branch are required".to_string());
+    }
+    tokio::task::spawn_blocking(move || git_branch_diff_stats_blocking(&cwd, &base_branch, &branch))
+        .await
+        .map_err(|e| format!("Diff stats task panicked: {}", e))?
+}
+
+/// 获取 base 与任意分支之间某个文件的统一 diff 文本。
+#[tauri::command]
+pub async fn git_branch_diff_file(
+    project_path: String,
+    repo_path: Option<String>,
+    base_branch: String,
+    branch: String,
+    file_path: String,
+) -> Result<String, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    if base_branch.trim().is_empty() || branch.trim().is_empty() {
+        return Err("baseBranch and branch are required".to_string());
+    }
+    ensure_relative_file_path(&file_path)?;
+    tokio::task::spawn_blocking(move || {
+        let spec = format!("{}...{}", base_branch.trim(), branch.trim());
+        let output = run_git(&cwd, &["diff", &spec, "--", &file_path])?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+        let limit = 500 * 1024;
+        if raw.len() > limit {
+            Ok(raw.chars().take(limit).collect())
+        } else {
+            Ok(raw)
+        }
+    })
+    .await
+    .map_err(|e| format!("Diff file task panicked: {}", e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2128,5 +2225,40 @@ mod tests {
         let args = build_commit_message_agent_args("codex", "msg", None, None);
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert_eq!(args, vec!["exec", "msg"]);
+    }
+
+    #[test]
+    fn branch_diff_stats_counts_additions_and_deletions() {
+        let dir = std::env::temp_dir().join(format!("nezha-branch-diff-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.to_string_lossy().into_owned();
+        let run = |args: &[&str]| {
+            let mut cmd = Command::new("git");
+            cmd.args(args).current_dir(&dir);
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        run(&["checkout", "-q", "-b", "base"]);
+        fs::write(dir.join("a.txt"), "line1\nline2\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "base"]);
+        run(&["checkout", "-q", "-b", "feature/x"]);
+        fs::write(dir.join("a.txt"), "line1\nline2\nline3\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "change"]);
+        let stats = super::git_branch_diff_stats_blocking(&dir_str, "base", "feature/x").unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].path, "a.txt");
+        assert_eq!(stats[0].additions, 1);
+        assert_eq!(stats[0].deletions, 0);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
