@@ -13,6 +13,19 @@ use crate::yunxiao::{API_BASE, build_client, read_json_body};
 /// Codeup API 前缀（相对接入点）。若实际为其它路径，仅需改这里。
 const CODUP_PREFIX: &str = "oapi/v1/codeup";
 
+/// 进程内自增计数，与毫秒时间戳组合保证每次临时目录/分支不重名。
+static MR_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 为这次操作生成唯一后缀（毫秒时间戳 + 进程内自增）。
+fn unique_mr_temp_suffix() -> String {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let n = MR_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{ts}-{n}")
+}
+
 /// 一个仓库的 Codeup 定位信息。
 #[derive(Clone, Debug)]
 struct CodeupRepo {
@@ -127,13 +140,28 @@ async fn resolve_project_for_repo(repository: &str) -> Result<String, String> {
     Err(format!("本地未注册仓库 {repository}，无法拉取代码。请先将其注册为 Nezha 项目。"))
 }
 
-/// 某个 MR 在本地拉取后的 worktree 路径（`<project>/.nezha/worktrees/codeup-mr-<mr_id>`）。
-fn mr_worktree_path(project_path: &str, mr_id: &str) -> Result<String, String> {
-    let p = std::path::Path::new(project_path)
-        .join(".nezha")
-        .join("worktrees")
-        .join(format!("codeup-mr-{mr_id}"));
-    path_to_string(&p)
+/// 该 MR 当前仍存在的本地临时 worktree 路径（取最近创建的一个），没有则返回 None。
+fn mr_find_local_worktree(cwd: &str, mr_id: &str) -> Option<String> {
+    let worktrees_dir = Path::new(cwd).join(".nezha").join("worktrees");
+    let base = format!("codeup-mr-{mr_id}");
+    let prefix = format!("{base}-");
+    let entries = std::fs::read_dir(&worktrees_dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, String)> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if path.is_dir() && (name == base || name.starts_with(&prefix)) {
+            let created = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.created().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            if best.as_ref().map(|(t, _)| created > *t).unwrap_or(true) {
+                best = Some((created, path.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// 读取应用级设置中的云效 token / organizationId。
@@ -432,14 +460,17 @@ pub async fn codeup_list_pending_mrs(
                 .unwrap_or_default();
             let repo_path = namespace_to_repo_path(&ns);
             let project_path = resolve_project_for_repo(&repo_path).await.unwrap_or_default();
-            let wt = if project_path.is_empty() {
+            let cwd = if project_path.is_empty() {
                 String::new()
             } else {
-                mr_worktree_path(&project_path, &local_id.to_string()).unwrap_or_default()
+                resolve_repo_path(&project_path, None).await.unwrap_or_default()
             };
-            let pulled = !project_path.is_empty()
-                && !wt.is_empty()
-                && std::path::Path::new(&wt).exists();
+            let wt = if cwd.is_empty() {
+                String::new()
+            } else {
+                mr_find_local_worktree(&cwd, &local_id.to_string()).unwrap_or_default()
+            };
+            let pulled = !wt.is_empty();
             out.push(CodeupMr {
                 project_id: project_id.clone(),
                 project_path,
@@ -616,25 +647,51 @@ pub async fn codeup_merge_mr(
     Ok(mr_id)
 }
 
-/// 为某个 MR 拉取其源分支并创建本地临时 worktree，供 Agent 代码审核/冲突解决使用。
-/// 若已存在同名 worktree 则直接复用。
-#[tauri::command]
-pub async fn codeup_ensure_worktree(
-    project_path: String,
-    repo_path: Option<String>,
+/// 清掉该 MR 在 `.nezha/worktrees` 下所有 `codeup-mr-<id>(-*)` 临时 worktree
+/// （含 git worktree 元数据与临时分支），失败静默。
+async fn codeup_cleanup_mr_temps(cwd: String, mr_id: String) {
+    tokio::task::spawn_blocking(move || {
+        let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
+        let base = format!("codeup-mr-{mr_id}");
+        let prefix = format!("{base}-");
+        let Ok(entries) = std::fs::read_dir(&worktrees_dir) else {
+            return;
+        };
+        // Windows 下 git 把 worktree 登记为 //?/ 长路径，直接 `git worktree remove` 用普通
+        // 路径会匹配不上（"not a working tree"）。所以先物理删目录，再 prune 清登记，最后删分支。
+        let mut removed_names: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path();
+            if path.is_dir() && (name == base || name.starts_with(&prefix)) {
+                let _ = std::fs::remove_dir_all(&path);
+                removed_names.push(name);
+            }
+        }
+        let _ = run_git(&cwd, &["worktree", "prune"]);
+        for name in removed_names {
+            let _ = run_git(&cwd, &["branch", "-D", &name]);
+        }
+    })
+    .await
+    .ok();
+}
+
+/// 为 MR 创建一份**全新的**临时 worktree（每次都是新目录，绝不复用本地遗留）。
+/// 返回 `(worktree_path, local_branch)`。
+async fn codeup_create_temp_worktree(
+    cwd: String,
     source_branch: String,
     mr_id: String,
-) -> Result<String, String> {
-    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+) -> Result<(String, String), String> {
     tokio::task::spawn_blocking(move || {
         let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
         std::fs::create_dir_all(&worktrees_dir)
             .map_err(|e| format!("创建 worktrees 目录失败: {e}"))?;
-        let wt = worktrees_dir.join(format!("codeup-mr-{mr_id}"));
-        let wt_str = path_to_string(&wt)?;
-        if wt.exists() {
-            return Ok(wt_str);
-        }
+        let suffix = unique_mr_temp_suffix();
+        let dir = worktrees_dir.join(format!("codeup-mr-{mr_id}-{suffix}"));
+        let dir_str = path_to_string(&dir)?;
+        let local = format!("codeup-mr-{mr_id}-{suffix}");
         // 先拉取源分支，再基于远端 ref 建本地分支 + worktree。
         let fetch = run_git(&cwd, &["fetch", "origin", &source_branch])?;
         if !fetch.status.success() {
@@ -643,23 +700,33 @@ pub async fn codeup_ensure_worktree(
                 String::from_utf8_lossy(&fetch.stderr).trim()
             ));
         }
-        let local = format!("codeup-mr-{mr_id}");
         let branch_ref = format!("origin/{source_branch}");
-        let add = run_git(&cwd, &["worktree", "add", &wt_str, "-b", &local, &branch_ref])?;
+        let add = run_git(&cwd, &["worktree", "add", &dir_str, "-b", &local, &branch_ref])?;
         if !add.status.success() {
             return Err(format!(
                 "创建 worktree 失败: {}",
                 String::from_utf8_lossy(&add.stderr).trim()
             ));
         }
-        Ok(wt_str)
+        Ok((dir_str, local))
     })
     .await
-    .map_err(|e| format!("ensure worktree task panicked: {e}"))?
+    .map_err(|e| format!("create temp worktree task panicked: {e}"))?
 }
 
-/// 对某个跨仓库 MR 执行 Agent 代码审查：先在已注册项目里按仓库路径找到本地仓库，
-/// 再建临时 worktree，最后跑 `run_merge_code_review`（软提示，仅返回 findings）。
+/// 移除本次操作创建的临时 worktree（force 移除 + prune + 删临时分支），失败静默。
+async fn codeup_remove_temp_worktree(cwd: String, worktree_path: String, local_branch: String) {
+    tokio::task::spawn_blocking(move || {
+        let _ = std::fs::remove_dir_all(&worktree_path);
+        let _ = run_git(&cwd, &["worktree", "prune"]);
+        let _ = run_git(&cwd, &["branch", "-D", &local_branch]);
+    })
+    .await
+    .ok();
+}
+
+/// 对某个跨仓库 MR 执行 Agent 代码审查：每次都用一份**全新的临时 worktree**
+/// （不复用本地遗留，也不论是否已经拉取过），跑完即清理，仅返回 findings。
 #[tauri::command]
 pub async fn codeup_review_mr(
     repository: String,
@@ -670,22 +737,26 @@ pub async fn codeup_review_mr(
 ) -> Result<Vec<crate::agent_assist::ReviewFinding>, String> {
     let agent = agent.unwrap_or_else(|| "claude".to_string());
     let project_path = resolve_project_for_repo(&repository).await?;
-    let worktree_path = mr_worktree_path(&project_path, &mr_id)?;
-    if !std::path::Path::new(&worktree_path).exists() {
-        return Err("请先「拉取代码」再执行代码审查。".to_string());
-    }
-    crate::agent_assist::run_merge_code_review(
+    let cwd = resolve_repo_path(&project_path, None).await?;
+    // 每次处理都重建全新临时 worktree，先清掉旧残留。
+    codeup_cleanup_mr_temps(cwd.clone(), mr_id.clone()).await;
+    let (worktree_path, local_branch) =
+        codeup_create_temp_worktree(cwd.clone(), source_branch.clone(), mr_id.clone()).await?;
+    let result = crate::agent_assist::run_merge_code_review(
         project_path,
         None,
-        worktree_path,
+        worktree_path.clone(),
         target_branch,
         source_branch,
         agent,
     )
-    .await
+    .await;
+    codeup_remove_temp_worktree(cwd, worktree_path.clone(), local_branch).await;
+    result
 }
 
-/// 显式「拉取代码」：找到本地项目并建/复用该 MR 的 worktree，返回其路径。
+/// 显式「拉取代码」：为该 MR 建一份**全新的**临时 worktree 并返回路径（每次都是最新）。
+/// 该动作只做一次物化，供用户查看；后续审查/冲突处理各自重建，不再依赖这份。
 #[tauri::command]
 pub async fn codeup_pull_code(
     repository: String,
@@ -693,22 +764,38 @@ pub async fn codeup_pull_code(
     mr_id: String,
 ) -> Result<String, String> {
     let project_path = resolve_project_for_repo(&repository).await?;
-    codeup_ensure_worktree(project_path.clone(), None, source_branch.clone(), mr_id.clone()).await
+    let cwd = resolve_repo_path(&project_path, None).await?;
+    codeup_cleanup_mr_temps(cwd.clone(), mr_id.clone()).await;
+    let (worktree_path, _local_branch) =
+        codeup_create_temp_worktree(cwd, source_branch.clone(), mr_id.clone()).await?;
+    Ok(worktree_path)
 }
 
-/// 查询某个 MR 是否已拉到本地 worktree。
+/// 查询某个 MR 当前是否已存在本地临时 worktree。
 #[tauri::command]
 pub async fn codeup_is_pulled(repository: String, mr_id: String) -> Result<bool, String> {
     let project_path = match resolve_project_for_repo(&repository).await {
         Ok(p) => p,
         Err(_) => return Ok(false),
     };
-    let wt = mr_worktree_path(&project_path, &mr_id)?;
-    Ok(std::path::Path::new(&wt).exists())
+    let cwd = match resolve_repo_path(&project_path, None).await {
+        Ok(c) => c,
+        Err(_) => return Ok(false),
+    };
+    Ok(mr_find_local_worktree(&cwd, &mr_id).is_some())
 }
 
-/// 处理冲突（须先「拉取代码」）：在本地 worktree 里把目标分支并入源分支找出冲突；
-/// 有冲突则跑 Agent 解决→提交→push 回源分支；无冲突则提示可直接合并。
+/// 清理某 MR 的所有临时 worktree（Agent 审查/冲突任务结束后由前端调用）。
+#[tauri::command]
+pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), String> {
+    let project_path = resolve_project_for_repo(&repository).await?;
+    let cwd = resolve_repo_path(&project_path, None).await?;
+    codeup_cleanup_mr_temps(cwd, mr_id).await;
+    Ok(())
+}
+
+/// 处理冲突：每次用一份**全新的临时 worktree**（不复用本地遗留），把目标分支并入源分支找出冲突；
+/// 有冲突则跑 Agent 解决→提交→push 回源分支；无冲突则提示可直接合并。跑完即清理临时 worktree。
 #[tauri::command]
 pub async fn codeup_resolve_conflicts(
     repository: String,
@@ -719,13 +806,33 @@ pub async fn codeup_resolve_conflicts(
 ) -> Result<String, String> {
     let agent = agent.unwrap_or_else(|| "claude".to_string());
     let project_path = resolve_project_for_repo(&repository).await?;
-    let worktree_path = mr_worktree_path(&project_path, &mr_id)?;
-    if !std::path::Path::new(&worktree_path).exists() {
-        return Err("请先「拉取代码」再处理冲突。".to_string());
-    }
     if target_branch.trim().is_empty() {
         return Err("目标分支不能为空".to_string());
     }
+    let cwd = resolve_repo_path(&project_path, None).await?;
+    codeup_cleanup_mr_temps(cwd.clone(), mr_id.clone()).await;
+    let (worktree_path, local_branch) =
+        codeup_create_temp_worktree(cwd.clone(), source_branch.clone(), mr_id.clone()).await?;
+    let result = codeup_resolve_conflicts_inner(
+        project_path,
+        worktree_path.clone(),
+        target_branch,
+        source_branch,
+        agent,
+    )
+    .await;
+    codeup_remove_temp_worktree(cwd, worktree_path.clone(), local_branch).await;
+    result
+}
+
+/// `codeup_resolve_conflicts` 的具体冲突探测/解决逻辑（在临时 worktree 内执行）。
+async fn codeup_resolve_conflicts_inner(
+    project_path: String,
+    worktree_path: String,
+    target_branch: String,
+    source_branch: String,
+    agent: String,
+) -> Result<String, String> {
     // 拉目标分支，并在 worktree 里做一次不提交的 merge 以暴露冲突。
     let fetch = run_git(&worktree_path, &["fetch", "origin", &target_branch])?;
     if !fetch.status.success() {

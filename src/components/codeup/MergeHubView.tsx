@@ -32,14 +32,20 @@ function statusBadge(state: string) {
   return s.bbBadgeActive;
 }
 
-export function MergeHubView({ onBack }: { onBack: () => void }) {
+export function MergeHubView({
+  onBack,
+  onStartCodeupTask,
+}: {
+  onBack: () => void;
+  onStartCodeupTask: (mr: CodeupMr, kind: "review" | "conflict") => void | Promise<void>;
+}) {
   const [repos, setRepos] = useState<CodeupRepository[]>([]);
   const [repoFilter, setRepoFilter] = useState("");
   const [mrs, setMrs] = useState<CodeupMr[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
+  const [reviews] = useState<Record<string, ReviewState>>({});
   const [busyId, setBusyId] = useState("");
 
   const loadRepos = useCallback(async () => {
@@ -93,25 +99,8 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
   );
 
   const runReview = useCallback(async (mr: CodeupMr) => {
-    if (!mr.pulled) {
-      setNotice("请先「拉取代码」再执行代码审查。");
-      return;
-    }
-    const key = mr.id;
-    setReviews((prev) => ({ ...prev, [key]: { running: true, findings: [], error: "" } }));
-    try {
-      const findings = await invoke<ReviewFinding[]>("codeup_review_mr", {
-        repository: mr.repository,
-        sourceBranch: mr.sourceBranch,
-        targetBranch: mr.targetBranch,
-        mrId: String(mr.localId),
-        agent: "claude",
-      });
-      setReviews((prev) => ({ ...prev, [key]: { running: false, findings, error: "" } }));
-    } catch (e) {
-      setReviews((prev) => ({ ...prev, [key]: { running: false, findings: [], error: String(e) } }));
-    }
-  }, []);
+    await onStartCodeupTask(mr, "review");
+  }, [onStartCodeupTask]);
 
   const pullCode = useCallback(async (mr: CodeupMr) => {
     setBusyId(mr.id);
@@ -134,27 +123,8 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
   }, []);
 
   const resolveConflicts = useCallback(async (mr: CodeupMr) => {
-    if (!mr.pulled) {
-      setNotice("请先「拉取代码」再处理冲突。");
-      return;
-    }
-    setBusyId(mr.id);
-    setNotice("");
-    try {
-      const res = await invoke<string>("codeup_resolve_conflicts", {
-        repository: mr.repository,
-        sourceBranch: mr.sourceBranch,
-        targetBranch: mr.targetBranch,
-        mrId: String(mr.localId),
-        agent: "claude",
-      });
-      setNotice(res);
-    } catch (e) {
-      setNotice(String(e));
-    } finally {
-      setBusyId("");
-    }
-  }, []);
+    await onStartCodeupTask(mr, "conflict");
+  }, [onStartCodeupTask]);
 
   return (
     <div style={s.welcomePane}>

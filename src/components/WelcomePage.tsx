@@ -3,6 +3,7 @@ import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge } from
 import type {
   Project,
   Task,
+  CodeupMr,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -79,6 +80,7 @@ export function WelcomePage({
   tasks,
   onOpen,
   onProjectClick,
+  onStartCodeupTask,
   onDeleteProject,
   onToggleProjectHidden,
   onRenameProject,
@@ -108,6 +110,7 @@ export function WelcomePage({
   tasks: Task[];
   onOpen: () => void;
   onProjectClick: (p: Project) => void;
+  onStartCodeupTask: (mr: CodeupMr, kind: "review" | "conflict") => void | Promise<void>;
   onDeleteProject: (projectId: string) => void;
   onToggleProjectHidden: (projectId: string) => void;
   onRenameProject: (projectId: string, name: string) => Promise<ProjectRenameResult>;
@@ -218,7 +221,10 @@ export function WelcomePage({
         </div>
 
         {view === "codeup" ? (
-          <MergeHubView onBack={() => setView("projects")} />
+          <MergeHubView
+            onBack={() => setView("projects")}
+            onStartCodeupTask={onStartCodeupTask}
+          />
         ) : view === "yunxiao" ? (
           <YunxiaoView
             projects={allProjects}
