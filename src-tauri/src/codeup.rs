@@ -56,6 +56,11 @@ pub struct CodeupMr {
     /// 更新时间戳（若可解析）。
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
+    /// 本地是否已拉取该 MR 代码（用于「拉取代码」门禁）。
+    pub pulled: bool,
+    /// 已拉取后的本地 worktree 路径。
+    #[serde(rename = "worktreePath")]
+    pub worktree_path: String,
 }
 
 /// 返回给前端的 Codeup 仓库（用于仓库过滤下拉）。
@@ -104,6 +109,31 @@ async fn resolve_codeup_repo(project_path: &str, repo_path: Option<&str>) -> Res
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let (org, repository) = parse_codeup_remote(&url)?;
     Ok(CodeupRepo { org_id: org, repository })
+}
+
+/// 按仓库路径找到已注册的本地 Nezha 项目（git origin 可解析到同一 Codeup 仓库）。
+async fn resolve_project_for_repo(repository: &str) -> Result<String, String> {
+    let projects = load_projects()?;
+    for project in &projects {
+        if project.path.trim().is_empty() {
+            continue;
+        }
+        if let Ok(repo) = resolve_codeup_repo(&project.path, None).await {
+            if repo.repository == repository {
+                return Ok(project.path.clone());
+            }
+        }
+    }
+    Err(format!("本地未注册仓库 {repository}，无法拉取代码。请先将其注册为 Nezha 项目。"))
+}
+
+/// 某个 MR 在本地拉取后的 worktree 路径（`<project>/.nezha/worktrees/codeup-mr-<mr_id>`）。
+fn mr_worktree_path(project_path: &str, mr_id: &str) -> Result<String, String> {
+    let p = std::path::Path::new(project_path)
+        .join(".nezha")
+        .join("worktrees")
+        .join(format!("codeup-mr-{mr_id}"));
+    path_to_string(&p)
 }
 
 /// 读取应用级设置中的云效 token / organizationId。
@@ -400,10 +430,20 @@ pub async fn codeup_list_pending_mrs(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let repo_path = namespace_to_repo_path(&ns);
+            let project_path = resolve_project_for_repo(&repo_path).await.unwrap_or_default();
+            let wt = if project_path.is_empty() {
+                String::new()
+            } else {
+                mr_worktree_path(&project_path, &mr_biz).unwrap_or_default()
+            };
+            let pulled = !project_path.is_empty()
+                && !wt.is_empty()
+                && std::path::Path::new(&wt).exists();
             out.push(CodeupMr {
                 project_id: project_id.clone(),
-                project_path: String::new(),
-                repository: namespace_to_repo_path(&ns),
+                project_path,
+                repository: repo_path,
                 id: mr_biz,
                 title: item
                     .get("title")
@@ -446,6 +486,8 @@ pub async fn codeup_list_pending_mrs(
                     .unwrap_or("")
                     .to_string(),
                 updated_at: 0,
+                pulled,
+                worktree_path: wt,
             });
         }
         if arr.len() < 20 {
@@ -525,6 +567,8 @@ pub async fn codeup_get_mr(
             .unwrap_or("")
             .to_string(),
         updated_at: 0,
+        pulled: false,
+        worktree_path: String::new(),
     })
 }
 
@@ -625,27 +669,11 @@ pub async fn codeup_review_mr(
     agent: Option<String>,
 ) -> Result<Vec<crate::agent_assist::ReviewFinding>, String> {
     let agent = agent.unwrap_or_else(|| "claude".to_string());
-    let projects = load_projects()?;
-    let mut matched: Option<String> = None;
-    for project in &projects {
-        if project.path.trim().is_empty() {
-            continue;
-        }
-        let repo = match resolve_codeup_repo(&project.path, None).await {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        if repo.repository == repository {
-            matched = Some(project.path.clone());
-            break;
-        }
+    let project_path = resolve_project_for_repo(&repository).await?;
+    let worktree_path = mr_worktree_path(&project_path, &mr_id)?;
+    if !std::path::Path::new(&worktree_path).exists() {
+        return Err("请先「拉取代码」再执行代码审查。".to_string());
     }
-    let project_path = matched.ok_or_else(|| {
-        format!("本地未注册仓库 {repository}，无法执行 Agent 代码审查。请先将其注册为 Nezha 项目。")
-    })?;
-    let worktree_path =
-        codeup_ensure_worktree(project_path.clone(), None, source_branch.clone(), mr_id.clone())
-            .await?;
     crate::agent_assist::run_merge_code_review(
         project_path,
         None,
@@ -655,6 +683,89 @@ pub async fn codeup_review_mr(
         agent,
     )
     .await
+}
+
+/// 显式「拉取代码」：找到本地项目并建/复用该 MR 的 worktree，返回其路径。
+#[tauri::command]
+pub async fn codeup_pull_code(
+    repository: String,
+    source_branch: String,
+    mr_id: String,
+) -> Result<String, String> {
+    let project_path = resolve_project_for_repo(&repository).await?;
+    codeup_ensure_worktree(project_path.clone(), None, source_branch.clone(), mr_id.clone()).await
+}
+
+/// 查询某个 MR 是否已拉到本地 worktree。
+#[tauri::command]
+pub async fn codeup_is_pulled(repository: String, mr_id: String) -> Result<bool, String> {
+    let project_path = match resolve_project_for_repo(&repository).await {
+        Ok(p) => p,
+        Err(_) => return Ok(false),
+    };
+    let wt = mr_worktree_path(&project_path, &mr_id)?;
+    Ok(std::path::Path::new(&wt).exists())
+}
+
+/// 处理冲突（须先「拉取代码」）：在本地 worktree 里把目标分支并入源分支找出冲突；
+/// 有冲突则跑 Agent 解决→提交→push 回源分支；无冲突则提示可直接合并。
+#[tauri::command]
+pub async fn codeup_resolve_conflicts(
+    repository: String,
+    source_branch: String,
+    target_branch: String,
+    mr_id: String,
+    agent: Option<String>,
+) -> Result<String, String> {
+    let agent = agent.unwrap_or_else(|| "claude".to_string());
+    let project_path = resolve_project_for_repo(&repository).await?;
+    let worktree_path = mr_worktree_path(&project_path, &mr_id)?;
+    if !std::path::Path::new(&worktree_path).exists() {
+        return Err("请先「拉取代码」再处理冲突。".to_string());
+    }
+    if target_branch.trim().is_empty() {
+        return Err("目标分支不能为空".to_string());
+    }
+    // 拉目标分支，并在 worktree 里做一次不提交的 merge 以暴露冲突。
+    let fetch = run_git(&worktree_path, &["fetch", "origin", &target_branch])?;
+    if !fetch.status.success() {
+        return Err(format!(
+            "拉取目标分支失败: {}",
+            String::from_utf8_lossy(&fetch.stderr).trim()
+        ));
+    }
+    let target_ref = format!("origin/{target_branch}");
+    let merge = run_git(&worktree_path, &["merge", "--no-commit", "--no-ff", &target_ref])?;
+    if merge.status.success() {
+        // 无冲突，还原 worktree 状态即可。
+        let _ = run_git(&worktree_path, &["merge", "--abort"]);
+        return Ok("MR 当前无冲突，可直接合并。".to_string());
+    }
+    // 有冲突：Agent 解决 → 提交 → push 回源分支。
+    crate::agent_assist::run_conflict_resolution(
+        project_path.clone(),
+        None,
+        worktree_path.clone(),
+        agent,
+    )
+    .await?;
+    crate::git::commit_conflict_resolution(
+        project_path.clone(),
+        None,
+        worktree_path.clone(),
+        "resolve merge conflicts".to_string(),
+        None,
+    )
+    .await?;
+    let refspec = format!("HEAD:{source_branch}");
+    let push = run_git(&worktree_path, &["push", "origin", &refspec])?;
+    if !push.status.success() {
+        return Err(format!(
+            "推送解决结果到源分支失败: {}",
+            String::from_utf8_lossy(&push.stderr).trim()
+        ));
+    }
+    Ok("已解决冲突并推送回源分支，可刷新后合并。".to_string())
 }
 
 /// 供测试/调试：输出项目的 Codeup 定位信息（不含远端 URL 细节）。

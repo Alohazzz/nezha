@@ -1550,6 +1550,35 @@ fn task_worktree_branch_name(task_id: &str) -> String {
     format!("nezha/task-{}", short)
 }
 
+/// 默认 worktree 基路径：若项目父目录存在「可执行程序」（共享 hub 模式），自动用父目录作为
+/// 基路径（worktree 落成 `<父目录>/<task_id>`，使相对 HintPath 能解析到共享 hub）；
+/// 否则回退到 `<项目根>/.nezha/worktrees`（向后兼容）。
+fn default_worktree_base(repo_root: &str) -> PathBuf {
+    let root = Path::new(repo_root);
+    if let Some(parent) = root.parent() {
+        if parent.join("可执行程序").is_dir() {
+            return parent.to_path_buf();
+        }
+    }
+    root.join(".nezha").join("worktrees")
+}
+
+/// 自动探测项目里的 prepare-run-root 脚本（HIS 场景是 `.codex/skills/hsp-prepare-run-root/...` 符号链接）。
+/// 不存在则返回 None（不自动运行）。
+fn auto_prepare_script(repo_root: &str) -> Option<PathBuf> {
+    let p = Path::new(repo_root)
+        .join(".codex")
+        .join("skills")
+        .join("hsp-prepare-run-root")
+        .join("scripts")
+        .join("hsp-prepare-run-root.ps1");
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
 /// 校验 worktree 路径必须落在 `<repo_root>/.nezha/worktrees/` 之下，
 /// 防止 remove_task_worktree 被传入任意路径。多 sub-repo 项目中 repo_root 为 sub-repo
 /// 根；单仓库时与 project_path 一致（向后兼容旧 worktree 数据）。
@@ -1557,10 +1586,13 @@ pub(crate) fn ensure_path_under_worktrees_root(
     repo_root: &str,
     worktree_path: &str,
 ) -> Result<(), String> {
-    let root = Path::new(repo_root)
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve repo path: {}", e))?;
-    let expected_root = root.join(".nezha").join("worktrees");
+    let cfg = crate::config::read_project_config(repo_root.to_string())
+        .unwrap_or_else(|_| crate::config::ProjectConfig::default());
+    let expected_root = if !cfg.worktree.base_path.is_empty() {
+        std::path::PathBuf::from(&cfg.worktree.base_path)
+    } else {
+        default_worktree_base(repo_root)
+    };
     let target = Path::new(worktree_path)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve worktree path: {}", e))?;
@@ -1586,7 +1618,13 @@ pub async fn create_task_worktree(
     }
 
     tokio::task::spawn_blocking(move || -> Result<WorktreeCreated, String> {
-        let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
+        let cfg = crate::config::read_project_config(project_path.clone())
+            .unwrap_or_else(|_| crate::config::ProjectConfig::default());
+    let worktrees_dir = if !cfg.worktree.base_path.is_empty() {
+        std::path::PathBuf::from(&cfg.worktree.base_path)
+    } else {
+        default_worktree_base(&cwd)
+    };
         std::fs::create_dir_all(&worktrees_dir)
             .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
 
@@ -1609,6 +1647,40 @@ pub async fn create_task_worktree(
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
 
+        // 自动准备运行根（后台执行，不阻塞创建；失败仅告警）
+        let prepare_script = if !cfg.worktree.prepare_script.is_empty() {
+            Some(cfg.worktree.prepare_script.clone())
+        } else {
+            auto_prepare_script(&cwd).map(|p| p.to_string_lossy().to_string())
+        };
+        if let Some(script) = prepare_script {
+            let run_root = worktree_path.join("_run");
+            std::thread::spawn(move || {
+                let out = std::process::Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        &script,
+                        "-Target",
+                    ])
+                    .arg(&run_root)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output();
+                if let Ok(o) = out {
+                    if !o.status.success() {
+                        eprintln!(
+                            "prepare run-root failed for {}: {:?}",
+                            run_root.display(),
+                            o.status
+                        );
+                    }
+                }
+            });
+        }
+
         Ok(WorktreeCreated {
             worktree_path: wt_path_str,
             worktree_branch: branch,
@@ -1623,75 +1695,82 @@ pub async fn create_task_worktree(
 pub async fn merge_task_worktree(
     project_path: String,
     repo_path: Option<String>,
-    worktree_path: String,
+    _worktree_path: String,
     branch: String,
     base_branch: String,
     expected_issue_tag: Option<String>,
 ) -> Result<String, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
     if branch.trim().is_empty() || base_branch.trim().is_empty() {
         return Err("Branch and base branch are required".to_string());
     }
 
     tokio::task::spawn_blocking(move || -> Result<String, String> {
-        // 0) worktree 自身有未提交修改 → 拒绝合并，避免丢失工作进度
-        let wt_status = run_git(&worktree_path, &["status", "--porcelain"])?;
-        if !wt_status.status.success() {
-            return Err(String::from_utf8_lossy(&wt_status.stderr)
-                .trim()
-                .to_string());
-        }
-        if !wt_status.stdout.is_empty() {
-            return Err(
-                "Worktree has uncommitted changes; commit or stash them before merging".into(),
-            );
-        }
-
-        // 0.5) 云效任务：合并前校验分支内全部提交都带 #议题编号
-        if let Some(tag) = expected_issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty())
-        {
-            validate_commits_contain_tag(&cwd, &base_branch, &branch, tag)?;
-        }
-
-        // 拿主仓当前 HEAD：HEAD == base 时直接 merge，否则用 fetch ff（不切走 HEAD）。
-        let head_out = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        if !head_out.status.success() {
-            return Err(String::from_utf8_lossy(&head_out.stderr).trim().to_string());
-        }
-        let original_branch = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
-
-        if original_branch == base_branch {
-            // 主仓正在 base 上，直接合并（保留 merge commit 让历史可追溯）
-            let merge_out = run_git(&cwd, &["merge", "--no-ff", &branch])?;
-            let combined = format!(
-                "{}{}",
-                String::from_utf8_lossy(&merge_out.stdout),
-                String::from_utf8_lossy(&merge_out.stderr)
-            );
-            if !merge_out.status.success() {
-                return Err(format!(
-                    "Merge failed (main repo on '{}'; please resolve manually): {}",
-                    base_branch, combined
-                ));
-            }
-            return Ok(combined.trim().to_string());
-        }
-
-        // 主仓不在 base：用 `git fetch . <src>:<dst>` 把 worktree 分支 ff 到 base ref，不动主仓 HEAD。
-        // git fetch 默认仅允许 fast-forward 更新（用 `+` 前缀才强制），刚好阻止误覆盖 base 的提交。
-        let refspec = format!("{}:{}", branch, base_branch);
-        let ff_out = run_git(&cwd, &["fetch", ".", &refspec])?;
-        if !ff_out.status.success() {
-            let err = String::from_utf8_lossy(&ff_out.stderr);
+        // 用任务分支建一次性的 detached worktree（干净），保证校验/合并不依赖长期
+        // 开发 worktree（含 `_run`、prepare 等未提交内容，也因此不再卡住合并）。
+        let temp_dir = std::path::Path::new(&cwd).join(".nezha").join("worktrees");
+        std::fs::create_dir_all(&temp_dir)
+            .map_err(|e| format!("创建临时 worktree 目录失败: {e}"))?;
+        let temp = temp_dir.join(format!("merge-prep-{}", branch.replace('/', "-")));
+        let temp_str = path_to_string(&temp)?;
+        // 清掉可能残留的同名临时 worktree。
+        let _ = run_git(&cwd, &["worktree", "remove", "--force", &temp_str]);
+        let add = run_git(&cwd, &["worktree", "add", "--detach", &temp_str, &branch])?;
+        if !add.status.success() {
             return Err(format!(
-                "Cannot fast-forward '{}' (worktree may have diverged from base). \
-                 Pull base into the worktree and retry, or merge manually. Detail: {}",
-                base_branch,
-                err.trim()
+                "创建临时 merge worktree 失败: {}",
+                String::from_utf8_lossy(&add.stderr).trim()
             ));
         }
-        Ok(format!("Fast-forwarded '{}' to '{}'", base_branch, branch))
+
+        let outcome = (|| -> Result<String, String> {
+            // 云效任务：合并前校验分支内全部提交都带 #议题编号。
+            if let Some(tag) = expected_issue_tag
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            {
+                validate_commits_contain_tag(&cwd, &base_branch, &branch, tag)?;
+            }
+            let head_out = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            if !head_out.status.success() {
+                return Err(String::from_utf8_lossy(&head_out.stderr).trim().to_string());
+            }
+            let original_branch = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+            if original_branch == base_branch {
+                // 主仓正在 base 上，直接合并（保留 merge commit 让历史可追溯）。
+                let merge_out = run_git(&cwd, &["merge", "--no-ff", &branch])?;
+                let combined = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&merge_out.stdout),
+                    String::from_utf8_lossy(&merge_out.stderr)
+                );
+                if !merge_out.status.success() {
+                    return Err(format!(
+                        "Merge failed (main repo on '{}'; please resolve manually): {}",
+                        base_branch, combined
+                    ));
+                }
+                return Ok(combined.trim().to_string());
+            }
+            // 主仓不在 base：用 `git fetch . <src>:<dst>` 把任务分支 ff 到 base ref，不动主仓 HEAD。
+            let refspec = format!("{}:{}", branch, base_branch);
+            let ff_out = run_git(&cwd, &["fetch", ".", &refspec])?;
+            if !ff_out.status.success() {
+                let err = String::from_utf8_lossy(&ff_out.stderr);
+                return Err(format!(
+                    "Cannot fast-forward '{}' (task branch may have diverged from base). \
+                     Pull base into the task branch and retry, or merge manually. Detail: {}",
+                    base_branch,
+                    err.trim()
+                ));
+            }
+            Ok(format!("Fast-forwarded '{}' to '{}'", base_branch, branch))
+        })();
+
+        // 无论成功与否都清理临时 worktree。
+        let _ = run_git(&cwd, &["worktree", "remove", "--force", &temp_str]);
+        outcome
     })
     .await
     .map_err(|e| format!("Merge task panicked: {}", e))?

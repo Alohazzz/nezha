@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle2, GitMerge, Play, RefreshCw, X } from "lucide-react";
+import { CheckCircle2, Download, GitMerge, Play, RefreshCw, X } from "lucide-react";
 import type { CodeupMr, CodeupRepository } from "../../types";
 import s from "../../styles";
 
@@ -40,6 +40,7 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
+  const [busyId, setBusyId] = useState("");
 
   const loadRepos = useCallback(async () => {
     try {
@@ -105,6 +106,45 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
       setReviews((prev) => ({ ...prev, [key]: { running: false, findings, error: "" } }));
     } catch (e) {
       setReviews((prev) => ({ ...prev, [key]: { running: false, findings: [], error: String(e) } }));
+    }
+  }, []);
+
+  const pullCode = useCallback(async (mr: CodeupMr) => {
+    setBusyId(mr.id);
+    setNotice("");
+    try {
+      const path = await invoke<string>("codeup_pull_code", {
+        repository: mr.repository,
+        sourceBranch: mr.sourceBranch,
+        mrId: String(mr.localId),
+      });
+      setMrs((prev) =>
+        prev.map((m) => (m.id === mr.id ? { ...m, pulled: true, worktreePath: path } : m)),
+      );
+      setNotice("已拉取代码到本地 worktree。");
+    } catch (e) {
+      setNotice(String(e));
+    } finally {
+      setBusyId("");
+    }
+  }, []);
+
+  const resolveConflicts = useCallback(async (mr: CodeupMr) => {
+    setBusyId(mr.id);
+    setNotice("");
+    try {
+      const res = await invoke<string>("codeup_resolve_conflicts", {
+        repository: mr.repository,
+        sourceBranch: mr.sourceBranch,
+        targetBranch: mr.targetBranch,
+        mrId: String(mr.localId),
+        agent: "claude",
+      });
+      setNotice(res);
+    } catch (e) {
+      setNotice(String(e));
+    } finally {
+      setBusyId("");
     }
   }, []);
 
@@ -177,13 +217,33 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
             <div style={s.bbCardActions}>
               <button
                 type="button"
+                style={s.bbBtnPrimary}
+                disabled={mr.pulled || busyId === mr.id}
+                onClick={() => void pullCode(mr)}
+              >
+                <Download size={13} />
+                {mr.pulled ? "已拉取" : "拉取代码"}
+              </button>
+              <button
+                type="button"
                 style={s.bbBtnGhost}
-                disabled={reviews[mr.id]?.running}
+                disabled={reviews[mr.id]?.running || !mr.pulled}
                 onClick={() => void runReview(mr)}
               >
                 <Play size={13} />
                 {reviews[mr.id]?.running ? "审查中…" : "代码审查"}
               </button>
+              {mr.hasConflict && (
+                <button
+                  type="button"
+                  style={s.bbBtnGhost}
+                  disabled={!mr.pulled || busyId === mr.id}
+                  onClick={() => void resolveConflicts(mr)}
+                >
+                  <GitMerge size={13} />
+                  处理冲突
+                </button>
+              )}
               <button
                 type="button"
                 style={s.bbBtnGhost}

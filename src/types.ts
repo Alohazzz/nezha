@@ -194,6 +194,10 @@ export interface CodeupMr {
   /** MR 详情 web 链接。 */
   detailUrl: string;
   updatedAt: number;
+  /** 本地是否已拉取该 MR 代码（用于「拉取代码」门禁）。 */
+  pulled: boolean;
+  /** 已拉取后的本地 worktree 路径。 */
+  worktreePath: string;
 }
 
 /** Codeup 仓库（欢迎页合并审核的仓库过滤下拉用）。 */
