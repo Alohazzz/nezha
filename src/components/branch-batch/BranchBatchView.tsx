@@ -222,10 +222,13 @@ export function BranchBatchView({
         />
       )}
 
-      {reviewBatch && (
+      {reviewBatch && selectedProject && (
         <MergeReviewView
+          projectPath={selectedProject.path}
+          worktreePath={`${selectedProject.path}/.nezha/worktrees/${reviewBatch.id}`}
           baseBranch={reviewBatch.baseBranch}
           branch={reviewBatch.branch}
+          agent="claude"
           onPass={() =>
             setReviewPassed((prev) => new Set(prev).add(reviewBatch.id))
           }

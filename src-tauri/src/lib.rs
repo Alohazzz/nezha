@@ -384,6 +384,7 @@ pub fn run() {
             agent_assist::generate_issue_supplement,
             agent_assist::get_issue_discussion_instructions,
             agent_assist::get_merge_code_review_instructions,
+            agent_assist::run_merge_code_review,
             git::git_status,
             git::git_list_branches,
             git::git_create_branch,

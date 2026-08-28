@@ -9,6 +9,11 @@ use crate::storage::{Batch, load_project_batches, save_project_batches};
 
 const VALID_KINDS: &[&str] = &["feature", "patch", "release", "hotfix"];
 
+/// 仅 hotfix 是“只挑拣、不开发、不向上合并”的补丁容器，其余类型都可合并到目标分支。
+pub(crate) fn merge_allows_kind(kind: &str) -> bool {
+    !kind.eq_ignore_ascii_case("hotfix")
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -180,6 +185,9 @@ pub async fn merge_branch_batch(
         .into_iter()
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "Batch not found".to_string())?;
+    if !merge_allows_kind(&batch.kind) {
+        return Err(format!("批次类型 {} 是挑拣容器，不允许向上合并", batch.kind));
+    }
     let worktree_path = Path::new(&cwd).join(".nezha").join("worktrees").join(&batch_id);
     let worktree_str = crate::git::path_to_string(&worktree_path)?;
     let message = crate::git::merge_task_worktree(
@@ -223,5 +231,13 @@ mod tests {
         assert_eq!(sanitize_branch_slug("  A B C  "), "a-b-c");
         assert_eq!(sanitize_branch_slug("a..b"), "a.b");
         assert_eq!(sanitize_branch_slug("!!!"), "batch");
+    }
+
+    #[test]
+    fn merge_allows_feature_patch_release_but_not_pick_only_hotfix() {
+        assert!(merge_allows_kind("feature"));
+        assert!(merge_allows_kind("patch"));
+        assert!(merge_allows_kind("release"));
+        assert!(!merge_allows_kind("hotfix"));
     }
 }

@@ -504,6 +504,74 @@ pub fn get_merge_code_review_instructions() -> Result<String, String> {
     Ok(MERGE_CODE_REVIEW_INSTRUCTIONS.to_string())
 }
 
+/// 合并代码审查的单项结果（对应 Skill 约定的 JSON 输出结构）。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ReviewFinding {
+    pub rule: String,
+    pub status: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(rename = "startLine", default)]
+    pub start_line: i32,
+    #[serde(rename = "endLine", default)]
+    pub end_line: i32,
+    pub message: String,
+}
+
+fn extract_review_findings(stdout: &str) -> Result<Vec<ReviewFinding>, String> {
+    const OPEN: &str = "<REVIEW>";
+    const CLOSE: &str = "</REVIEW>";
+    if let Some(close_pos) = stdout.rfind(CLOSE) {
+        let prefix = &stdout[..close_pos];
+        if let Some(open_start) = prefix.rfind(OPEN) {
+            let inner = &prefix[open_start + OPEN.len()..];
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                return serde_json::from_str(trimmed)
+                    .map_err(|e| format!("解析审查结果失败: {e}"));
+            }
+        }
+    }
+    serde_json::from_str(stdout.trim()).map_err(|e| format!("解析审查结果失败: {e}"))
+}
+
+const REVIEW_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// 运行 Agent 对 base...branch 的改动做合并代码审查，返回结构化结果（path/startLine 供定位）。
+#[tauri::command]
+pub async fn run_merge_code_review(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    base_branch: String,
+    branch: String,
+    agent: String,
+) -> Result<Vec<ReviewFinding>, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {agent}"));
+    }
+    if base_branch.trim().is_empty() || branch.trim().is_empty() {
+        return Err("baseBranch and branch are required".to_string());
+    }
+    let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let wt = worktree_path.clone();
+    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&cwd, &wt))
+        .await
+        .map_err(|e| format!("校验线程错误: {e}"))??;
+
+    // 让 Agent 在图内自行读取 diff（它有 git 权限），再逐项校验。
+    let prompt = format!(
+        "{}\n\n──── 本次需审查的改动 ────\n请先在当前工作区运行 `git diff {base_branch}...{branch}` 查看，再按上述规则逐项校验并输出 <REVIEW> JSON。",
+        MERGE_CODE_REVIEW_INSTRUCTIONS
+    );
+    let output = run_headless_agent_with_timeout(&agent, &worktree_path, &prompt, REVIEW_TIMEOUT, true, None)
+        .await?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    extract_review_findings(&String::from_utf8_lossy(&output.stdout))
+}
+
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
 
 const SUPPLEMENT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1506,5 +1574,24 @@ mod tests {
                 "prompt text",
             ]
         );
+    }
+
+    #[test]
+    fn extracts_review_findings_from_tagged_json() {
+        let stdout = "前言\n<REVIEW>[{\"rule\":\"命名规范\",\"status\":\"fail\",\"path\":\"src/main.rs\",\"startLine\":12,\"endLine\":12,\"message\":\"分支命名不符合约定\"},{\"rule\":\"议题编号\",\"status\":\"pass\",\"path\":\"\",\"startLine\":0,\"endLine\":0,\"message\":\"提交信息含 #123\"}]</REVIEW>\n后记";
+        let findings = extract_review_findings(stdout).unwrap();
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].rule, "命名规范");
+        assert_eq!(findings[0].path, "src/main.rs");
+        assert_eq!(findings[0].start_line, 12);
+        assert_eq!(findings[1].status, "pass");
+    }
+
+    #[test]
+    fn extract_review_findings_falls_back_to_raw_json() {
+        let findings =
+            extract_review_findings("[{\"rule\":\"x\",\"status\":\"warn\",\"message\":\"m\"}]").unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].message, "m");
     }
 }

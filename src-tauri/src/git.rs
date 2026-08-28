@@ -1553,7 +1553,10 @@ fn task_worktree_branch_name(task_id: &str) -> String {
 /// 校验 worktree 路径必须落在 `<repo_root>/.nezha/worktrees/` 之下，
 /// 防止 remove_task_worktree 被传入任意路径。多 sub-repo 项目中 repo_root 为 sub-repo
 /// 根；单仓库时与 project_path 一致（向后兼容旧 worktree 数据）。
-fn ensure_path_under_worktrees_root(repo_root: &str, worktree_path: &str) -> Result<(), String> {
+pub(crate) fn ensure_path_under_worktrees_root(
+    repo_root: &str,
+    worktree_path: &str,
+) -> Result<(), String> {
     let root = Path::new(repo_root)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve repo path: {}", e))?;

@@ -410,6 +410,34 @@ const branchBatch = {
   bbReviewSide: {
     width: 260,
   },
+  bbCodeLine: {
+    display: "flex",
+    gap: 8,
+    fontFamily: "var(--font-mono)",
+    fontSize: 11.5,
+    lineHeight: 1.55,
+    color: "var(--text-secondary)",
+  },
+  bbCodeLineActive: {
+    background: "var(--bg-selected)",
+    color: "var(--text-primary)",
+  },
+  bbCodeGutter: {
+    width: 14,
+    color: "var(--accent)",
+    textAlign: "right" as const,
+  },
+  bbCodeNum: {
+    width: 28,
+    color: "var(--text-hint)",
+    textAlign: "right" as const,
+  },
+  bbLocate: {
+    fontFamily: "var(--font-mono)",
+    fontSize: 11.5,
+    color: "var(--accent)",
+    cursor: "pointer",
+  },
 } satisfies Record<string, React.CSSProperties>;
 
 export { branchBatch };
