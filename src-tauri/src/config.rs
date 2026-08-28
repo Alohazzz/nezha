@@ -48,11 +48,36 @@ fn default_commit_message_timeout_secs() -> u64 {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct WorktreeConfig {
+    /// worktree 基路径。为空时使用默认 `<项目根>/.nezha/worktrees`。
+    /// 对 HIS 这类「相对路径引用共享 hub」的仓库，设为共享 hub 的父目录
+    /// （例如 `H:\Project\Company\`），让 worktree 落到 `<base>/<task_id>`，
+    /// 使 csproj 里 `..\..\..\..\可执行程序\X.dll` 能正确解析到共享目录。
+    #[serde(default)]
+    pub base_path: String,
+    /// 创建 worktree 成功后自动运行的脚本（如 `hsp-prepare-run-root.ps1`）。
+    /// 为空则不自动运行。
+    #[serde(default)]
+    pub prepare_script: String,
+}
+
+impl Default for WorktreeConfig {
+    fn default() -> Self {
+        WorktreeConfig {
+            base_path: String::new(),
+            prepare_script: String::new(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct ProjectConfig {
     pub agent: AgentConfig,
     pub git: GitConfig,
     #[serde(default)]
     pub build: crate::build::BuildConfig,
+    #[serde(default)]
+    pub worktree: WorktreeConfig,
 }
 
 impl Default for ProjectConfig {
@@ -68,6 +93,7 @@ impl Default for ProjectConfig {
                 commit_message_timeout_secs: default_commit_message_timeout_secs(),
             },
             build: crate::build::BuildConfig::default(),
+            worktree: WorktreeConfig::default(),
         }
     }
 }

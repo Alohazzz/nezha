@@ -1178,6 +1178,7 @@ export function ProjectPage({
               <BuildPanel
                 projectPath={worktreeScope || project.path}
                 width={rightPanelWidth}
+                worktreePath={worktreeScope || undefined}
                 onCreateFixTask={(t) =>
                   onSubmitTask({
                     prompt: t.prompt,

@@ -1566,17 +1566,31 @@ fn default_worktree_base(repo_root: &str) -> PathBuf {
 /// 自动探测项目里的 prepare-run-root 脚本（HIS 场景是 `.codex/skills/hsp-prepare-run-root/...` 符号链接）。
 /// 不存在则返回 None（不自动运行）。
 fn auto_prepare_script(repo_root: &str) -> Option<PathBuf> {
-    let p = Path::new(repo_root)
+    let local = Path::new(repo_root)
         .join(".codex")
         .join("skills")
         .join("hsp-prepare-run-root")
         .join("scripts")
         .join("hsp-prepare-run-root.ps1");
-    if p.is_file() {
-        Some(p)
-    } else {
-        None
+    if local.is_file() {
+        return Some(local);
     }
+    if let Some(home) = crate::platform::home_dir() {
+        let skill_repos = home.join(".nezha").join("skill_repos");
+        if let Ok(rd) = std::fs::read_dir(&skill_repos) {
+            for e in rd.flatten() {
+                let cand = e
+                    .path()
+                    .join("hsp-prepare-run-root")
+                    .join("scripts")
+                    .join("hsp-prepare-run-root.ps1");
+                if cand.is_file() {
+                    return Some(cand);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 校验 worktree 路径必须落在 `<repo_root>/.nezha/worktrees/` 之下，
