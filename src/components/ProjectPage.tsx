@@ -1,7 +1,9 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   Project,
   Task,
+  BranchBatch,
   AgentType,
   PermissionMode,
   TaskStatus,
@@ -259,6 +261,14 @@ export function ProjectPage({
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
+  const [batches, setBatches] = useState<BranchBatch[]>([]);
+  const [worktreeScope, setWorktreeScope] = useState<string>("");
+
+  useEffect(() => {
+    void invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id })
+      .then(setBatches)
+      .catch((e) => console.error("[project] load batches failed:", e));
+  }, [project.id]);
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const pendingCmdRef = useRef<string | null>(null);
   const prevHadDiffRef = useRef(false);
@@ -272,6 +282,28 @@ export function ProjectPage({
     [tasks, project.id],
   );
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
+
+  const worktreeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: Array<{ key: string; label: string }> = [{ key: "", label: "主检出" }];
+    for (const task of projectTasks) {
+      if (task.worktreePath && !task.worktreeDiscarded && !seen.has(task.worktreePath)) {
+        seen.add(task.worktreePath);
+        options.push({
+          key: task.worktreePath,
+          label: `WorkTree · ${task.worktreeBranch ?? "?"}`,
+        });
+      }
+    }
+    for (const batch of batches) {
+      if (batch.status === "merged" || batch.status === "closed") continue;
+      const key = `${project.path}/.nezha/worktrees/${batch.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({ key, label: `WorkTree · ${batch.branch}` });
+    }
+    return options;
+  }, [projectTasks, batches, project.path]);
 
   // 工作区项目可能包含多个 sub-repo，selectedRoot.path 为当前活动的 git 根（缺省回落 project.path）。
   const {
@@ -1051,10 +1083,22 @@ export function ProjectPage({
       {rightPanel && rightPanel !== "build" && (
         <div style={s.rightPanelWrap}>
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
+          <div style={s.bbScopeBar}>
+            {worktreeOptions.map((opt) => (
+              <button
+                key={opt.key || "__main__"}
+                type="button"
+                style={worktreeScope === opt.key ? s.bbOptionBtnActive : s.bbOptionBtn}
+                onClick={() => setWorktreeScope(opt.key)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           {rightPanel === "files" && (
             <ErrorBoundary label="文件浏览器">
               <FileExplorer
-                projectPath={project.path}
+                projectPath={worktreeScope || project.path}
                 projectName={project.name}
                 onFileSelect={handleFileSelect}
                 active={visible}
@@ -1065,8 +1109,8 @@ export function ProjectPage({
           {rightPanel === "git-changes" && (
             <ErrorBoundary label="Git 变更">
               <GitChanges
-                projectRoot={project.path}
-                repoPath={gitContextPath}
+                projectRoot={worktreeScope || project.path}
+                repoPath={worktreeScope || gitContextPath}
                 currentTaskCreatedAt={currentTaskCreatedAt}
                 issueTag={
                   selectedTask?.yunxiaoSerialNumber
@@ -1081,8 +1125,8 @@ export function ProjectPage({
           {rightPanel === "git-history" && (
             <ErrorBoundary label="Git 历史">
               <GitHistory
-                projectRoot={project.path}
-                repoPath={gitContextPath}
+                projectRoot={worktreeScope || project.path}
+                repoPath={worktreeScope || gitContextPath}
                 onCommitSelect={handleCommitSelectWithCollapse}
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={rightPanelWidth}
@@ -1110,9 +1154,9 @@ export function ProjectPage({
         }}
       >
         <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
-        <ErrorBoundary label="构建">
-          <BuildPanel
-            projectPath={project.path}
+          <ErrorBoundary label="构建">
+            <BuildPanel
+              projectPath={worktreeScope || project.path}
             width={rightPanelWidth}
             onCreateFixTask={(t) =>
               onSubmitTask({

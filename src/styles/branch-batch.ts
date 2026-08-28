@@ -363,6 +363,13 @@ const branchBatch = {
     gap: 8,
     alignItems: "center" as const,
   },
+  bbScopeBar: {
+    padding: "8px 10px",
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 6,
+    borderBottom: "1px solid var(--border-dim)",
+  },
   bbSourceInput: {
     height: 32,
     padding: "0 10px",
