@@ -8,6 +8,7 @@ use usage::CodexRpcClient;
 mod agent_assist;
 mod analytics;
 mod app_settings;
+mod batch;
 mod build;
 mod config;
 mod drafts;
@@ -440,6 +441,10 @@ pub fn run() {
     storage::save_project_tasks,
     storage::load_project_batches,
     storage::save_project_batches,
+    batch::create_branch_batch,
+    batch::list_branch_batches,
+    batch::get_branch_batch,
+    batch::close_branch_batch,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,

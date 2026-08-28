@@ -30,7 +30,7 @@ fn validate_project_path(project_path: &str) -> Result<(), String> {
 
 /// 执行 git 命令并返回原始 Output。
 /// 泛型 S 允许同时接受 `&[&str]` 和 `&[String]`。
-fn run_git<S: AsRef<std::ffi::OsStr>>(
+pub(crate) fn run_git<S: AsRef<std::ffi::OsStr>>(
     project_path: &str,
     args: &[S],
 ) -> Result<std::process::Output, String> {
@@ -212,7 +212,10 @@ fn resolve_repo_path_blocking(
     path_to_string(&repo_canonical)
 }
 
-async fn resolve_repo_path(project_path: &str, repo_path: Option<&str>) -> Result<String, String> {
+pub(crate) async fn resolve_repo_path(
+    project_path: &str,
+    repo_path: Option<&str>,
+) -> Result<String, String> {
     let project_path = project_path.to_string();
     let repo_path = repo_path.map(str::to_string);
     tauri::async_runtime::spawn_blocking(move || {
@@ -247,7 +250,7 @@ fn git_worktree_root(project_path: &str) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-fn path_to_string(path: &Path) -> Result<String, String> {
+pub(crate) fn path_to_string(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(|path| path.to_string())
         .ok_or_else(|| "Path contains invalid UTF-8".to_string())
