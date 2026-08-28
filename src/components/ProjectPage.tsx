@@ -40,6 +40,7 @@ import { GitDiffViewer } from "./GitDiffViewer";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
+import { BranchBatchView } from "./branch-batch/BranchBatchView";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
@@ -1085,6 +1086,16 @@ export function ProjectPage({
                 onCommitSelect={handleCommitSelectWithCollapse}
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={rightPanelWidth}
+              />
+            </ErrorBoundary>
+          )}
+          {rightPanel === "branch-batch" && (
+            <ErrorBoundary label="创建PR">
+              <BranchBatchView
+                projectPath={project.path}
+                projectId={project.id}
+                tasks={projectTasks}
+                onClose={() => handleTogglePanel("branch-batch")}
               />
             </ErrorBoundary>
           )}

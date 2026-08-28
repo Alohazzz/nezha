@@ -105,55 +105,44 @@ export function TaskList({
     });
   }, [filtered]);
 
-  const { todayTs, cutoffTs } = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    const todayTs = d.getTime();
-    const cutoffTs =
+  const rows = useMemo<VirtualRow[]>(() => {
+    const MAIN = "__main__";
+    const attention: Task[] = [];
+    const groups = new Map<string, { label: string; tasks: Task[] }>();
+    const cutoff =
       taskDisplayWindow === "all"
         ? Number.NEGATIVE_INFINITY
-        : todayTs - taskDisplayWindow * 24 * 60 * 60 * 1000;
-    return { todayTs, cutoffTs };
-  }, [taskDisplayWindow]);
-
-  const rows = useMemo<VirtualRow[]>(() => {
-    const attentionTasks: Task[] = [];
-    const pendingMergeTasks: Task[] = [];
-    const starredTasks: Task[] = [];
-    const todoTasks: Task[] = [];
-    const todayTasks: Task[] = [];
-    const earlierTasks: Task[] = [];
+        : Date.now() - taskDisplayWindow * 24 * 60 * 60 * 1000;
 
     for (const task of sorted) {
-      if (
+      const needsAttention =
         task.status === "input_required" ||
         task.status === "awaiting_review" ||
         task.status === "detached" ||
-        task.status === "interrupted"
-      ) {
-        attentionTasks.push(task);
-      } else if (
-        task.status === "done" &&
-        !!task.worktreePath &&
-        !task.worktreeDiscarded
-      ) {
-        pendingMergeTasks.push(task);
-      } else if (task.starred) {
-        starredTasks.push(task);
-      } else if (task.status === "todo") {
-        todoTasks.push(task);
-      } else {
-        const bucketAt = task.updatedAt ?? task.createdAt;
-        if (bucketAt >= todayTs) {
-          todayTasks.push(task);
-        } else if (bucketAt >= cutoffTs) {
-          earlierTasks.push(task);
-        }
+        task.status === "interrupted";
+      if (needsAttention) {
+        attention.push(task);
+        continue;
       }
+      const bucketAt = task.updatedAt ?? task.createdAt;
+      if (bucketAt < cutoff) continue;
+      const isWorktree = !!task.worktreePath && !task.worktreeDiscarded;
+      const key = isWorktree ? task.worktreePath! : MAIN;
+      let g = groups.get(key);
+      if (!g) {
+        g = {
+          label: isWorktree
+            ? `WorkTree · ${task.worktreeBranch ?? "?"}`
+            : "主检出",
+          tasks: [],
+        };
+        groups.set(key, g);
+      }
+      g.tasks.push(task);
     }
 
     const nextRows: VirtualRow[] = [];
-    const appendGroup = (key: string, label: string, groupTasks: Task[], showRunTodo = false) => {
+    const appendGroup = (key: string, label: string, groupTasks: Task[]) => {
       if (groupTasks.length === 0) return;
       nextRows.push({ type: "group", key, label, height: GROUP_ROW_HEIGHT });
       groupTasks.forEach((task) => {
@@ -161,21 +150,22 @@ export function TaskList({
           type: "task",
           key: task.id,
           task,
-          showRunTodo: showRunTodo || task.status === "todo",
+          showRunTodo: task.status === "todo",
           height: TASK_ROW_HEIGHT,
         });
       });
     };
 
-    appendGroup("attention", t("task.needsAttention"), attentionTasks);
-    appendGroup("pending_merge", t("task.pendingMerge"), pendingMergeTasks);
-    appendGroup("starred", t("task.starred"), starredTasks);
-    appendGroup("todo", t("status.todo"), todoTasks, true);
-    appendGroup("today", t("task.today"), todayTasks);
-    appendGroup("earlier", t("task.earlier"), earlierTasks);
+    if (attention.length) appendGroup("attention", t("task.needsAttention"), attention);
+    // 主检出（无 worktree）作为基准放最前，其后各 worktree 按最旧组先显示。
+    const mainGroup = groups.get(MAIN);
+    if (mainGroup) appendGroup(MAIN, mainGroup.label, mainGroup.tasks);
+    [...groups.entries()]
+      .filter(([key]) => key !== MAIN)
+      .forEach(([key, g]) => appendGroup(key, g.label, g.tasks));
 
     return nextRows;
-  }, [cutoffTs, sorted, t, todayTs]);
+  }, [sorted, t, taskDisplayWindow]);
 
   const offsets = useMemo(() => {
     const nextOffsets = [0];

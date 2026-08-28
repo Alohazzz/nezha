@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { IconButton } from "./IconButton";
-import { Folder, Search, GitBranch, History, Settings, Terminal, Hammer } from "lucide-react";
+import { Folder, Search, GitBranch, GitPullRequest, History, Settings, Terminal, Hammer } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
 
@@ -29,6 +29,7 @@ export function RightToolbar({
     { key: "git-changes", icon: <GitBranch size={17} />, title: t("toolbar.gitChanges") },
     { key: "git-history", icon: <History size={17} />, title: t("toolbar.gitHistory") },
     { key: "build", icon: <Hammer size={17} />, title: t("toolbar.build") },
+    { key: "branch-batch", icon: <GitPullRequest size={17} />, title: "创建PR" },
   ];
 
   const footerItems = [
