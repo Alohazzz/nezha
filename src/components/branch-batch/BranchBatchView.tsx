@@ -6,6 +6,7 @@ import s from "../../styles";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
 import { BranchBatchDiff } from "./BranchBatchDiff";
 import { PatchPickView } from "./PatchPickView";
+import { MergeReviewView } from "./MergeReviewView";
 
 const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   draft: "草稿",
@@ -37,6 +38,8 @@ export function BranchBatchView({
   const [showCreate, setShowCreate] = useState(false);
   const [diffBatch, setDiffBatch] = useState<BranchBatch | null>(null);
   const [pickBatch, setPickBatch] = useState<BranchBatch | null>(null);
+  const [reviewBatch, setReviewBatch] = useState<BranchBatch | null>(null);
+  const [reviewPassed, setReviewPassed] = useState<Set<string>>(() => new Set());
 
   const selectedProject = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
@@ -142,6 +145,11 @@ export function BranchBatchView({
                 <RefreshCw size={13} />
                 查看 Diff
               </button>
+              {batch.status === "active" && (
+                <button type="button" style={s.bbBtnGhost} onClick={() => setReviewBatch(batch)}>
+                  审查
+                </button>
+              )}
               {batch.kind === "hotfix" && (
                 <button type="button" style={s.bbBtnGhost} onClick={() => setPickBatch(batch)}>
                   挑拣
@@ -158,10 +166,14 @@ export function BranchBatchView({
                 <button
                   type="button"
                   style={s.bbBtnPrimary}
+                  disabled={!reviewPassed.has(batch.id)}
                   onClick={() => void merge(batch)}
                 >
                   合并到 {batch.targetBranch}
                 </button>
+              )}
+              {batch.status === "active" && !reviewPassed.has(batch.id) && (
+                <span style={s.bbGateHint}>需先通过代码审查</span>
               )}
             </div>
           </div>
@@ -193,6 +205,17 @@ export function BranchBatchView({
           worktreePath={`${selectedProject.path}/.nezha/worktrees/${pickBatch.id}`}
           targetBranch={pickBatch.branch}
           onClose={() => setPickBatch(null)}
+        />
+      )}
+
+      {reviewBatch && (
+        <MergeReviewView
+          baseBranch={reviewBatch.baseBranch}
+          branch={reviewBatch.branch}
+          onPass={() =>
+            setReviewPassed((prev) => new Set(prev).add(reviewBatch.id))
+          }
+          onClose={() => setReviewBatch(null)}
         />
       )}
     </div>

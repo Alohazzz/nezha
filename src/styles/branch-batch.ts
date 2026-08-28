@@ -372,6 +372,39 @@ const branchBatch = {
   bbSection: {
     marginTop: 12,
   },
+  bbReviewRules: {
+    fontFamily: "var(--font-mono)",
+    fontSize: 11.5,
+    lineHeight: 1.6,
+    whiteSpace: "pre-wrap" as const,
+    background: "var(--bg-subtle)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 8,
+    padding: 10,
+    color: "var(--text-secondary)",
+    maxHeight: 260,
+    overflow: "auto",
+  },
+  bbGateHint: {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    fontSize: 12,
+    color: "var(--warning)",
+  },
+  bbReviewBody: {
+    padding: 14,
+    overflow: "auto",
+    display: "flex",
+    gap: 16,
+  },
+  bbReviewCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bbReviewSide: {
+    width: 260,
+  },
 } satisfies Record<string, React.CSSProperties>;
 
 export { branchBatch };
