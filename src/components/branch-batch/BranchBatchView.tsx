@@ -84,6 +84,23 @@ export function BranchBatchView({
     [selectedProject, load],
   );
 
+  const merge = useCallback(
+    async (batch: BranchBatch) => {
+      if (!selectedProject) return;
+      try {
+        await invoke<{ message: string; batch: BranchBatch }>("merge_branch_batch", {
+          projectPath: selectedProject.path,
+          projectId: selectedProject.id,
+          batchId: batch.id,
+        });
+        await load(selectedProject.id);
+      } catch (e) {
+        console.error("[branch-batch] merge failed:", e);
+      }
+    },
+    [selectedProject, load],
+  );
+
   return (
     <div style={s.bbView}>
       <div style={s.bbHeader}>
@@ -149,7 +166,7 @@ export function BranchBatchView({
                 <button
                   type="button"
                   style={s.bbBtnPrimary}
-                  onClick={() => void close(batch, true)}
+                  onClick={() => void merge(batch)}
                 >
                   合并到 {batch.targetBranch}
                 </button>

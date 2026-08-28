@@ -446,6 +446,7 @@ pub fn run() {
     batch::list_branch_batches,
     batch::get_branch_batch,
     batch::close_branch_batch,
+    batch::merge_branch_batch,
     git::git_branch_diff_stats,
     git::git_branch_diff_file,
     git::git_patch_dependency_check,

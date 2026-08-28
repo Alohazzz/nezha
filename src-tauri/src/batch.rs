@@ -154,6 +154,47 @@ pub fn close_branch_batch(project_id: String, batch_id: String, merged: bool) ->
     Ok(result)
 }
 
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct MergeBatchResult {
+    pub message: String,
+    pub batch: Batch,
+}
+
+/// 合并分支批到目标分支（复用 worktree 合并），成功后自动关批并删除 worktree/分支。
+/// 批 = 一个分支 + 一个 worktree，故 worktree 路径由批 id 推导。
+#[tauri::command]
+pub async fn merge_branch_batch(
+    project_path: String,
+    repo_path: Option<String>,
+    project_id: String,
+    batch_id: String,
+) -> Result<MergeBatchResult, String> {
+    let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let batch = load_project_batches(project_id.clone())?
+        .into_iter()
+        .find(|b| b.id == batch_id)
+        .ok_or_else(|| "Batch not found".to_string())?;
+    let worktree_path = Path::new(&cwd).join(".nezha").join("worktrees").join(&batch_id);
+    let worktree_str = crate::git::path_to_string(&worktree_path)?;
+    let message = crate::git::merge_task_worktree(
+        project_path.clone(),
+        repo_path.clone(),
+        worktree_str.clone(),
+        batch.branch.clone(),
+        batch.target_branch.clone(),
+        None,
+    )
+    .await?;
+    // 合并成功后自动关批（status = merged）并删除 worktree/分支。
+    let closed = close_branch_batch(project_id.clone(), batch_id, true)?;
+    let _ = crate::git::remove_task_worktree(project_path, repo_path, worktree_str, batch.branch)
+        .await;
+    Ok(MergeBatchResult {
+        message,
+        batch: closed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
