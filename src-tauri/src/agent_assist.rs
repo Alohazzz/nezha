@@ -481,6 +481,29 @@ pub fn get_issue_discussion_instructions(
     Ok(issue_discussion_instructions(&category, &task_id).unwrap_or_default())
 }
 
+/// 合并代码审查规则（作为可维护的 `merge-code-review` Skill 的默认文本；前端取用并拼进
+/// 审查任务的 prompt，供 Agent 逐项校验批次分支相对 base 的改动）。
+const MERGE_CODE_REVIEW_INSTRUCTIONS: &str = r#"你是合并代码审查助手。请对给定批次的改动（相对 base 分支 base...branch 的 diff）做代码审查校验。
+
+必须逐项检查并按固定格式输出结果：
+1. 命名规范：分支 / commit 是否符合约定。
+2. 提交信息是否带 #议题 编号。
+3. 是否引入合并冲突风险。
+4. 调试残留、临时文件、日志输出。
+5. 改动是否超范围（是否只涉及本批议题）。
+6. 依赖 / 引用是否完整。
+7. 破坏性变更 / 数据库变更是否有说明。
+
+输出要求：只输出结构化 JSON 数组，用 <REVIEW> 与 </REVIEW> 包裹，标签外不要输出其它内容。每一项：
+{"rule": "规则名", "status": "pass|warn|fail", "path": "文件相对路径", "startLine": 数字, "endLine": 数字, "message": "原因/建议"}
+status 取值：pass 通过；warn 需修改；fail 阻止合并。"#;
+
+/// 返回合并代码审查规则文本（供前端拼入审查任务 prompt，以及规则维护入口查看）。
+#[tauri::command]
+pub fn get_merge_code_review_instructions() -> Result<String, String> {
+    Ok(MERGE_CODE_REVIEW_INSTRUCTIONS.to_string())
+}
+
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
 
 const SUPPLEMENT_TIMEOUT: Duration = Duration::from_secs(60);
