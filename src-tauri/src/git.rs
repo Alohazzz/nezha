@@ -2023,6 +2023,78 @@ pub async fn cherry_pick_to_patch(
     .map_err(|e| format!("Cherry pick task panicked: {}", e))?
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PatchPickEntry {
+    pub source_commit: String,
+    pub picked_commit: String,
+    pub message: String,
+    pub target_branch: String,
+}
+
+/// 解析 `git log` 输出（format: %H%x00%s%x00%b%x1e），抽取带 `cherry-pick -x` 来源的提交。
+fn parse_patch_pick_entries(stdout: &[u8], target_branch: &str) -> Vec<PatchPickEntry> {
+    let mut entries = Vec::new();
+    for record in String::from_utf8_lossy(stdout).split('\u{1e}') {
+        if record.trim().is_empty() {
+            continue;
+        }
+        let mut parts = record.splitn(3, '\u{0}');
+        let hash = parts.next().unwrap_or("").trim().to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        let body = parts.next().unwrap_or("").to_string();
+        if hash.is_empty() {
+            continue;
+        }
+        // `cherry-pick -x` 会在 commit 体追加 `(cherry picked from commit <sha>)`。
+        let marker = "(cherry picked from commit ";
+        if let Some(pos) = body.rfind(marker) {
+            let tail = &body[pos + marker.len()..];
+            let source: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit() || *c == '\n' || *c == ')')
+                .filter(|c| *c != '\n' && *c != ')')
+                .take(40)
+                .collect();
+            if source.len() == 40 {
+                entries.push(PatchPickEntry {
+                    source_commit: source,
+                    picked_commit: hash,
+                    message: subject,
+                    target_branch: target_branch.to_string(),
+                });
+            }
+        }
+    }
+    entries
+}
+
+fn list_patch_picks_blocking(cwd: &str) -> Result<Vec<PatchPickEntry>, String> {
+    let branch_out = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if !branch_out.status.success() {
+        return Err(String::from_utf8_lossy(&branch_out.stderr).trim().to_string());
+    }
+    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+    let out = run_git(cwd, &["log", "--reverse", "--format=%H%x00%s%x00%b%x1e"])?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(parse_patch_pick_entries(&out.stdout, &branch))
+}
+
+/// 列出当前补丁分支上所有 `cherry-pick -x` 的来源（commit ↔ 版本矩阵的依据）。
+#[tauri::command]
+pub async fn list_patch_picks(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+) -> Result<Vec<PatchPickEntry>, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || list_patch_picks_blocking(&worktree_path))
+        .await
+        .map_err(|e| format!("List patch picks task panicked: {}", e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2427,5 +2499,16 @@ mod tests {
         // 最旧在前：第一个 commit 的 parent 是 base 上的初始提交，第二个是后续。
         assert_ne!(plans[0].needed[0], plans[0].needed[1]);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_patch_pick_entries_extracts_source_sha() {
+        let log = "a1f3c02\0fix: 号源锁定\0\n(cherry picked from commit 9c21ba0000000000000000000000000000000000)\n\x1e\
+                   b77d2f1\0feat: 缴费页\0no marker\n\x1e";
+        let entries = super::parse_patch_pick_entries(log.as_bytes(), "hotfix/2.5.1");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_commit, "9c21ba0000000000000000000000000000000000");
+        assert_eq!(entries[0].picked_commit, "a1f3c02");
+        assert_eq!(entries[0].target_branch, "hotfix/2.5.1");
     }
 }
