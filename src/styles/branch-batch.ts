@@ -352,6 +352,26 @@ const branchBatch = {
     color: "var(--text-muted)",
     background: "var(--bg-subtle)",
   },
+  bbToolbar: {
+    padding: 12,
+    display: "flex",
+    gap: 8,
+    alignItems: "center" as const,
+  },
+  bbSourceInput: {
+    height: 32,
+    padding: "0 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border-medium)",
+    background: "var(--bg-input)",
+    color: "var(--text-primary)",
+    fontSize: 13,
+    outline: "none",
+    width: 220,
+  },
+  bbSection: {
+    marginTop: 12,
+  },
 } satisfies Record<string, React.CSSProperties>;
 
 export { branchBatch };

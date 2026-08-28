@@ -5,6 +5,7 @@ import type { BranchBatch, BranchBatchStatus, Project, Task } from "../../types"
 import s from "../../styles";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
 import { BranchBatchDiff } from "./BranchBatchDiff";
+import { PatchPickView } from "./PatchPickView";
 
 const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   draft: "草稿",
@@ -35,6 +36,7 @@ export function BranchBatchView({
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [diffBatch, setDiffBatch] = useState<BranchBatch | null>(null);
+  const [pickBatch, setPickBatch] = useState<BranchBatch | null>(null);
 
   const selectedProject = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
@@ -140,6 +142,11 @@ export function BranchBatchView({
                 <RefreshCw size={13} />
                 查看 Diff
               </button>
+              {batch.kind === "hotfix" && (
+                <button type="button" style={s.bbBtnGhost} onClick={() => setPickBatch(batch)}>
+                  挑拣
+                </button>
+              )}
               <button
                 type="button"
                 style={s.bbBtnGhost}
@@ -177,6 +184,15 @@ export function BranchBatchView({
           baseBranch={diffBatch.baseBranch}
           branch={diffBatch.branch}
           onClose={() => setDiffBatch(null)}
+        />
+      )}
+
+      {pickBatch && selectedProject && (
+        <PatchPickView
+          projectPath={selectedProject.path}
+          worktreePath={`${selectedProject.path}/.nezha/worktrees/${pickBatch.id}`}
+          targetBranch={pickBatch.branch}
+          onClose={() => setPickBatch(null)}
         />
       )}
     </div>
