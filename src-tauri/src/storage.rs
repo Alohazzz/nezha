@@ -75,6 +75,12 @@ pub struct Task {
     pub worktree_repo: Option<String>,
     #[serde(rename = "baseBranch", skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// 所属分支批 id；非空即该任务属于某个可独立验收批次。
+    #[serde(rename = "batchId", default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    /// 该任务所在分支的类型（feature/patch/release/hotfix）。
+    #[serde(rename = "branchKind", default, skip_serializing_if = "Option::is_none")]
+    pub branch_kind: Option<String>,
     #[serde(rename = "worktreeDiscarded", skip_serializing_if = "Option::is_none")]
     pub worktree_discarded: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,6 +113,41 @@ pub struct Task {
     pub derived_from_workitem_id: Option<String>,
 }
 
+/// 分支批 = 一个可独立验收的 PR（一个批对应一个分支 + 一个 worktree，批内任务顺序共用）。
+/// 镜像 TypeScript 的 BranchBatch 接口。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Batch {
+    pub id: String,
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    pub name: String,
+    /// 分支类型：feature/patch/release/hotfix。
+    pub kind: String,
+    /// 批的目标分支名（如 feature/batch-p01）。
+    pub branch: String,
+    #[serde(rename = "baseBranch")]
+    pub base_branch: String,
+    #[serde(rename = "targetBranch")]
+    pub target_branch: String,
+    /// 该批包含的议题任务 id 列表（顺序即验收批次内任务顺序）。
+    #[serde(rename = "taskIds", default, skip_serializing_if = "Vec::is_empty")]
+    pub task_ids: Vec<String>,
+    /// draft | active | review | conflict | merged | closed
+    #[serde(default)]
+    pub status: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "closedAt", default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<i32>,
+    /// 云效议题编号列表，用于 commit 门禁与回写（如 ["QHDK-29312"]）。
+    #[serde(rename = "issueSerialNumbers", default, skip_serializing_if = "Vec::is_empty")]
+    pub issue_serial_numbers: Vec<String>,
+}
+
 /// 云效议题补充表单数据：字段随草稿防抖落盘；finalized 区分「已定稿」与「仅草稿」。
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct YunxiaoSupplement {
@@ -132,6 +173,10 @@ fn projects_path() -> Result<PathBuf, String> {
 
 fn tasks_path(project_id: &str) -> Result<PathBuf, String> {
     Ok(project_dir(project_id)?.join("tasks.json"))
+}
+
+fn batches_path(project_id: &str) -> Result<PathBuf, String> {
+    Ok(project_dir(project_id)?.join("batches.json"))
 }
 
 fn project_dir(project_id: &str) -> Result<PathBuf, String> {
@@ -201,6 +246,25 @@ pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), St
     atomic_write(&tasks_path(&project_id)?, &raw)
 }
 
+/// 加载某项目的分支批列表（不存在则返回空列表）。
+#[tauri::command]
+pub fn load_project_batches(project_id: String) -> Result<Vec<Batch>, String> {
+    let path = batches_path(&project_id)?;
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// 保存某项目的分支批列表（原子写入，空列表也照常写 "[]"，不删文件）。
+#[tauri::command]
+pub fn save_project_batches(project_id: String, batches: Vec<Batch>) -> Result<(), String> {
+    ensure_project_dir(&project_id)?;
+    let raw = serde_json::to_string_pretty(&batches).map_err(|e| e.to_string())?;
+    atomic_write(&batches_path(&project_id)?, &raw)
+}
+
 // ── Atomic write (write to tmp then rename) ───────────────────────────────────
 
 /// 原子写入：先写入唯一临时文件，fsync 落盘后再 rename 到目标路径。
@@ -234,4 +298,46 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         e.to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn batch_serde_round_trip() {
+        let batch = Batch {
+            id: "b1".into(),
+            project_id: "p1".into(),
+            name: "门诊挂号优化".into(),
+            kind: "feature".into(),
+            branch: "feature/batch-p01".into(),
+            base_branch: "develop".into(),
+            target_branch: "develop".into(),
+            task_ids: vec!["t1".into(), "t2".into()],
+            status: "active".into(),
+            created_at: 1_700_000_000_000,
+            closed_at: None,
+            additions: Some(312),
+            deletions: Some(48),
+            issue_serial_numbers: vec!["QHDK-29312".into()],
+        };
+        let json = serde_json::to_string(&batch).unwrap();
+        let back: Batch = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "b1");
+        assert_eq!(back.kind, "feature");
+        assert_eq!(back.branch, "feature/batch-p01");
+        assert_eq!(back.task_ids, vec!["t1", "t2"]);
+        assert_eq!(back.status, "active");
+        assert_eq!(back.additions, Some(312));
+        assert_eq!(back.issue_serial_numbers, vec!["QHDK-29312"]);
+    }
+
+    #[test]
+    fn task_legacy_json_without_batch_fields_defaults_none() {
+        let legacy = r#"{"id":"t1","projectId":"p1","name":"x","prompt":"p","agent":"claude","permissionMode":"ask","status":"todo","createdAt":1}"#;
+        let task: Task = serde_json::from_str(legacy).unwrap();
+        assert_eq!(task.batch_id, None);
+        assert_eq!(task.branch_kind, None);
+    }
 }
