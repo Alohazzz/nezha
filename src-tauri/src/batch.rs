@@ -90,39 +90,45 @@ pub async fn create_branch_batch(
 
     let branch = batch_branch_name(&kind, &name);
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
-    std::fs::create_dir_all(&worktrees_dir).map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
-    let worktree_path = worktrees_dir.join(&id);
-    if worktree_path.exists() {
-        return Err(format!("Worktree path already exists: {}", worktree_path.display()));
-    }
-    let worktree_str = path_to_string(&worktree_path)?;
-    let output = run_git(&cwd, &["worktree", "add", &worktree_str, "-b", &branch, &base_branch])?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
+    // 阻塞的 git 创建与文件落盘统一放到 spawn_blocking，避免占用 Tokio 运行时。
+    tokio::task::spawn_blocking(move || {
+        let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
+        std::fs::create_dir_all(&worktrees_dir)
+            .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
+        let worktree_path = worktrees_dir.join(&id);
+        if worktree_path.exists() {
+            return Err(format!("Worktree path already exists: {}", worktree_path.display()));
+        }
+        let worktree_str = path_to_string(&worktree_path)?;
+        let output = run_git(&cwd, &["worktree", "add", &worktree_str, "-b", &branch, &base_branch])?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
 
-    let batch = Batch {
-        id: id.clone(),
-        project_id: project_id.clone(),
-        name,
-        kind,
-        branch: branch.clone(),
-        base_branch,
-        target_branch,
-        task_ids,
-        status: "active".to_string(),
-        created_at: now_ms(),
-        closed_at: None,
-        additions: None,
-        deletions: None,
-        issue_serial_numbers: vec![],
-    };
+        let batch = Batch {
+            id: id.clone(),
+            project_id: project_id.clone(),
+            name,
+            kind,
+            branch: branch.clone(),
+            base_branch,
+            target_branch,
+            task_ids,
+            status: "active".to_string(),
+            created_at: now_ms(),
+            closed_at: None,
+            additions: None,
+            deletions: None,
+            issue_serial_numbers: vec![],
+        };
 
-    let mut batches = load_project_batches(project_id.clone())?;
-    batches.push(batch.clone());
-    save_project_batches(project_id, batches)?;
-    Ok(batch)
+        let mut batches = load_project_batches(project_id.clone())?;
+        batches.push(batch.clone());
+        save_project_batches(project_id, batches)?;
+        Ok(batch)
+    })
+    .await
+    .map_err(|e| format!("Create batch task panicked: {}", e))?
 }
 
 /// 列出某项目的分支批。
