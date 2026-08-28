@@ -516,7 +516,7 @@ fn extract_patch_path(line: &str) -> Option<&str> {
 
 fn patch_target_requires_confirmation(path: &str, project_path: &Path) -> bool {
     let target = Path::new(path);
-    if !target.is_absolute() {
+    if !target.has_root() {
         return false;
     }
 
