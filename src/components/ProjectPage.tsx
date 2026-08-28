@@ -43,6 +43,7 @@ import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { BranchBatchView } from "./branch-batch/BranchBatchView";
+import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
@@ -1084,16 +1085,11 @@ export function ProjectPage({
         <div style={s.rightPanelWrap}>
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
-            {worktreeOptions.map((opt) => (
-              <button
-                key={opt.key || "__main__"}
-                type="button"
-                style={worktreeScope === opt.key ? s.bbOptionBtnActive : s.bbOptionBtn}
-                onClick={() => setWorktreeScope(opt.key)}
-              >
-                {opt.label}
-              </button>
-            ))}
+            <WorktreeScopeSelect
+              options={worktreeOptions}
+              value={worktreeScope}
+              onChange={setWorktreeScope}
+            />
           </div>
           {rightPanel === "files" && (
             <ErrorBoundary label="文件浏览器">
