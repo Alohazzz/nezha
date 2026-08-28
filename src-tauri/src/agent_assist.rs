@@ -72,6 +72,52 @@ fn build_headless_agent_args(
     args
 }
 
+/// 可写版 headless agent 参数（用于 Agent 直接修改文件，如解决合并冲突）。
+fn build_headless_writer_agent_args(
+    agent: &str,
+    prompt: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
+    if agent == "codex" {
+        args.extend(
+            ["exec", "--sandbox", "workspace-write", "-a", "on-request", "--ephemeral", "-c", "approval_policy=\"never\""]
+                .map(OsString::from),
+        );
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("-c".into());
+            args.push(
+                format!(
+                    "model_reasoning_effort={}",
+                    toml::Value::String(effort.to_string())
+                )
+                .into(),
+            );
+        }
+        args.push(prompt.into());
+    } else {
+        args.extend(
+            ["-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits"]
+                .map(OsString::from),
+        );
+        args.push("--no-session-persistence".into());
+        if let Some(model) = model {
+            args.push("--model".into());
+            args.push(model.into());
+        }
+        if let Some(effort) = reasoning_effort {
+            args.push("--effort".into());
+            args.push(effort.into());
+        }
+    }
+    args
+}
+
 const NAMING_PROMPT_TEMPLATE: &str = r#"You are a task title generator. Given the original task prompt below and (when available) the session execution summary, produce a single short title for this task.
 
 Rules:
@@ -570,6 +616,118 @@ pub async fn run_merge_code_review(
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     extract_review_findings(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// 可写版 headless agent（Agent 会在 cwd 直接改文件，如解决冲突；带超时与 kill_on_drop）。
+async fn run_headless_writer_agent_with_timeout(
+    agent: &str,
+    cwd: &str,
+    prompt: &str,
+    timeout_dur: Duration,
+) -> Result<Output, String> {
+    let settings = crate::app_settings::load_settings_internal();
+    let launch = crate::app_settings::get_agent_launch_spec_from_settings(&settings, agent);
+    let light = crate::app_settings::get_light_model_config_from_settings(&settings, agent);
+    let login_env: Vec<(String, String)> = crate::app_settings::get_login_shell_env().to_vec();
+
+    let mut cmd = tokio::process::Command::new(&launch.program);
+    crate::subprocess::configure_background_tokio_command(&mut cmd);
+    cmd.args(build_headless_writer_agent_args(
+        agent,
+        prompt,
+        light.model.as_deref(),
+        light.reasoning_effort.as_deref(),
+    ));
+    cmd.current_dir(cwd);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+    for (key, value) in &login_env {
+        cmd.env(key, value);
+    }
+    for (key, value) in &launch.extra_env {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn {agent}: {e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture agent stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture agent stderr".to_string())?;
+
+    let stdout_task = tokio::spawn(read_pipe_to_end(stdout, "stdout"));
+    let stderr_task = tokio::spawn(read_pipe_to_end(stderr, "stderr"));
+
+    let status = match tokio::time::timeout(timeout_dur, child.wait()).await {
+        Ok(result) => result.map_err(|e| format!("Agent wait error: {}", e))?,
+        Err(_) => {
+            let _ = child.start_kill();
+            if let Some(pid) = child.id() {
+                kill_process_tree(pid);
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            stdout_task.abort();
+            stderr_task.abort();
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err(format!("解决冲突超时（{} 秒）", timeout_dur.as_secs()));
+        }
+    };
+
+    let stdout_data = stdout_task
+        .await
+        .map_err(|e| format!("Agent stdout task failed: {}", e))??;
+    let stderr_data = stderr_task
+        .await
+        .map_err(|e| format!("Agent stderr task failed: {}", e))??;
+
+    Ok(Output {
+        status,
+        stdout: stdout_data,
+        stderr: stderr_data,
+    })
+}
+
+/// 运行 Agent 在工作区解决合并冲突（草稿式：Agent 修改+add，之后由前端确认才 commit）。
+#[tauri::command]
+pub async fn run_conflict_resolution(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    agent: String,
+) -> Result<String, String> {
+    if !matches!(agent.as_str(), "claude" | "codex") {
+        return Err(format!("Unsupported agent: {agent}"));
+    }
+    let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let wt = worktree_path.clone();
+    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&cwd, &wt))
+        .await
+        .map_err(|e| format!("校验线程错误: {e}"))??;
+
+    let ctx = crate::git::get_conflict_context(project_path.clone(), repo_path.clone(), worktree_path.clone())
+        .await?;
+    if ctx.conflicted_files.is_empty() {
+        return Ok("没有需要解决的冲突".to_string());
+    }
+    let output = run_headless_writer_agent_with_timeout(&agent, &worktree_path, &ctx.prompt, Duration::from_secs(300)).await?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    // 校验冲突是否已解决：仍有冲突则返回剩余文件。
+    let status = crate::git::run_git(&worktree_path, &["status", "--porcelain"])?;
+    let remaining = crate::git::parse_conflicted_files(&status.stdout);
+    if !remaining.is_empty() {
+        return Err(format!("仍有冲突未解决: {}", remaining.join(", ")));
+    }
+    Ok(format!("已解决 {} 个冲突文件，等你确认后提交", ctx.conflicted_files.len()))
 }
 
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────

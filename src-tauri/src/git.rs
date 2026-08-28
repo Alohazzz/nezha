@@ -2105,7 +2105,7 @@ pub struct ConflictContext {
 }
 
 /// 从 `git status --porcelain` 输出中提取处于合并冲突状态的文件（XY 含 'U' 或 AA/DD）。
-fn parse_conflicted_files(stdout: &[u8]) -> Vec<String> {
+pub(crate) fn parse_conflicted_files(stdout: &[u8]) -> Vec<String> {
     let mut files = Vec::new();
     for line in String::from_utf8_lossy(stdout).lines() {
         if line.len() < 4 || line.as_bytes()[2] != b' ' {
@@ -2159,6 +2159,39 @@ pub async fn get_conflict_context(
     })
     .await
     .map_err(|e| format!("Conflict context task panicked: {}", e))?
+}
+
+/// 在 Agent 解决冲突后，暂存全部改动并提交（带可选的 #议题 tag）。
+#[tauri::command]
+pub async fn commit_conflict_resolution(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+    message: String,
+    expected_issue_tag: Option<String>,
+) -> Result<String, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    if message.trim().is_empty() {
+        return Err("Commit message is required".to_string());
+    }
+    tokio::task::spawn_blocking(move || {
+        let add = run_git(&worktree_path, &["add", "-A"])?;
+        if !add.status.success() {
+            return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
+        }
+        let mut msg = message.trim().to_string();
+        if let Some(tag) = expected_issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            msg = format!("{msg} {tag}");
+        }
+        let commit = run_git(&worktree_path, &["commit", "-m", &msg])?;
+        if !commit.status.success() {
+            return Err(String::from_utf8_lossy(&commit.stderr).trim().to_string());
+        }
+        Ok(String::from_utf8_lossy(&commit.stdout).trim().to_string())
+    })
+    .await
+    .map_err(|e| format!("Commit conflict task panicked: {}", e))?
 }
 
 #[cfg(test)]

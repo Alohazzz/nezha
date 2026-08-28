@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, X } from "lucide-react";
 import s from "../../styles";
 
 interface ConflictContext {
@@ -11,19 +11,57 @@ interface ConflictContext {
 export function ConflictResolveView({
   projectPath,
   worktreePath,
+  agent = "claude",
   onClose,
 }: {
   projectPath: string;
   worktreePath: string;
+  agent?: string;
   onClose: () => void;
 }) {
   const [ctx, setCtx] = useState<ConflictContext | null>(null);
+  const [running, setRunning] = useState(false);
+  const [resolved, setResolved] = useState("");
+  const [committing, setCommitting] = useState(false);
 
   useEffect(() => {
     void invoke<ConflictContext>("get_conflict_context", { projectPath, worktreePath })
       .then(setCtx)
       .catch((e) => console.error("[conflict] load context failed:", e));
   }, [projectPath, worktreePath]);
+
+  const resolve = async () => {
+    setRunning(true);
+    setResolved("");
+    try {
+      const result = await invoke<string>("run_conflict_resolution", {
+        projectPath,
+        worktreePath,
+        agent,
+      });
+      setResolved(result);
+    } catch (e) {
+      setResolved(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const commit = async () => {
+    setCommitting(true);
+    try {
+      await invoke("commit_conflict_resolution", {
+        projectPath,
+        worktreePath,
+        message: "resolve merge conflicts",
+      });
+      onClose();
+    } catch (e) {
+      console.error("[conflict] commit failed:", e);
+    } finally {
+      setCommitting(false);
+    }
+  };
 
   return (
     <div style={s.bbDiffOverlay}>
@@ -56,19 +94,33 @@ export function ConflictResolveView({
             <div style={s.bbReviewRules}>{ctx?.prompt || "加载冲突上下文…"}</div>
           </div>
           <div style={s.bbReviewSide}>
-            <div style={s.bbGateHint}>方案确认后由 Agent 解决并 git add；提交动作由你确认。</div>
+            <div style={s.bbGateHint}>Agent 将修改冲突文件并 git add；提交动作由你确认。</div>
+            {resolved && (
+              <div style={s.bbSection}>
+                <div style={s.bbCardMono}>{resolved}</div>
+              </div>
+            )}
             <div style={s.bbCardActions}>
-              <button type="button" style={s.bbBtnGhost} onClick={onClose}>
-                取消
-              </button>
-              <button
-                type="button"
-                style={s.bbBtnPrimary}
-                disabled={!ctx || ctx.conflicted_files.length === 0}
-                onClick={() => onClose()}
-              >
-                用 Agent 解决冲突
-              </button>
+              {!resolved ? (
+                <button
+                  type="button"
+                  style={s.bbBtnPrimary}
+                  disabled={running || !ctx || ctx.conflicted_files.length === 0}
+                  onClick={() => void resolve()}
+                >
+                  {running ? "解决中…" : "用 Agent 解决冲突"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  style={s.bbBtnPrimary}
+                  disabled={committing}
+                  onClick={() => void commit()}
+                >
+                  <CheckCircle2 size={13} />
+                  {committing ? "提交中…" : "确认并提交"}
+                </button>
+              )}
             </div>
           </div>
         </div>
