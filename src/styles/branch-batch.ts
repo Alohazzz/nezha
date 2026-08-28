@@ -123,6 +123,11 @@ const branchBatch = {
     color: "var(--success-fg)",
     borderColor: "rgba(74,222,128,.34)",
   },
+  bbBadgeWarn: {
+    background: "var(--warning-surface)",
+    color: "var(--warning)",
+    borderColor: "var(--warning-border)",
+  },
   bbMetric: {
     display: "inline-flex" as const,
     alignItems: "center" as const,

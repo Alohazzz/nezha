@@ -7,6 +7,7 @@ import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
 import { BranchBatchDiff } from "./BranchBatchDiff";
 import { PatchPickView } from "./PatchPickView";
 import { MergeReviewView } from "./MergeReviewView";
+import { ConflictResolveView } from "./ConflictResolveView";
 
 const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   draft: "草稿",
@@ -16,6 +17,8 @@ const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   merged: "已合并",
   closed: "已关闭",
 };
+
+const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 
 function statusStyle(status: BranchBatchStatus) {
   if (status === "active") return s.bbBadgeActive;
@@ -40,6 +43,7 @@ export function BranchBatchView({
   const [pickBatch, setPickBatch] = useState<BranchBatch | null>(null);
   const [reviewBatch, setReviewBatch] = useState<BranchBatch | null>(null);
   const [reviewPassed, setReviewPassed] = useState<Set<string>>(() => new Set());
+  const [conflictBatch, setConflictBatch] = useState<BranchBatch | null>(null);
 
   const selectedProject = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
@@ -126,6 +130,11 @@ export function BranchBatchView({
               <span style={s.bbCardTitle}>{batch.name}</span>
               <span style={statusStyle(batch.status)}>{STATUS_LABEL[batch.status]}</span>
               <span style={s.bbBadge}>{batch.kind}</span>
+              {batch.status !== "merged" &&
+                batch.status !== "closed" &&
+                Date.now() - batch.createdAt > OVERDUE_MS && (
+                  <span style={s.bbBadgeWarn}>超期</span>
+                )}
               <div style={s.bbFill} />
               {batch.additions != null && batch.deletions != null && (
                 <span style={s.bbMetric}>
@@ -153,6 +162,11 @@ export function BranchBatchView({
               {batch.kind === "hotfix" && (
                 <button type="button" style={s.bbBtnGhost} onClick={() => setPickBatch(batch)}>
                   挑拣
+                </button>
+              )}
+              {batch.kind === "hotfix" && (
+                <button type="button" style={s.bbBtnGhost} onClick={() => setConflictBatch(batch)}>
+                  解决冲突
                 </button>
               )}
               <button
@@ -216,6 +230,14 @@ export function BranchBatchView({
             setReviewPassed((prev) => new Set(prev).add(reviewBatch.id))
           }
           onClose={() => setReviewBatch(null)}
+        />
+      )}
+
+      {conflictBatch && selectedProject && (
+        <ConflictResolveView
+          projectPath={selectedProject.path}
+          worktreePath={`${selectedProject.path}/.nezha/worktrees/${conflictBatch.id}`}
+          onClose={() => setConflictBatch(null)}
         />
       )}
     </div>

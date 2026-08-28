@@ -2091,8 +2091,71 @@ pub async fn list_patch_picks(
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
     tokio::task::spawn_blocking(move || list_patch_picks_blocking(&worktree_path))
-        .await
-        .map_err(|e| format!("List patch picks task panicked: {}", e))?
+    .await
+    .map_err(|e| format!("List patch picks task panicked: {}", e))?
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConflictContext {
+    pub conflicted_files: Vec<String>,
+    pub prompt: String,
+}
+
+/// 从 `git status --porcelain` 输出中提取处于合并冲突状态的文件（XY 含 'U' 或 AA/DD）。
+fn parse_conflicted_files(stdout: &[u8]) -> Vec<String> {
+    let mut files = Vec::new();
+    for line in String::from_utf8_lossy(stdout).lines() {
+        if line.len() < 4 || line.as_bytes()[2] != b' ' {
+            continue;
+        }
+        let x = line.as_bytes()[0] as char;
+        let y = line.as_bytes()[1] as char;
+        let path = &line[3..];
+        let conflicted = (x == 'U' || y == 'U') || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
+        if conflicted {
+            files.push(path.trim().to_string());
+        }
+    }
+    files
+}
+
+const CONFLICT_RESOLUTION_INSTRUCTIONS: &str = r#"你是合并冲突解决助手。请读取以下合并冲突上下文，产出解决方案。
+
+约束：
+1. 只解决冲突，不要改动无关代码。
+2. 判定哪份是权威（结合两侧分支的意图与 #议题 提交说明）；无法判定时列出两种方案及建议。
+3. 解决流程：修改冲突文件 → git add → 保留 git 冲突标记已清除。
+4. 输出：简明说明每处冲突如何解决 + 改动的文件清单。不要在此提交。"#;
+
+/// 获取补丁（当前）工作区的合并冲突上下文，供「用 Agent 解决冲突」入口组装 prompt。
+#[tauri::command]
+pub async fn get_conflict_context(
+    project_path: String,
+    repo_path: Option<String>,
+    worktree_path: String,
+) -> Result<ConflictContext, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    tokio::task::spawn_blocking(move || {
+        let status = run_git(&worktree_path, &["status", "--porcelain"])?;
+        if !status.status.success() {
+            return Err(String::from_utf8_lossy(&status.stderr).trim().to_string());
+        }
+        let files = parse_conflicted_files(&status.stdout);
+        let files_list = files.join(", ");
+        let prompt = format!(
+            "{}\n──── 冲突文件 ────\n{}\n──── 冲突状态 ────\n{}",
+            CONFLICT_RESOLUTION_INSTRUCTIONS,
+            files_list,
+            String::from_utf8_lossy(&status.stdout).trim()
+        );
+        Ok(ConflictContext {
+            conflicted_files: files,
+            prompt,
+        })
+    })
+    .await
+    .map_err(|e| format!("Conflict context task panicked: {}", e))?
 }
 
 #[cfg(test)]
@@ -2510,5 +2573,12 @@ mod tests {
         assert_eq!(entries[0].source_commit, "9c21ba0000000000000000000000000000000000");
         assert_eq!(entries[0].picked_commit, "a1f3c02");
         assert_eq!(entries[0].target_branch, "hotfix/2.5.1");
+    }
+
+    #[test]
+    fn parse_conflicted_files_filters_merge_conflicts() {
+        let status = b"UU file_a.cs\n M file_b.cs\nAA file_c.cs\nDU file_d.cs\n";
+        let files = super::parse_conflicted_files(status);
+        assert_eq!(files, vec!["file_a.cs", "file_c.cs", "file_d.cs"]);
     }
 }

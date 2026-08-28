@@ -452,6 +452,7 @@ pub fn run() {
     git::git_patch_dependency_check,
     git::cherry_pick_to_patch,
     git::list_patch_picks,
+    git::get_conflict_context,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,
