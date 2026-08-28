@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
-import type { Task, TaskDisplayWindow } from "../../types";
+import { Plus } from "lucide-react";
+import type { BranchBatch, Task, TaskDisplayWindow } from "../../types";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -40,6 +41,8 @@ export function TaskList({
   onDeleteTask,
   onToggleTaskStar,
   onRunTodo,
+  batches,
+  onCreateTaskInGroup,
 }: {
   tasks: Task[];
   taskDisplayWindow: TaskDisplayWindow;
@@ -50,6 +53,8 @@ export function TaskList({
   onDeleteTask: (id: string) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
+  batches: BranchBatch[];
+  onCreateTaskInGroup: (groupKey: string) => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -109,6 +114,11 @@ export function TaskList({
     const MAIN = "__main__";
     const attention: Task[] = [];
     const groups = new Map<string, { label: string; tasks: Task[] }>();
+    // 批创建时在 batch.taskIds 记录成员，任务自身未写 batchId——用 task.id → 所属批 来归组。
+    const taskToBatch = new Map<string, BranchBatch>();
+    for (const b of batches) {
+      for (const tid of b.taskIds) taskToBatch.set(tid, b);
+    }
     const cutoff =
       taskDisplayWindow === "all"
         ? Number.NEGATIVE_INFINITY
@@ -127,17 +137,21 @@ export function TaskList({
       const bucketAt = task.updatedAt ?? task.createdAt;
       if (bucketAt < cutoff) continue;
       const isWorktree = !!task.worktreePath && !task.worktreeDiscarded;
-      const key = isWorktree ? task.worktreePath! : MAIN;
-      let g = groups.get(key);
-      if (!g) {
-        g = {
-          label: isWorktree
-            ? `WorkTree · ${task.worktreeBranch ?? "?"}`
-            : "主检出",
-          tasks: [],
-        };
-        groups.set(key, g);
+      const batch = taskToBatch.get(task.id);
+      let key: string;
+      let label: string;
+      if (isWorktree) {
+        key = `wt:${task.worktreePath}`;
+        label = `WorkTree · ${task.worktreeBranch ?? "?"}`;
+      } else if (batch) {
+        key = `batch:${batch.id}`;
+        label = `WorkTree · ${batch.branch}`;
+      } else {
+        key = MAIN;
+        label = "主检出";
       }
+      let g = groups.get(key);
+      if (!g) groups.set(key, (g = { label, tasks: [] }));
       g.tasks.push(task);
     }
 
@@ -165,7 +179,7 @@ export function TaskList({
       .forEach(([key, g]) => appendGroup(key, g.label, g.tasks));
 
     return nextRows;
-  }, [sorted, t, taskDisplayWindow]);
+  }, [sorted, t, taskDisplayWindow, batches]);
 
   const offsets = useMemo(() => {
     const nextOffsets = [0];
@@ -204,7 +218,18 @@ export function TaskList({
               }}
             >
               {row.type === "group" ? (
-                <div style={s.groupLabel}>{row.label}</div>
+                <div style={s.groupRow}>
+                  <span style={s.groupLabel}>{row.label}</span>
+                  <button
+                    type="button"
+                    style={s.groupAdd}
+                    aria-label="新建任务"
+                    title="新建任务"
+                    onClick={() => onCreateTaskInGroup(row.key)}
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
               ) : (
                 <TaskListItem
                   task={row.task}

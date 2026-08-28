@@ -9,6 +9,7 @@ mod agent_assist;
 mod analytics;
 mod app_settings;
 mod batch;
+mod codeup;
 mod build;
 mod config;
 mod drafts;
@@ -449,6 +450,19 @@ pub fn run() {
     batch::get_branch_batch,
     batch::close_branch_batch,
     batch::merge_branch_batch,
+    codeup::codeup_resolve_repo,
+    codeup::codeup_branch_managers,
+    codeup::codeup_create_mr,
+    codeup::codeup_list_repositories,
+    codeup::codeup_list_pending_mrs,
+    codeup::codeup_get_mr,
+    codeup::codeup_approve_mr,
+    codeup::codeup_merge_mr,
+    codeup::codeup_ensure_worktree,
+    codeup::codeup_review_mr,
+    codeup::codeup_pull_code,
+    codeup::codeup_is_pulled,
+    codeup::codeup_resolve_conflicts,
     git::git_branch_diff_stats,
     git::git_branch_diff_file,
     git::git_patch_dependency_check,

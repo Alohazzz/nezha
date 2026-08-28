@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-const API_BASE: &str = "https://openapi-rdc.aliyuncs.com";
+pub(crate) const API_BASE: &str = "https://openapi-rdc.aliyuncs.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
@@ -23,7 +23,7 @@ const MAX_ISSUE_IMAGES: usize = 20;
 const MAX_COMMENT_CHARS: usize = 20_000;
 const MAX_REPORTED_ERRORS: usize = 5;
 
-fn build_client() -> Result<reqwest::Client, String> {
+pub(crate) fn build_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
@@ -45,7 +45,7 @@ fn body_string(bytes: &[u8]) -> String {
 }
 
 /// 校验响应域名与 HTTP 状态，返回响应体字节。
-async fn read_json_body(resp: reqwest::Response) -> Result<Vec<u8>, String> {
+pub(crate) async fn read_json_body(resp: reqwest::Response) -> Result<Vec<u8>, String> {
     let final_url = resp.url().as_str();
     if !final_url.starts_with(API_BASE) {
         return Err(format!("Unexpected response URL: {final_url}"));
@@ -232,7 +232,7 @@ fn parse_total_header(resp: &reqwest::Response) -> Option<usize> {
 }
 
 /// GET 请求 + 鉴权头 + 响应校验（新命令复用；域名白名单由 read_json_body 兜底）。
-async fn get_yunxiao_json(
+pub(crate) async fn get_yunxiao_json(
     client: &reqwest::Client,
     token: &str,
     url: String,

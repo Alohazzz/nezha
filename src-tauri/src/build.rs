@@ -115,6 +115,9 @@ pub struct RunBuildOptions {
     /// Selected git repo names (build scope). Empty = full solution.
     #[serde(default)]
     pub selected: Vec<String>,
+    /// 覆盖构建输出目录（如 worktree 运行根）。为空则用项目配置 external_dll_dir / 自动探测。
+    #[serde(default)]
+    pub external_dll_dir: String,
 }
 
 fn validate_project_path(project_path: &str) -> Result<(), String> {
@@ -681,7 +684,9 @@ pub async fn run_build(
     if !cfg.msbuild_path.is_empty() {
         cmd.arg("-MsbuildPath").arg(&cfg.msbuild_path);
     }
-    if !cfg.external_dll_dir.is_empty() {
+    if !options.external_dll_dir.is_empty() {
+        cmd.arg("-ExternalDllDir").arg(&options.external_dll_dir);
+    } else if !cfg.external_dll_dir.is_empty() {
         cmd.arg("-ExternalDllDir").arg(&cfg.external_dll_dir);
     }
     if !cfg.solution.is_empty() {

@@ -265,11 +265,26 @@ export function ProjectPage({
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [worktreeScope, setWorktreeScope] = useState<string>("");
 
-  useEffect(() => {
-    void invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id })
-      .then(setBatches)
-      .catch((e) => console.error("[project] load batches failed:", e));
+  const loadBatches = useCallback(async () => {
+    try {
+      const list = await invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id });
+      setBatches(list);
+    } catch (e) {
+      console.error("[project] load batches failed:", e);
+    }
   }, [project.id]);
+
+  useEffect(() => {
+    void loadBatches();
+  }, [loadBatches]);
+
+  const handleScopeChange = useCallback(
+    (path: string) => {
+      setWorktreeScope(path);
+      void loadBatches();
+    },
+    [loadBatches],
+  );
   const shellRef = useRef<ShellTerminalPanelHandle>(null);
   const pendingCmdRef = useRef<string | null>(null);
   const prevHadDiffRef = useRef(false);
@@ -430,6 +445,20 @@ export function ProjectPage({
     clearFileAndDiff();
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
+
+  const handleCreateTaskInGroup = useCallback(
+    (groupKey: string) => {
+      if (groupKey.startsWith("batch:")) {
+        const id = groupKey.slice("batch:".length);
+        const batch = batches.find((b) => b.id === id);
+        if (batch) setWorktreeScope(`${project.path}/.nezha/worktrees/${batch.id}`);
+      } else if (groupKey.startsWith("wt:")) {
+        setWorktreeScope(groupKey.slice("wt:".length));
+      }
+      handleNewTask();
+    },
+    [batches, project.path, handleNewTask],
+  );
 
   const collapseTaskPanelForNewDiff = useCallback(() => {
     if (!openDiff) {
@@ -865,6 +894,8 @@ export function ProjectPage({
         onDeleteAllTasks={onDeleteAllTasks}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
+        batches={batches}
+        onCreateTaskInGroup={handleCreateTaskInGroup}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         backTitle={hubMode ? t("skill.taskView.back") : undefined}
         themeVariant={themeVariant}
@@ -1088,7 +1119,7 @@ export function ProjectPage({
             <WorktreeScopeSelect
               options={worktreeOptions}
               value={worktreeScope}
-              onChange={setWorktreeScope}
+              onChange={handleScopeChange}
             />
           </div>
           <div style={s.rpContent}>
@@ -1136,6 +1167,8 @@ export function ProjectPage({
                 projectPath={project.path}
                 projectId={project.id}
                 tasks={projectTasks}
+                worktreeScope={worktreeScope}
+                onScopeChange={handleScopeChange}
                 onClose={() => handleTogglePanel("branch-batch")}
               />
             </ErrorBoundary>
@@ -1145,6 +1178,7 @@ export function ProjectPage({
               <BuildPanel
                 projectPath={worktreeScope || project.path}
                 width={rightPanelWidth}
+                worktreePath={worktreeScope || undefined}
                 onCreateFixTask={(t) =>
                   onSubmitTask({
                     prompt: t.prompt,

@@ -200,9 +200,11 @@ export function BuildPanel({
   projectPath,
   width,
   onCreateFixTask,
+  worktreePath,
 }: {
   projectPath: string;
   width: number;
+  worktreePath?: string;
   onCreateFixTask?: (t: {
     prompt: string;
     agent: string;
@@ -539,6 +541,7 @@ export function BuildPanel({
       skip_external_check: config?.skip_external_check ?? false,
       skip_restore: config?.skip_restore ?? false,
       skip_clean: config?.skip_clean ?? false,
+      external_dll_dir: worktreePath ? `${worktreePath}\\_run` : config?.external_dll_dir ?? "",
     };
     try {
       const id = await invoke<string>("run_build", { projectPath, options, onOutput: channel });
@@ -552,7 +555,7 @@ export function BuildPanel({
       setError(String(e));
       setStatusText("");
     }
-  }, [projectPath, plan, mode, config, appendLog, load, errorList, fixedProjects]);
+  }, [projectPath, plan, mode, config, appendLog, load, errorList, fixedProjects, worktreePath]);
 
   const handleCancel = useCallback(async () => {
     if (!runningId) return;

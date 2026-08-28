@@ -145,9 +145,69 @@ export interface BranchBatch {
   deletions?: number;
   /** 云效议题编号列表，用于 commit 门禁与回写（如 ["QHDK-29312"]）。 */
   issueSerialNumbers?: string[];
+  /** Codeup 合并请求 id（提交 MR 成功后回填）。 */
+  mrId?: string;
+  /** Codeup 合并请求状态（提交后跟随 MR 状态回填）。 */
+  mrStatus?: MrStatus;
 }
 
-export type BranchBatchStatus = "draft" | "active" | "review" | "conflict" | "merged" | "closed";
+/** Codeup 合并请求生命周期状态。 */
+export type MrStatus =
+  | "opened"
+  | "approved"
+  | "merging"
+  | "merged"
+  | "rejected"
+  | "closed";
+
+/** draft | active | review | conflict | approved | merged | rejected | closed */
+export type BranchBatchStatus =
+  | "draft"
+  | "active"
+  | "review"
+  | "conflict"
+  | "approved"
+  | "merged"
+  | "rejected"
+  | "closed";
+
+/** 跨项目聚合的 Codeup 合并请求（欢迎页合并审核用）。 */
+export interface CodeupMr {
+  projectId: string;
+  projectPath: string;
+  repository: string;
+  id: string;
+  title: string;
+  description: string;
+  sourceBranch: string;
+  targetBranch: string;
+  status: string;
+  author: string;
+  reviewers: string[];
+  createdAt: number;
+  /** Codeup 仓库 id（数字，按仓库操作 MR 用）。 */
+  repositoryId: string;
+  /** 仓库内 MR 编号（change 的 local id）。 */
+  localId: number;
+  /** 是否存在冲突。 */
+  hasConflict: boolean;
+  /** MR 详情 web 链接。 */
+  detailUrl: string;
+  updatedAt: number;
+  /** 本地是否已拉取该 MR 代码（用于「拉取代码」门禁）。 */
+  pulled: boolean;
+  /** 已拉取后的本地 worktree 路径。 */
+  worktreePath: string;
+}
+
+/** Codeup 仓库（欢迎页合并审核的仓库过滤下拉用）。 */
+export interface CodeupRepository {
+  id: string;
+  name: string;
+  path: string;
+  namespace: string;
+  webUrl: string;
+}
 
 export interface Task {
   id: string;

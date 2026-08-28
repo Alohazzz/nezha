@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Plus, RefreshCw, X } from "lucide-react";
+import { Plus, RefreshCw, Send, X } from "lucide-react";
 import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
 import s from "../../styles";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
@@ -8,13 +8,16 @@ import { BranchBatchDiff } from "./BranchBatchDiff";
 import { PatchPickView } from "./PatchPickView";
 import { MergeReviewView } from "./MergeReviewView";
 import { ConflictResolveView } from "./ConflictResolveView";
+import { SubmitMrDialog } from "./SubmitMrDialog";
 
 const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   draft: "草稿",
   active: "进行中",
   review: "待评审",
   conflict: "冲突",
+  approved: "已通过",
   merged: "已合并",
+  rejected: "已拒绝",
   closed: "已关闭",
 };
 
@@ -23,6 +26,8 @@ const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 function statusStyle(status: BranchBatchStatus) {
   if (status === "active") return s.bbBadgeActive;
   if (status === "conflict") return s.bbBadgeConflict;
+  if (status === "approved") return s.bbBadgeDone;
+  if (status === "rejected") return s.bbBadgeConflict;
   if (status === "merged") return s.bbBadgeDone;
   return s.bbBadge;
 }
@@ -31,11 +36,15 @@ export function BranchBatchView({
   projectPath,
   projectId,
   tasks,
+  worktreeScope,
+  onScopeChange,
   onClose,
 }: {
   projectPath: string;
   projectId: string;
   tasks: Task[];
+  worktreeScope: string;
+  onScopeChange: (path: string) => void;
   onClose: () => void;
 }) {
   const [batches, setBatches] = useState<BranchBatch[]>([]);
@@ -43,7 +52,7 @@ export function BranchBatchView({
   const [diffBatch, setDiffBatch] = useState<BranchBatch | null>(null);
   const [pickBatch, setPickBatch] = useState<BranchBatch | null>(null);
   const [reviewBatch, setReviewBatch] = useState<BranchBatch | null>(null);
-  const [reviewPassed, setReviewPassed] = useState<Set<string>>(() => new Set());
+  const [submitBatch, setSubmitBatch] = useState<BranchBatch | null>(null);
   const [conflictBatch, setConflictBatch] = useState<BranchBatch | null>(null);
 
   const load = useCallback(async (pid: string) => {
@@ -72,20 +81,14 @@ export function BranchBatchView({
     [projectId, load],
   );
 
-  const merge = useCallback(
-    async (batch: BranchBatch) => {
-      try {
-        await invoke<{ message: string; batch: BranchBatch }>("merge_branch_batch", {
-          projectPath,
-          projectId,
-          batchId: batch.id,
-        });
-        await load(projectId);
-      } catch (e) {
-        console.error("[branch-batch] merge failed:", e);
-      }
-    },
-    [projectPath, projectId, load],
+  /** 仅展示当前选中 worktree 对应的批（一个批最多一条）。 */
+  const scopedBatches = useMemo(
+    () =>
+      batches.filter((b) => {
+        if (!worktreeScope) return false;
+        return `${projectPath}/.nezha/worktrees/${b.id}` === worktreeScope;
+      }),
+    [batches, worktreeScope, projectPath],
   );
 
   return (
@@ -103,8 +106,10 @@ export function BranchBatchView({
       </div>
 
       <div style={s.bbList}>
-        {batches.length === 0 && <div style={s.bbEmpty}>暂无 PR，点击「新建 PR」创建。</div>}
-        {batches.map((batch) => (
+        {scopedBatches.length === 0 && (
+          <div style={s.bbEmpty}>当前 worktree 无关联 PR，点击「新建 PR」创建。</div>
+        )}
+        {scopedBatches.map((batch) => (
           <div key={batch.id} style={s.bbCard}>
             <div style={s.bbCardHead}>
               <span style={s.bbCardTitle}>{batch.name}</span>
@@ -178,17 +183,10 @@ export function BranchBatchView({
                 关闭
               </button>
               {batch.status === "active" && (
-                <button
-                  type="button"
-                  style={s.bbBtnPrimary}
-                  disabled={!reviewPassed.has(batch.id)}
-                  onClick={() => void merge(batch)}
-                >
-                  合并到 {batch.targetBranch}
+                <button type="button" style={s.bbBtnPrimary} onClick={() => setSubmitBatch(batch)}>
+                  <Send size={13} />
+                  提交 MR
                 </button>
-              )}
-              {batch.status === "active" && !reviewPassed.has(batch.id) && (
-                <span style={s.bbGateHint}>需先通过代码审查</span>
               )}
             </div>
           </div>
@@ -200,7 +198,10 @@ export function BranchBatchView({
           projectId={projectId}
           projectPath={projectPath}
           tasks={tasks}
-          onCreated={(batch) => setBatches((prev) => [...prev, batch])}
+          onCreated={(batch) => {
+            setBatches((prev) => [...prev, batch]);
+            onScopeChange(`${projectPath}/.nezha/worktrees/${batch.id}`);
+          }}
           onClose={() => setShowCreate(false)}
         />
       )}
@@ -230,7 +231,7 @@ export function BranchBatchView({
           baseBranch={reviewBatch.baseBranch}
           branch={reviewBatch.branch}
           agent="claude"
-          onPass={() => setReviewPassed((prev) => new Set(prev).add(reviewBatch.id))}
+          onPass={() => {}}
           onClose={() => setReviewBatch(null)}
         />
       )}
@@ -240,6 +241,16 @@ export function BranchBatchView({
           projectPath={projectPath}
           worktreePath={`${projectPath}/.nezha/worktrees/${conflictBatch.id}`}
           onClose={() => setConflictBatch(null)}
+        />
+      )}
+
+      {submitBatch && (
+        <SubmitMrDialog
+          projectPath={projectPath}
+          projectId={projectId}
+          batch={submitBatch}
+          onDone={() => void load(projectId)}
+          onClose={() => setSubmitBatch(null)}
         />
       )}
     </div>
