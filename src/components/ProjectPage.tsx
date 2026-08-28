@@ -446,6 +446,20 @@ export function ProjectPage({
     onNewTask();
   }, [onNewTask, clearFileAndDiff]);
 
+  const handleCreateTaskInGroup = useCallback(
+    (groupKey: string) => {
+      if (groupKey.startsWith("batch:")) {
+        const id = groupKey.slice("batch:".length);
+        const batch = batches.find((b) => b.id === id);
+        if (batch) setWorktreeScope(`${project.path}/.nezha/worktrees/${batch.id}`);
+      } else if (groupKey.startsWith("wt:")) {
+        setWorktreeScope(groupKey.slice("wt:".length));
+      }
+      handleNewTask();
+    },
+    [batches, project.path, handleNewTask],
+  );
+
   const collapseTaskPanelForNewDiff = useCallback(() => {
     if (!openDiff) {
       setTaskPanelCollapsed(true);
@@ -880,6 +894,8 @@ export function ProjectPage({
         onDeleteAllTasks={onDeleteAllTasks}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
+        batches={batches}
+        onCreateTaskInGroup={handleCreateTaskInGroup}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         backTitle={hubMode ? t("skill.taskView.back") : undefined}
         themeVariant={themeVariant}

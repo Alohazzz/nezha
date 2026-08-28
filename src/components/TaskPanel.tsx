@@ -12,6 +12,7 @@ import {
 import type {
   Project,
   Task,
+  BranchBatch,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -44,6 +45,8 @@ export function TaskPanel({
   onDeleteAllTasks,
   onToggleTaskStar,
   onRunTodo,
+  batches,
+  onCreateTaskInGroup,
   onBack,
   backTitle,
   themeVariant,
@@ -86,6 +89,8 @@ export function TaskPanel({
   onDeleteAllTasks: () => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
+  batches: BranchBatch[];
+  onCreateTaskInGroup: (groupKey: string) => void;
   onBack: () => void;
   backTitle?: string;
   themeVariant: ThemeVariant;
@@ -239,6 +244,8 @@ export function TaskPanel({
         onDeleteTask={onDeleteTask}
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodo}
+        batches={batches}
+        onCreateTaskInGroup={onCreateTaskInGroup}
       />
       <div style={s.taskPanelFooter}>
         <SidebarFooterActions
