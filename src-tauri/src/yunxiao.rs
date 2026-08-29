@@ -1269,6 +1269,85 @@ async fn update_workitem_field(
     Ok(())
 }
 
+/// PUT 更新工作项字段（字符串值版，如 status=状态ID）。
+async fn update_workitem_field_str(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+    field_id: &str,
+    value: &str,
+) -> Result<(), String> {
+    let resp = client
+        .put(format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+        ))
+        .header("x-yunxiao-token", token)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ field_id: value }))
+        .send()
+        .await
+        .map_err(|e| format!("请求云效更新字段失败: {e}"))?;
+    let _ = read_json_body(resp).await?;
+    Ok(())
+}
+
+/// 查询指定工作项类型工作流里名为「已完成」的状态 ID；找不到时报错。
+async fn find_done_status_id(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+    workitem_type_id: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes/{workitem_type_id}/workflows"
+    );
+    let bytes = get_yunxiao_json(client, token, url).await?;
+    let statuses = parse_workflow_statuses(&bytes)?;
+    statuses
+        .iter()
+        .find(|s| s.name == "已完成" || s.display_name.as_deref() == Some("已完成"))
+        .map(|s| s.id.clone())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "工作流中未找到「已完成」状态".to_string())
+}
+
+/// 把工作项状态置为「已完成」（知识沉淀自动回写闭环用）。
+#[tauri::command]
+pub async fn yunxiao_complete_workitem(
+    token: String,
+    organization_id: String,
+    workitem_id: String,
+) -> Result<(), String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    let workitem_id = workitem_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
+    }
+    let client = build_client()?;
+    let (project_id, workitem_type_id) =
+        fetch_workitem_placements(&client, &token, &organization_id, &workitem_id).await?;
+    let status_id = find_done_status_id(
+        &client,
+        &token,
+        &organization_id,
+        &project_id,
+        &workitem_type_id,
+    )
+    .await?;
+    update_workitem_field_str(
+        &client,
+        &token,
+        &organization_id,
+        &workitem_id,
+        "status",
+        &status_id,
+    )
+    .await
+}
+
 /// 知识沉淀创建的审核议题结果：`duplicated=true` 表示标题已存在（幂等，不重复创建）。
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]

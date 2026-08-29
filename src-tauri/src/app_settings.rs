@@ -162,6 +162,22 @@ pub struct CodeupSettings {
     pub worktree_base_path: String,
 }
 
+/// 知识沉淀自动回写配置。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct KnowledgeSettings {
+    /// 提交知识沉淀后经质量门校验自动写入技能库知识图谱，并 git 提交推送。
+    #[serde(default)]
+    pub auto_writeback: bool,
+}
+
+impl Default for KnowledgeSettings {
+    fn default() -> Self {
+        Self {
+            auto_writeback: false,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AppSettings {
     #[serde(default)]
@@ -222,6 +238,8 @@ pub struct AppSettings {
     pub yunxiao: YunxiaoSettings,
     #[serde(default)]
     pub codeup: CodeupSettings,
+    #[serde(default)]
+    pub knowledge: KnowledgeSettings,
 }
 
 impl Default for AppSettings {
@@ -249,6 +267,7 @@ impl Default for AppSettings {
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
             codeup: CodeupSettings::default(),
+            knowledge: KnowledgeSettings::default(),
         }
     }
 }
@@ -694,6 +713,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         codex_model_catalog: normalize_catalog(settings.codex_model_catalog),
         yunxiao: settings.yunxiao,
         codeup: settings.codeup,
+        knowledge: settings.knowledge,
     }
 }
 
@@ -727,6 +747,7 @@ fn load_settings_unlocked() -> AppSettings {
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
             codeup: CodeupSettings::default(),
+            knowledge: KnowledgeSettings::default(),
         });
         if let Ok(dir) = nezha_dir() {
             let _ = fs::create_dir_all(&dir);
@@ -1387,6 +1408,25 @@ pub async fn save_system_notifications(enabled: bool) -> Result<AppSettings, Str
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         settings.system_notifications = enabled;
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_knowledge_auto_writeback(enabled: bool) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.knowledge.auto_writeback = enabled;
 
         let dir = nezha_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

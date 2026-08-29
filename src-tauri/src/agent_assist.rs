@@ -179,7 +179,7 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
 
 /// 异步启动 headless agent 子进程（任务命名 / 议题补充共用）。
 /// 超时后通过 `start_kill()` 终止子进程，避免阻塞线程和后台 agent 持续运行（M-2 修复）。
-async fn run_headless_agent_with_timeout(
+pub(crate) async fn run_headless_agent_with_timeout(
     agent: &str,
     project_path: &str,
     prompt: &str,

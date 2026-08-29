@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { FolderOpen, GitBranch, RotateCcw } from "lucide-react";
 import { useI18n } from "../../i18n";
 import type { Project, SkillHubConfig, SetSkillHubResult } from "../../types";
-import { SKILL_HUB_CHANGED_EVENT } from "./types";
+import { SKILL_HUB_CHANGED_EVENT, type AppSettings } from "./types";
 import s from "../../styles";
 
 function formatSyncTime(ts?: number): string {
@@ -22,6 +22,25 @@ export function SkillsPanel() {
   const [branchText, setBranchText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoWriteback, setAutoWriteback] = useState<boolean | null>(null);
+  const [writebackBusy, setWritebackBusy] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AppSettings>("load_app_settings")
+      .then((settings) => {
+        if (!cancelled) setAutoWriteback(settings.knowledge?.autoWriteback ?? false);
+      })
+      .catch(() => {
+        if (!cancelled) setAutoWriteback(false);
+      })
+      .finally(() => {
+        if (!cancelled) setWritebackBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     invoke<SkillHubConfig>("get_skill_hub_config")
@@ -121,6 +140,21 @@ export function SkillsPanel() {
       setBusy(false);
     }
   }, []);
+
+  const handleWritebackToggle = useCallback(async () => {
+    if (writebackBusy || autoWriteback === null) return;
+    const enabled = !autoWriteback;
+    setWritebackBusy(true);
+    setError(null);
+    try {
+      const next = await invoke<AppSettings>("save_knowledge_auto_writeback", { enabled });
+      setAutoWriteback(next.knowledge?.autoWriteback ?? enabled);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setWritebackBusy(false);
+    }
+  }, [writebackBusy, autoWriteback]);
 
   const hubPath = config?.hubPath ?? "";
   const lastSyncedAt = config?.lastSyncedAt;
@@ -256,6 +290,29 @@ export function SkillsPanel() {
           <span style={s.skillsPanelMetaValue}>{hubProjectName}</span>
         </div>
       ) : null}
+
+      <div style={s.settingFieldSpaced}>
+        <label style={s.settingFieldLabel}>{t("appSettings.knowledgeAutoWriteback")}</label>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={autoWriteback === true}
+          aria-label={t("appSettings.knowledgeAutoWriteback")}
+          disabled={writebackBusy}
+          data-checked={autoWriteback === true}
+          data-disabled={writebackBusy}
+          onClick={() => void handleWritebackToggle()}
+          className="app-settings-toggle"
+        >
+          <span className="app-settings-toggle-label">
+            {t("appSettings.knowledgeAutoWritebackToggle")}
+          </span>
+          <span className="app-settings-toggle-track">
+            <span className="app-settings-toggle-knob" />
+          </span>
+        </button>
+        <span style={s.settingFieldHint}>{t("appSettings.knowledgeAutoWritebackHint")}</span>
+      </div>
 
       {error ? <div style={s.skillsPanelError}>{error}</div> : null}
     </div>

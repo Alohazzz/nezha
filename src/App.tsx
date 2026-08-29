@@ -39,6 +39,7 @@ import type {
   CreateKnowledgeIssueResult,
   FontFamily,
   KnowledgeSuggestion,
+  KnowledgeWritebackResult,
 } from "./types";
 import { quoteFontName } from "./utils/fonts";
 import {
@@ -54,6 +55,7 @@ import {
 import { buildYunxiaoFieldsText } from "./components/yunxiao/issueForms";
 import {
   EMPTY_YUNXIAO_SETTINGS,
+  type KnowledgeSettings,
   type YunxiaoSettings,
 } from "./components/app-settings/types";
 import { WelcomePage } from "./components/WelcomePage";
@@ -1803,8 +1805,12 @@ function App() {
   ): Promise<string[]> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
-    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const appSettings = await invoke<{
+      yunxiao?: YunxiaoSettings;
+      knowledge?: KnowledgeSettings;
+    }>("load_app_settings");
     const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    const autoWriteback = appSettings.knowledge?.autoWriteback ?? false;
     if (!yunxiao.token || !yunxiao.organizationId) {
       throw new Error(t("yunxiao.notConnected"));
     }
@@ -1814,32 +1820,45 @@ function App() {
       yunxiao.projectId && task.yunxiaoWorkitemId
         ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
         : "";
-    const createdIds: string[] = [];
-    for (const s of suggestions) {
-      const title = `【知识沉淀】${s.module}-${s.suggestedTitle || s.section}`;
-      const description = [
-        `来源议题：${task.yunxiaoSerialNumber ?? ""} ${link}`,
-        `目标模块卡片：${s.module}（data/modules/${s.module}.md）`,
-        `建议更新段落：${s.section}`,
-        "",
-        s.content,
-        "",
-        `依据：${s.evidence}`,
-        `置信度：${s.confidence === "confirmed" ? "已确认" : "待验证"}`,
-        `审核指引：审核通过后由知识库负责人更新 data/modules/${s.module}.md 并提交（git 统一管理）。`,
-      ].join("\n");
-      const result = await invoke<CreateKnowledgeIssueResult>(
-        "yunxiao_create_knowledge_issue",
-        {
-          token: yunxiao.token,
-          organizationId: yunxiao.organizationId,
-          projectId: kbProjectId,
-          subject: title,
-          description,
-        },
-      );
-      if (result.created) createdIds.push(result.workitemId);
-    }
+    // 一次提交合并成一条云效知识议题（所有候选进同一描述，不再每条一个议题）。
+    const serial = task.yunxiaoSerialNumber ?? "";
+    const taskLabel = (task.name ?? task.prompt).slice(0, 60);
+    const title = `【知识沉淀】${serial ? `${serial} ` : ""}${taskLabel}（${suggestions.length} 条）`;
+    const candidateSections = suggestions
+      .map(
+        (s, i) =>
+          [
+            `### ${i + 1}. ${s.module} / ${s.section}`,
+            `目标模块卡片：${s.module}（data/modules/${s.module}.md）`,
+            "",
+            s.content,
+            "",
+            `依据：${s.evidence}`,
+            `置信度：${s.confidence === "confirmed" ? "已确认" : "待验证"}`,
+          ].join("\n"),
+      )
+      .join("\n\n");
+    const description = [
+      `来源议题：${serial} ${link}`,
+      `候选数量：${suggestions.length}`,
+      "",
+      candidateSections,
+      "",
+      autoWriteback
+        ? "自动回写已开启：质量门通过的条目将自动写入模块卡片并 git 提交推送；全部通过时本议题自动置为已完成，未通过条目保留人工审核。"
+        : "审核指引：审核通过后由知识库负责人更新对应 data/modules/<module>.md 并提交（git 统一管理）。",
+    ].join("\n");
+    const result = await invoke<CreateKnowledgeIssueResult>(
+      "yunxiao_create_knowledge_issue",
+      {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        projectId: kbProjectId,
+        subject: title,
+        description,
+      },
+    );
+    const createdIds = result.created ? [result.workitemId] : [];
     if (createdIds.length > 0) {
       setTasks((prev) => {
         const next = prev.map((candidate) =>
@@ -1856,6 +1875,52 @@ function App() {
         persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
         return next;
       });
+    }
+    // 自动回写：仅在新建议题时执行一次（duplicated 命中说明此前已提交过，幂等跳过）。
+    if (autoWriteback && result.created) {
+      const agent = task.agent === "codex" ? "codex" : "claude";
+      try {
+        const writeback = await invoke<KnowledgeWritebackResult>(
+          "knowledge_auto_writeback",
+          { suggestions, agent },
+        );
+        if (writeback.allPassed && writeback.writtenCount > 0) {
+          await invoke("yunxiao_complete_workitem", {
+            token: yunxiao.token,
+            organizationId: yunxiao.organizationId,
+            workitemId: result.workitemId,
+          });
+          showToast(
+            `知识已自动写入技能库（${writeback.writtenCount} 条）并推送，议题已置为已完成`,
+            "success",
+          );
+        } else {
+          const writtenLines = writeback.items
+            .filter((item) => item.written)
+            .map((item) => `- ${item.module} / ${item.section}：已自动写入模块卡片`);
+          const failedLines = writeback.items
+            .filter((item) => !item.passed)
+            .map((item) => `- ${item.module} / ${item.section}：${item.reason || "质量门未通过"}`);
+          const comment = [
+            `自动回写结果：通过 ${writeback.writtenCount} / 共 ${suggestions.length} 条。`,
+            "",
+            ...(writtenLines.length > 0 ? ["已自动写入：", ...writtenLines, ""] : []),
+            ...(failedLines.length > 0 ? ["待人工审核：", ...failedLines] : []),
+          ].join("\n");
+          await invoke("yunxiao_create_workitem_comment", {
+            token: yunxiao.token,
+            organizationId: yunxiao.organizationId,
+            workitemId: result.workitemId,
+            content: comment,
+          }).catch(() => {});
+          showToast(
+            `质量门通过 ${writeback.writtenCount}/${suggestions.length} 条，未通过条目保留人工审核`,
+            "warning",
+          );
+        }
+      } catch (e) {
+        showToast(`知识自动回写失败：${String(e)}（议题保留人工审核）`, "error");
+      }
     }
     return createdIds;
   }

@@ -74,6 +74,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Notify when the agent needs confirmation or a task completes",
     "appSettings.systemNotificationsHint":
       "Show OS-level notifications when the window is unfocused and the agent needs your confirmation or a task completes or fails. While the window is focused, only the in-app badge is shown.",
+    "appSettings.knowledgeAutoWriteback": "Knowledge Auto Write-back",
+    "appSettings.knowledgeAutoWritebackToggle":
+      "Auto write knowledge to the skill library after quality gate",
+    "appSettings.knowledgeAutoWritebackHint":
+      "When enabled, submitting knowledge sedimentation runs a two-layer quality gate (rules + agent) and writes passing entries into his-knowledge-graph module docs, then commits and pushes the skill library. Entries that fail stay as review issues.",
     "appSettings.terminalScrollback": "Terminal Scrollback",
     "appSettings.terminalScrollbackUnit": "lines",
     "appSettings.terminalScrollbackHint":
@@ -909,6 +914,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.systemNotificationsToggle": "Agent 需要确认或任务完成时提醒",
     "appSettings.systemNotificationsHint":
       "窗口未聚焦时，Agent 需要确认或任务完成/失败时发送系统通知；窗口聚焦时只显示应用内角标。",
+    "appSettings.knowledgeAutoWriteback": "知识沉淀自动回写",
+    "appSettings.knowledgeAutoWritebackToggle": "提交后经质量门自动写入技能库",
+    "appSettings.knowledgeAutoWritebackHint":
+      "开启后，提交知识沉淀会先过「规则 + Agent」两层质量门：通过的条目自动写入 his-knowledge-graph 模块卡片并 git 提交推送，全部通过时议题自动置为已完成；未通过的条目保留议题走人工审核。",
     "appSettings.terminalScrollback": "终端滚动缓冲",
     "appSettings.terminalScrollbackUnit": "行",
     "appSettings.terminalScrollbackHint":

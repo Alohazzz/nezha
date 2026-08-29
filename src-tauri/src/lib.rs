@@ -19,6 +19,7 @@ mod fs;
 mod fs_watcher;
 mod git;
 mod hooks;
+mod knowledge;
 mod notification;
 mod platform;
 mod pty;
@@ -487,6 +488,7 @@ pub fn run() {
             app_settings::save_terminal_scrollback,
             app_settings::save_terminal_copy_on_select,
             app_settings::save_system_notifications,
+            app_settings::save_knowledge_auto_writeback,
             app_settings::save_yunxiao_settings,
             app_settings::save_codeup_settings,
             app_settings::detect_agent_paths,
@@ -500,6 +502,7 @@ pub fn run() {
             yunxiao::yunxiao_get_workitem,
             yunxiao::yunxiao_prepare_issue_images,
             yunxiao::yunxiao_create_workitem_comment,
+            yunxiao::yunxiao_complete_workitem,
             yunxiao::yunxiao_writeback_with_score,
             yunxiao::yunxiao_write_score_field,
             yunxiao::yunxiao_create_knowledge_issue,
@@ -509,6 +512,7 @@ pub fn run() {
             yunxiao::write_backfill_consumed,
             drafts::clear_backfill_draft,
             agent_assist::generate_yunxiao_writeback_summary,
+            knowledge::knowledge_auto_writeback,
             agent_assist::generate_knowledge_sedimentation,
             notification::get_notifications,
             notification::mark_notification_read,

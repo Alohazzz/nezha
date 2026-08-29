@@ -284,6 +284,24 @@ export interface CreateKnowledgeIssueResult {
   workitemId: string;
 }
 
+/** 知识自动回写单条结果。 */
+export interface KnowledgeWritebackItem {
+  index: number;
+  module: string;
+  section: string;
+  passed: boolean;
+  written: boolean;
+  reason: string;
+}
+
+/** 知识自动回写整体结果。 */
+export interface KnowledgeWritebackResult {
+  items: KnowledgeWritebackItem[];
+  allPassed: boolean;
+  writtenCount: number;
+  commit: string | null;
+}
+
 /** 云效议题补充表单数据：草稿即随编辑落盘（防抖），切走/重启后重挂载可恢复；
  *  `finalized` 区分「已定稿」与「仅草稿」，缺省视为有字段即已定稿（兼容旧数据）。 */
 export interface YunxiaoSupplement {

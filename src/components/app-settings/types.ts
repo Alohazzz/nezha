@@ -90,6 +90,16 @@ export const EMPTY_CODEUP_SETTINGS: CodeupSettings = {
   worktreeBasePath: "",
 };
 
+/** 知识沉淀自动回写配置 */
+export interface KnowledgeSettings {
+  /** 提交知识沉淀后经质量门校验自动写入技能库知识图谱并 git 提交推送 */
+  autoWriteback: boolean;
+}
+
+export const EMPTY_KNOWLEDGE_SETTINGS: KnowledgeSettings = {
+  autoWriteback: false,
+};
+
 export interface AppSettings {
   claude_path: string;
   codex_path: string;
@@ -119,6 +129,7 @@ export interface AppSettings {
   codex_model_catalog: AgentModelCatalog;
   yunxiao: YunxiaoSettings;
   codeup: CodeupSettings;
+  knowledge: KnowledgeSettings;
 }
 
 /**
@@ -148,6 +159,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   codex_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   yunxiao: EMPTY_YUNXIAO_SETTINGS,
   codeup: EMPTY_CODEUP_SETTINGS,
+  knowledge: EMPTY_KNOWLEDGE_SETTINGS,
 };
 
 export interface AgentVersions {
