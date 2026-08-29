@@ -299,6 +299,16 @@ export function ProjectPage({
   );
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
 
+  // 选中带 worktreePath 的任务（含合并审核发起的审查/冲突任务）时，把项目作用域
+  // 默认切到该 worktree，让文件树 / git 面板 / 分支栏直接展示 worktree 内容。
+  useEffect(() => {
+    if (selectedTask?.worktreePath && !selectedTask.worktreeDiscarded) {
+      setWorktreeScope(selectedTask.worktreePath);
+    } else {
+      setWorktreeScope("");
+    }
+  }, [selectedTask?.worktreePath, selectedTask?.worktreeDiscarded]);
+
   const worktreeOptions = useMemo(() => {
     const seen = new Set<string>();
     const options: Array<{ key: string; label: string }> = [{ key: "", label: "主检出" }];

@@ -13,6 +13,7 @@ export type NavKey =
   | "shortcuts"
   | "hooks"
   | "skills"
+  | "gitSource"
   | "about"
   | "thanks"
   | "community"
@@ -79,6 +80,16 @@ export const EMPTY_YUNXIAO_SETTINGS: YunxiaoSettings = {
   projectId: "",
 };
 
+/** 合并审核（Codeup）集成配置：未注册仓库落地的临时仓库基路径。 */
+export interface CodeupSettings {
+  /** 临时仓库基路径；留空使用缺省 ~/.nezha/codeup_worktrees */
+  worktreeBasePath: string;
+}
+
+export const EMPTY_CODEUP_SETTINGS: CodeupSettings = {
+  worktreeBasePath: "",
+};
+
 export interface AppSettings {
   claude_path: string;
   codex_path: string;
@@ -107,6 +118,7 @@ export interface AppSettings {
   claude_model_catalog: AgentModelCatalog;
   codex_model_catalog: AgentModelCatalog;
   yunxiao: YunxiaoSettings;
+  codeup: CodeupSettings;
 }
 
 /**
@@ -135,6 +147,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   claude_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   codex_model_catalog: EMPTY_AGENT_MODEL_CATALOG,
   yunxiao: EMPTY_YUNXIAO_SETTINGS,
+  codeup: EMPTY_CODEUP_SETTINGS,
 };
 
 export interface AgentVersions {

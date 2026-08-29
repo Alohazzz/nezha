@@ -83,6 +83,9 @@ pub struct CodeupRepository {
     pub name: String,
     pub path: String,
     pub namespace: String,
+    /// 克隆地址（`httpUrlToRepo`），合并审核对未注册仓库自动 clone 用。
+    #[serde(rename = "httpUrl")]
+    pub http_url: String,
     #[serde(rename = "webUrl")]
     pub web_url: String,
 }
@@ -140,30 +143,147 @@ async fn resolve_project_for_repo(repository: &str) -> Result<String, String> {
     Err(format!("本地未注册仓库 {repository}，无法拉取代码。请先将其注册为 Nezha 项目。"))
 }
 
-/// 该 MR 当前仍存在的本地临时 worktree 路径（取最近创建的一个），没有则返回 None。
-fn mr_find_local_worktree(cwd: &str, mr_id: &str) -> Option<String> {
-    let worktrees_dir = Path::new(cwd).join(".nezha").join("worktrees");
-    let base = format!("codeup-mr-{mr_id}");
-    let prefix = format!("{base}-");
-    let entries = std::fs::read_dir(&worktrees_dir).ok()?;
-    let mut best: Option<(std::time::SystemTime, String)> = None;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        if path.is_dir() && (name == base || name.starts_with(&prefix)) {
-            let created = entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.created().ok())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            if best.as_ref().map(|(t, _)| created > *t).unwrap_or(true) {
-                best = Some((created, path.to_string_lossy().into_owned()));
+/// 把 Codeup 仓库路径转成安全的本地目录名（杜绝 Windows 非法字符与路径穿越）。
+fn sanitize_repo_dir(repository: &str) -> String {
+    let mut out = String::new();
+    for ch in repository.trim().chars() {
+        match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => out.push('_'),
+            _ => out.push(ch),
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "repository".to_string()
+    } else {
+        trimmed
+    }
+}
+
+/// 去掉 Windows `std::fs::canonicalize` 产生的 `\\?\` / `//?/` verbatim 前缀。
+/// 这类前缀会导致 `git worktree add` 在 checkout 的 `git reset --hard` 阶段卡死
+/// （历史残留 worktree 的 `locked: initializing` 正是这样来的），git 命令一律用普通路径。
+fn strip_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("\\\\?\\") {
+        return rest.to_string();
+    }
+    if let Some(rest) = path.strip_prefix("//?/") {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
+/// 从 Codeup 仓库列表里为某个仓库找到克隆地址（`httpUrlToRepo`）。
+async fn codeup_find_clone_url(repository: &str) -> Result<String, String> {
+    let repos = fetch_codeup_repositories().await?;
+    for r in &repos {
+        if r.namespace == repository || r.path == repository {
+            if !r.http_url.is_empty() {
+                return Ok(r.http_url.clone());
             }
         }
     }
-    best.map(|(_, p)| p)
+    Err(format!("未找到仓库 {repository} 的克隆地址（请确认其在 Codeup 组织内可见）。"))
 }
 
+/// 确保 `<root>` 成为一个可用 git 仓库：已是 git 仓库则跳过；否则 `git init` + 配置 origin。
+/// 采用 init + fetch 而非 clone，是为了**不要求目录为空**（历史残留也不报错），
+/// 后续由 `codeup_pull_code` 的 fetch + `checkout -f` 全覆盖，不检查本地冲突。
+async fn ensure_codeup_repo(root: &str, repository: &str) -> Result<(), String> {
+    let root_path = Path::new(root);
+    std::fs::create_dir_all(root_path).map_err(|e| format!("创建基路径失败: {e}"))?;
+    if root_path.join(".git").exists() {
+        return Ok(());
+    }
+    let init = crate::git::run_git_with_timeout(
+        root.to_string(),
+        vec!["init".into()],
+        std::time::Duration::from_secs(60),
+    )
+    .await?;
+    if !init.status.success() {
+        return Err(format!("git init 失败: {}", String::from_utf8_lossy(&init.stderr).trim()));
+    }
+    let url = codeup_find_clone_url(repository).await?;
+    let add = crate::git::run_git_with_timeout(
+        root.to_string(),
+        vec!["remote".into(), "add".into(), "origin".into(), url],
+        std::time::Duration::from_secs(60),
+    )
+    .await?;
+    if !add.status.success() {
+        return Err(format!(
+            "配置 origin 失败: {}",
+            String::from_utf8_lossy(&add.stderr).trim()
+        ));
+    }
+    // git init 不会像 clone 那样配置 fetch refspec；补上，使 `git fetch origin <branch>`
+    // 会更新 `origin/<branch>`（否则后面 `git checkout origin/<branch>` 找不到 ref）。
+    let _ = crate::git::run_git_with_timeout(
+        root.to_string(),
+        vec![
+            "config".into(),
+            "remote.origin.fetch".into(),
+            "+refs/heads/*:refs/remotes/origin/*".into(),
+        ],
+        std::time::Duration::from_secs(30),
+    )
+    .await?;
+    Ok(())
+}
+
+/// 合并审核的「worktree 槽位根」：`<基路径>/<仓库路径>`。所有 MR 的临时 worktree
+/// 都统一落在 `<根>/.nezha/worktrees/` 下，**不区分仓库是否已注册**（设置面板的
+/// 基路径对所有合并审核 pull 生效）。
+async fn codeup_worktree_root(repository: &str) -> Result<String, String> {
+    let base = crate::app_settings::codeup_worktree_base().await?;
+    let root = Path::new(&base).join(sanitize_repo_dir(repository));
+    let root_str = strip_verbatim_prefix(&path_to_string(&root)?);
+    Ok(root_str)
+}
+
+/// 拉取/审查所需的 git 源仓库（含 origin，用于 fetch / worktree add）：
+/// - 已注册为 Nezha 项目 → 复用项目自己的克隆（避免重复克隆大仓库）；
+/// - 未注册仓库 → 在基路径槽位下自动 clone（`ensure_clone` 为 true 时）。
+async fn codeup_git_source(repository: &str, ensure_clone: bool) -> Result<String, String> {
+    if let Ok(project_path) = resolve_project_for_repo(repository).await {
+        return resolve_repo_path(&project_path, None).await;
+    }
+    let root = codeup_worktree_root(repository).await?;
+    if !Path::new(&root).join(".git").exists() {
+        if !ensure_clone {
+            return Err(format!("本地未注册仓库 {repository}，且未在临时仓库基路径下 clone。"));
+        }
+        ensure_codeup_repo(&root, repository).await?;
+    }
+    Ok(root)
+}
+
+/// 每仓库的「固定文件夹」（merge-review 用）：`<基路径>/<仓库>`。
+/// 首次调用会全量 clone，之后该文件夹常驻，每次拉取只做 fetch + checkout 增量更新，
+/// 避免大仓库（如 HIS）每次为每个 MR 新建整份 worktree 导致的耗时。
+async fn codeup_repo_dir(repository: &str, ensure_clone: bool) -> Result<String, String> {
+    let base = crate::app_settings::codeup_worktree_base().await?;
+    let root = Path::new(&base).join(sanitize_repo_dir(repository));
+    let root_str = strip_verbatim_prefix(&path_to_string(&root)?);
+    if !Path::new(&root_str).join(".git").exists() {
+        if !ensure_clone {
+            return Err(format!("本地未注册仓库 {repository}，且未在临时仓库基路径下 clone。"));
+        }
+        ensure_codeup_repo(&root_str, repository).await?;
+    }
+    Ok(root_str)
+}
+
+/// 每仓库固定文件夹的**确定性路径**（不要求已存在、不触发 clone）。
+/// 供未注册为 Nezha 项目的仓库兜底：前端据此把该路径当作项目根自动定位。
+async fn codeup_repo_dir_path(repository: &str) -> Result<String, String> {
+    let base = crate::app_settings::codeup_worktree_base().await?;
+    let root = Path::new(&base).join(sanitize_repo_dir(repository));
+    Ok(strip_verbatim_prefix(&path_to_string(&root)?))
+}
+
+/// 该 MR 当前仍存在的本地临时 worktree 路径（取最近创建的一个），没有则返回 None。
 /// 读取应用级设置中的云效 token / organizationId。
 async fn load_creds() -> Result<(String, String), String> {
     let settings = crate::app_settings::load_app_settings().await?;
@@ -328,8 +448,8 @@ fn namespace_to_repo_path(ns: &str) -> String {
 }
 
 /// 列出当前组织下所有 Codeup 仓库（供「仓库过滤」下拉）。
-#[tauri::command]
-pub async fn codeup_list_repositories() -> Result<Vec<CodeupRepository>, String> {
+/// 从 Codeup API 拉取当前组织下的仓库列表（含克隆地址）。供命令与克隆解析共用。
+async fn fetch_codeup_repositories() -> Result<Vec<CodeupRepository>, String> {
     let (token, _) = load_creds().await?;
     let client = build_client()?;
     let org_id = crate::app_settings::load_app_settings()
@@ -368,6 +488,11 @@ pub async fn codeup_list_repositories() -> Result<Vec<CodeupRepository>, String>
                 .to_string(),
             path: repo_path,
             namespace,
+            http_url: item
+                .get("httpUrlToRepo")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             web_url: item
                 .get("webUrl")
                 .and_then(|v| v.as_str())
@@ -376,6 +501,11 @@ pub async fn codeup_list_repositories() -> Result<Vec<CodeupRepository>, String>
         });
     }
     Ok(out)
+}
+
+#[tauri::command]
+pub async fn codeup_list_repositories() -> Result<Vec<CodeupRepository>, String> {
+    fetch_codeup_repositories().await
 }
 
 /// 跨仓库聚合「已开启/评审中」的 MR；可选按仓库 id 过滤。
@@ -394,10 +524,18 @@ pub async fn codeup_list_pending_mrs(
         let url = format!("{url_base}?page={page}");
         let bytes = match crate::yunxiao::get_yunxiao_json(&client, &token, url).await {
             Ok(b) => b,
+            // 第一页失败直接暴露给前端，避免把「请求/凭据失败」误显示成「无可审核 MR」。
+            Err(e) if page == 1 => return Err(format!("拉取待审核合并请求失败: {e}")),
             Err(_) => break,
         };
         let json: serde_json::Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
+            Err(e) if page == 1 => {
+                return Err(format!(
+                    "解析待审核合并请求响应失败: {e} (body={})",
+                    String::from_utf8_lossy(&bytes)
+                ))
+            }
             Err(_) => break,
         };
         let arr = json
@@ -459,18 +597,23 @@ pub async fn codeup_list_pending_mrs(
                 })
                 .unwrap_or_default();
             let repo_path = namespace_to_repo_path(&ns);
-            let project_path = resolve_project_for_repo(&repo_path).await.unwrap_or_default();
-            let cwd = if project_path.is_empty() {
-                String::new()
-            } else {
-                resolve_repo_path(&project_path, None).await.unwrap_or_default()
+            // 已注册项目路径：前端把审查/冲突任务挂在项目上必须依赖它（保持原样）。
+            let registered_project = resolve_project_for_repo(&repo_path).await.ok();
+            // 固定文件夹路径（基路径下）：用于探测 MR 是否已拉取（只读，不触发 clone）；
+            // 未注册仓库时兜底把该确定性路径给前端，让「代码审查」能自动定位、无需手动注册。
+            let root = codeup_repo_dir(&repo_path, false).await.unwrap_or_default();
+            let project_path = match &registered_project {
+                Some(p) => p.clone(),
+                None => codeup_repo_dir_path(&repo_path).await.unwrap_or_default(),
             };
-            let wt = if cwd.is_empty() {
-                String::new()
+            let pulled = if root.is_empty() {
+                false
             } else {
-                mr_find_local_worktree(&cwd, &local_id.to_string()).unwrap_or_default()
+                Path::new(&root)
+                    .join(".nezha")
+                    .join(format!("pulled-{}", local_id))
+                    .is_file()
             };
-            let pulled = !wt.is_empty();
             out.push(CodeupMr {
                 project_id: project_id.clone(),
                 project_path,
@@ -518,7 +661,7 @@ pub async fn codeup_list_pending_mrs(
                     .to_string(),
                 updated_at: 0,
                 pulled,
-                worktree_path: wt,
+                worktree_path: if pulled { root.clone() } else { String::new() },
             });
         }
         if arr.len() < 20 {
@@ -647,11 +790,11 @@ pub async fn codeup_merge_mr(
     Ok(mr_id)
 }
 
-/// 清掉该 MR 在 `.nezha/worktrees` 下所有 `codeup-mr-<id>(-*)` 临时 worktree
+/// 清掉该 MR 在 `worktree_root/.nezha/worktrees` 下所有 `codeup-mr-<id>(-*)` 临时 worktree
 /// （含 git worktree 元数据与临时分支），失败静默。
-async fn codeup_cleanup_mr_temps(cwd: String, mr_id: String) {
+async fn codeup_cleanup_mr_temps(worktree_root: String, source_cwd: String, mr_id: String) {
     tokio::task::spawn_blocking(move || {
-        let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
+        let worktrees_dir = Path::new(&worktree_root).join(".nezha").join("worktrees");
         let base = format!("codeup-mr-{mr_id}");
         let prefix = format!("{base}-");
         let Ok(entries) = std::fs::read_dir(&worktrees_dir) else {
@@ -668,9 +811,9 @@ async fn codeup_cleanup_mr_temps(cwd: String, mr_id: String) {
                 removed_names.push(name);
             }
         }
-        let _ = run_git(&cwd, &["worktree", "prune"]);
+        let _ = run_git(&source_cwd, &["worktree", "prune"]);
         for name in removed_names {
-            let _ = run_git(&cwd, &["branch", "-D", &name]);
+            let _ = run_git(&source_cwd, &["branch", "-D", &name]);
         }
     })
     .await
@@ -680,38 +823,84 @@ async fn codeup_cleanup_mr_temps(cwd: String, mr_id: String) {
 /// 为 MR 创建一份**全新的**临时 worktree（每次都是新目录，绝不复用本地遗留）。
 /// 返回 `(worktree_path, local_branch)`。
 async fn codeup_create_temp_worktree(
-    cwd: String,
+    source_cwd: String,
+    worktree_root: String,
     source_branch: String,
+    target_branch: Option<String>,
     mr_id: String,
+    no_checkout: bool,
 ) -> Result<(String, String), String> {
-    tokio::task::spawn_blocking(move || {
-        let worktrees_dir = Path::new(&cwd).join(".nezha").join("worktrees");
-        std::fs::create_dir_all(&worktrees_dir)
-            .map_err(|e| format!("创建 worktrees 目录失败: {e}"))?;
-        let suffix = unique_mr_temp_suffix();
-        let dir = worktrees_dir.join(format!("codeup-mr-{mr_id}-{suffix}"));
-        let dir_str = path_to_string(&dir)?;
-        let local = format!("codeup-mr-{mr_id}-{suffix}");
-        // 先拉取源分支，再基于远端 ref 建本地分支 + worktree。
-        let fetch = run_git(&cwd, &["fetch", "origin", &source_branch])?;
-        if !fetch.status.success() {
+    let worktrees_dir = Path::new(&worktree_root).join(".nezha").join("worktrees");
+    std::fs::create_dir_all(&worktrees_dir)
+        .map_err(|e| format!("创建 worktrees 目录失败: {e}"))?;
+    let suffix = unique_mr_temp_suffix();
+    let dir = worktrees_dir.join(format!("codeup-mr-{mr_id}-{suffix}"));
+    let dir_str = strip_verbatim_prefix(&path_to_string(&dir)?);
+    let local = format!("codeup-mr-{mr_id}-{suffix}");
+    // 拉取源分支（带超时，避免网络/凭据卡死）。
+    let fetch = crate::git::run_git_with_timeout(
+        source_cwd.clone(),
+        vec!["fetch".into(), "origin".into(), source_branch.clone()],
+        std::time::Duration::from_secs(300),
+    )
+    .await?;
+    if !fetch.status.success() {
+        return Err(format!(
+            "拉取源分支失败: {}",
+            String::from_utf8_lossy(&fetch.stderr).trim()
+        ));
+    }
+    // 拉取目标分支：让工作区内的 `git diff origin/<target>...origin/<source>` 能解析，
+    // 否则审查任务会因缺少分支 ref 而「加载不出来具体分支」。
+    if let Some(target) = target_branch.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let fetch_target = crate::git::run_git_with_timeout(
+            source_cwd.clone(),
+            vec!["fetch".into(), "origin".into(), target.to_string()],
+            std::time::Duration::from_secs(300),
+        )
+        .await?;
+        if !fetch_target.status.success() {
             return Err(format!(
-                "拉取源分支失败: {}",
-                String::from_utf8_lossy(&fetch.stderr).trim()
+                "拉取目标分支失败: {}",
+                String::from_utf8_lossy(&fetch_target.stderr).trim()
             ));
         }
-        let branch_ref = format!("origin/{source_branch}");
-        let add = run_git(&cwd, &["worktree", "add", &dir_str, "-b", &local, &branch_ref])?;
-        if !add.status.success() {
-            return Err(format!(
-                "创建 worktree 失败: {}",
-                String::from_utf8_lossy(&add.stderr).trim()
-            ));
-        }
-        Ok((dir_str, local))
-    })
-    .await
-    .map_err(|e| format!("create temp worktree task panicked: {e}"))?
+    }
+    let branch_ref = format!("origin/{source_branch}");
+    // 创建临时 worktree。HIS 这类大仓库 + `* text=auto` 在 checkout 时会按文件做
+    // CRLF 归一化，极慢；关掉 autocrlf/safecrlf 跳过行尾转换，大幅提速。审查只读，
+    // 行尾不影响 diff 结论；提交时代理会按 .gitattributes 再归一化。
+    let mut add_args: Vec<String> = vec![
+        "-c".into(),
+        "core.autocrlf=false".into(),
+        "-c".into(),
+        "core.safecrlf=false".into(),
+        "worktree".into(),
+        "add".into(),
+    ];
+    // 审查只读且仓库极大（HIS）：用 --no-checkout 只建 worktree 骨架、不落盘文件，
+    // 秒级完成；agent 用 git diff/show 读对象库。浏览/冲突仍需整树检出。 --no-checkout
+    // 要放在 <dir> 之前。
+    if no_checkout {
+        add_args.push("--no-checkout".into());
+    }
+    add_args.push(dir_str.clone());
+    add_args.push("-b".into());
+    add_args.push(local.clone());
+    add_args.push(branch_ref);
+    let add = crate::git::run_git_with_timeout(
+        source_cwd,
+        add_args,
+        std::time::Duration::from_secs(600),
+    )
+    .await?;
+    if !add.status.success() {
+        return Err(format!(
+            "创建 worktree 失败: {}",
+            String::from_utf8_lossy(&add.stderr).trim()
+        ));
+    }
+    Ok((dir_str, local))
 }
 
 /// 移除本次操作创建的临时 worktree（force 移除 + prune + 删临时分支），失败静默。
@@ -736,14 +925,22 @@ pub async fn codeup_review_mr(
     agent: Option<String>,
 ) -> Result<Vec<crate::agent_assist::ReviewFinding>, String> {
     let agent = agent.unwrap_or_else(|| "claude".to_string());
-    let project_path = resolve_project_for_repo(&repository).await?;
-    let cwd = resolve_repo_path(&project_path, None).await?;
+    let source = codeup_git_source(&repository, true).await?;
+    let root = codeup_worktree_root(&repository).await?;
     // 每次处理都重建全新临时 worktree，先清掉旧残留。
-    codeup_cleanup_mr_temps(cwd.clone(), mr_id.clone()).await;
+    codeup_cleanup_mr_temps(root.clone(), source.clone(), mr_id.clone()).await;
     let (worktree_path, local_branch) =
-        codeup_create_temp_worktree(cwd.clone(), source_branch.clone(), mr_id.clone()).await?;
+        codeup_create_temp_worktree(
+            source.clone(),
+            root.clone(),
+            source_branch.clone(),
+            Some(target_branch.clone()),
+            mr_id.clone(),
+            true,
+        )
+        .await?;
     let result = crate::agent_assist::run_merge_code_review(
-        project_path,
+        root,
         None,
         worktree_path.clone(),
         target_branch,
@@ -751,46 +948,155 @@ pub async fn codeup_review_mr(
         agent,
     )
     .await;
-    codeup_remove_temp_worktree(cwd, worktree_path.clone(), local_branch).await;
+    codeup_remove_temp_worktree(source, worktree_path.clone(), local_branch).await;
     result
 }
 
-/// 显式「拉取代码」：为该 MR 建一份**全新的**临时 worktree 并返回路径（每次都是最新）。
-/// 该动作只做一次物化，供用户查看；后续审查/冲突处理各自重建，不再依赖这份。
+/// 带重试的 git 命令：对瞬时网络 / DNS 失败重试 `attempts` 次，成功返回 Output。
+async fn run_git_with_retry(
+    project_path: String,
+    args: Vec<String>,
+    timeout: std::time::Duration,
+    attempts: u32,
+) -> Result<std::process::Output, String> {
+    let mut last_msg = String::new();
+    for i in 0..attempts {
+        match crate::git::run_git_with_timeout(project_path.clone(), args.clone(), timeout).await {
+            Ok(out) if out.status.success() => return Ok(out),
+            Ok(out) => {
+                last_msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if i + 1 < attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+            Err(e) => {
+                last_msg = e;
+                if i + 1 < attempts {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+    Err(if last_msg.is_empty() { "git 命令失败".to_string() } else { last_msg })
+}
+
+/// 显式「拉取代码」：使用**每仓库固定文件夹**（`<基路径>/<仓库>`）。
+/// 首次全量 clone，之后每次只 fetch + 切到源分支（增量更新），解决大仓库每次
+/// 建整份 worktree 造成的耗时。
 #[tauri::command]
 pub async fn codeup_pull_code(
     repository: String,
     source_branch: String,
+    target_branch: String,
     mr_id: String,
 ) -> Result<String, String> {
-    let project_path = resolve_project_for_repo(&repository).await?;
-    let cwd = resolve_repo_path(&project_path, None).await?;
-    codeup_cleanup_mr_temps(cwd.clone(), mr_id.clone()).await;
-    let (worktree_path, _local_branch) =
-        codeup_create_temp_worktree(cwd, source_branch.clone(), mr_id.clone()).await?;
-    Ok(worktree_path)
+    let root = codeup_repo_dir(&repository, true).await?;
+    // fetch 源分支（带超时；固定文件夹首次 clone 后，这里只是增量更新）。
+    let _ = run_git_with_retry(
+        root.clone(),
+        vec!["fetch".into(), "origin".into(), source_branch.clone()],
+        std::time::Duration::from_secs(300),
+        3,
+    )
+    .await
+    .map_err(|e| format!("拉取源分支失败: {e}"))?;
+    // fetch 目标分支，使 `git diff origin/<target>...origin/<source>` 可解析。
+    let target_trim = target_branch.trim().to_string();
+    if !target_trim.is_empty() {
+        let _ = run_git_with_retry(
+            root.clone(),
+            vec!["fetch".into(), "origin".into(), target_trim],
+            std::time::Duration::from_secs(300),
+            3,
+        )
+        .await
+        .map_err(|e| format!("拉取目标分支失败: {e}"))?;
+    }
+    // 把固定文件夹 HEAD 切到源分支（force 丢弃上次审查对工作区文件的改动）。
+    let local = format!("codeup-mr-{mr_id}");
+    let branch_ref = format!("origin/{source_branch}");
+    let _ = run_git_with_retry(
+        root.clone(),
+        vec!["checkout".into(), "-f".into(), "-B".into(), local, branch_ref],
+        std::time::Duration::from_secs(300),
+        2,
+    )
+    .await
+    .map_err(|e| format!("切换分支失败: {e}"))?;
+    // 记录该 MR 已拉取（文件夹共享，按 MR 标记区分）。
+    let nezha = Path::new(&root).join(".nezha");
+    std::fs::create_dir_all(&nezha).map_err(|e| format!("创建 .nezha 失败: {e}"))?;
+    let _ = std::fs::write(nezha.join(format!("pulled-{mr_id}")), b"");
+    Ok(root)
 }
 
-/// 查询某个 MR 当前是否已存在本地临时 worktree。
+/// 查询某个 MR 是否已拉取（按固定文件夹下的 per-MR 标记）。
 #[tauri::command]
 pub async fn codeup_is_pulled(repository: String, mr_id: String) -> Result<bool, String> {
-    let project_path = match resolve_project_for_repo(&repository).await {
-        Ok(p) => p,
+    let root = match codeup_repo_dir(&repository, false).await {
+        Ok(r) => r,
         Err(_) => return Ok(false),
     };
-    let cwd = match resolve_repo_path(&project_path, None).await {
-        Ok(c) => c,
-        Err(_) => return Ok(false),
-    };
-    Ok(mr_find_local_worktree(&cwd, &mr_id).is_some())
+    Ok(Path::new(&root)
+        .join(".nezha")
+        .join(format!("pulled-{mr_id}"))
+        .is_file())
 }
 
-/// 清理某 MR 的所有临时 worktree（Agent 审查/冲突任务结束后由前端调用）。
+/// 读取某个 MR 在固定文件夹里保存的代码审查结果（`.nezha/review-<mrId>.json`）。
+/// 没有该文件或未拉取到 worktree 时返回 None。
+#[tauri::command]
+pub async fn codeup_read_review(
+    repository: String,
+    mr_id: String,
+) -> Result<Option<Vec<crate::agent_assist::ReviewFinding>>, String> {
+    let root = match codeup_repo_dir(&repository, false).await {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+    let result_path = Path::new(&root).join(".nezha").join(format!("review-{mr_id}.json"));
+    if !result_path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&result_path)
+        .map_err(|e| format!("读取审查结果失败: {e}"))?;
+    let parsed: Vec<crate::agent_assist::ReviewFinding> =
+        serde_json::from_str(&raw).map_err(|e| format!("解析审查结果失败: {e}"))?;
+    Ok(Some(parsed))
+}
+
+/// 读取某个 MR 在固定文件夹里保存的代码审查**总结报告**（`.nezha/review-report-<mrId>.md`）。
+/// 没有该文件或未拉取到 worktree 时返回 None。
+#[tauri::command]
+pub async fn codeup_read_review_report(
+    repository: String,
+    mr_id: String,
+) -> Result<Option<String>, String> {
+    let root = match codeup_repo_dir(&repository, false).await {
+        Ok(r) => r,
+        Err(_) => return Ok(None),
+    };
+    let report_path = Path::new(&root)
+        .join(".nezha")
+        .join(format!("review-report-{mr_id}.md"));
+    if !report_path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&report_path)
+        .map_err(|e| format!("读取审查报告失败: {e}"))?;
+    Ok(Some(raw))
+}
+
+/// 清理某 MR 在固定文件夹下的拉取标记与审查结果（Agent 审查/冲突任务结束后由前端调用；
+/// 固定文件夹本身保留，下次拉取复用）。
 #[tauri::command]
 pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), String> {
-    let project_path = resolve_project_for_repo(&repository).await?;
-    let cwd = resolve_repo_path(&project_path, None).await?;
-    codeup_cleanup_mr_temps(cwd, mr_id).await;
+    let root = match codeup_repo_dir(&repository, false).await {
+        Ok(r) => r,
+        Err(_) => return Ok(()),
+    };
+    let _ = std::fs::remove_file(Path::new(&root).join(".nezha").join(format!("pulled-{mr_id}")));
+    let _ = std::fs::remove_file(Path::new(&root).join(".nezha").join(format!("review-{mr_id}.json")));
     Ok(())
 }
 
@@ -805,23 +1111,31 @@ pub async fn codeup_resolve_conflicts(
     agent: Option<String>,
 ) -> Result<String, String> {
     let agent = agent.unwrap_or_else(|| "claude".to_string());
-    let project_path = resolve_project_for_repo(&repository).await?;
     if target_branch.trim().is_empty() {
         return Err("目标分支不能为空".to_string());
     }
-    let cwd = resolve_repo_path(&project_path, None).await?;
-    codeup_cleanup_mr_temps(cwd.clone(), mr_id.clone()).await;
+    let source = codeup_git_source(&repository, true).await?;
+    let root = codeup_worktree_root(&repository).await?;
+    codeup_cleanup_mr_temps(root.clone(), source.clone(), mr_id.clone()).await;
     let (worktree_path, local_branch) =
-        codeup_create_temp_worktree(cwd.clone(), source_branch.clone(), mr_id.clone()).await?;
+        codeup_create_temp_worktree(
+            source.clone(),
+            root.clone(),
+            source_branch.clone(),
+            Some(target_branch.clone()),
+            mr_id.clone(),
+            false,
+        )
+        .await?;
     let result = codeup_resolve_conflicts_inner(
-        project_path,
+        root,
         worktree_path.clone(),
         target_branch,
         source_branch,
         agent,
     )
     .await;
-    codeup_remove_temp_worktree(cwd, worktree_path.clone(), local_branch).await;
+    codeup_remove_temp_worktree(source, worktree_path.clone(), local_branch).await;
     result
 }
 

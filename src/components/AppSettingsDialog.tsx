@@ -11,6 +11,7 @@ import {
   Heart,
   ExternalLink,
   Bot,
+  GitBranch,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
@@ -38,6 +39,7 @@ import { FontPanel } from "./app-settings/FontPanel";
 import { HooksPanel } from "./app-settings/HooksPanel";
 import { SkillsPanel } from "./app-settings/SkillsPanel";
 import { DshSettingsSection } from "./app-settings/DshSettingsSection";
+import { GitSourceSettingsPanel } from "./app-settings/GitSourceSettingsPanel";
 import { getAgentSettingsFilePath } from "./app-settings/shared";
 import type { AgentKey, AppSettingsNavItem, NavKey, NavSection } from "./app-settings/types";
 
@@ -48,6 +50,12 @@ const NAV_ITEMS: AppSettingsNavItem[] = [
   { key: "shortcuts", labelKey: "appSettings.shortcuts", section: "application", icon: Keyboard },
   { key: "hooks", labelKey: "appSettings.hooks", section: "application", icon: Zap },
   { key: "skills", labelKey: "skill.settings.navLabel", section: "application", icon: Blocks },
+  {
+    key: "gitSource",
+    labelKey: "appSettings.gitSource",
+    section: "application",
+    icon: GitBranch,
+  },
   {
     key: "claude",
     labelKey: "Claude Code",
@@ -257,6 +265,8 @@ export function AppSettingsDialog({
             <HooksPanel key="hooks" />
           ) : activeNav === "skills" ? (
             <SkillsPanel key="skills" />
+          ) : activeNav === "gitSource" ? (
+            <GitSourceSettingsPanel key="gitSource" />
           ) : activeNav === "about" ? (
             <AboutPanel key="about" />
           ) : activeNav === "thanks" ? (
