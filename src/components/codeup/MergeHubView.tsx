@@ -1,23 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle2, Download, GitMerge, Play, RefreshCw, X } from "lucide-react";
+import { CheckCircle2, Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import type { CodeupMr, CodeupRepository } from "../../types";
 import s from "../../styles";
-
-interface ReviewFinding {
-  rule: string;
-  status: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  message: string;
-}
-
-interface ReviewState {
-  running: boolean;
-  findings: ReviewFinding[];
-  error: string;
-}
 
 const STATUS_LABEL: Record<string, string> = {
   UNDER_REVIEW: "评审中",
@@ -32,15 +19,27 @@ function statusBadge(state: string) {
   return s.bbBadgeActive;
 }
 
-export function MergeHubView({ onBack }: { onBack: () => void }) {
+export function MergeHubView({
+  onBack,
+  onStartCodeupTask,
+}: {
+  onBack: () => void;
+  onStartCodeupTask: (mr: CodeupMr, kind: "review" | "conflict") => void | Promise<void>;
+}) {
   const [repos, setRepos] = useState<CodeupRepository[]>([]);
   const [repoFilter, setRepoFilter] = useState("");
   const [mrs, setMrs] = useState<CodeupMr[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
   const [busyId, setBusyId] = useState("");
+  const [busyAction, setBusyAction] = useState<"" | "pull" | "review" | "conflict">("");
+  const [reviewModal, setReviewModal] = useState<{
+    mr: CodeupMr;
+    content: string;
+    loading: boolean;
+    error: string;
+  } | null>(null);
 
   const loadRepos = useCallback(async () => {
     try {
@@ -93,33 +92,28 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
   );
 
   const runReview = useCallback(async (mr: CodeupMr) => {
-    if (!mr.pulled) {
-      setNotice("请先「拉取代码」再执行代码审查。");
-      return;
-    }
-    const key = mr.id;
-    setReviews((prev) => ({ ...prev, [key]: { running: true, findings: [], error: "" } }));
+    setBusyId(mr.id);
+    setBusyAction("review");
+    setNotice("");
     try {
-      const findings = await invoke<ReviewFinding[]>("codeup_review_mr", {
-        repository: mr.repository,
-        sourceBranch: mr.sourceBranch,
-        targetBranch: mr.targetBranch,
-        mrId: String(mr.localId),
-        agent: "claude",
-      });
-      setReviews((prev) => ({ ...prev, [key]: { running: false, findings, error: "" } }));
+      await onStartCodeupTask(mr, "review");
     } catch (e) {
-      setReviews((prev) => ({ ...prev, [key]: { running: false, findings: [], error: String(e) } }));
+      setNotice(String(e));
+    } finally {
+      setBusyId("");
+      setBusyAction("");
     }
-  }, []);
+  }, [onStartCodeupTask]);
 
   const pullCode = useCallback(async (mr: CodeupMr) => {
     setBusyId(mr.id);
+    setBusyAction("pull");
     setNotice("");
     try {
       const path = await invoke<string>("codeup_pull_code", {
         repository: mr.repository,
         sourceBranch: mr.sourceBranch,
+        targetBranch: mr.targetBranch,
         mrId: String(mr.localId),
       });
       setMrs((prev) =>
@@ -130,31 +124,57 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
       setNotice(String(e));
     } finally {
       setBusyId("");
+      setBusyAction("");
     }
   }, []);
 
   const resolveConflicts = useCallback(async (mr: CodeupMr) => {
-    if (!mr.pulled) {
-      setNotice("请先「拉取代码」再处理冲突。");
-      return;
-    }
     setBusyId(mr.id);
+    setBusyAction("conflict");
     setNotice("");
     try {
-      const res = await invoke<string>("codeup_resolve_conflicts", {
-        repository: mr.repository,
-        sourceBranch: mr.sourceBranch,
-        targetBranch: mr.targetBranch,
-        mrId: String(mr.localId),
-        agent: "claude",
-      });
-      setNotice(res);
+      await onStartCodeupTask(mr, "conflict");
     } catch (e) {
       setNotice(String(e));
     } finally {
       setBusyId("");
+      setBusyAction("");
+    }
+  }, [onStartCodeupTask]);
+
+  const openReview = useCallback(async (mr: CodeupMr) => {
+    setReviewModal({ mr, content: "", loading: true, error: "" });
+    setNotice("");
+    try {
+      const report = await invoke<string | null>("codeup_read_review_report", {
+        repository: mr.repository,
+        mrId: String(mr.localId),
+      });
+      setReviewModal((prev) =>
+        prev?.mr.id === mr.id
+          ? {
+              ...prev,
+              content: report ?? "",
+              loading: false,
+              error: report ? "" : "该 MR 暂无审查报告，请先执行「代码审查」。",
+            }
+          : prev,
+      );
+    } catch (e) {
+      setReviewModal((prev) =>
+        prev?.mr.id === mr.id ? { ...prev, loading: false, error: String(e) } : prev,
+      );
     }
   }, []);
+
+  // 报告是 Markdown，渲染为 sanitized HTML 后以 .md-preview 排版，避免直接铺开卡片导致错乱。
+  const reviewReportHtml = useMemo(
+    () =>
+      reviewModal?.content
+        ? DOMPurify.sanitize(marked.parse(reviewModal.content, { async: false }) as string)
+        : "",
+    [reviewModal?.content],
+  );
 
   return (
     <div style={s.welcomePane}>
@@ -208,20 +228,6 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
                 <span style={s.bbCardMono}>审核人：{mr.reviewers.join(", ")}</span>
               </div>
             )}
-            {reviews[mr.id]?.error && <div style={s.bbGateHint}>{reviews[mr.id]?.error}</div>}
-            {reviews[mr.id]?.findings.map((f, i) => (
-              <div key={i} style={s.bbCardSub}>
-                {f.status === "fail" ? (
-                  <span style={s.bbBadgeConflict}>fail</span>
-                ) : (
-                  <span style={s.bbBadgeDone}>ok</span>
-                )}
-                <span style={s.bbCardMono}>
-                  {f.path}:{f.startLine}
-                </span>
-                <span>{f.message}</span>
-              </div>
-            ))}
             <div style={s.bbCardActions}>
               <button
                 type="button"
@@ -230,16 +236,20 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
                 onClick={() => void pullCode(mr)}
               >
                 <Download size={13} />
-                {mr.pulled ? "已拉取" : "拉取代码"}
+                {busyAction === "pull" && busyId === mr.id
+                  ? "拉取中…"
+                  : mr.pulled
+                    ? "已拉取"
+                    : "拉取代码"}
               </button>
               <button
                 type="button"
                 style={s.bbBtnGhost}
-                disabled={reviews[mr.id]?.running}
+                disabled={busyId === mr.id}
                 onClick={() => void runReview(mr)}
               >
                 <Play size={13} />
-                {reviews[mr.id]?.running ? "审查中…" : "代码审查"}
+                {busyAction === "review" && busyId === mr.id ? "审查中…" : "代码审查"}
               </button>
               {mr.hasConflict && (
                 <button
@@ -249,7 +259,7 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
                   onClick={() => void resolveConflicts(mr)}
                 >
                   <GitMerge size={13} />
-                  处理冲突
+                  {busyAction === "conflict" && busyId === mr.id ? "处理中…" : "处理冲突"}
                 </button>
               )}
               <button
@@ -268,10 +278,55 @@ export function MergeHubView({ onBack }: { onBack: () => void }) {
                 <GitMerge size={13} />
                 合并
               </button>
+              <button
+                type="button"
+                style={s.bbBtnGhost}
+                disabled={busyId === mr.id}
+                onClick={() => void openReview(mr)}
+              >
+                <FileText size={13} />
+                查看审查结果
+              </button>
             </div>
           </div>
         ))}
       </div>
+
+      {reviewModal && (
+        <div style={s.bbDialogOverlay} onMouseDown={() => setReviewModal(null)}>
+          <div
+            style={s.bbReviewDialog}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div style={s.bbReviewDialogHead}>
+              <span style={s.bbReviewDialogTitle}>{reviewModal.mr.title}</span>
+              <button
+                type="button"
+                title="关闭"
+                aria-label="关闭"
+                onClick={() => setReviewModal(null)}
+                style={s.bbReviewCloseBtn}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div style={s.bbReviewDialogBody}>
+              {reviewModal.loading ? (
+                <div style={s.bbEmpty}>加载中…</div>
+              ) : reviewModal.error ? (
+                <div style={s.bbGateHint}>{reviewModal.error}</div>
+              ) : reviewModal.content ? (
+                <div
+                  className="md-preview"
+                  dangerouslySetInnerHTML={{ __html: reviewReportHtml }}
+                />
+              ) : (
+                <div style={s.bbGateHint}>该 MR 暂无审查报告，请先执行「代码审查」。</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

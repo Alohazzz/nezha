@@ -17,6 +17,30 @@
   opacity: 0.55;
 }
 
+.app-settings-input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.app-settings-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border: none;
+  border-radius: 7px;
+  background: var(--primary-action-bg);
+  color: var(--primary-action-fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-settings-save[data-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .app-settings-toggle-label {
   color: var(--text-primary);
   font-size: 13px;

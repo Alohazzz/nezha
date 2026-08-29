@@ -57,7 +57,7 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
 
 /// 带超时的 git 命令执行。
 /// 超时后会终止底层 git 子进程，避免后台进程和阻塞线程持续积压。
-async fn run_git_with_timeout(
+pub(crate) async fn run_git_with_timeout(
     project_path: String,
     args: Vec<String>,
     timeout: Duration,

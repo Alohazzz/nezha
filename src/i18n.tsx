@@ -33,6 +33,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.thanks.copyName": "Click to copy the account name",
     "appSettings.thanks.openLink": "Open in browser",
     "appSettings.thanks.copied": "Copied",
+    "appSettings.gitSource": "Git & Source Code",
+    "appSettings.codeupWorktreeBasePath": "Temp repository base path",
+    "appSettings.codeupWorktreeBasePathHint":
+      "Merge review: repositories not registered as Nezha projects are cloned here. Leave empty to use ~/.nezha/codeup_worktrees.",
     "appSettings.fonts": "Fonts",
     "appSettings.hooks": "Hook Integration",
     "appSettings.hooks.description":
@@ -865,6 +869,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.thanks.copyName": "点击复制公众号名称",
     "appSettings.thanks.openLink": "在浏览器中打开",
     "appSettings.thanks.copied": "已复制",
+    "appSettings.gitSource": "Git 和源代码设置",
+    "appSettings.codeupWorktreeBasePath": "临时仓库基路径",
+    "appSettings.codeupWorktreeBasePathHint":
+      "合并审核拉取/审查/处理冲突时，未注册为 Nezha 项目的仓库会克隆到此目录。留空使用缺省 ~/.nezha/codeup_worktrees。",
     "appSettings.fonts": "字体",
     "appSettings.hooks": "Hook 集成",
     "appSettings.hooks.description":

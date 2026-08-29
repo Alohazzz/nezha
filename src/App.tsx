@@ -9,6 +9,7 @@ import type {
   TaskStatus,
   AgentType,
   PermissionMode,
+  CodeupMr,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -379,6 +380,8 @@ function App() {
   // 「恢复会话再发」时暂存的待发送输入：resume_task 启动的 PTY 会缓冲写入，
   // invoke 完成后补发 send_input 即可（决策 9）。
   const pendingResumeInputRef = useRef<Record<string, string>>({});
+  // 由「合并审核」发起的 codeup 审查/冲突任务，任务结束后需清理临时 worktree。
+  const codeupTaskCleanupRef = useRef<Record<string, { repository: string; mrId: number }>>({});
 
   const formatSaveProjectsError = useCallback(
     (error: string) => t("toast.saveProjectsFailed", { error }),
@@ -689,6 +692,15 @@ function App() {
         updateTaskStatus(task_id, status, undefined, failure_reason);
         if (!isActiveTaskStatus(status)) {
           tm.removeTaskBuffers([task_id]);
+          // 合并审核发起的任务：结束后清理该 MR 的临时 worktree。
+          const codeupCleanup = codeupTaskCleanupRef.current[task_id];
+          if (codeupCleanup) {
+            delete codeupTaskCleanupRef.current[task_id];
+            invoke("codeup_cleanup_mr", {
+              repository: codeupCleanup.repository,
+              mrId: String(codeupCleanup.mrId),
+            }).catch(() => {});
+          }
         }
         if (status === "done") scheduleForDoneTask(task_id);
       },
@@ -910,6 +922,121 @@ function App() {
       texts,
       project.path,
     );
+  }
+
+  /** 合并审核：点「代码审查/处理冲突」时，在 MR 对应项目里发起一个真实任务（codex + YOLO + 全新临时 worktree）。 */
+  async function startCodeupTask(mr: CodeupMr, kind: "review" | "conflict") {
+    let project = projects.find((p) => p.path === mr.projectPath) ?? null;
+    // 该 MR 的仓库未注册为 Nezha 项目时，自动把后端给出的固定文件夹路径注册成一个项目，
+    // 让「代码审查 / 处理冲突」能自动定位到对应代码文件夹，无需手动添加。
+    if (!project && mr.projectPath) {
+      project = {
+        id: `${Date.now()}`,
+        name: deriveProjectName(mr.projectPath),
+        path: mr.projectPath,
+        lastOpenedAt: Date.now(),
+      };
+      setProjects((prev) => {
+        const next = [project!, ...prev];
+        persistProjects(next, showToast, formatSaveProjectsError);
+        return next;
+      });
+    }
+    if (!project) {
+      showToast("找不到该 MR 对应的本地项目，请先将其注册为 Nezha 项目", "error");
+      return;
+    }
+
+    // 2) 组装任务 prompt。
+    let prompt: string;
+    if (kind === "review") {
+      prompt =
+        `──── 代码审查（规则与输出由 \`merge-code-review\` 技能统一管理）────\n` +
+        `请读取并遵循 \`merge-code-review\` 技能：\`~/.codex/skills/merge-code-review/SKILL.md\`（审查规范在 \`references/csharp-dev-manual.md\`）。对 \`git diff origin/${mr.targetBranch}...origin/${mr.sourceBranch}\` 的改动按技能规则逐项审查；读文件内容用 \`git show origin/${mr.sourceBranch}:<path>\`。\n` +
+        `不要输出结构化 <REVIEW> JSON 数组。请汇总本次改动发现的全部问题，写出一份**对人可读的整体审查总结报告**：按规则分组、标注严重程度（warn/fail）、文件路径与行号、问题说明与修改建议，并在报告末尾给出「是否可合并」结论。\n` +
+        `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。`;
+    } else {
+      prompt =
+        `你是合并冲突解决助手。请在当前工作区按步骤完成并把结果推回源分支：\n` +
+        `1. 运行 \`git fetch origin ${mr.targetBranch}\`\n` +
+        `2. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`\n` +
+        `3. 若存在冲突，修改代码解决冲突；若无冲突，执行 \`git merge --abort\` 并告知无冲突\n` +
+        `4. 解决后运行 \`git add -A\` 与 \`git commit -m "resolve merge conflicts"\`\n` +
+        `5. 运行 \`git push origin HEAD:${mr.sourceBranch}\`\n` +
+        `完成后简要说明结果。`;
+    }
+
+    // 3) 先建任务并立即切换到该项目 RunningView（不等 worktree，避免点下去长时间无跳转）。
+    const taskId = `${Date.now()}`;
+    const now = Date.now();
+    const task: Task = {
+      id: taskId,
+      projectId: project.id,
+      name: kind === "review" ? `代码审查 ${mr.title}` : `处理冲突 ${mr.title}`,
+      prompt,
+      agent: "codex",
+      permissionMode: "full_access", // YOLO
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+    setTasks((prev) => {
+      const next = [task, ...prev];
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    setActiveProject(project);
+    mountProject(project.id);
+    updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
+    tm.resetTaskTerminal(taskId);
+    // 任务结束后清理该 MR 的代码文件夹/审查结果（step 3 已先建任务，这里补登记）。
+    codeupTaskCleanupRef.current[taskId] = {
+      repository: mr.repository,
+      mrId: mr.localId,
+    };
+
+    // 4) 后台创建该 MR 的代码文件夹（fetch 源/目标分支 + checkout 源分支）。
+    // 对 HIS 这类大仓库首次可能是全量 clone，耗时较长；立即写一行进度到终端，
+    // 避免任务停在 RunningView 却长时间「无反应」，让用户误以为没点成功。
+    tm.writeErrorToTerminal(
+      taskId,
+      `\r\n正在准备代码文件夹（拉取源/目标分支并切到源分支）…\r\n`,
+    );
+    let worktreePath: string;
+    try {
+      worktreePath = await invoke<string>("codeup_pull_code", {
+        repository: mr.repository,
+        sourceBranch: mr.sourceBranch,
+        targetBranch: mr.targetBranch,
+        mrId: String(mr.localId),
+      });
+    } catch (e) {
+      const msg = `创建代码文件夹失败: ${String(e)}`;
+      showToast(msg, "error");
+      tm.writeErrorToTerminal(taskId, `\r\n${msg}\r\n`);
+      delete codeupTaskCleanupRef.current[taskId];
+      setTasks((prev) => {
+        const next = prev.filter((t) => t.id !== taskId);
+        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+        return next;
+      });
+      tm.removeTaskBuffers([taskId]);
+      return;
+    }
+    tm.writeErrorToTerminal(taskId, `\r\n代码文件夹已就绪，正在启动审查 Agent…\r\n`);
+    const worktreeTask: Task = {
+      ...task,
+      worktreePath,
+      worktreeBranch: mr.sourceBranch,
+      baseBranch: mr.targetBranch,
+      worktreeRepo: project.path,
+    };
+    setTasks((prev) => {
+      const next = prev.map((t) => (t.id === taskId ? worktreeTask : t));
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    invokeRunTask(worktreeTask, worktreePath, [], [], project.path);
   }
 
   function handleRunTodoTask(task: Task) {
@@ -2210,6 +2337,7 @@ function App() {
             tasks={tasks}
             onOpen={handleOpen}
             onProjectClick={handleProjectClick}
+            onStartCodeupTask={startCodeupTask}
             onDeleteProject={handleDeleteProject}
             onToggleProjectHidden={handleToggleProjectHidden}
             onRenameProject={handleRenameProject}

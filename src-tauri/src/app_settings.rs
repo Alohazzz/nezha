@@ -152,6 +152,16 @@ pub struct YunxiaoSettings {
     pub current_user_name: Option<String>,
 }
 
+/// Codeup（合并审核）集成配置，随应用级设置存放在 ~/.nezha/settings.json。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct CodeupSettings {
+    /// 合并审核「拉取代码/审查/处理冲突」时，未注册为 Nezha 项目的仓库
+    /// 落地的临时仓库基路径（自动 clone 到 `<基路径>/<仓库路径>/`）。
+    /// 为空时使用缺省 `~/.nezha/codeup_worktrees`。
+    #[serde(rename = "worktreeBasePath", default)]
+    pub worktree_base_path: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AppSettings {
     #[serde(default)]
@@ -210,6 +220,8 @@ pub struct AppSettings {
     pub codex_model_catalog: AgentModelCatalog,
     #[serde(default)]
     pub yunxiao: YunxiaoSettings,
+    #[serde(default)]
+    pub codeup: CodeupSettings,
 }
 
 impl Default for AppSettings {
@@ -236,6 +248,7 @@ impl Default for AppSettings {
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
+            codeup: CodeupSettings::default(),
         }
     }
 }
@@ -680,6 +693,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_model_catalog: normalize_catalog(settings.claude_model_catalog),
         codex_model_catalog: normalize_catalog(settings.codex_model_catalog),
         yunxiao: settings.yunxiao,
+        codeup: settings.codeup,
     }
 }
 
@@ -712,6 +726,7 @@ fn load_settings_unlocked() -> AppSettings {
             claude_model_catalog: AgentModelCatalog::default(),
             codex_model_catalog: AgentModelCatalog::default(),
             yunxiao: YunxiaoSettings::default(),
+            codeup: CodeupSettings::default(),
         });
         if let Ok(dir) = nezha_dir() {
             let _ = fs::create_dir_all(&dir);
@@ -956,6 +971,39 @@ pub async fn save_yunxiao_settings(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 保存合并审核（Codeup）配置：临时仓库基路径。
+#[tauri::command]
+pub async fn save_codeup_settings(worktree_base_path: String) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.codeup = CodeupSettings {
+            worktree_base_path: worktree_base_path.trim().to_string(),
+        };
+        save_settings_unlocked(settings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 解析合并审核的临时仓库基路径：优先用户配置的 `codeup.worktreeBasePath`，
+/// 为空返回缺省 `~/.nezha/codeup_worktrees`。
+pub(crate) async fn codeup_worktree_base() -> Result<PathBuf, String> {
+    let settings = load_app_settings().await?;
+    let configured = settings.codeup.worktree_base_path.trim().to_string();
+    if !configured.is_empty() {
+        // 支持 `~` 开头（展开到用户主目录），其余按绝对路径处理。
+        if configured == "~" || configured.starts_with("~/") || configured.starts_with("~\\") {
+            let home = crate::platform::home_dir()
+                .ok_or_else(|| "Cannot find home directory".to_string())?;
+            let rest = configured[1..].trim_start_matches(['/', '\\']);
+            return Ok(home.join(rest));
+        }
+        return Ok(PathBuf::from(configured));
+    }
+    Ok(nezha_dir()?.join("codeup_worktrees"))
 }
 
 fn parse_codex_model_option(value: &Value) -> Option<AgentModelOption> {
