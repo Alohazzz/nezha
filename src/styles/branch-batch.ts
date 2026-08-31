@@ -206,6 +206,12 @@ const branchBatch = {
     color: "var(--text-secondary)",
     cursor: "pointer",
   },
+  bbReviewActions: {
+    display: "flex",
+    alignItems: "center" as const,
+    gap: 6,
+    flexShrink: 0,
+  },
   bbReviewDialogBody: {
     flex: 1,
     overflow: "auto",

@@ -1087,6 +1087,39 @@ pub async fn codeup_read_review_report(
     Ok(Some(raw))
 }
 
+/// 把某 MR 的代码审查**总结报告**（`.nezha/review-report-<mrId>.md`）导出到用户所选路径。
+/// `dest_path` 由前端「另存为」对话框给出，必须是绝对路径；源报告不存在则报错。
+#[tauri::command]
+pub async fn codeup_export_review_report(
+    repository: String,
+    mr_id: String,
+    dest_path: String,
+) -> Result<String, String> {
+    let root = codeup_repo_dir(&repository, false).await?;
+    let source = Path::new(&root)
+        .join(".nezha")
+        .join(format!("review-report-{mr_id}.md"));
+    let dest = std::path::PathBuf::from(&dest_path);
+    if !dest.is_absolute() {
+        return Err("导出路径必须是绝对路径".to_string());
+    }
+    tokio::task::spawn_blocking(move || {
+        if !source.is_file() {
+            return Err("该 MR 暂无审查报告，请先执行「代码审查」。".to_string());
+        }
+        let content = std::fs::read_to_string(&source)
+            .map_err(|e| format!("读取审查报告失败: {e}"))?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建导出目录失败: {e}"))?;
+        }
+        std::fs::write(&dest, content).map_err(|e| format!("写入审查报告失败: {e}"))?;
+        Ok(dest_path)
+    })
+    .await
+    .map_err(|e| format!("导出线程错误: {e}"))?
+}
+
 /// 清理某 MR 在固定文件夹下的拉取标记与审查结果（Agent 审查/冲突任务结束后由前端调用；
 /// 固定文件夹本身保留，下次拉取复用）。
 #[tauri::command]
