@@ -153,12 +153,8 @@ export interface BranchBatch {
   worktreePath?: string;
   /** worktree 所属 sub-repo 路径（多仓库工作区）。 */
   worktreeRepo?: string;
-  /** 运行根准备状态；缺省视为无准备脚本。 */
-  prepareStatus?: "preparing" | "ready" | "failed";
-  /** 运行根准备失败原因。 */
-  prepareError?: string;
-  /** 后台 prepare 进程 PID（供删除前停止）。 */
-  preparePid?: number;
+  /** 列表实时探测：未关闭批次的工作树下缺少运行程序目录（`_run`）时为 true，仅提示不落盘。 */
+  runRootMissing?: boolean;
   /** 提交 MR 时源分支 HEAD SHA。 */
   mrSourceSha?: string;
 }
@@ -178,7 +174,6 @@ export type MrStatus =
   | "rejected"
   | "closed";
 
-/** draft | active | review | conflict | approved | merged | rejected | closed */
 export type BranchBatchStatus =
   | "draft"
   | "active"

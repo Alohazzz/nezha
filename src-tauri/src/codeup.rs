@@ -423,12 +423,6 @@ pub async fn codeup_create_mr(
     if batch.status != "active" {
         return Err("批次不是进行中状态，无法提交 MR".to_string());
     }
-    if batch.prepare_status.as_deref() == Some("preparing") {
-        return Err("运行根准备中，暂不能提交 MR".to_string());
-    }
-    if batch.prepare_status.as_deref() == Some("failed") {
-        return Err("运行根准备失败，请先重试".to_string());
-    }
     let worktree_str = path_to_string(
         &std::path::Path::new(&project_path)
             .join(".nezha")
@@ -436,9 +430,6 @@ pub async fn codeup_create_mr(
             .join(&batch_id),
     )?;
     let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
-    let effective_repo = batch.worktree_repo.clone().or(repo_path.clone());
-    let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
-    crate::git::ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     if let Some(dirty) = crate::git::worktree_dirty_reason(&worktree_path)? {
         return Err(format!("提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"));
     }

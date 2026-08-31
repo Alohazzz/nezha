@@ -117,7 +117,7 @@ export function TaskList({
     // 批创建时在 batch.taskIds 记录成员，任务自身未写 batchId——用 task.id → 所属批 来归组。
     const taskToBatch = new Map<string, BranchBatch>();
     for (const b of batches) {
-      for (const tid of b.taskIds) taskToBatch.set(tid, b);
+      for (const tid of b.taskIds ?? []) taskToBatch.set(tid, b);
     }
     const cutoff =
       taskDisplayWindow === "all"

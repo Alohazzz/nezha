@@ -55,17 +55,12 @@ pub struct WorktreeConfig {
     /// 使 csproj 里 `..\..\..\..\可执行程序\X.dll` 能正确解析到共享目录。
     #[serde(default)]
     pub base_path: String,
-    /// 创建 worktree 成功后自动运行的脚本（如 `hsp-prepare-run-root.ps1`）。
-    /// 为空则不自动运行。
-    #[serde(default)]
-    pub prepare_script: String,
 }
 
 impl Default for WorktreeConfig {
     fn default() -> Self {
         WorktreeConfig {
             base_path: String::new(),
-            prepare_script: String::new(),
         }
     }
 }

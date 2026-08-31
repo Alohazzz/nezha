@@ -19,7 +19,6 @@ interface ProjectConfig {
   };
   worktree?: {
     base_path?: string;
-    prepare_script?: string;
   };
   [key: string]: unknown;
 }

@@ -1,13 +1,12 @@
 //! 分支批（Branch Batch）管理：一个批 = 一个可独立验收的 PR，
 //! 对应一个分支 + 一个 worktree，批内议题任务顺序共用该工作区。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::git::{
-    branch_unmerged_count, ensure_path_under_worktrees_root, local_branch_exists, path_to_string,
-    prepare_script_path, remote_branch_exists, resolve_repo_path, run_git,
-    stop_process_tree, worktree_base_dir, worktree_dirty_reason,
+    branch_unmerged_count, local_branch_exists, path_to_string, remote_branch_exists,
+    resolve_repo_path, run_git, worktree_base_dir, worktree_dirty_reason,
 };
 use crate::storage::{Batch, load_project_batches, load_project_tasks, save_project_batches};
 
@@ -84,6 +83,8 @@ pub async fn create_branch_batch(
     task_ids: Vec<String>,
     source_branch: Option<String>,
     use_existing_remote: bool,
+    // 创建者自行选择的代码目录（worktree 落在其下的 `<目录>/<批id>`）；缺省回落配置基路径。
+    worktree_dir: Option<String>,
 ) -> Result<Batch, String> {
     if id.trim().is_empty() {
         return Err("Batch id is required".to_string());
@@ -125,16 +126,28 @@ pub async fn create_branch_batch(
         return Err("远端不存在此分支，请改名后重新创建".to_string());
     }
 
+    // 计划路径：创建者选的目录优先，缺省回落配置基路径 / 共享 hub / 项目内默认。
+    let worktree_path = match worktree_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(dir) => PathBuf::from(dir).join(&id),
+        None => worktree_base_dir(&project_path, &cwd).join(&id),
+    };
+    if !worktree_path.is_absolute() {
+        return Err("代码目录必须是绝对路径".to_string());
+    }
+    let worktree_str = path_to_string(&worktree_path)?;
+    let owner_repo = repo_path.clone().or_else(|| Some(cwd.clone()));
+
     // 阻塞的 git 创建与文件落盘统一放到 spawn_blocking，避免占用 Tokio 运行时。
-    tokio::task::spawn_blocking(move || {
-        let worktrees_dir = worktree_base_dir(&project_path, &cwd);
-        std::fs::create_dir_all(&worktrees_dir)
-            .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
-        let worktree_path = worktrees_dir.join(&id);
+    // 建成功才落盘批次记录；git 失败就地回滚，不留半态记录。
+    tokio::task::spawn_blocking(move || -> Result<Batch, String> {
+        // 确保落盘父目录存在。
+        if let Some(parent) = worktree_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
+        }
         if worktree_path.exists() {
             return Err(format!("Worktree path already exists: {}", worktree_path.display()));
         }
-        let worktree_str = path_to_string(&worktree_path)?;
         let output = if use_existing_remote {
             let fetch = run_git(&cwd, &["fetch", "origin", &branch])?;
             if !fetch.status.success() {
@@ -159,29 +172,18 @@ pub async fn create_branch_batch(
             )?
         };
         if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-
-        let owner_repo = repo_path.clone().or_else(|| Some(cwd.clone()));
-        let prepare_script = prepare_script_path(&project_path, &cwd);
-        let mut prepare_status: Option<String> = None;
-        let mut prepare_error: Option<String> = None;
-        let mut prepare_pid: Option<u32> = None;
-        if let Some(script) = prepare_script.as_ref() {
-            match spawn_prepare_script(project_id.clone(), id.clone(), script, &worktree_path) {
-                Ok(pid) => {
-                    prepare_status = Some("preparing".to_string());
-                    prepare_pid = Some(pid);
-                }
-                Err(e) => {
-                    prepare_status = Some("failed".to_string());
-                    prepare_error = Some(e);
-                }
+            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            // 回滚：worktree add 失败可能已创建分支 ref 或半成品目录。
+            if worktree_path.is_dir() {
+                let _ = run_git(&cwd, &["worktree", "remove", "--force", &worktree_str]);
             }
+            let _ = run_git(&cwd, &["worktree", "prune"]);
+            let _ = run_git(&cwd, &["branch", "-D", &branch]);
+            return Err(err);
         }
 
         let batch = Batch {
-            id: id.clone(),
+            id,
             project_id: project_id.clone(),
             name,
             kind,
@@ -199,115 +201,50 @@ pub async fn create_branch_batch(
             mr_status: None,
             worktree_path: Some(worktree_str.clone()),
             worktree_repo: owner_repo,
-            prepare_status,
-            prepare_error,
-            prepare_pid,
             mr_source_sha: None,
         };
-
         let mut batches = load_project_batches(project_id.clone())?;
         batches.push(batch.clone());
         save_project_batches(project_id, batches)?;
         Ok(batch)
     })
     .await
-    .map_err(|e| format!("Create batch task panicked: {}", e))?
+    .map_err(|e| format!("Create batch task panicked: {e}"))?
 }
 
-/// 后台启动 prepare 脚本并返回子进程 PID。脚本退出后把批次状态写回 ready/failed。
-fn spawn_prepare_script(
-    project_id: String,
-    batch_id: String,
-    script: &str,
-    worktree_path: &Path,
-) -> Result<u32, String> {
-    let run_root = worktree_path.join("_run");
-    let mut child = crate::git::spawn_prepare_script_process(script, &run_root)?;
-    let pid = child.id();
-    std::thread::spawn(move || {
-        let status = child.wait();
-        match status {
-            Ok(s) if s.success() => {
-                let _ = update_batch_prepare_status(&project_id, &batch_id, "ready", None, None);
-            }
-            Ok(s) => {
-                let _ = update_batch_prepare_status(
-                    &project_id,
-                    &batch_id,
-                    "failed",
-                    Some(format!("prepare 脚本退出码 {}", s.code().unwrap_or(-1))),
-                    Some(pid),
-                );
-            }
-            Err(e) => {
-                let _ = update_batch_prepare_status(
-                    &project_id,
-                    &batch_id,
-                    "failed",
-                    Some(format!("prepare 脚本等待失败: {e}")),
-                    Some(pid),
-                );
-            }
-        }
-    });
-    Ok(pid)
-}
-
-fn update_batch_prepare_status(
-    project_id: &str,
-    batch_id: &str,
-    status: &str,
-    error: Option<String>,
-    pid: Option<u32>,
-) -> Result<Batch, String> {
-    let mut batches = load_project_batches(project_id.to_string())?;
-    let batch = batches
-        .iter_mut()
-        .find(|b| b.id == batch_id)
-        .ok_or_else(|| "Batch not found".to_string())?;
-    if batch.status == "closed" {
-        return Ok(batch.clone());
-    }
-    batch.prepare_status = Some(status.to_string());
-    batch.prepare_error = error;
-    if status == "preparing" {
-        batch.prepare_pid = pid;
-    } else {
-        batch.prepare_pid = None;
-    }
-    let result = batch.clone();
-    save_project_batches(project_id.to_string(), batches)?;
-    Ok(result)
+/// 批次视图：批次记录 + 实时探测的运行程序缺失提示（不落盘）。
+#[derive(serde::Serialize, Clone)]
+pub struct BatchView {
+    #[serde(flatten)]
+    pub batch: Batch,
+    /// 未关闭批次的工作树下缺少运行程序目录（`_run`）时为 true；仅提示，不阻断操作。
+    #[serde(rename = "runRootMissing")]
+    pub run_root_missing: bool,
 }
 
 /// 列出某项目的分支批。
 #[tauri::command]
-pub async fn list_branch_batches(project_id: String) -> Result<Vec<Batch>, String> {
-    let mut batches = load_project_batches(project_id.clone())?;
-    let mut changed = false;
-    for batch in &mut batches {
-        if batch.prepare_status.as_deref() != Some("preparing") {
-            continue;
-        }
-        let alive = if let Some(pid) = batch.prepare_pid {
-            let pid = pid;
-            tokio::task::spawn_blocking(move || crate::git::prepare_process_alive(pid))
-                .await
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        if !alive {
-            batch.prepare_status = Some("failed".to_string());
-            batch.prepare_error = Some("应用重启后准备进程已退出，请重试".to_string());
-            batch.prepare_pid = None;
-            changed = true;
-        }
-    }
-    if changed {
-        save_project_batches(project_id.clone(), batches.clone())?;
-    }
-    Ok(batches)
+pub async fn list_branch_batches(project_id: String) -> Result<Vec<BatchView>, String> {
+    let batches = load_project_batches(project_id)?;
+    tokio::task::spawn_blocking(move || {
+        Ok(batches
+            .into_iter()
+            .map(|b| {
+                let run_root_missing = match &b.worktree_path {
+                    Some(wt) if b.status != "merged" && b.status != "closed" => {
+                        !Path::new(wt).join("_run").is_dir()
+                    }
+                    _ => false,
+                };
+                BatchView {
+                    batch: b,
+                    run_root_missing,
+                }
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("List batches task panicked: {e}"))?
 }
 
 /// 获取单个分支批。
@@ -358,8 +295,6 @@ pub async fn merge_branch_batch(
     let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
     let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str.clone());
     let effective_repo = batch.worktree_repo.clone().or(repo_path.clone());
-    let cwd = crate::git::resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
-    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     let message = crate::git::merge_task_worktree(
         project_path.clone(),
         effective_repo.clone(),
@@ -438,9 +373,6 @@ pub async fn open_branch_batch_worktree(
         .ok_or_else(|| "Batch not found".to_string())?;
     let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
     let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
-    let effective_repo = batch.worktree_repo.clone().or_else(|| None);
-    let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
-    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
 
     let target = Path::new(&worktree_path)
         .canonicalize()
@@ -449,7 +381,7 @@ pub async fn open_branch_batch_worktree(
     crate::fs::open_in_system_file_manager(target_str.clone(), target_str).await
 }
 
-/// 删除 PR worktree：批准删除（含停止 prepare、任务/Shell 占用、未合并/脏文件/MR 状态全部校验）后清理并关批。
+/// 删除 PR worktree：只删代码目录与本地分支（任务/Shell 占用、未合并/脏文件/MR 状态校验后）并关批。
 #[tauri::command]
 pub async fn delete_branch_batch(
     project_path: String,
@@ -478,19 +410,9 @@ pub async fn delete_branch_batch(
         return Err("嵌入式 Shell 仍打开在该 worktree，请先关闭".to_string());
     }
 
-    // 2) 停止运行根准备
-    if batch.prepare_status.as_deref() == Some("preparing") {
-        if let Some(pid) = batch.prepare_pid {
-            stop_process_tree(pid)?;
-        } else {
-            return Err("运行根准备中，但未记录进程，无法确认停止".to_string());
-        }
-    }
-
-    // 3) 未合并提交 / MR 状态 / 脏文件校验
+    // 2) 未合并提交 / MR 状态 / 脏文件校验
     let worktree_exists = Path::new(&worktree_path).is_dir();
     if worktree_exists {
-        ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
         if let Some(dirty) = worktree_dirty_reason(&worktree_path)? {
             return Err(format!("worktree 仍有未提交内容，请先处理：{dirty}"));
         }
@@ -571,32 +493,18 @@ pub async fn delete_branch_batch(
     close_branch_batch(project_id, batch_id, false).map(|_| batch2)
 }
 
-/// 重试运行根准备：仅在批次未关闭且脚本存在时可用。
+/// 新建 PR 对话框的默认代码目录（配置基路径 / 共享 hub / 项目内默认，实时解析）。
 #[tauri::command]
-pub async fn retry_branch_batch_prepare(
+pub async fn get_branch_batch_worktree_base(
     project_path: String,
-    project_id: String,
-    batch_id: String,
-) -> Result<Batch, String> {
-    let batch = load_project_batches(project_id.clone())?
-        .into_iter()
-        .find(|b| b.id == batch_id)
-        .ok_or_else(|| "Batch not found".to_string())?;
-    if batch.status == "closed" || batch.status == "merged" {
-        return Err("批次已关闭，无法重试准备".to_string());
-    }
-    let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
-    let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
-    let effective_repo = batch.worktree_repo.clone();
-    let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
-    if !Path::new(&worktree_path).is_dir() {
-        return Err("worktree 不存在，无法重试准备".to_string());
-    }
-    let Some(script) = prepare_script_path(&project_path, &cwd) else {
-        return Err("未配置 prepare 脚本，无需重试".to_string());
-    };
-    let pid = spawn_prepare_script(project_id.clone(), batch_id.clone(), &script, Path::new(&worktree_path))?;
-    update_batch_prepare_status(&project_id, &batch_id, "preparing", None, Some(pid))
+    repo_path: Option<String>,
+) -> Result<String, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    tokio::task::spawn_blocking(move || {
+        Ok(worktree_base_dir(&project_path, &cwd).to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Worktree base task panicked: {e}"))?
 }
 
 fn run_git_head(worktree_path: &str) -> Result<String, String> {

@@ -1563,75 +1563,6 @@ fn default_worktree_base(repo_root: &str) -> PathBuf {
     root.join(".nezha").join("worktrees")
 }
 
-/// 自动探测项目里的 prepare-run-root 脚本（HIS 场景是 `.codex/skills/hsp-prepare-run-root/...` 符号链接）。
-/// 不存在则返回 None（不自动运行）。
-fn auto_prepare_script(repo_root: &str) -> Option<PathBuf> {
-    let local = Path::new(repo_root)
-        .join(".codex")
-        .join("skills")
-        .join("hsp-prepare-run-root")
-        .join("scripts")
-        .join("hsp-prepare-run-root.ps1");
-    if local.is_file() {
-        return Some(local);
-    }
-    if let Some(home) = crate::platform::home_dir() {
-        let skill_repos = home.join(".nezha").join("skill_repos");
-        if let Ok(rd) = std::fs::read_dir(&skill_repos) {
-            for e in rd.flatten() {
-                let cand = e
-                    .path()
-                    .join("hsp-prepare-run-root")
-                    .join("scripts")
-                    .join("hsp-prepare-run-root.ps1");
-                if cand.is_file() {
-                    return Some(cand);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// 解析应运行的 prepare 脚本：项目配置显式值优先，其次自动探测；都没有则 None。
-pub(crate) fn prepare_script_path(project_path: &str, repo_root: &str) -> Option<String> {
-    let cfg = crate::config::read_project_config(project_path.to_string())
-        .unwrap_or_else(|_| crate::config::ProjectConfig::default());
-    if !cfg.worktree.prepare_script.trim().is_empty() {
-        Some(cfg.worktree.prepare_script.trim().to_string())
-    } else {
-        auto_prepare_script(repo_root).map(|p| p.to_string_lossy().to_string())
-    }
-}
-
-/// 启动 prepare 脚本进程：优先 `pwsh`（PowerShell 7，脚本语法需要），
-/// 失败时回退 `powershell`（Windows PowerShell 5.1）。返回已启动的子进程。
-pub(crate) fn spawn_prepare_script_process(
-    script: &str,
-    run_root: &Path,
-) -> Result<std::process::Child, String> {
-    let configure = |cmd: &mut std::process::Command| {
-        let _ = cmd
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Target"])
-            .arg(run_root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-    };
-
-    let mut primary = std::process::Command::new("pwsh");
-    configure(&mut primary);
-    match primary.spawn() {
-        Ok(child) => Ok(child),
-        Err(_) => {
-            let mut fallback = std::process::Command::new("powershell");
-            configure(&mut fallback);
-            fallback
-                .spawn()
-                .map_err(|e| format!("启动 prepare 脚本失败: {e}"))
-        }
-    }
-}
-
 /// 计算 worktree 落盘基路径：项目配置优先，否则自动探测共享 hub / 项目内 .nezha/worktrees。
 /// 配置永远从项目根读取（多 sub-repo 时配置在项目根 `.nezha/config.toml`）。
 pub(crate) fn worktree_base_dir(project_path: &str, repo_root: &str) -> PathBuf {
@@ -1762,72 +1693,6 @@ pub(crate) async fn branch_unmerged_count(
     .map_err(|e| format!("Unmerged commit check task panicked: {}", e))?
 }
 
-/// 进程是否仍在运行。
-fn process_is_running(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let pid_str = pid.to_string();
-        let filter = format!("PID eq {pid_str}");
-        let output = std::process::Command::new("tasklist")
-            .args(["/FI", filter.as_str(), "/NH"])
-            .output();
-        return matches!(output, Ok(o) if o.status.success() && !o.stdout.is_empty());
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("kill")
-            .arg("0")
-            .arg(pid.to_string())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-}
-
-/// 停止 prepare 进程树并等待退出（最多 5 秒）。Windows 用 `taskkill /T /F`，其余平台用 SIGKILL。
-pub(crate) fn stop_process_tree(pid: u32) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let pid_str = pid.to_string();
-        let output = std::process::Command::new("taskkill")
-            .args(["/PID", pid_str.as_str(), "/T", "/F"])
-            .output()
-            .map_err(|e| format!("taskkill failed: {e}"))?;
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            if !err.to_lowercase().contains("not found") && !err.is_empty() {
-                return Err(format!("停止 prepare 进程失败: {err}"));
-            }
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let output = std::process::Command::new("kill")
-            .arg("-KILL")
-            .arg(pid.to_string())
-            .output()
-            .map_err(|e| format!("kill failed: {e}"))?;
-        if !output.status.success() {
-            return Err(format!("停止 prepare 进程失败: {}", output.status));
-        }
-    }
-
-    // 等待进程退出（最多 5 秒），退出失败视为未确认停止。
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while process_is_running(pid) {
-        if std::time::Instant::now() >= deadline {
-            return Err("等待 prepare 进程退出超时".to_string());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-    Ok(())
-}
-
-/// 重启后识别 prepare 进程：进程仍存活则视为仍在准备；已退出则需 reconcile 成 failed。
-pub(crate) fn prepare_process_alive(pid: u32) -> bool {
-    process_is_running(pid)
-}
-
 #[tauri::command]
 pub async fn create_task_worktree(
     project_path: String,
@@ -1864,26 +1729,10 @@ pub async fn create_task_worktree(
             &["worktree", "add", &wt_path_str, "-b", &branch, &base_branch],
         )?;
         if !output.status.success() {
+            // 回滚：worktree add 失败可能已创建分支 ref 或半成品目录。
+            let _ = run_git(&cwd, &["branch", "-D", &branch]);
+            let _ = run_git(&cwd, &["worktree", "prune"]);
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-
-        // 自动准备运行根（后台执行，不阻塞创建；失败仅告警）
-        let prepare_script = prepare_script_path(&project_path, &cwd);
-        if let Some(script) = prepare_script {
-            let run_root = worktree_path.join("_run");
-            if let Ok(mut child) = spawn_prepare_script_process(&script, &run_root) {
-                std::thread::spawn(move || {
-                    if let Ok(status) = child.wait() {
-                        if !status.success() {
-                            eprintln!(
-                                "prepare run-root failed for {}: {:?}",
-                                run_root.display(),
-                                status
-                            );
-                        }
-                    }
-                });
-            }
         }
 
         Ok(WorktreeCreated {

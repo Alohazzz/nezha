@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, RefreshCw, X } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { AlertTriangle, FolderOpen, RefreshCw, X } from "lucide-react";
 import type { BranchBatch, BranchConflictCheck, BranchKind, Task } from "../../types";
 import s from "../../styles";
 
@@ -38,6 +39,7 @@ export function CreateBranchBatchDialog({
   onClose: () => void;
 }) {
   const [name, setName] = useState("");
+  const [worktreeDir, setWorktreeDir] = useState("");
   const [kind, setKind] = useState<BranchKind>("feature");
   const [baseBranch, setBaseBranch] = useState("develop");
   const [targetBranch, setTargetBranch] = useState("develop");
@@ -50,6 +52,19 @@ export function CreateBranchBatchDialog({
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const manualBranchRef = useRef(false);
+
+  // 默认代码目录 = 项目配置基路径 / 共享 hub / 项目内默认，创建者可改。
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string>("get_branch_batch_worktree_base", { projectPath, repoPath })
+      .then((dir) => {
+        if (!cancelled) setWorktreeDir(dir);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, repoPath]);
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -126,7 +141,15 @@ export function CreateBranchBatchDialog({
   };
 
   const submit = async () => {
-    if (!name.trim() || !baseBranch.trim() || !targetBranch.trim() || !sourceBranch.trim() || busy) return;
+    if (
+      !name.trim() ||
+      !worktreeDir.trim() ||
+      !baseBranch.trim() ||
+      !targetBranch.trim() ||
+      !sourceBranch.trim() ||
+      busy
+    )
+      return;
     if (localConflict) {
       setError("请先处理本地同名分支后再创建。");
       return;
@@ -150,6 +173,7 @@ export function CreateBranchBatchDialog({
         taskIds: Array.from(selected),
         sourceBranch: sourceBranch.trim(),
         useExistingRemote,
+        worktreeDir: worktreeDir.trim(),
       });
       onCreated(batch);
       onClose();
@@ -164,6 +188,30 @@ export function CreateBranchBatchDialog({
     <div style={s.bbDialogOverlay}>
       <div style={s.bbDialog}>
         <div style={s.bbDialogTitle}>创建 PR</div>
+
+        <div style={s.bbField}>
+          <span style={s.bbFieldLabel}>代码目录（worktree 创建位置，运行程序不自动复制）</span>
+          <div style={s.bbSourceRow}>
+            <input
+              style={s.bbInput}
+              value={worktreeDir}
+              onChange={(e) => setWorktreeDir(e.target.value)}
+              placeholder="如 H:\Project\Company\worktree"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              style={s.bbBtnGhost}
+              onClick={async () => {
+                const selected = await openDialog({ directory: true, multiple: false });
+                if (selected) setWorktreeDir(selected);
+              }}
+            >
+              <FolderOpen size={13} />
+              选择
+            </button>
+          </div>
+        </div>
 
         <div style={s.bbField}>
           <span style={s.bbFieldLabel}>批名称</span>

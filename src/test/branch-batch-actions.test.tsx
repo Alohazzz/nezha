@@ -24,7 +24,6 @@ const baseBatch: BranchBatch = {
   status: "active",
   createdAt: Date.now(),
   worktreePath: "H:/Project/.nezha/worktrees/b1",
-  prepareStatus: "ready",
 };
 
 const renderView = (batch: BranchBatch) =>
@@ -53,13 +52,15 @@ describe("BranchBatchView", () => {
     expect(screen.queryByText(/复制路径/)).not.toBeInTheDocument();
     expect(screen.queryByText(/审查/)).not.toBeInTheDocument();
     expect(screen.queryByText(/worktree: /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/清理/)).not.toBeInTheDocument();
   });
 
-  it("disables submission while the run root is preparing", async () => {
-    vi.mocked(invoke).mockResolvedValue([{ ...baseBatch, prepareStatus: "preparing" }]);
-    renderView({ ...baseBatch, prepareStatus: "preparing" });
+  it("shows a hint when the run program is missing without blocking actions", async () => {
+    vi.mocked(invoke).mockResolvedValue([{ ...baseBatch, runRootMissing: true }]);
+    renderView({ ...baseBatch, runRootMissing: true });
 
-    expect(await screen.findByRole("button", { name: /提交 MR/ })).toBeDisabled();
-    expect(screen.getByText("准备运行根中")).toBeInTheDocument();
+    expect(await screen.findByText("运行程序缺失")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /提交 MR/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /删除 WorkTree/ })).toBeEnabled();
   });
 });

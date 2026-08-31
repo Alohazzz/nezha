@@ -130,7 +130,8 @@ pub struct Batch {
     #[serde(rename = "targetBranch")]
     pub target_branch: String,
     /// 该批包含的议题任务 id 列表（顺序即验收批次内任务顺序）。
-    #[serde(rename = "taskIds", default, skip_serializing_if = "Vec::is_empty")]
+    /// 必须始终序列化：前端依赖字段存在（空批也不可缺省），缺失会让 TS 侧迭代 undefined 崩溃。
+    #[serde(rename = "taskIds", default)]
     pub task_ids: Vec<String>,
     /// draft | active | review | conflict | merged | closed
     #[serde(default)]
@@ -158,15 +159,6 @@ pub struct Batch {
     /// worktree 所属 sub-repo 路径（多仓库工作区）。缺省视为项目根，向后兼容旧批次。
     #[serde(rename = "worktreeRepo", default, skip_serializing_if = "Option::is_none")]
     pub worktree_repo: Option<String>,
-    /// 运行根准备状态：preparing | ready | failed；缺省表示无准备脚本（视为 ready）。
-    #[serde(rename = "prepareStatus", default, skip_serializing_if = "Option::is_none")]
-    pub prepare_status: Option<String>,
-    /// 运行根准备失败原因（仅 failed 时有值）。
-    #[serde(rename = "prepareError", default, skip_serializing_if = "Option::is_none")]
-    pub prepare_error: Option<String>,
-    /// 后台准备脚本进程 PID（供删除前停止 / 重启后识别）。
-    #[serde(rename = "preparePid", default, skip_serializing_if = "Option::is_none")]
-    pub prepare_pid: Option<u32>,
     /// 提交 MR 时源分支 HEAD SHA；删除前校验本地/远端源分支未新增提交。
     #[serde(rename = "mrSourceSha", default, skip_serializing_if = "Option::is_none")]
     pub mr_source_sha: Option<String>,

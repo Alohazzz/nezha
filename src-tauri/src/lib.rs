@@ -454,7 +454,7 @@ pub fn run() {
     batch::check_branch_batch_branch,
     batch::open_branch_batch_worktree,
     batch::delete_branch_batch,
-    batch::retry_branch_batch_prepare,
+    batch::get_branch_batch_worktree_base,
     codeup::codeup_resolve_repo,
     codeup::codeup_branch_managers,
     codeup::codeup_create_mr,

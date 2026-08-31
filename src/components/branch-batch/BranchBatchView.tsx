@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Plus, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { FolderOpen, Plus, Send, Trash2, X } from "lucide-react";
 import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
 import s from "../../styles";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
@@ -68,14 +68,6 @@ export function BranchBatchView({
     void load(projectId);
   }, [projectId, load]);
 
-  // 后台 prepare 完成后没有独立事件：若有批次在准备，轮询刷新状态。
-  useEffect(() => {
-    const preparing = batches.some((b) => b.prepareStatus === "preparing");
-    if (!preparing) return;
-    const timer = window.setInterval(() => void load(projectId), 5000);
-    return () => window.clearInterval(timer);
-  }, [batches, projectId, load]);
-
   const batchWorktreePath = useCallback((batch: BranchBatch) => {
     return batch.worktreePath ?? `${projectPath}/.nezha/worktrees/${batch.id}`;
   }, [projectPath]);
@@ -127,38 +119,7 @@ export function BranchBatchView({
     [projectPath, projectId, load, onScopeChange, shellOpen],
   );
 
-  const handleRetryPrepare = useCallback(
-    async (batch: BranchBatch) => {
-      setBusyId(batch.id);
-      setNotice("");
-      try {
-        const updated = await invoke<BranchBatch>("retry_branch_batch_prepare", {
-          projectPath,
-          projectId,
-          batchId: batch.id,
-        });
-        setBatches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
-      } catch (e) {
-        setNotice(String(e));
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [projectPath, projectId],
-  );
-
-  const canSubmit = (batch: BranchBatch) =>
-    batch.status === "active" && (batch.prepareStatus === "ready" || !batch.prepareStatus);
-
-  const prepareBadge = (batch: BranchBatch) => {
-    if (batch.prepareStatus === "preparing") {
-      return <span style={s.bbBadgeWarn}>准备运行根中</span>;
-    }
-    if (batch.prepareStatus === "failed") {
-      return <span style={s.bbBadgeConflict}>准备失败</span>;
-    }
-    return null;
-  };
+  const canSubmit = (batch: BranchBatch) => batch.status === "active";
 
   return (
     <div style={s.bbView}>
@@ -186,7 +147,7 @@ export function BranchBatchView({
               <span style={s.bbCardTitle}>{batch.name}</span>
               <span style={statusStyle(batch.status)}>{STATUS_LABEL[batch.status]}</span>
               <span style={s.bbBadge}>{batch.kind}</span>
-              {prepareBadge(batch)}
+              {batch.runRootMissing && <span style={s.bbBadgeWarn}>运行程序缺失</span>}
               {batch.status !== "merged" &&
                 batch.status !== "closed" &&
                 Date.now() - batch.createdAt > OVERDUE_MS && (
@@ -204,10 +165,7 @@ export function BranchBatchView({
               <span style={s.bbCardMono}>{batch.branch}</span>
               <span>← {batch.baseBranch}</span>
               <span>→ {batch.targetBranch}</span>
-              <span>{batch.taskIds.length} 个议题</span>
-              {batch.prepareStatus === "failed" && batch.prepareError && (
-                <span style={s.bbCardMono}>{batch.prepareError}</span>
-              )}
+              <span>{(batch.taskIds ?? []).length} 个议题</span>
             </div>
             <div style={s.bbCardActions}>
               <button
@@ -228,17 +186,6 @@ export function BranchBatchView({
                 <Send size={13} />
                 提交 MR
               </button>
-              {batch.prepareStatus === "failed" && (
-                <button
-                  type="button"
-                  style={s.bbBtnGhost}
-                  disabled={busyId === batch.id}
-                  onClick={() => void handleRetryPrepare(batch)}
-                >
-                  <RefreshCw size={13} />
-                  重试准备
-                </button>
-              )}
               <button
                 type="button"
                 style={s.bbBtnGhost}
