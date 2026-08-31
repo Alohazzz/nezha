@@ -295,8 +295,32 @@ fn update_batch_prepare_status(
 
 /// 列出某项目的分支批。
 #[tauri::command]
-pub fn list_branch_batches(project_id: String) -> Result<Vec<Batch>, String> {
-    load_project_batches(project_id)
+pub async fn list_branch_batches(project_id: String) -> Result<Vec<Batch>, String> {
+    let mut batches = load_project_batches(project_id.clone())?;
+    let mut changed = false;
+    for batch in &mut batches {
+        if batch.prepare_status.as_deref() != Some("preparing") {
+            continue;
+        }
+        let alive = if let Some(pid) = batch.prepare_pid {
+            let pid = pid;
+            tokio::task::spawn_blocking(move || crate::git::prepare_process_alive(pid))
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if !alive {
+            batch.prepare_status = Some("failed".to_string());
+            batch.prepare_error = Some("应用重启后准备进程已退出，请重试".to_string());
+            batch.prepare_pid = None;
+            changed = true;
+        }
+    }
+    if changed {
+        save_project_batches(project_id.clone(), batches.clone())?;
+    }
+    Ok(batches)
 }
 
 /// 获取单个分支批。

@@ -1731,7 +1731,29 @@ pub(crate) async fn branch_unmerged_count(
     .map_err(|e| format!("Unmerged commit check task panicked: {}", e))?
 }
 
-/// 停止 prepare 进程树。Windows 用 `taskkill /T /F`，其余平台用 SIGKILL。
+/// 进程是否仍在运行。
+fn process_is_running(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let pid_str = pid.to_string();
+        let filter = format!("PID eq {pid_str}");
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", filter.as_str(), "/NH"])
+            .output();
+        return matches!(output, Ok(o) if o.status.success() && !o.stdout.is_empty());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("kill")
+            .arg("0")
+            .arg(pid.to_string())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+}
+
+/// 停止 prepare 进程树并等待退出（最多 5 秒）。Windows 用 `taskkill /T /F`，其余平台用 SIGKILL。
 pub(crate) fn stop_process_tree(pid: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1746,7 +1768,6 @@ pub(crate) fn stop_process_tree(pid: u32) -> Result<(), String> {
                 return Err(format!("停止 prepare 进程失败: {err}"));
             }
         }
-        Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1758,8 +1779,22 @@ pub(crate) fn stop_process_tree(pid: u32) -> Result<(), String> {
         if !output.status.success() {
             return Err(format!("停止 prepare 进程失败: {}", output.status));
         }
-        Ok(())
     }
+
+    // 等待进程退出（最多 5 秒），退出失败视为未确认停止。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while process_is_running(pid) {
+        if std::time::Instant::now() >= deadline {
+            return Err("等待 prepare 进程退出超时".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+/// 重启后识别 prepare 进程：进程仍存活则视为仍在准备；已退出则需 reconcile 成 failed。
+pub(crate) fn prepare_process_alive(pid: u32) -> bool {
+    process_is_running(pid)
 }
 
 #[tauri::command]
