@@ -152,6 +152,24 @@ pub struct Batch {
     /// Codeup 合并请求状态（提交后跟随 MR 状态回填）。
     #[serde(rename = "mrStatus", default, skip_serializing_if = "Option::is_none")]
     pub mr_status: Option<String>,
+    /// 创建时实际落盘的 worktree 路径（优先于硬编码推导，兼容共享 hub / 自定义基路径）。
+    #[serde(rename = "worktreePath", default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    /// worktree 所属 sub-repo 路径（多仓库工作区）。缺省视为项目根，向后兼容旧批次。
+    #[serde(rename = "worktreeRepo", default, skip_serializing_if = "Option::is_none")]
+    pub worktree_repo: Option<String>,
+    /// 运行根准备状态：preparing | ready | failed；缺省表示无准备脚本（视为 ready）。
+    #[serde(rename = "prepareStatus", default, skip_serializing_if = "Option::is_none")]
+    pub prepare_status: Option<String>,
+    /// 运行根准备失败原因（仅 failed 时有值）。
+    #[serde(rename = "prepareError", default, skip_serializing_if = "Option::is_none")]
+    pub prepare_error: Option<String>,
+    /// 后台准备脚本进程 PID（供删除前停止 / 重启后识别）。
+    #[serde(rename = "preparePid", default, skip_serializing_if = "Option::is_none")]
+    pub prepare_pid: Option<u32>,
+    /// 提交 MR 时源分支 HEAD SHA；删除前校验本地/远端源分支未新增提交。
+    #[serde(rename = "mrSourceSha", default, skip_serializing_if = "Option::is_none")]
+    pub mr_source_sha: Option<String>,
 }
 
 /// 云效议题补充表单数据：字段随草稿防抖落盘；finalized 区分「已定稿」与「仅草稿」。
@@ -329,6 +347,12 @@ mod tests {
             issue_serial_numbers: vec!["QHDK-29312".into()],
             mr_id: None,
             mr_status: None,
+            worktree_path: None,
+            worktree_repo: None,
+            prepare_status: None,
+            prepare_error: None,
+            prepare_pid: None,
+            mr_source_sha: None,
         };
         let json = serde_json::to_string(&batch).unwrap();
         let back: Batch = serde_json::from_str(&json).unwrap();

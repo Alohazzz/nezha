@@ -323,7 +323,7 @@ export function ProjectPage({
     }
     for (const batch of batches) {
       if (batch.status === "merged" || batch.status === "closed") continue;
-      const key = `${project.path}/.nezha/worktrees/${batch.id}`;
+      const key = batch.worktreePath ?? `${project.path}/.nezha/worktrees/${batch.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
       options.push({ key, label: `WorkTree · ${batch.branch}` });
@@ -461,7 +461,9 @@ export function ProjectPage({
       if (groupKey.startsWith("batch:")) {
         const id = groupKey.slice("batch:".length);
         const batch = batches.find((b) => b.id === id);
-        if (batch) setWorktreeScope(`${project.path}/.nezha/worktrees/${batch.id}`);
+        if (batch) {
+          setWorktreeScope(batch.worktreePath ?? `${project.path}/.nezha/worktrees/${batch.id}`);
+        }
       } else if (groupKey.startsWith("wt:")) {
         setWorktreeScope(groupKey.slice("wt:".length));
       }
@@ -1176,6 +1178,8 @@ export function ProjectPage({
               <BranchBatchView
                 projectPath={project.path}
                 projectId={project.id}
+                repoPath={subRepoPath}
+                shellOpen={showShellTerminal && shellProjectPath === worktreeScope}
                 tasks={projectTasks}
                 worktreeScope={worktreeScope}
                 onScopeChange={handleScopeChange}

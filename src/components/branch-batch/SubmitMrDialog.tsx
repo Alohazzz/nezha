@@ -43,7 +43,7 @@ export function SubmitMrDialog({
         .filter(Boolean);
       await invoke("codeup_create_mr", {
         projectPath,
-        repoPath: null,
+        repoPath: batch.worktreeRepo ?? null,
         projectId,
         batchId: batch.id,
         reviewers: list,
@@ -55,7 +55,7 @@ export function SubmitMrDialog({
     } finally {
       setBusy(false);
     }
-  }, [busy, reviewers, projectPath, projectId, batch.id, batch.targetBranch, onDone, onClose]);
+  }, [busy, reviewers, projectPath, projectId, batch.id, batch.targetBranch, batch.worktreeRepo, onDone, onClose]);
 
   return (
     <div style={s.bbDialogOverlay}>

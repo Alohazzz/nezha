@@ -149,6 +149,24 @@ export interface BranchBatch {
   mrId?: string;
   /** Codeup 合并请求状态（提交后跟随 MR 状态回填）。 */
   mrStatus?: MrStatus;
+  /** 创建时实际落盘的 worktree 路径（优先于硬编码推导，兼容共享 hub / 自定义基路径）。 */
+  worktreePath?: string;
+  /** worktree 所属 sub-repo 路径（多仓库工作区）。 */
+  worktreeRepo?: string;
+  /** 运行根准备状态；缺省视为无准备脚本。 */
+  prepareStatus?: "preparing" | "ready" | "failed";
+  /** 运行根准备失败原因。 */
+  prepareError?: string;
+  /** 后台 prepare 进程 PID（供删除前停止）。 */
+  preparePid?: number;
+  /** 提交 MR 时源分支 HEAD SHA。 */
+  mrSourceSha?: string;
+}
+
+/** 新建 PR 前的源分支冲突预检结果。 */
+export interface BranchConflictCheck {
+  remoteExists: boolean;
+  localExists: boolean;
 }
 
 /** Codeup 合并请求生命周期状态。 */

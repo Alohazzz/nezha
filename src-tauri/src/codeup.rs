@@ -380,6 +380,35 @@ fn load_batch(project_id: &str, batch_id: &str) -> Result<Batch, String> {
         .ok_or_else(|| "Batch not found".to_string())
 }
 
+/// 查询 Codeup 上该 MR 当前是否已合并（状态归一化为含 "MERGED"）。
+pub(crate) async fn batch_mr_is_merged(
+    project_path: &str,
+    repo_path: Option<&str>,
+    mr_id: &str,
+) -> Result<bool, String> {
+    let (token, org_id) = load_creds().await?;
+    let repo = resolve_codeup_repo(project_path, repo_path).await?;
+    let repos = fetch_codeup_repositories().await?;
+    let repository_id = repos
+        .iter()
+        .find(|r| r.namespace == repo.repository || r.path == repo.repository)
+        .map(|r| r.id.clone())
+        .ok_or_else(|| format!("未找到仓库 {} 的 Codeup 仓库 id", repo.repository))?;
+    let url = change_item_url(&org_id, &repository_id, mr_id);
+    let client = build_client()?;
+    let bytes = crate::yunxiao::get_yunxiao_json(&client, &token, url).await?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析 MR 状态失败: {e}"))?;
+    let item = json.get("result").unwrap_or(&json);
+    let state = item
+        .get("state")
+        .or_else(|| item.get("status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_uppercase();
+    Ok(state.contains("MERGED"))
+}
+
 /// 在 Codeup 上创建合并请求；仅提交（不合并）。成功后回写批的 mrId/mrStatus，status=review。
 #[tauri::command]
 pub async fn codeup_create_mr(
@@ -391,6 +420,43 @@ pub async fn codeup_create_mr(
 ) -> Result<Batch, String> {
     let (token, _) = load_creds().await?;
     let batch = load_batch(&project_id, &batch_id)?;
+    if batch.status != "active" {
+        return Err("批次不是进行中状态，无法提交 MR".to_string());
+    }
+    if batch.prepare_status.as_deref() == Some("preparing") {
+        return Err("运行根准备中，暂不能提交 MR".to_string());
+    }
+    if batch.prepare_status.as_deref() == Some("failed") {
+        return Err("运行根准备失败，请先重试".to_string());
+    }
+    let worktree_str = path_to_string(
+        &std::path::Path::new(&project_path)
+            .join(".nezha")
+            .join("worktrees")
+            .join(&batch_id),
+    )?;
+    let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
+    let effective_repo = batch.worktree_repo.clone().or(repo_path.clone());
+    let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
+    crate::git::ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
+    if let Some(dirty) = crate::git::worktree_dirty_reason(&worktree_path)? {
+        return Err(format!("提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"));
+    }
+
+    // 先非 force push 源分支，保证 MR 引用远端已有提交；再取提交时的 HEAD。
+    let push = run_git(&worktree_path, &["push", "origin", &batch.branch])?;
+    if !push.status.success() {
+        return Err(format!(
+            "推送源分支失败（不会 force push）：{}",
+            String::from_utf8_lossy(&push.stderr).trim()
+        ));
+    }
+    let head_out = run_git(&worktree_path, &["rev-parse", "HEAD"])?;
+    if !head_out.status.success() {
+        return Err(String::from_utf8_lossy(&head_out.stderr).trim().to_string());
+    }
+    let source_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+
     let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
     let org = repo_org_id(&repo);
     let url = format!("{API_BASE}/{CODUP_PREFIX}/organizations/{org}/changeRequests");
@@ -429,6 +495,7 @@ pub async fn codeup_create_mr(
     updated.mr_id = Some(mr_id);
     updated.mr_status = Some("opened".to_string());
     updated.status = "review".to_string();
+    updated.mr_source_sha = Some(source_sha);
     let result = updated.clone();
     save_project_batches(project_id, batches)?;
     Ok(result)

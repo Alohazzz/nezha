@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import * as RadixSelect from "@radix-ui/react-select";
 import { X, FolderOpen, ChevronDown, Check } from "lucide-react";
 import { permissionModeLabel, type PermissionMode, type AgentType } from "../types";
@@ -16,6 +17,11 @@ interface ProjectConfig {
     commit_prompt: string;
     commit_message_timeout_secs?: number;
   };
+  worktree?: {
+    base_path?: string;
+    prepare_script?: string;
+  };
+  [key: string]: unknown;
 }
 
 const PERMISSION_MODES: PermissionMode[] = ["ask", "auto_edit", "full_access"];
@@ -86,6 +92,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   const [commitMessageTimeoutSecs, setCommitMessageTimeoutSecs] = useState(
     String(DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS),
   );
+  const [worktreeBasePath, setWorktreeBasePath] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -109,6 +116,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
             ),
           ),
         );
+        setWorktreeBasePath(c.worktree?.base_path ?? "");
       })
       .catch((e) => setError(String(e)));
   }, [projectPath]);
@@ -157,6 +165,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
       await invoke("write_project_config", {
         projectPath,
         config: {
+          ...config,
           agent: {
             default: agentDefault,
             default_permission_mode: defaultPermissionMode,
@@ -165,6 +174,10 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
           git: {
             commit_prompt: commitPrompt,
             commit_message_timeout_secs: timeoutSecs,
+          },
+          worktree: {
+            ...(config?.worktree ?? {}),
+            base_path: worktreeBasePath.trim(),
           },
         },
       });
@@ -180,10 +193,10 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
     <>
       <div style={s.settingsBody}>
         {!config && !error && (
-          <div style={{ color: "var(--text-hint)", fontSize: 13 }}>{t("common.loading")}</div>
+          <div style={s.settingsLoading}>{t("common.loading")}</div>
         )}
         {error && (
-          <div style={{ color: "var(--danger)", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
+          <div style={s.settingsError}>{error}</div>
         )}
         {config && (
           <>
@@ -247,7 +260,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
                 </label>
                 <div style={s.settingsFlexRow}>
                   <input
-                    style={{ ...s.modalInput, ...s.settingsInputWithFlex }}
+                    style={s.modalInputFlex}
                     type="text"
                     inputMode="numeric"
                     pattern="[0-9]*"
@@ -273,6 +286,34 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
                   spellCheck={false}
                 />
               </div>
+              <div style={s.modalField}>
+                <label style={s.modalLabel}>
+                  Worktree 基路径
+                  <span style={s.modalLabelHint}>
+                    留空则自动使用共享 hub / 项目 .nezha/worktrees；仅影响新建任务与 PR。
+                  </span>
+                </label>
+                <div style={s.settingsFlexRow}>
+                  <input
+                    style={s.modalInputFlex}
+                    value={worktreeBasePath}
+                    onChange={(e) => setWorktreeBasePath(e.target.value)}
+                    placeholder="H:\Project\Company"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    style={s.modalSaveBtn}
+                    onClick={async () => {
+                      const selected = await openDialog({ directory: true, multiple: false });
+                      if (selected) setWorktreeBasePath(selected);
+                    }}
+                  >
+                    <FolderOpen size={13} />
+                    选择
+                  </button>
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -282,7 +323,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
           {t("common.cancel")}
         </button>
         <button
-          style={{ ...s.modalSaveBtn, opacity: saving ? 0.6 : 1 }}
+          style={saving ? s.modalSaveBtnBusy : s.modalSaveBtn}
           onClick={handleSave}
           disabled={saving || !config}
         >
@@ -318,12 +359,7 @@ export function SettingsDialog({
           {NAV_ITEMS.map((item) => (
             <button
               key={item.key}
-              style={{
-                ...s.settingsNavItem,
-                background: activeNav === item.key ? "var(--bg-hover)" : "none",
-                color: activeNav === item.key ? "var(--text-primary)" : "var(--text-secondary)",
-                fontWeight: activeNav === item.key ? 600 : 500,
-              }}
+              style={activeNav === item.key ? s.settingsNavItemActive : s.settingsNavItem}
               onClick={() => setActiveNav(item.key)}
             >
               <FolderOpen size={14} />
