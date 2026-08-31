@@ -1604,6 +1604,34 @@ pub(crate) fn prepare_script_path(project_path: &str, repo_root: &str) -> Option
     }
 }
 
+/// 启动 prepare 脚本进程：优先 `pwsh`（PowerShell 7，脚本语法需要），
+/// 失败时回退 `powershell`（Windows PowerShell 5.1）。返回已启动的子进程。
+pub(crate) fn spawn_prepare_script_process(
+    script: &str,
+    run_root: &Path,
+) -> Result<std::process::Child, String> {
+    let configure = |cmd: &mut std::process::Command| {
+        let _ = cmd
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Target"])
+            .arg(run_root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    };
+
+    let mut primary = std::process::Command::new("pwsh");
+    configure(&mut primary);
+    match primary.spawn() {
+        Ok(child) => Ok(child),
+        Err(_) => {
+            let mut fallback = std::process::Command::new("powershell");
+            configure(&mut fallback);
+            fallback
+                .spawn()
+                .map_err(|e| format!("启动 prepare 脚本失败: {e}"))
+        }
+    }
+}
+
 /// 计算 worktree 落盘基路径：项目配置优先，否则自动探测共享 hub / 项目内 .nezha/worktrees。
 /// 配置永远从项目根读取（多 sub-repo 时配置在项目根 `.nezha/config.toml`）。
 pub(crate) fn worktree_base_dir(project_path: &str, repo_root: &str) -> PathBuf {
@@ -1706,14 +1734,17 @@ pub(crate) async fn branch_unmerged_count(
     let target = target_branch.clone();
     let source = source_branch.clone();
     tokio::task::spawn_blocking(move || -> Result<u64, String> {
-        let fetch = run_git(
-            &cwd,
-            &["fetch", "origin", &target, &source],
-        )?;
-        if !fetch.status.success() {
-            let stderr = String::from_utf8_lossy(&fetch.stderr).trim().to_string();
-            if !stderr.contains("couldn't find remote ref") {
-                return Err(stderr);
+        let fetch_target = run_git(&cwd, &["fetch", "origin", &target])?;
+        if !fetch_target.status.success() {
+            return Err(String::from_utf8_lossy(&fetch_target.stderr).trim().to_string());
+        }
+        // 源分支可能尚未推送到远端：允许 fetch 失败（忽略“couldn't find remote ref”）。
+        if let Ok(fetch_source) = run_git(&cwd, &["fetch", "origin", &source]) {
+            if !fetch_source.status.success() {
+                let stderr = String::from_utf8_lossy(&fetch_source.stderr).trim().to_string();
+                if !stderr.to_lowercase().contains("find remote ref") {
+                    return Err(stderr);
+                }
             }
         }
         let rev = format!("origin/{target}..{source}");
@@ -1840,30 +1871,19 @@ pub async fn create_task_worktree(
         let prepare_script = prepare_script_path(&project_path, &cwd);
         if let Some(script) = prepare_script {
             let run_root = worktree_path.join("_run");
-            std::thread::spawn(move || {
-                let out = std::process::Command::new("powershell")
-                    .args([
-                        "-NoProfile",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-File",
-                        &script,
-                        "-Target",
-                    ])
-                    .arg(&run_root)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .output();
-                if let Ok(o) = out {
-                    if !o.status.success() {
-                        eprintln!(
-                            "prepare run-root failed for {}: {:?}",
-                            run_root.display(),
-                            o.status
-                        );
+            if let Ok(mut child) = spawn_prepare_script_process(&script, &run_root) {
+                std::thread::spawn(move || {
+                    if let Ok(status) = child.wait() {
+                        if !status.success() {
+                            eprintln!(
+                                "prepare run-root failed for {}: {:?}",
+                                run_root.display(),
+                                status
+                            );
+                        }
                     }
-                }
-            });
+                });
+            }
         }
 
         Ok(WorktreeCreated {

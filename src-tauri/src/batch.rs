@@ -222,20 +222,7 @@ fn spawn_prepare_script(
     worktree_path: &Path,
 ) -> Result<u32, String> {
     let run_root = worktree_path.join("_run");
-    let mut child = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            script,
-            "-Target",
-        ])
-        .arg(&run_root)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("启动 prepare 脚本失败: {e}"))?;
+    let mut child = crate::git::spawn_prepare_script_process(script, &run_root)?;
     let pid = child.id();
     std::thread::spawn(move || {
         let status = child.wait();
