@@ -99,7 +99,7 @@ pub fn notify_task_event(
     // macOS 首次使用需请求通知权限（幂等，已授权/已拒绝后直接返回现状）。
     #[cfg(target_os = "macos")]
     {
-        let _ = app.notification().permission().request();
+        let _ = app.notification().request_permission();
     }
     #[cfg(target_os = "windows")]
     show_windows_notification(app, body);
