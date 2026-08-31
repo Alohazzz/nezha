@@ -1693,6 +1693,42 @@ pub(crate) async fn branch_unmerged_count(
     .map_err(|e| format!("Unmerged commit check task panicked: {}", e))?
 }
 
+/// 统计远端源分支相对远端目标分支未合并的提交数；本地分支缺失时仍用于安全清理校验。
+pub(crate) async fn remote_branch_unmerged_count(
+    cwd: String,
+    target_branch: String,
+    source_branch: String,
+) -> Result<u64, String> {
+    let target = target_branch.clone();
+    let source = source_branch.clone();
+    tokio::task::spawn_blocking(move || -> Result<u64, String> {
+        let fetch_target = run_git(&cwd, &["fetch", "origin", &target])?;
+        if !fetch_target.status.success() {
+            return Err(String::from_utf8_lossy(&fetch_target.stderr)
+                .trim()
+                .to_string());
+        }
+        let fetch_source = run_git(&cwd, &["fetch", "origin", &source])?;
+        if !fetch_source.status.success() {
+            return Err(String::from_utf8_lossy(&fetch_source.stderr)
+                .trim()
+                .to_string());
+        }
+
+        let rev = format!("origin/{target}..origin/{source}");
+        let out = run_git(&cwd, &["rev-list", "--count", &rev])?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| format!("解析未合并提交数量失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Remote branch unmerged count task panicked: {e}"))?
+}
+
 #[tauri::command]
 pub async fn create_task_worktree(
     project_path: String,

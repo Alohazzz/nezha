@@ -139,6 +139,14 @@ const branchBatch = {
     color: "var(--text-hint)",
     fontSize: 13,
   },
+  bbMissingNotice: {
+    background: "var(--bg-card)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 12,
+    padding: 14,
+    color: "var(--text-secondary)",
+    fontSize: 12,
+  },
   bbDialogOverlay: {
     position: "fixed" as const,
     inset: 0,

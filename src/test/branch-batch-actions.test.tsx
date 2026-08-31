@@ -63,4 +63,14 @@ describe("BranchBatchView", () => {
     expect(screen.getByRole("button", { name: /提交 MR/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /删除 WorkTree/ })).toBeEnabled();
   });
+
+  it("keeps a missing worktree available for cleanup without opening it", async () => {
+    vi.mocked(invoke).mockResolvedValue([{ ...baseBatch, worktreeMissing: true }]);
+    renderView({ ...baseBatch, worktreeMissing: true });
+
+    expect(await screen.findByText("WorkTree 缺失")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /打开/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /提交 MR/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /删除 WorkTree/ })).toBeEnabled();
+  });
 });

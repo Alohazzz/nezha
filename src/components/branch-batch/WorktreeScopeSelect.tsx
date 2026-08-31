@@ -5,6 +5,8 @@ import * as Popover from "@radix-ui/react-popover";
 export interface WorktreeScopeOption {
   key: string;
   label: string;
+  /** 下拉里的路径详情；触发器仍展示 label，避免长路径撑宽右侧工具栏。 */
+  description?: string;
 }
 
 export function WorktreeScopeSelect({
@@ -42,8 +44,13 @@ export function WorktreeScopeSelect({
               >
                 <GitBranch size={12} />
                 <span className="branch-popover-item-name">
-                  {o.label}
-                  {o.key === value ? " · 当前" : ""}
+                  <span className="branch-popover-item-title">
+                    {o.label}
+                    {o.key === value ? " · 当前" : ""}
+                  </span>
+                  {o.description && (
+                    <span className="branch-popover-item-description">{o.description}</span>
+                  )}
                 </span>
                 {o.key === value && <Check size={12} />}
               </button>

@@ -155,6 +155,8 @@ export interface BranchBatch {
   worktreeRepo?: string;
   /** 列表实时探测：未关闭批次的工作树下缺少运行程序目录（`_run`）时为 true，仅提示不落盘。 */
   runRootMissing?: boolean;
+  /** 列表实时探测：未关闭批次的 worktree 目录缺失时为 true，仅提示不落盘。 */
+  worktreeMissing?: boolean;
   /** 提交 MR 时源分支 HEAD SHA。 */
   mrSourceSha?: string;
 }

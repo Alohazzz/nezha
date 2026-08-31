@@ -44,6 +44,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { BranchBatchView } from "./branch-batch/BranchBatchView";
 import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
+import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
@@ -267,12 +268,15 @@ export function ProjectPage({
 
   const loadBatches = useCallback(async () => {
     try {
-      const list = await invoke<BranchBatch[]>("list_branch_batches", { projectId: project.id });
+      const list = await invoke<BranchBatch[]>("list_branch_batches", {
+        projectId: project.id,
+        projectPath: project.path,
+      });
       setBatches(list);
     } catch (e) {
       console.error("[project] load batches failed:", e);
     }
-  }, [project.id]);
+  }, [project.id, project.path]);
 
   useEffect(() => {
     void loadBatches();
@@ -310,26 +314,15 @@ export function ProjectPage({
   }, [selectedTask?.worktreePath, selectedTask?.worktreeDiscarded]);
 
   const worktreeOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const options: Array<{ key: string; label: string }> = [{ key: "", label: "主检出" }];
-    for (const task of projectTasks) {
-      if (task.worktreePath && !task.worktreeDiscarded && !seen.has(task.worktreePath)) {
-        seen.add(task.worktreePath);
-        options.push({
-          key: task.worktreePath,
-          label: `WorkTree · ${task.worktreeBranch ?? "?"}`,
-        });
-      }
-    }
-    for (const batch of batches) {
-      if (batch.status === "merged" || batch.status === "closed") continue;
-      const key = batch.worktreePath ?? `${project.path}/.nezha/worktrees/${batch.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      options.push({ key, label: `WorkTree · ${batch.branch}` });
-    }
-    return options;
+    return buildWorktreeScopeOptions({ tasks: projectTasks, batches, projectPath: project.path });
   }, [projectTasks, batches, project.path]);
+
+  // 已选中的失效批次不再出现在 selector 里；回落主检出，避免文件树/Git 面板继续访问空路径。
+  useEffect(() => {
+    if (worktreeScope && !worktreeOptions.some((option) => option.key === worktreeScope)) {
+      setWorktreeScope("");
+    }
+  }, [worktreeOptions, worktreeScope]);
 
   // 工作区项目可能包含多个 sub-repo，selectedRoot.path 为当前活动的 git 根（缺省回落 project.path）。
   const {

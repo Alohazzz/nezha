@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::git::{
     branch_unmerged_count, local_branch_exists, path_to_string, remote_branch_exists,
-    resolve_repo_path, run_git, worktree_base_dir, worktree_dirty_reason,
+    remote_branch_unmerged_count, resolve_repo_path, run_git, worktree_base_dir,
+    worktree_dirty_reason,
 };
 use crate::storage::{Batch, load_project_batches, load_project_tasks, save_project_batches};
 
@@ -220,25 +221,41 @@ pub struct BatchView {
     /// 未关闭批次的工作树下缺少运行程序目录（`_run`）时为 true；仅提示，不阻断操作。
     #[serde(rename = "runRootMissing")]
     pub run_root_missing: bool,
+    /// 未关闭批次的 worktree 目录缺失时为 true；selector 不展示，PR 面板可提供清理入口。
+    #[serde(rename = "worktreeMissing")]
+    pub worktree_missing: bool,
 }
 
 /// 列出某项目的分支批。
 #[tauri::command]
-pub async fn list_branch_batches(project_id: String) -> Result<Vec<BatchView>, String> {
+pub async fn list_branch_batches(
+    project_id: String,
+    project_path: Option<String>,
+) -> Result<Vec<BatchView>, String> {
     let batches = load_project_batches(project_id)?;
     tokio::task::spawn_blocking(move || {
         Ok(batches
             .into_iter()
             .map(|b| {
-                let run_root_missing = match &b.worktree_path {
-                    Some(wt) if b.status != "merged" && b.status != "closed" => {
-                        !Path::new(wt).join("_run").is_dir()
-                    }
-                    _ => false,
+                let is_open = b.status != "merged" && b.status != "closed";
+                let worktree_path = match b.worktree_path.as_deref() {
+                    Some(path) => PathBuf::from(path),
+                    None => match project_path.as_deref() {
+                        Some(path) if !path.trim().is_empty() => {
+                            Path::new(path).join(".nezha").join("worktrees").join(&b.id)
+                        }
+                        _ => PathBuf::new(),
+                    },
                 };
+                let run_root_missing = is_open
+                    && !worktree_path.as_os_str().is_empty()
+                    && !worktree_path.join("_run").is_dir();
+                let worktree_missing =
+                    is_open && !worktree_path.as_os_str().is_empty() && !worktree_path.is_dir();
                 BatchView {
                     batch: b,
                     run_root_missing,
+                    worktree_missing,
                 }
             })
             .collect())
@@ -453,8 +470,36 @@ pub async fn delete_branch_batch(
             }
         }
     } else {
-        let count = branch_unmerged_count(cwd.clone(), batch.target_branch.clone(), batch.branch.clone())
+        let source_branch_exists =
+            local_branch_exists(project_path.clone(), effective_repo.clone(), batch.branch.clone())
+                .await?;
+        let count = if source_branch_exists {
+            branch_unmerged_count(
+                cwd.clone(),
+                batch.target_branch.clone(),
+                batch.branch.clone(),
+            )
+            .await?
+        } else {
+            // worktree 和本地分支都可能已被外部清理；此时仍要检查远端分支，
+            // 避免删除记录后掩盖一个还有未合并提交的 PR。
+            let remote_source_exists = remote_branch_exists(
+                project_path.clone(),
+                effective_repo.clone(),
+                batch.branch.clone(),
+            )
             .await?;
+            if remote_source_exists {
+                remote_branch_unmerged_count(
+                    cwd.clone(),
+                    batch.target_branch.clone(),
+                    batch.branch.clone(),
+                )
+                .await?
+            } else {
+                0
+            }
+        };
         if count > 0 {
             return Err("源分支仍有未合并提交，禁止删除".to_string());
         }

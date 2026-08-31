@@ -1,13 +1,21 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { WorktreeScopeSelect } from "../components/branch-batch/WorktreeScopeSelect";
 
 describe("WorktreeScopeSelect", () => {
-  it("truncates a long worktree label instead of overflowing the trigger", () => {
+  it("truncates a long worktree label instead of overflowing the trigger", async () => {
+    const user = userEvent.setup();
     const longBranch = "feature/v2.20260501/master/补丁议题修改";
     render(
       <WorktreeScopeSelect
-        options={[{ key: "/wt", label: `WorkTree · ${longBranch}` }]}
+        options={[
+          {
+            key: "/wt",
+            label: `WorkTree · ${longBranch}`,
+            description: "H:/Project/company/worktree/batch-id",
+          },
+        ]}
         value="/wt"
         onChange={() => undefined}
       />,
@@ -20,5 +28,9 @@ describe("WorktreeScopeSelect", () => {
     expect(value).not.toBeNull();
     expect(value).toHaveTextContent(`WorkTree · ${longBranch}`);
     expect(value).toHaveClass("radix-select-trigger-value");
+
+    // The path stays discoverable in the dropdown without widening the trigger.
+    await user.click(screen.getByRole("button"));
+    expect(screen.getByText("H:/Project/company/worktree/batch-id")).toBeInTheDocument();
   });
 });

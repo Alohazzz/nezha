@@ -57,12 +57,15 @@ export function BranchBatchView({
   const load = useCallback(async (pid: string) => {
     if (!pid) return;
     try {
-      const list = await invoke<BranchBatch[]>("list_branch_batches", { projectId: pid });
+      const list = await invoke<BranchBatch[]>("list_branch_batches", {
+        projectId: pid,
+        projectPath,
+      });
       setBatches(list);
     } catch (e) {
       console.error("[branch-batch] load failed:", e);
     }
-  }, []);
+  }, [projectPath]);
 
   useEffect(() => {
     void load(projectId);
@@ -76,10 +79,17 @@ export function BranchBatchView({
   const scopedBatches = useMemo(
     () =>
       batches.filter((b) => {
+        if (b.worktreeMissing) return false;
         if (!worktreeScope) return false;
         return batchWorktreePath(b) === worktreeScope;
       }),
     [batches, worktreeScope, batchWorktreePath],
+  );
+
+  /** 失效批次不出现在 selector，但仍保留清理入口，避免记录变成不可达的孤儿数据。 */
+  const missingBatches = useMemo(
+    () => batches.filter((b) => b.worktreeMissing),
+    [batches],
   );
 
   const handleOpen = useCallback(
@@ -121,6 +131,65 @@ export function BranchBatchView({
 
   const canSubmit = (batch: BranchBatch) => batch.status === "active";
 
+  const renderBatchCard = (batch: BranchBatch, missing = false) => (
+    <div key={batch.id} style={s.bbCard}>
+      <div style={s.bbCardHead}>
+        <span style={s.bbCardTitle}>{batch.name}</span>
+        <span style={statusStyle(batch.status)}>{STATUS_LABEL[batch.status]}</span>
+        <span style={s.bbBadge}>{batch.kind}</span>
+        {missing && <span style={s.bbBadgeWarn}>WorkTree 缺失</span>}
+        {batch.runRootMissing && <span style={s.bbBadgeWarn}>运行程序缺失</span>}
+        {batch.status !== "merged" &&
+          batch.status !== "closed" &&
+          Date.now() - batch.createdAt > OVERDUE_MS && (
+            <span style={s.bbBadgeWarn}>超期</span>
+          )}
+        <div style={s.bbFill} />
+        {batch.additions != null && batch.deletions != null && (
+          <span style={s.bbMetric}>
+            <span style={s.bbBadgeDone}>+{batch.additions}</span>
+            <span style={s.bbBadgeConflict}>-{batch.deletions}</span>
+          </span>
+        )}
+      </div>
+      <div style={s.bbCardSub}>
+        <span style={s.bbCardMono}>{batch.branch}</span>
+        <span>← {batch.baseBranch}</span>
+        <span>→ {batch.targetBranch}</span>
+        <span>{(batch.taskIds ?? []).length} 个议题</span>
+      </div>
+      <div style={s.bbCardActions}>
+        <button
+          type="button"
+          style={s.bbBtnGhost}
+          disabled={missing || busyId === batch.id}
+          onClick={() => void handleOpen(batch)}
+        >
+          <FolderOpen size={13} />
+          打开
+        </button>
+        <button
+          type="button"
+          style={s.bbBtnPrimary}
+          disabled={!canSubmit(batch) || missing || busyId === batch.id}
+          onClick={() => setSubmitBatch(batch)}
+        >
+          <Send size={13} />
+          提交 MR
+        </button>
+        <button
+          type="button"
+          style={s.bbBtnGhost}
+          disabled={busyId === batch.id}
+          onClick={() => void handleDelete(batch)}
+        >
+          <Trash2 size={13} />
+          删除 WorkTree
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div style={s.bbView}>
       <div style={s.bbHeader}>
@@ -141,64 +210,17 @@ export function BranchBatchView({
         {scopedBatches.length === 0 && (
           <div style={s.bbEmpty}>当前 worktree 无关联 PR，点击「新建 PR」创建。</div>
         )}
-        {scopedBatches.map((batch) => (
-          <div key={batch.id} style={s.bbCard}>
-            <div style={s.bbCardHead}>
-              <span style={s.bbCardTitle}>{batch.name}</span>
-              <span style={statusStyle(batch.status)}>{STATUS_LABEL[batch.status]}</span>
-              <span style={s.bbBadge}>{batch.kind}</span>
-              {batch.runRootMissing && <span style={s.bbBadgeWarn}>运行程序缺失</span>}
-              {batch.status !== "merged" &&
-                batch.status !== "closed" &&
-                Date.now() - batch.createdAt > OVERDUE_MS && (
-                  <span style={s.bbBadgeWarn}>超期</span>
-                )}
-              <div style={s.bbFill} />
-              {batch.additions != null && batch.deletions != null && (
-                <span style={s.bbMetric}>
-                  <span style={s.bbBadgeDone}>+{batch.additions}</span>
-                  <span style={s.bbBadgeConflict}>-{batch.deletions}</span>
-                </span>
-              )}
-            </div>
-            <div style={s.bbCardSub}>
-              <span style={s.bbCardMono}>{batch.branch}</span>
-              <span>← {batch.baseBranch}</span>
-              <span>→ {batch.targetBranch}</span>
-              <span>{(batch.taskIds ?? []).length} 个议题</span>
-            </div>
-            <div style={s.bbCardActions}>
-              <button
-                type="button"
-                style={s.bbBtnGhost}
-                disabled={busyId === batch.id}
-                onClick={() => void handleOpen(batch)}
-              >
-                <FolderOpen size={13} />
-                打开
-              </button>
-              <button
-                type="button"
-                style={s.bbBtnPrimary}
-                disabled={!canSubmit(batch) || busyId === batch.id}
-                onClick={() => setSubmitBatch(batch)}
-              >
-                <Send size={13} />
-                提交 MR
-              </button>
-              <button
-                type="button"
-                style={s.bbBtnGhost}
-                disabled={busyId === batch.id}
-                onClick={() => void handleDelete(batch)}
-              >
-                <Trash2 size={13} />
-                删除 WorkTree
-              </button>
-            </div>
-          </div>
-        ))}
+        {scopedBatches.map((batch) => renderBatchCard(batch))}
       </div>
+
+      {missingBatches.length > 0 && (
+        <div style={s.bbList}>
+          <div style={s.bbMissingNotice}>
+            以下批次记录仍保留，但 worktree 目录已不存在；可确认分支不需要后清理。
+          </div>
+          {missingBatches.map((batch) => renderBatchCard(batch, true))}
+        </div>
+      )}
 
       {showCreate && (
         <CreateBranchBatchDialog

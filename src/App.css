@@ -213,7 +213,22 @@ body {
 }
 .branch-popover-item-name {
   flex: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.branch-popover-item-title {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.branch-popover-item-description {
+  overflow: hidden;
+  color: var(--text-hint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
