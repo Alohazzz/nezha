@@ -434,6 +434,18 @@ const branchBatch = {
     outline: "none",
     width: 220,
   },
+  bbSourceRow: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    flex: 1,
+  },
+  bbConflictActions: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    marginTop: 8,
+  },
   bbSection: {
     marginTop: 12,
   },

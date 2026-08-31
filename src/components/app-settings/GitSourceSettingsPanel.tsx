@@ -83,35 +83,34 @@ export function GitSourceSettingsPanel() {
 
       <div style={s.settingField}>
         <label style={s.settingFieldLabel}>{t("appSettings.codeupWorktreeBasePath")}</label>
-        <input
-          className="app-settings-input"
-          style={s.modalInput}
-          value={settings.codeup.worktreeBasePath}
-          onChange={(e) =>
-            setSettings((prev) => ({
-              ...prev,
-              codeup: { ...prev.codeup, worktreeBasePath: e.target.value },
-            }))
-          }
-          placeholder="~/.nezha/codeup_worktrees"
-          disabled={loading}
-          spellCheck={false}
-          aria-label={t("appSettings.codeupWorktreeBasePath")}
-        />
+        <div style={s.settingsFlexRow}>
+          <input
+            className="app-settings-input"
+            style={s.modalInputFlex}
+            value={settings.codeup.worktreeBasePath}
+            onChange={(e) =>
+              setSettings((prev) => ({
+                ...prev,
+                codeup: { ...prev.codeup, worktreeBasePath: e.target.value },
+              }))
+            }
+            placeholder="~/.nezha/codeup_worktrees"
+            disabled={loading}
+            spellCheck={false}
+            aria-label={t("appSettings.codeupWorktreeBasePath")}
+          />
+          <button
+            type="button"
+            className="app-settings-save"
+            data-disabled={saving || !isDirty}
+            disabled={loading || saving || !isDirty}
+            onClick={() => void handleSave()}
+          >
+            {saving ? t("common.saving") : t("common.save")}
+          </button>
+        </div>
         <span style={s.settingFieldHint}>{t("appSettings.codeupWorktreeBasePathHint")}</span>
-      </div>
-
-      <div style={s.settingFieldSpaced}>
         {saved && <span style={s.settingFieldHint}>{t("common.saved")}</span>}
-        <button
-          type="button"
-          className="app-settings-save"
-          data-disabled={saving || !isDirty}
-          disabled={loading || saving || !isDirty}
-          onClick={() => void handleSave()}
-        >
-          {saving ? t("common.saving") : t("common.save")}
-        </button>
       </div>
     </div>
   );

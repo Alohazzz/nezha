@@ -600,8 +600,9 @@ pub async fn run_merge_code_review(
         return Err("baseBranch and branch are required".to_string());
     }
     let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let project = project_path.clone();
     let wt = worktree_path.clone();
-    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&cwd, &wt))
+    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&project, &cwd, &wt))
         .await
         .map_err(|e| format!("校验线程错误: {e}"))??;
 
@@ -707,8 +708,9 @@ pub async fn run_conflict_resolution(
         return Err(format!("Unsupported agent: {agent}"));
     }
     let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    let project = project_path.clone();
     let wt = worktree_path.clone();
-    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&cwd, &wt))
+    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&project, &cwd, &wt))
         .await
         .map_err(|e| format!("校验线程错误: {e}"))??;
 

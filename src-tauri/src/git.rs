@@ -1593,27 +1593,173 @@ fn auto_prepare_script(repo_root: &str) -> Option<PathBuf> {
     None
 }
 
-/// 校验 worktree 路径必须落在 `<repo_root>/.nezha/worktrees/` 之下，
-/// 防止 remove_task_worktree 被传入任意路径。多 sub-repo 项目中 repo_root 为 sub-repo
-/// 根；单仓库时与 project_path 一致（向后兼容旧 worktree 数据）。
+/// 解析应运行的 prepare 脚本：项目配置显式值优先，其次自动探测；都没有则 None。
+pub(crate) fn prepare_script_path(project_path: &str, repo_root: &str) -> Option<String> {
+    let cfg = crate::config::read_project_config(project_path.to_string())
+        .unwrap_or_else(|_| crate::config::ProjectConfig::default());
+    if !cfg.worktree.prepare_script.trim().is_empty() {
+        Some(cfg.worktree.prepare_script.trim().to_string())
+    } else {
+        auto_prepare_script(repo_root).map(|p| p.to_string_lossy().to_string())
+    }
+}
+
+/// 计算 worktree 落盘基路径：项目配置优先，否则自动探测共享 hub / 项目内 .nezha/worktrees。
+/// 配置永远从项目根读取（多 sub-repo 时配置在项目根 `.nezha/config.toml`）。
+pub(crate) fn worktree_base_dir(project_path: &str, repo_root: &str) -> PathBuf {
+    let cfg = crate::config::read_project_config(project_path.to_string())
+        .unwrap_or_else(|_| crate::config::ProjectConfig::default());
+    if !cfg.worktree.base_path.trim().is_empty() {
+        PathBuf::from(cfg.worktree.base_path.trim())
+    } else {
+        default_worktree_base(repo_root)
+    }
+}
+
+/// 校验 worktree 路径必须落在配置/自动规则解析出的 worktree 根目录之下，
+/// 防止 delete/open 命令被传入任意路径。
 pub(crate) fn ensure_path_under_worktrees_root(
+    project_path: &str,
     repo_root: &str,
     worktree_path: &str,
 ) -> Result<(), String> {
-    let cfg = crate::config::read_project_config(repo_root.to_string())
-        .unwrap_or_else(|_| crate::config::ProjectConfig::default());
-    let expected_root = if !cfg.worktree.base_path.is_empty() {
-        std::path::PathBuf::from(&cfg.worktree.base_path)
-    } else {
-        default_worktree_base(repo_root)
-    };
+    let expected_root = worktree_base_dir(project_path, repo_root);
     let target = Path::new(worktree_path)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve worktree path: {}", e))?;
     if !target.starts_with(&expected_root) {
-        return Err("Worktree path is outside .nezha/worktrees".to_string());
+        return Err("Worktree path is outside the configured worktree root".to_string());
     }
     Ok(())
+}
+
+/// 返回 worktree 是否含“非 `_run` 生成件”的未提交/未跟踪内容。
+/// 仅根目录下未跟踪的 `_run`（或 `_run/**`）视为生成运行根，不 block；其余全部 block。
+pub(crate) fn worktree_dirty_reason(worktree_path: &str) -> Result<Option<String>, String> {
+    let output = run_git(
+        worktree_path,
+        &["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"],
+    )?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.len() < 4 || line.as_bytes().get(2) != Some(&b' ') {
+            continue;
+        }
+        let status = &line[..2];
+        let path = &line[3..];
+        if status == "??" {
+            let trimmed = path.trim_matches('"');
+            if trimmed == "_run" || trimmed.starts_with("_run/") {
+                continue;
+            }
+        }
+        return Ok(Some(line.to_string()));
+    }
+    Ok(None)
+}
+
+/// 远端是否存在某个分支（live `git ls-remote`，不用本地 stale remote-tracking ref）。
+pub(crate) async fn remote_branch_exists(
+    project_path: String,
+    repo_path: Option<String>,
+    branch: String,
+) -> Result<bool, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    tokio::task::spawn_blocking(move || {
+        let output = run_git(
+            &cwd,
+            &["ls-remote", "--heads", "origin", &format!("refs/heads/{branch}")],
+        )?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(!stdout.trim().is_empty())
+    })
+    .await
+    .map_err(|e| format!("Remote branch check task panicked: {}", e))?
+}
+
+/// 本地是否存在某个分支。
+pub(crate) async fn local_branch_exists(
+    project_path: String,
+    repo_path: Option<String>,
+    branch: String,
+) -> Result<bool, String> {
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    tokio::task::spawn_blocking(move || {
+        let output = run_git(&cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")])?;
+        Ok(output.status.success())
+    })
+    .await
+    .map_err(|e| format!("Local branch check task panicked: {}", e))?
+}
+
+/// 统计源分支相对远端目标分支未合并的提交数（先 fetch，保证以远端为准）。
+pub(crate) async fn branch_unmerged_count(
+    cwd: String,
+    target_branch: String,
+    source_branch: String,
+) -> Result<u64, String> {
+    let target = target_branch.clone();
+    let source = source_branch.clone();
+    tokio::task::spawn_blocking(move || -> Result<u64, String> {
+        let fetch = run_git(
+            &cwd,
+            &["fetch", "origin", &target, &source],
+        )?;
+        if !fetch.status.success() {
+            let stderr = String::from_utf8_lossy(&fetch.stderr).trim().to_string();
+            if !stderr.contains("couldn't find remote ref") {
+                return Err(stderr);
+            }
+        }
+        let rev = format!("origin/{target}..{source}");
+        let out = run_git(&cwd, &["rev-list", "--count", &rev])?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        let count = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0);
+        Ok(count)
+    })
+    .await
+    .map_err(|e| format!("Unmerged commit check task panicked: {}", e))?
+}
+
+/// 停止 prepare 进程树。Windows 用 `taskkill /T /F`，其余平台用 SIGKILL。
+pub(crate) fn stop_process_tree(pid: u32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let pid_str = pid.to_string();
+        let output = std::process::Command::new("taskkill")
+            .args(["/PID", pid_str.as_str(), "/T", "/F"])
+            .output()
+            .map_err(|e| format!("taskkill failed: {e}"))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if !err.to_lowercase().contains("not found") && !err.is_empty() {
+                return Err(format!("停止 prepare 进程失败: {err}"));
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .output()
+            .map_err(|e| format!("kill failed: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("停止 prepare 进程失败: {}", output.status));
+        }
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -1632,13 +1778,7 @@ pub async fn create_task_worktree(
     }
 
     tokio::task::spawn_blocking(move || -> Result<WorktreeCreated, String> {
-        let cfg = crate::config::read_project_config(project_path.clone())
-            .unwrap_or_else(|_| crate::config::ProjectConfig::default());
-    let worktrees_dir = if !cfg.worktree.base_path.is_empty() {
-        std::path::PathBuf::from(&cfg.worktree.base_path)
-    } else {
-        default_worktree_base(&cwd)
-    };
+        let worktrees_dir = worktree_base_dir(&project_path, &cwd);
         std::fs::create_dir_all(&worktrees_dir)
             .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
 
@@ -1662,11 +1802,7 @@ pub async fn create_task_worktree(
         }
 
         // 自动准备运行根（后台执行，不阻塞创建；失败仅告警）
-        let prepare_script = if !cfg.worktree.prepare_script.is_empty() {
-            Some(cfg.worktree.prepare_script.clone())
-        } else {
-            auto_prepare_script(&cwd).map(|p| p.to_string_lossy().to_string())
-        };
+        let prepare_script = prepare_script_path(&project_path, &cwd);
         if let Some(script) = prepare_script {
             let run_root = worktree_path.join("_run");
             std::thread::spawn(move || {
@@ -1798,7 +1934,9 @@ pub async fn remove_task_worktree(
     branch: String,
 ) -> Result<(), String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    let project = project_path.clone();
+    let current = cwd.clone();
+    ensure_path_under_worktrees_root(&project, &current, &worktree_path)?;
 
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         // worktree remove --force 既可移除有未提交修改的工作树，也会清理元数据。
@@ -1846,7 +1984,7 @@ pub async fn worktree_diff_stats(
 
     tokio::task::spawn_blocking(move || -> Result<WorktreeDiffStats, String> {
         // 路径校验包含同步 canonicalize，必须留在 spawn_blocking 内，避免阻塞 Tokio 运行时。
-        ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+        ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
 
         // 1) 已跟踪改动（含已 stage / 未 stage）：working tree vs merge-base
         let mb_out = run_git(&worktree_path, &["merge-base", &base_branch, "HEAD"])?;
@@ -2047,7 +2185,7 @@ pub async fn git_patch_dependency_check(
     commit_hashes: Vec<String>,
 ) -> Result<Vec<PatchPickPlan>, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     tokio::task::spawn_blocking(move || patch_pick_plan_blocking(&worktree_path, &commit_hashes))
         .await
         .map_err(|e| format!("Patch check task panicked: {}", e))?
@@ -2076,7 +2214,7 @@ pub async fn cherry_pick_to_patch(
     commit_hashes: Vec<String>,
 ) -> Result<CherryPickResult, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     tokio::task::spawn_blocking(move || {
         let plans = patch_pick_plan_blocking(&worktree_path, &commit_hashes)?;
         let skipped = plans
@@ -2185,7 +2323,7 @@ pub async fn list_patch_picks(
     worktree_path: String,
 ) -> Result<Vec<PatchPickEntry>, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     tokio::task::spawn_blocking(move || list_patch_picks_blocking(&worktree_path))
     .await
     .map_err(|e| format!("List patch picks task panicked: {}", e))?
@@ -2231,7 +2369,7 @@ pub async fn get_conflict_context(
     worktree_path: String,
 ) -> Result<ConflictContext, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     tokio::task::spawn_blocking(move || {
         let status = run_git(&worktree_path, &["status", "--porcelain"])?;
         if !status.status.success() {
@@ -2264,7 +2402,7 @@ pub async fn commit_conflict_resolution(
     expected_issue_tag: Option<String>,
 ) -> Result<String, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
-    ensure_path_under_worktrees_root(&cwd, &worktree_path)?;
+    ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     if message.trim().is_empty() {
         return Err("Commit message is required".to_string());
     }
