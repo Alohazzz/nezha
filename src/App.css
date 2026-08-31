@@ -61,6 +61,15 @@ body {
   border-color: var(--border-focus);
   box-shadow: none;
 }
+/* 触发按钮里的值文本：长标签（如 worktree 分支名）必须截断，禁止溢出撑破触发器 */
+.radix-select-trigger-value {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .radix-select-content {
   background: var(--bg-card);
   border: 1px solid var(--border-medium);

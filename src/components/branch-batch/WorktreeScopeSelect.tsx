@@ -24,7 +24,7 @@ export function WorktreeScopeSelect({
       <Popover.Trigger asChild>
         <button className="radix-select-trigger">
           <GitBranch size={13} />
-          <span>{current?.label ?? "选择"}</span>
+          <span className="radix-select-trigger-value">{current?.label ?? "选择"}</span>
           <ChevronDown size={13} />
         </button>
       </Popover.Trigger>
