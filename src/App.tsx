@@ -383,7 +383,12 @@ function App() {
   // invoke 完成后补发 send_input 即可（决策 9）。
   const pendingResumeInputRef = useRef<Record<string, string>>({});
   // 由「合并审核」发起的 codeup 审查/冲突任务，任务结束后需清理临时 worktree。
-  const codeupTaskCleanupRef = useRef<Record<string, { repository: string; mrId: number }>>({});
+  const codeupTaskCleanupRef = useRef<
+    Record<
+      string,
+      { repository: string; mrId: number; repositoryId?: string; kind?: string }
+    >
+  >({});
 
   const formatSaveProjectsError = useCallback(
     (error: string) => t("toast.saveProjectsFailed", { error }),
@@ -698,10 +703,27 @@ function App() {
           const codeupCleanup = codeupTaskCleanupRef.current[task_id];
           if (codeupCleanup) {
             delete codeupTaskCleanupRef.current[task_id];
-            invoke("codeup_cleanup_mr", {
-              repository: codeupCleanup.repository,
-              mrId: String(codeupCleanup.mrId),
-            }).catch(() => {});
+            if (codeupCleanup.kind === "merge" && status === "done") {
+              // 分支合并任务：Agent 已把源分支推回，收尾由宿主调 Codeup 接口真正合并 MR。
+              invoke("codeup_merge_mr", {
+                repositoryId: codeupCleanup.repositoryId,
+                mrId: String(codeupCleanup.mrId),
+                mergeType: "merge",
+              })
+                .then(() => showToast("MR 已合并完成", "success"))
+                .catch((e) => showToast(`MR 合并失败: ${String(e)}`, "error"))
+                .finally(() =>
+                  invoke("codeup_cleanup_mr", {
+                    repository: codeupCleanup.repository,
+                    mrId: String(codeupCleanup.mrId),
+                  }).catch(() => {}),
+                );
+            } else {
+              invoke("codeup_cleanup_mr", {
+                repository: codeupCleanup.repository,
+                mrId: String(codeupCleanup.mrId),
+              }).catch(() => {});
+            }
           }
         }
         if (status === "done") scheduleForDoneTask(task_id);
@@ -927,7 +949,7 @@ function App() {
   }
 
   /** 合并审核：点「代码审查/处理冲突」时，在 MR 对应项目里发起一个真实任务（codex + YOLO + 全新临时 worktree）。 */
-  async function startCodeupTask(mr: CodeupMr, kind: "review" | "conflict") {
+  async function startCodeupTask(mr: CodeupMr, kind: "review" | "conflict" | "merge") {
     let project = projects.find((p) => p.path === mr.projectPath) ?? null;
     // 该 MR 的仓库未注册为 Nezha 项目时，自动把后端给出的固定文件夹路径注册成一个项目，
     // 让「代码审查 / 处理冲突」能自动定位到对应代码文件夹，无需手动添加。
@@ -957,6 +979,15 @@ function App() {
         `请读取并遵循 \`merge-code-review\` 技能：\`~/.codex/skills/merge-code-review/SKILL.md\`（审查规范在 \`references/csharp-dev-manual.md\`）。对 \`git diff origin/${mr.targetBranch}...origin/${mr.sourceBranch}\` 的改动按技能规则逐项审查；读文件内容用 \`git show origin/${mr.sourceBranch}:<path>\`。\n` +
         `不要输出结构化 <REVIEW> JSON 数组。请汇总本次改动发现的全部问题，写出一份**对人可读的整体审查总结报告**：按规则分组、标注严重程度（warn/fail）、文件路径与行号、问题说明与修改建议，并在报告末尾给出「是否可合并」结论。\n` +
         `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。`;
+    } else if (kind === "merge") {
+      prompt =
+        `你是 MR 合并助手。请在当前工作区完成把 ${mr.sourceBranch} 合并进 ${mr.targetBranch} 的操作：\n` +
+        `1. 运行 \`git fetch origin ${mr.targetBranch}\`\n` +
+        `2. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`\n` +
+        `3. 若存在冲突，修改代码解决冲突；若无冲突，执行 \`git merge --abort\` 并告知无冲突\n` +
+        `4. 解决后运行 \`git add -A\` 与 \`git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`\n` +
+        `5. 运行 \`git push origin HEAD:${mr.sourceBranch}\`\n` +
+        `完成后简要说明结果。真正的 MR 合并将由系统在任务结束后调用 Codeup 接口完成。`;
     } else {
       prompt =
         `你是合并冲突解决助手。请在当前工作区按步骤完成并把结果推回源分支：\n` +
@@ -974,7 +1005,12 @@ function App() {
     const task: Task = {
       id: taskId,
       projectId: project.id,
-      name: kind === "review" ? `代码审查 ${mr.title}` : `处理冲突 ${mr.title}`,
+      name:
+        kind === "review"
+          ? `代码审查 ${mr.title}`
+          : kind === "merge"
+            ? `分支合并 ${mr.title}`
+            : `处理冲突 ${mr.title}`,
       prompt,
       agent: "codex",
       permissionMode: "full_access", // YOLO
@@ -995,6 +1031,8 @@ function App() {
     codeupTaskCleanupRef.current[taskId] = {
       repository: mr.repository,
       mrId: mr.localId,
+      repositoryId: mr.repositoryId,
+      kind,
     };
 
     // 4) 后台创建该 MR 的代码文件夹（fetch 源/目标分支 + checkout 源分支）。

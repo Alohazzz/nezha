@@ -110,7 +110,7 @@ export function WelcomePage({
   tasks: Task[];
   onOpen: () => void;
   onProjectClick: (p: Project) => void;
-  onStartCodeupTask: (mr: CodeupMr, kind: "review" | "conflict") => void | Promise<void>;
+  onStartCodeupTask: (mr: CodeupMr, kind: "review" | "conflict" | "merge") => void | Promise<void>;
   onDeleteProject: (projectId: string) => void;
   onToggleProjectHidden: (projectId: string) => void;
   onRenameProject: (projectId: string, name: string) => Promise<ProjectRenameResult>;
