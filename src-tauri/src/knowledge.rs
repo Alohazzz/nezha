@@ -574,7 +574,7 @@ fn module_is_safe(module: &str) -> bool {
 
 /// 候选对应的模块卡片路径；调用方需先确认目标知识库可用。
 fn module_doc_path(target: &KnowledgeTarget, module: &str) -> PathBuf {
-    Path::new(&target.skill_dir)
+    Path::new(&target.graph_dir)
         .join("data")
         .join("modules")
         .join(format!("{module}.md"))

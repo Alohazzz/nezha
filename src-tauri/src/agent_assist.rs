@@ -1743,7 +1743,8 @@ mod tests {
             issue_discussion_instructions("Req", "task-123", None).expect("Req has instructions");
         assert!(text.contains("grilling"));
         assert!(!text.contains("knowledge-graph"));
-        assert!(!text.contains("knowledge.json"));
+        assert!(!text.contains("knowledgeGraphId"));
+        assert!(!text.contains("知识沉淀规则"));
         assert!(text.contains("discussion.md"));
     }
 

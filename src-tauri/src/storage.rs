@@ -1,5 +1,5 @@
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -49,7 +49,10 @@ pub struct Task {
     pub created_at: i64,
     #[serde(rename = "updatedAt", default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
-    #[serde(rename = "attentionRequestedAt", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "attentionRequestedAt",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub attention_requested_at: Option<i64>,
     #[serde(rename = "claudeSessionId", skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
@@ -79,7 +82,11 @@ pub struct Task {
     #[serde(rename = "batchId", default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
     /// 该任务所在分支的类型（feature/patch/release/hotfix）。
-    #[serde(rename = "branchKind", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "branchKind",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub branch_kind: Option<String>,
     #[serde(rename = "worktreeDiscarded", skip_serializing_if = "Option::is_none")]
     pub worktree_discarded: Option<bool>,
@@ -88,28 +95,60 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletions: Option<i32>,
     /// 导入自云效 Projex 的工作项 id（去重键）。
-    #[serde(rename = "yunxiaoWorkitemId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "yunxiaoWorkitemId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub yunxiao_workitem_id: Option<String>,
     /// 导入自云效 Projex 的工作项编号，如 QHDK-29728。
-    #[serde(rename = "yunxiaoSerialNumber", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "yunxiaoSerialNumber",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub yunxiao_serial_number: Option<String>,
     /// 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单。
-    #[serde(rename = "yunxiaoSupplement", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "yunxiaoSupplement",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub yunxiao_supplement: Option<YunxiaoSupplement>,
     /// 修改方案回写云效评论的时间戳（幂等标记，非空即已回写）。
-    #[serde(rename = "yunxiaoWrittenBackAt", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "yunxiaoWrittenBackAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub yunxiao_written_back_at: Option<i64>,
     /// 回写成功后云效返回的评论 ID（审计/追查用）。
-    #[serde(rename = "yunxiaoCommentId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "yunxiaoCommentId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub yunxiao_comment_id: Option<String>,
     /// 知识沉淀创建的云效审核议题 ID 列表（幂等标记：非空即已沉淀）。
-    #[serde(rename = "knowledgeIssueIds", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "knowledgeIssueIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub knowledge_issue_ids: Vec<String>,
     /// 起源任务 ID：本任务由哪个任务的讨论/执行中发现的问题补录而来（来源追溯）。
-    #[serde(rename = "derivedFromTaskId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "derivedFromTaskId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub derived_from_task_id: Option<String>,
     /// 起源云效议题 ID：补充的议题来自哪个已有议题的讨论发现（来源追溯）。
-    #[serde(rename = "derivedFromWorkitemId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "derivedFromWorkitemId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub derived_from_workitem_id: Option<String>,
 }
 
@@ -145,7 +184,11 @@ pub struct Batch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deletions: Option<i32>,
     /// 云效议题编号列表，用于 commit 门禁与回写（如 ["QHDK-29312"]）。
-    #[serde(rename = "issueSerialNumbers", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "issueSerialNumbers",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub issue_serial_numbers: Vec<String>,
     /// Codeup 合并请求 id（提交 MR 成功后回填）。
     #[serde(rename = "mrId", default, skip_serializing_if = "Option::is_none")]
@@ -154,13 +197,25 @@ pub struct Batch {
     #[serde(rename = "mrStatus", default, skip_serializing_if = "Option::is_none")]
     pub mr_status: Option<String>,
     /// 创建时实际落盘的 worktree 路径（优先于硬编码推导，兼容共享 hub / 自定义基路径）。
-    #[serde(rename = "worktreePath", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "worktreePath",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub worktree_path: Option<String>,
     /// worktree 所属 sub-repo 路径（多仓库工作区）。缺省视为项目根，向后兼容旧批次。
-    #[serde(rename = "worktreeRepo", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "worktreeRepo",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub worktree_repo: Option<String>,
     /// 提交 MR 时源分支 HEAD SHA；删除前校验本地/远端源分支未新增提交。
-    #[serde(rename = "mrSourceSha", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "mrSourceSha",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub mr_source_sha: Option<String>,
 }
 
@@ -179,7 +234,8 @@ pub struct YunxiaoSupplement {
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
 pub(crate) fn nezha_dir() -> Result<PathBuf, String> {
-    let home = crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let home =
+        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     Ok(home.join(".nezha"))
 }
 
@@ -341,9 +397,6 @@ mod tests {
             mr_status: None,
             worktree_path: None,
             worktree_repo: None,
-            prepare_status: None,
-            prepare_error: None,
-            prepare_pid: None,
             mr_source_sha: None,
         };
         let json = serde_json::to_string(&batch).unwrap();
