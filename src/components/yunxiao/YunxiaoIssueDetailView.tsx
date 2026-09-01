@@ -302,10 +302,32 @@ export function YunxiaoIssueDetailView({
   }, [formKind, values, task.id, link, onFinalize, showToast, t]);
 
   const handleStartDiscussion = useCallback(async () => {
-    // 定稿后 task.prompt 已是「补全内容 + 原文 + 云效链接」，直接作为讨论基线；
-    // 再按类型从后端取 Skill 指令追加，保证 Req→grilling / Bug→diagnosing-bugs。
-    const base = task.prompt;
-    let prompt = base;
+    // 结构化组装讨论 prompt：任务目标 + 议题信息 + 补充内容 + 原始议题 + 链接，
+    // 再按类型追加后端注入的「工作流程 / 输出与产物」指令 + 协作约束（commit tag）。
+    const mission =
+      "你是「议题澄清与执行助手」。请先完整读懂下方议题，再按指定流程工作。目标：把议题分析清楚、产出可执行结论，并按约定把结论落盘，供「回写云效」直接生成两条评论（开发向 + 测试向）。";
+    const pieces: string[] = [mission];
+
+    // 议题信息：编号 / 类型 / 标题
+    const info: string[] = [];
+    if (task.yunxiaoSerialNumber) info.push(`- 编号：${task.yunxiaoSerialNumber}`);
+    info.push(`- 类型：${formKind === "bug" ? "Bug 缺陷" : "Req 需求"}`);
+    if (task.name) info.push(`- 标题：${task.name}`);
+    if (info.length > 0) pieces.push(`## 议题信息\n${info.join("\n")}`);
+
+    // 补充内容（已定稿字段，按表单顺序、跳过空值；复用 buildSupplementedPrompt 但去掉原文与链接）
+    const fieldsText = buildSupplementedPrompt(formKind, values, "", "").trim();
+    if (fieldsText) pieces.push(`## 补充内容（已定稿）\n${fieldsText}`);
+
+    // 原始议题
+    const original = originalPromptRef.current?.trim();
+    if (original) pieces.push(`## 原始议题\n${original}`);
+
+    // 云效链接
+    const trimmedLink = link.trim();
+    if (trimmedLink) pieces.push(`## 云效链接\n${trimmedLink}`);
+
+    // 工作流程 + 输出与产物（由后端按类别注入 grilling / diagnosing-bugs）
     try {
       const category = detail?.categoryId ?? (formKind === "bug" ? "Bug" : "Req");
       const instructions = await invoke<string>("get_issue_discussion_instructions", {
@@ -313,18 +335,17 @@ export function YunxiaoIssueDetailView({
         category,
         taskId: task.id,
       });
-      if (instructions.trim()) {
-        prompt = `${base}\n\n---\n${instructions.trim()}`;
-      }
+      if (instructions.trim()) pieces.push(instructions.trim());
     } catch (e) {
       console.error("[yunxiao-detail] fetch skill instructions failed:", e);
     }
 
-    // 提交关联议题编号：Agent 直接 commit 时也必须带 #编号，
-    // 云效按提交信息自动关联代码到议题，合并 worktree 前也会校验。
+    // 协作约束：commit message 带议题编号 tag（云效按提交信息自动关联代码到议题）。
     const tag = task.yunxiaoSerialNumber ? issueTag(task.yunxiaoSerialNumber) : "";
     if (tag) {
-      prompt = `${prompt}\n\n---\n所有 git commit message 必须包含议题编号 tag（${tag}，如 \`fix: 修复登录失效 ${tag}\`），云效按提交信息中的编号自动关联代码到议题。`;
+      pieces.push(
+        `## 协作约束\n所有 git commit message 必须包含议题编号 tag（${tag}，如 \`fix: 修复登录失效 ${tag}\`），云效按提交信息中的编号自动关联代码到议题。`,
+      );
     }
 
     // 议题图片：发起讨论时下载到附件目录，路径拼进 prompt 让 Agent 读原图。
@@ -340,7 +361,7 @@ export function YunxiaoIssueDetailView({
         });
         if (images.total > 0) {
           if (images.paths.length > 0) {
-            prompt = `${prompt}\n\n[Attached images]\n${images.paths.join("\n")}`;
+            pieces.push(`## 附件图片\n${images.paths.join("\n")}`);
           }
           if (images.failed === images.total) {
             showToast(
@@ -367,13 +388,16 @@ export function YunxiaoIssueDetailView({
         return;
       }
     }
+    const prompt = pieces.filter((p) => p && p.trim()).join("\n\n");
     onStartDiscussion(task.id, prompt, agent, permission);
   }, [
     task.id,
-    task.prompt,
+    task.name,
     task.yunxiaoSerialNumber,
     detail?.categoryId,
     formKind,
+    values,
+    link,
     onStartDiscussion,
     agent,
     permission,

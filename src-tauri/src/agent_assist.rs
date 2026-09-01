@@ -501,8 +501,9 @@ fn knowledge_graph_instruction(target: &crate::knowledge::KnowledgeTarget) -> St
 }
 
 /// 价值评分技能指令：讨论/分析得出结论后，用 issue-value-scoring 技能产出「价值评分」
-/// 小节并追加到 discussion.md，供回写云效写「价值评分」字段（Req 核心指数 / Bug 优先指数）。
-const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论后，使用 issue-value-scoring 技能对议题做价值评分，并把 `## 价值评分` 小节追加到 discussion.md 末尾（供回写云效写「价值评分」字段，Req 写核心指数、Bug 写优先指数）。评分小节固定格式如下（按议题类别只输出对应的一行指数，其余行不要输出）：
+/// 小节写入 discussion.md（放在「修改方案汇总」之后、「影响范围与测试」之前），
+/// 随开发向评论一起回写，数值同时写入议题「价值评分」字段（Req 核心指数 / Bug 优先指数）。
+const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论后，使用 issue-value-scoring 技能对议题做价值评分，并把 `## 价值评分` 小节写入 discussion.md（放在「修改方案汇总」小节之后、「影响范围与测试」小节之前，随开发向评论一起回写；数值同时写入议题「价值评分」字段，Req 写核心指数、Bug 写优先指数）。评分小节固定格式如下（按议题类别只输出对应的一行指数，其余行不要输出）：
 ## 价值评分
 - 议题类别：Req（或 Bug）
 - 核心指数：**50** = (价值 4 × 机会 5 × 影响 5) ÷ 工作量等级 2
@@ -547,10 +548,12 @@ fn draft_instructions(
         r#"── 工作产物落盘（必须执行）────────────────────────────
 本任务的工作产物需要写入本地临时文件，供任务完成后的「回写云效」{knowledge_purpose}直接读取。请在你当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录维护文件（目录不存在就先创建）：
 
-1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的「修改方案汇总」：
+1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的两条评论素材：
    - 讨论/分析得出结论后立即创建并写入；后续结论更新时整体覆盖写，只保留最新版。
-   - 内容需自包含：议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、分析结论、最终修改方案、验证方式与结果、关联 commit（如已提交）。
-   - 末尾追加 `## 价值评分` 小节（见上方价值评分指令）：Req 写核心指数、Bug 写优先指数，并附一句话结论；回写云效时该小节写入议题「价值评分」字段，不随评论发布。
+   - 结构固定为三段（按顺序）：
+     a. `## 修改方案汇总（开发向）`：议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、分析结论、最终修改方案、验证方式与结果、关联 commit（如已提交）。
+     b. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；回写云效时该小节随「开发向评论」发布，数值同时写入议题「价值评分」字段。
+     c. `## 影响范围与测试（测试向）`：面向测试人员的影响范围（涉及模块名/接口/文件路径）与可执行的测试步骤（含回归点）。
    - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。
 {knowledge_section}"#,
         task_id = task_id,
@@ -578,7 +581,15 @@ pub fn issue_discussion_instructions(
         .map(knowledge_graph_instruction)
         .unwrap_or_default();
     Some(format!(
-        "{flow}\n{knowledge_graph}\n{BACKFILL_SKILL_INSTRUCTION}\n{VALUE_SCORE_INSTRUCTION}\n\n{draft}",
+        "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{value_score}\n\n{backfill}\n\n{draft}",
+        flow = flow,
+        knowledge_graph = if knowledge_graph.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{knowledge_graph}")
+        },
+        value_score = VALUE_SCORE_INSTRUCTION,
+        backfill = BACKFILL_SKILL_INSTRUCTION,
         draft = draft_instructions(task_id, knowledge_target)
     ))
 }
@@ -962,18 +973,21 @@ const WRITEBACK_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_FACTS_CHARS: usize = 8000;
 const WRITEBACK_SESSION_BUDGET: usize = 8000;
 
-const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是代码修改总结助手。基于下面的会话过程与事实（议题信息、补充信息、Git 提交与变更统计），为云效议题撰写一段「修改方案汇总」评论，供团队阅读。请按本仓库 PR 描述规范（AGENTS.md 提交与 PR 规范）组织内容。
+const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基于下面的会话过程与事实（议题信息、补充信息、Git 提交与变更统计），为云效议题撰写两条评论：一条面向开发人员，一条面向测试人员。请按本仓库 PR 描述规范（AGENTS.md 提交与 PR 规范）组织内容。
 
 规则：
 1. 只依据给定事实与会话过程，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
-2. 按 PR 规范的三段结构输出 Markdown：
-   - What（改动方案）：做了什么、关键改动点（可引用 commit 短号/文件）；
-   - Why（动机与取舍）：当前问题/痛点是什么、为什么这样改、相对其他方案的取舍（仅当会话/事实中有依据，不编造）；
-   - Scope（影响面）：涉及哪些模块/文件、是否触碰现有功能或风险点。
-   会话中若有验证/测试过程，最后追加「验证情况」小节。
-3. 语言与议题标题一致（中文议题输出中文）。
-4. 长度 200-500 字，控制在 12 行以内。
-5. 输出放在 <SUMMARY> 与 </SUMMARY> 标签内，标签外不要输出任何内容。
+2. 输出两条评论（Markdown），分别用固定标签包裹，标签外不要输出任何内容：
+   - 开发向评论：<DEV_SUMMARY>...</DEV_SUMMARY>，面向开发解释改动，按 PR 规范三段结构组织：
+     - What（改动方案）：做了什么、关键改动点（可引用 commit 短号/文件）；
+     - Why（动机与取舍）：当前问题/痛点是什么、为什么这样改、相对其他方案的取舍（仅当会话/事实中有依据，不编造）；
+     - Scope（影响面）：涉及哪些模块/文件、是否触碰现有功能或风险点。
+     会话中若有验证/测试过程，最后追加「验证情况」小节。
+   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，固定为「影响范围与测试指引」：
+     - 影响范围：列出受影响模块名/接口/文件路径；
+     - 测试步骤：给出可执行的测试步骤与回归点。
+3. 每条评论语言与议题标题一致（中文议题输出中文），各 200-500 字，控制在 12 行以内。
+4. 某条若缺少事实支撑，就写「（无）」占位，不要编造。
 
 ──── 议题 ────
 编号：{serial_number}
@@ -1069,14 +1083,12 @@ fn build_writeback_prompt(
         )
 }
 
-/// 提取 `<SUMMARY>...</SUMMARY>` 内文本（取最后一对标签，避开 prompt 回显）。
-fn extract_summary(stdout: &str) -> Option<String> {
-    const OPEN: &str = "<SUMMARY>";
-    const CLOSE: &str = "</SUMMARY>";
-    if let Some(close_pos) = stdout.rfind(CLOSE) {
+/// 提取 `<open>...</close>` 内文本（取最后一对标签，避开 prompt 回显）。
+fn extract_tagged_block(stdout: &str, open: &str, close: &str) -> Option<String> {
+    if let Some(close_pos) = stdout.rfind(close) {
         let prefix = &stdout[..close_pos];
-        if let Some(open_start) = prefix.rfind(OPEN) {
-            let inner = &prefix[open_start + OPEN.len()..];
+        if let Some(open_start) = prefix.rfind(open) {
+            let inner = &prefix[open_start + open.len()..];
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
@@ -1086,14 +1098,43 @@ fn extract_summary(stdout: &str) -> Option<String> {
     None
 }
 
-/// AI 汇总失败时的纯事实模板回退（用户仍可在预览中编辑后发布）。
-fn build_fallback_summary(
+/// 云效回写草稿：开发向与测试向两条评论。
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct YunxiaoWritebackDraft {
+    pub dev_comment: String,
+    pub test_comment: String,
+}
+
+/// discussion.md 中「影响范围与测试」小节标题前缀。
+const TEST_SECTION_HEADER: &str = "## 影响范围与测试";
+
+/// 把 discussion.md 拆成（开发向评论，测试向评论）：
+/// - 开发向 = 从开头到 `## 影响范围与测试` 之前（含 `## 修改方案汇总` 与 `## 价值评分`）；
+/// - 测试向 = 从 `## 影响范围与测试` 到文档末尾。
+/// 找不到测试小节时：整篇归开发向，测试向为空串（由前端补填/走 headless 再生成）。
+fn split_discussion_into_comments(text: &str) -> (String, String) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return (String::new(), String::new());
+    }
+    if let Some(pos) = trimmed.find(TEST_SECTION_HEADER) {
+        let dev = trimmed[..pos].trim();
+        let test = trimmed[pos..].trim();
+        (dev.to_string(), test.to_string())
+    } else {
+        (trimmed.to_string(), String::new())
+    }
+}
+
+/// AI 生成失败时的纯事实模板回退（用户仍可在预览中编辑后发布）。
+fn build_fallback_draft(
     serial_number: &str,
     task_name: &str,
     commits: &str,
     diff_stat: &str,
-) -> String {
-    let mut lines = vec![
+) -> YunxiaoWritebackDraft {
+    let mut dev = vec![
         format!("### 修改方案汇总（议题 {serial_number}）"),
         String::new(),
         format!("> 标题：{task_name}"),
@@ -1103,29 +1144,33 @@ fn build_fallback_summary(
         "#### 关联提交".to_string(),
     ];
     if commits.trim().is_empty() {
-        lines.push("（无）".to_string());
+        dev.push("（无）".to_string());
     } else {
         for line in commits.lines() {
             if let Some((hash, subject)) = line.split_once(' ') {
-                lines.push(format!("- `{hash}` {subject}"));
+                dev.push(format!("- `{hash}` {subject}"));
             } else {
-                lines.push(format!("- {line}"));
+                dev.push(format!("- {line}"));
             }
         }
     }
-    lines.push(String::new());
-    lines.push("#### 变更统计".to_string());
+    dev.push(String::new());
+    dev.push("#### 变更统计".to_string());
     if diff_stat.trim().is_empty() {
-        lines.push("（无）".to_string());
+        dev.push("（无）".to_string());
     } else {
-        lines.push(format!("```\n{diff_stat}\n```"));
+        dev.push(format!("```\n{diff_stat}\n```"));
     }
-    lines.join("\n")
+    let test = format!("## 影响范围与测试指引\n\n- 影响范围：（无）\n- 测试步骤：请在预览中补充。");
+    YunxiaoWritebackDraft {
+        dev_comment: dev.join("\n"),
+        test_comment: test,
+    }
 }
 
-/// 生成云效回写「修改方案汇总」：
-/// - 草稿优先：会话中已落盘的 `discussion.md` 直接作为汇总（秒开）；
-/// - 无草稿或 force=true 时：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色。
+/// 生成云效回写草稿（开发向 + 测试向两条评论）：
+/// - 草稿优先：会话中已落盘的 `discussion.md` 直接拆成两条（秒开）；
+/// - 无草稿或 force=true 时：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色生成两条。
 /// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交；
 /// session_path 缺省或不可读时降级为仅事实模式。
 #[tauri::command]
@@ -1140,7 +1185,7 @@ pub async fn generate_yunxiao_writeback_summary(
     base_branch: Option<String>,
     agent: String,
     force: Option<bool>,
-) -> Result<String, String> {
+) -> Result<YunxiaoWritebackDraft, String> {
     if !matches!(agent.as_str(), "claude" | "codex") {
         return Err(format!("Unsupported agent: {}", agent));
     }
@@ -1154,19 +1199,22 @@ pub async fn generate_yunxiao_writeback_summary(
         .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
 
     // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
-    // 旧草稿没有图谱绑定或绑定不一致时不使用，重新按当前绑定提取。
     if !force.unwrap_or(false) {
         if let Some(draft) =
             crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
                 .map_err(|e| format!("读取讨论草稿失败: {e}"))?
                 .filter(|s| !s.trim().is_empty())
         {
-            return Ok(draft);
+            let (dev_comment, test_comment) = split_discussion_into_comments(&draft);
+            return Ok(YunxiaoWritebackDraft {
+                dev_comment,
+                test_comment,
+            });
         }
     }
 
     // 重新生成（force=true）会跳过草稿走 headless 润色，这里先把草稿里的
-    // 「价值评分」小节保留下来，生成后原样拼回（评分只读、随议题字段回写，不随评论发布）。
+    // 「价值评分」小节保留下来，生成后拼到开发向评论末尾（评分推导随开发向评论发布）。
     let preserved_score_section =
         crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
             .ok()
@@ -1253,13 +1301,17 @@ pub async fn generate_yunxiao_writeback_summary(
         return Err(format!("Agent failed: {}{}", stderr, stdout));
     }
     let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    let summary = extract_summary(&raw).unwrap_or_else(|| {
-        build_fallback_summary(&serial_number, task_name.trim(), &commits, &diff_stat)
-    });
-    Ok(crate::value_score::reappend_value_score_section(
-        &summary,
-        preserved_score_section.as_deref(),
-    ))
+    let fallback = build_fallback_draft(&serial_number, task_name.trim(), &commits, &diff_stat);
+    let dev = extract_tagged_block(&raw, "<DEV_SUMMARY>", "</DEV_SUMMARY>")
+        .unwrap_or(fallback.dev_comment);
+    let test = extract_tagged_block(&raw, "<TEST_SUMMARY>", "</TEST_SUMMARY>")
+        .unwrap_or(fallback.test_comment);
+    let dev_comment =
+        crate::value_score::reappend_value_score_section(&dev, preserved_score_section.as_deref());
+    Ok(YunxiaoWritebackDraft {
+        dev_comment,
+        test_comment: test,
+    })
 }
 
 // ── 知识沉淀（云效议题讨论完成后，提取图谱增量并生成审核议题候选）──────────────
@@ -1594,6 +1646,40 @@ mod tests {
     fn writeback_prompt_falls_back_to_no_session_markers() {
         let prompt = build_writeback_prompt("HJWE-65", "测试议题", "", "", "", "");
         assert!(prompt.contains("（无）"));
+    }
+
+    #[test]
+    fn split_discussion_splits_dev_and_test_sections() {
+        let text = "## 修改方案汇总（开发向）\n\nWhat…\n\n## 价值评分\n\n- 核心指数：**50** = (4 × 5 × 5) ÷ 2\n\n## 影响范围与测试（测试向）\n\n- 影响范围：模块A\n- 测试步骤：1. …";
+        let (dev, test) = split_discussion_into_comments(text);
+        assert!(dev.contains("修改方案汇总"));
+        assert!(dev.contains("## 价值评分"));
+        assert!(dev.contains("核心指数"));
+        assert!(!dev.contains("影响范围与测试"));
+        assert!(test.contains("影响范围与测试"));
+        assert!(test.contains("模块A"));
+    }
+
+    #[test]
+    fn split_discussion_without_test_section_keeps_all_in_dev() {
+        let text = "## 修改方案汇总\n\n内容";
+        let (dev, test) = split_discussion_into_comments(text);
+        assert_eq!(dev, "## 修改方案汇总\n\n内容");
+        assert!(test.is_empty());
+    }
+
+    #[test]
+    fn extract_tagged_block_takes_last_block() {
+        let stdout =
+            "user\n<DEV_SUMMARY>回显</DEV_SUMMARY>\ncodex\n<DEV_SUMMARY>真答案</DEV_SUMMARY>\ntokens used\n";
+        assert_eq!(
+            extract_tagged_block(stdout, "<DEV_SUMMARY>", "</DEV_SUMMARY>").as_deref(),
+            Some("真答案")
+        );
+        assert_eq!(
+            extract_tagged_block(stdout, "<TEST_SUMMARY>", "</TEST_SUMMARY>"),
+            None
+        );
     }
 
     #[test]

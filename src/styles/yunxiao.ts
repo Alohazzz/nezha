@@ -755,6 +755,7 @@ export const yunxiao = {
     width: 640,
     maxWidth: "calc(100vw - 48px)",
     maxHeight: "calc(100vh - 96px)",
+    overflowY: "auto" as const,
     display: "flex",
     flexDirection: "column" as const,
     gap: 12,
@@ -773,6 +774,11 @@ export const yunxiao = {
     fontSize: 11.5,
     color: "var(--text-hint)",
     lineHeight: 1.5,
+  },
+  yunxiaoWritebackFieldLabel: {
+    fontSize: 11.5,
+    fontWeight: 700,
+    color: "var(--text-hint)",
   },
   yunxiaoWritebackTextarea: {
     flex: 1,

@@ -18,6 +18,7 @@ import type {
   SkillHubConfig,
   YunxiaoWorkitem,
   YunxiaoSupplement,
+  YunxiaoWritebackDraft,
   YunxiaoWritebackResult,
   AgentEnabledState,
   BackfillIssueRequest,
@@ -1707,11 +1708,11 @@ function App() {
     handleRunTodoTask({ ...task, prompt, agent, permissionMode });
   }
 
-  /** 生成云效回写「修改方案汇总」：优先读取会话中落盘的讨论草稿，无草稿时 headless 生成。 */
+  /** 生成云效回写草稿（开发向 + 测试向）：优先读取会话中落盘的讨论草稿，无草稿时 headless 生成。 */
   async function handleGenerateYunxiaoWritebackSummary(
     taskId: string,
     force = false,
-  ): Promise<string> {
+  ): Promise<YunxiaoWritebackDraft> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task) throw new Error("Task not found");
     const project = projects.find((candidate) => candidate.id === task.projectId);
@@ -1724,7 +1725,7 @@ function App() {
         : task.agent === "claude"
           ? task.claudeSessionPath
           : undefined;
-    return invoke<string>("generate_yunxiao_writeback_summary", {
+    return invoke<YunxiaoWritebackDraft>("generate_yunxiao_writeback_summary", {
       projectPath: project.path,
       taskId,
       repoPath: worktreeAlive ? task.worktreePath : (task.worktreeRepo ?? project.path),
@@ -1740,12 +1741,13 @@ function App() {
   }
 
   /**
-   * 提交总结回写云效议题：评论先发布（后端剥离评分小节），再把「价值评分」写入议题字段。
+   * 提交总结回写云效议题：发布开发向 + 测试向两条评论，再把「价值评分」写入议题字段。
    * 返回回写结果（字段写入状态与警告），成功后记录幂等标记。
    */
   async function handleWritebackYunxiao(
     taskId: string,
-    content: string,
+    devContent: string,
+    testContent: string,
   ): Promise<YunxiaoWritebackResult> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
@@ -1760,7 +1762,8 @@ function App() {
       token: yunxiao.token,
       organizationId: yunxiao.organizationId,
       workitemId: task.yunxiaoWorkitemId,
-      content,
+      devContent,
+      testContent,
     });
     const now = Date.now();
     setTasks((prev) => {
@@ -1769,7 +1772,7 @@ function App() {
           ? {
               ...candidate,
               yunxiaoWrittenBackAt: now,
-              yunxiaoCommentId: result.commentId,
+              yunxiaoCommentId: result.devCommentId,
             }
           : candidate,
       );

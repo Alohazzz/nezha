@@ -2,12 +2,12 @@ import { Sparkles, Send, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
-/** 回写云效预览弹窗：AI 生成「修改方案汇总」→ 可编辑 → 确认发布为议题评论。 */
+/** 回写云效预览弹窗：AI 生成「开发向 + 测试向」两条评论 → 分别可编辑 → 一次性发布。 */
 export function YunxiaoWritebackDialog({
   serialNumber,
   title,
-  preview,
-  scoreSection,
+  devPreview,
+  testPreview,
   generating,
   posting,
   error,
@@ -15,7 +15,8 @@ export function YunxiaoWritebackDialog({
   fieldRetrying,
   retryScoreValue,
   posted,
-  onPreviewChange,
+  onDevChange,
+  onTestChange,
   onRegenerate,
   onPost,
   onRetryField,
@@ -23,8 +24,8 @@ export function YunxiaoWritebackDialog({
 }: {
   serialNumber: string;
   title: string;
-  preview: string;
-  scoreSection: string | null;
+  devPreview: string;
+  testPreview: string;
   generating: boolean;
   posting: boolean;
   error: string | null;
@@ -32,14 +33,15 @@ export function YunxiaoWritebackDialog({
   fieldRetrying: boolean;
   retryScoreValue: number | null;
   posted: boolean;
-  onPreviewChange: (value: string) => void;
+  onDevChange: (value: string) => void;
+  onTestChange: (value: string) => void;
   onRegenerate: () => void;
   onPost: () => void;
   onRetryField: () => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
-  const canPost = !generating && !posting && !posted && preview.trim().length > 0;
+  const canPost = !generating && !posting && !posted && devPreview.trim().length > 0;
   const canRetryField =
     retryScoreValue != null && !generating && !posting && !fieldRetrying && posted;
 
@@ -56,26 +58,35 @@ export function YunxiaoWritebackDialog({
           {" — "}
           {t("yunxiao.writeback.dialogHint")}
         </div>
+
+        <div style={s.yunxiaoWritebackFieldLabel}>{t("yunxiao.writeback.devLabel")}</div>
         <textarea
           style={s.yunxiaoWritebackTextarea}
-          value={preview}
+          value={devPreview}
           spellCheck={false}
           placeholder={
             generating
-              ? t("yunxiao.writeback.generating")
-              : t("yunxiao.writeback.dialogHint")
+              ? t("yunxiao.writeback.generatingDev")
+              : t("yunxiao.writeback.devPlaceholder")
           }
           disabled={generating}
-          onChange={(event) => onPreviewChange(event.target.value)}
+          onChange={(event) => onDevChange(event.target.value)}
         />
-        {scoreSection && (
-          <div style={s.yunxiaoWritebackScoreBlock}>
-            <div style={s.yunxiaoWritebackScoreTitle}>
-              {t("yunxiao.writeback.scoreTitle")}
-            </div>
-            <pre style={s.yunxiaoWritebackScorePre}>{scoreSection}</pre>
-          </div>
-        )}
+
+        <div style={s.yunxiaoWritebackFieldLabel}>{t("yunxiao.writeback.testLabel")}</div>
+        <textarea
+          style={s.yunxiaoWritebackTextarea}
+          value={testPreview}
+          spellCheck={false}
+          placeholder={
+            generating
+              ? t("yunxiao.writeback.generatingTest")
+              : t("yunxiao.writeback.testPlaceholder")
+          }
+          disabled={generating}
+          onChange={(event) => onTestChange(event.target.value)}
+        />
+
         {warning && (
           <div style={s.yunxiaoWritebackError}>
             {warning}
