@@ -201,8 +201,11 @@ pub(crate) fn read_messages(path: &Path) -> Result<Vec<SessionMessage>, String> 
                 }
             }
             "assistant/message" => {
-                let content =
-                    assistant_content(val.get("data").and_then(|d| d.get("message")).and_then(|m| m.get("content")));
+                let content = assistant_content(
+                    val.get("data")
+                        .and_then(|d| d.get("message"))
+                        .and_then(|m| m.get("content")),
+                );
                 if !content.is_empty() {
                     messages.push(SessionMessage {
                         role: "assistant".to_string(),
@@ -270,8 +273,16 @@ fn assistant_content(content: Option<&Value>) -> Vec<SessionContent> {
                 }
             }
             Some("tool-call") => Some(SessionContent::ToolUse {
-                id: b.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
-                name: b.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                id: b
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                name: b
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 input: b
                     .get("arguments")
                     .and_then(Value::as_str)
@@ -314,11 +325,26 @@ pub(crate) fn metrics(path: &Path) -> SessionMetrics {
         match val.get("type").and_then(Value::as_str) {
             Some("assistant/message") => {
                 if let Some(usage) = val.get("data").and_then(|d| d.get("usage")) {
-                    let inp = usage.get("inputTokens").and_then(Value::as_u64).unwrap_or(0);
-                    let out = usage.get("outputTokens").and_then(Value::as_u64).unwrap_or(0);
-                    let cache_read = usage.get("cacheReadTokens").and_then(Value::as_u64).unwrap_or(0);
-                    let cache_write = usage.get("cacheWriteTokens").and_then(Value::as_u64).unwrap_or(0);
-                    let reasoning = usage.get("reasoningTokens").and_then(Value::as_u64).unwrap_or(0);
+                    let inp = usage
+                        .get("inputTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let out = usage
+                        .get("outputTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let cache_read = usage
+                        .get("cacheReadTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let cache_write = usage
+                        .get("cacheWriteTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let reasoning = usage
+                        .get("reasoningTokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
                     total_tokens += inp + out + cache_read + cache_write + reasoning;
                     context_tokens = inp + cache_read + cache_write;
                 }

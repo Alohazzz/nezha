@@ -1,9 +1,9 @@
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -84,7 +84,10 @@ fn finalize_task_exit(
         let tm = app.state::<TaskManager>();
         let mut cancelled = tm.cancelled_tasks.lock();
         let mut manually_completed = tm.manually_completed_tasks.lock();
-        (cancelled.remove(task_id), manually_completed.remove(task_id))
+        (
+            cancelled.remove(task_id),
+            manually_completed.remove(task_id),
+        )
     };
 
     let had_agent_session;
@@ -125,7 +128,11 @@ fn finalize_task_exit(
         return;
     }
 
-    let status = if exit_ok || had_agent_session { "done" } else { "failed" };
+    let status = if exit_ok || had_agent_session {
+        "done"
+    } else {
+        "failed"
+    };
     let failure_reason = if status == "failed" {
         Some(match exit_code {
             Some(code) => format!("Process exited with code {}", code),
@@ -343,7 +350,10 @@ fn send_pty_chunk(app: &AppHandle, id: &str, sink: &OutputSink, data: String) {
     match sink {
         OutputSink::Event { event_name, id_key } => {
             let mut payload = serde_json::Map::new();
-            payload.insert((*id_key).to_string(), serde_json::Value::String(id.to_string()));
+            payload.insert(
+                (*id_key).to_string(),
+                serde_json::Value::String(id.to_string()),
+            );
             payload.insert("data".to_string(), serde_json::Value::String(data));
             let _ = app.emit(event_name, serde_json::Value::Object(payload));
         }
@@ -396,29 +406,14 @@ fn spawn_pty_reader(
                             Ok(chunk) => {
                                 batch.push_str(&chunk);
                                 if batch.len() >= max_batch_bytes {
-                                    flush_pty_batch(
-                                        &emit_app,
-                                        &emit_id,
-                                        &worker_sink,
-                                        &mut batch,
-                                    );
+                                    flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
                                 }
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                flush_pty_batch(
-                                    &emit_app,
-                                    &emit_id,
-                                    &worker_sink,
-                                    &mut batch,
-                                );
+                                flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
                             }
                             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                flush_pty_batch(
-                                    &emit_app,
-                                    &emit_id,
-                                    &worker_sink,
-                                    &mut batch,
-                                );
+                                flush_pty_batch(&emit_app, &emit_id, &worker_sink, &mut batch);
                                 break;
                             }
                         }
@@ -490,7 +485,11 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
 
         if let Some(status) = exit_status {
             let exit_ok = status.success();
-            let exit_code = if exit_ok { None } else { Some(status.exit_code()) };
+            let exit_code = if exit_ok {
+                None
+            } else {
+                Some(status.exit_code())
+            };
             // 等待会话注册完成
             wait_for_session(&app, &task_id, is_codex);
             finalize_task_exit(&app, &task_id, &project_path, is_codex, exit_ok, exit_code);
@@ -670,16 +669,14 @@ fn spawn_fork_task_process(
         let profile = crate::app_settings::load_settings_internal().dsh_profile;
         build_dsh_cmd(&agent_bin, &profile)
     } else if is_codex {
-        let mut command =
-            build_codex_cmd(&agent_bin, permission_mode, model, reasoning_effort);
+        let mut command = build_codex_cmd(&agent_bin, permission_mode, model, reasoning_effort);
         if use_hooks {
             command.arg("--dangerously-bypass-hook-trust");
         }
         append_fork_session_args(&mut command, true, source_session_id);
         command
     } else {
-        let mut command =
-            build_claude_cmd(&agent_bin, permission_mode, model, reasoning_effort);
+        let mut command = build_claude_cmd(&agent_bin, permission_mode, model, reasoning_effort);
         append_fork_session_args(&mut command, false, source_session_id);
         if claude_pass_settings {
             if let Ok(path) = crate::hooks::nezha_claude_settings_path() {
@@ -796,12 +793,7 @@ mod fork_command_tests {
 
     #[test]
     fn builds_claude_model_and_effort_arguments() {
-        let command = build_claude_cmd(
-            "claude",
-            "ask",
-            Some("custom-provider-model"),
-            Some("max"),
-        );
+        let command = build_claude_cmd("claude", "ask", Some("custom-provider-model"), Some("max"));
 
         assert_eq!(
             command.get_argv(),
@@ -946,14 +938,22 @@ pub async fn run_task(
     let prompt_with_images = if image_paths.is_empty() {
         base_prompt
     } else {
-        format!("{}\n\n[Attached images]\n{}", base_prompt, image_paths.join("\n"))
+        format!(
+            "{}\n\n[Attached images]\n{}",
+            base_prompt,
+            image_paths.join("\n")
+        )
     };
 
     // 将文本附件路径追加到提示词
     let final_prompt = if text_paths.is_empty() {
         prompt_with_images
     } else {
-        format!("{}\n\n[Attached text files — read these for full context]\n{}", prompt_with_images, text_paths.join("\n"))
+        format!(
+            "{}\n\n[Attached text files — read these for full context]\n{}",
+            prompt_with_images,
+            text_paths.join("\n")
+        )
     };
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
@@ -1181,11 +1181,7 @@ pub async fn complete_task(
     release_claimed_session_paths(&task_manager, &task_id);
 
     // 收拢草稿（Agent 可能写在 worktree 内）到项目根，供回写/沉淀直接读取。
-    let real_path = task_manager
-        .task_real_paths
-        .lock()
-        .get(&task_id)
-        .cloned();
+    let real_path = task_manager.task_real_paths.lock().get(&task_id).cloned();
     if let Some(real_path) = real_path {
         let effective = project_path.clone();
         let task_id_for_gather = task_id.clone();
@@ -1212,12 +1208,7 @@ pub async fn complete_task(
 pub async fn get_active_task_ids(
     task_manager: State<'_, TaskManager>,
 ) -> Result<Vec<String>, String> {
-    Ok(task_manager
-        .child_handles
-        .lock()
-        .keys()
-        .cloned()
-        .collect())
+    Ok(task_manager.child_handles.lock().keys().cloned().collect())
 }
 
 #[tauri::command]
@@ -1527,7 +1518,9 @@ pub async fn send_input(
 ) -> Result<(), String> {
     let mut writers = task_manager.pty_writers.lock();
     if let Some(writer) = writers.get_mut(&task_id) {
-        writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        writer
+            .write_all(data.as_bytes())
+            .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -1549,7 +1542,12 @@ pub async fn resize_pty(
     let masters = task_manager.pty_masters.lock();
     if let Some(master) = masters.get(&task_id) {
         master
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -1566,11 +1564,7 @@ pub async fn open_shell(
 ) -> Result<(), String> {
     // 先终止已存在的同 ID Shell
     {
-        let child_arc = task_manager
-            .child_handles
-            .lock()
-            .get(&shell_id)
-            .cloned();
+        let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
         if let Some(arc) = child_arc {
             let _ = arc.lock().unwrap().kill();
         }
@@ -1629,11 +1623,7 @@ pub async fn kill_shell(
     task_manager: State<'_, TaskManager>,
     shell_id: String,
 ) -> Result<(), String> {
-    let child_arc = task_manager
-        .child_handles
-        .lock()
-        .get(&shell_id)
-        .cloned();
+    let child_arc = task_manager.child_handles.lock().get(&shell_id).cloned();
     if let Some(arc) = child_arc {
         let _ = arc.lock().unwrap().kill();
     }

@@ -297,7 +297,10 @@ fn build_codex_block(_node_path: &str, script: &str) -> String {
         // Codex 的 `command` 只能是字符串(无 args 数组),在 Windows 上经
         // `cmd.exe /C` 执行、Unix 经 `/bin/sh -lc` 执行;裸 `node "<script>"`
         // 两边都成立。toml_quote 负责把内层的 `"` 与路径反斜杠转义成合法 TOML。
-        out.push_str(&format!("command = {}\n", toml_quote(&hook_command(script))));
+        out.push_str(&format!(
+            "command = {}\n",
+            toml_quote(&hook_command(script))
+        ));
         out.push('\n');
     }
     out.push_str(CODEX_END);
@@ -721,12 +724,8 @@ mod tests {
     fn claude_settings_value_escapes_windows_paths() {
         // 命令是裸 node + 双引号脚本路径;序列化后脚本路径的反斜杠必须被正确转义,
         // 保证 Windows 路径是合法 JSON。
-        let v = build_claude_settings_value(
-            r"C:\node.exe",
-            r"C:\hooks\nezha-hook.mjs",
-            true,
-            false,
-        );
+        let v =
+            build_claude_settings_value(r"C:\node.exe", r"C:\hooks\nezha-hook.mjs", true, false);
         let raw = serde_json::to_string(&v).unwrap();
         assert!(raw.contains(r"C:\\hooks\\nezha-hook.mjs"));
         // 回环解析得到原始命令

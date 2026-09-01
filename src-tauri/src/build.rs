@@ -177,7 +177,10 @@ fn git_branch(dir: &str) -> String {
 }
 
 fn git_branches(dir: &str) -> Vec<String> {
-    if let Ok(out) = run_git_in(dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]) {
+    if let Ok(out) = run_git_in(
+        dir,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    ) {
         String::from_utf8_lossy(&out.stdout)
             .lines()
             .map(|s| s.trim().to_string())
@@ -196,7 +199,12 @@ fn git_dirty(dir: &str) -> bool {
     // 只有受跟踪文件的改动/暂存改动才真正可能阻碍快进合并。
     if let Ok(out) = run_git_in(
         dir,
-        &["status", "--porcelain", "--ignore-submodules=all", "--untracked-files=no"],
+        &[
+            "status",
+            "--porcelain",
+            "--ignore-submodules=all",
+            "--untracked-files=no",
+        ],
     ) {
         !String::from_utf8_lossy(&out.stdout).trim().is_empty()
     } else {
@@ -232,11 +240,17 @@ fn parse_gitmodules(gitmodules: &str) -> Vec<(String, String, String)> {
             url = String::new();
             continue;
         }
-        if let Some(v) = t.strip_prefix("path").map(|s| s.trim().trim_start_matches('=').trim()) {
+        if let Some(v) = t
+            .strip_prefix("path")
+            .map(|s| s.trim().trim_start_matches('=').trim())
+        {
             if !v.is_empty() {
                 path = v.to_string();
             }
-        } else if let Some(v) = t.strip_prefix("url").map(|s| s.trim().trim_start_matches('=').trim()) {
+        } else if let Some(v) = t
+            .strip_prefix("url")
+            .map(|s| s.trim().trim_start_matches('=').trim())
+        {
             if !v.is_empty() {
                 url = v.to_string();
             }
@@ -307,10 +321,22 @@ fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String>
                 name,
                 path: full_str.clone(),
                 remote: url,
-                branch: if !missing { git_branch(&full_str) } else { String::new() },
-                branches: if !missing { git_branches(&full_str) } else { Vec::new() },
+                branch: if !missing {
+                    git_branch(&full_str)
+                } else {
+                    String::new()
+                },
+                branches: if !missing {
+                    git_branches(&full_str)
+                } else {
+                    Vec::new()
+                },
                 is_submodule: true,
-                dirty: if !missing { git_dirty(&full_str) } else { false },
+                dirty: if !missing {
+                    git_dirty(&full_str)
+                } else {
+                    false
+                },
                 missing,
             });
         }
@@ -381,7 +407,8 @@ pub async fn build_pull_repos(
                 out.push(PullResult {
                     name: r.name,
                     ok: false,
-                    message: "工作区不干净，已阻断（绝不 stash/reset）。先提交或暂存后再拉取。".to_string(),
+                    message: "工作区不干净，已阻断（绝不 stash/reset）。先提交或暂存后再拉取。"
+                        .to_string(),
                 });
                 continue;
             }
@@ -441,7 +468,9 @@ pub async fn build_pull_repos(
 }
 
 fn build_state_path(project_path: &str) -> Result<PathBuf, String> {
-    Ok(Path::new(project_path).join(".nezha").join("build-state.json"))
+    Ok(Path::new(project_path)
+        .join(".nezha")
+        .join("build-state.json"))
 }
 
 #[tauri::command]
@@ -485,7 +514,9 @@ pub fn read_build_plan(project_path: String) -> Result<Option<serde_json::Value>
 }
 
 fn build_fix_status_path(project_path: &str) -> Result<PathBuf, String> {
-    Ok(Path::new(project_path).join(".nezha").join("build-fix-status.json"))
+    Ok(Path::new(project_path)
+        .join(".nezha")
+        .join("build-fix-status.json"))
 }
 
 /// 读取「已修复完成」的项目名列表（agent 修完会写入，用户可手动勾选）。
@@ -554,7 +585,9 @@ pub async fn read_build_output_progress(
         let mut v: Option<serde_json::Value> = None;
         for _ in 0..4 {
             if let Ok(raw) = std::fs::read_to_string(&plan_path) {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}')) {
+                if let Ok(parsed) =
+                    serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}'))
+                {
                     v = Some(parsed);
                     break;
                 }
@@ -583,7 +616,11 @@ pub async fn read_build_output_progress(
             .and_then(|p| p.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|proj| proj.get("Assembly").and_then(|a| a.as_str()).map(str::to_string))
+                    .filter_map(|proj| {
+                        proj.get("Assembly")
+                            .and_then(|a| a.as_str())
+                            .map(str::to_string)
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -707,11 +744,16 @@ pub async fn run_build(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn powershell failed: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn powershell failed: {e}"))?;
     let pid = child.id();
     let build_id = uuid::Uuid::new_v4().to_string();
     if let Some(pid) = pid {
-        running_builds().lock().unwrap().insert(build_id.clone(), pid);
+        running_builds()
+            .lock()
+            .unwrap()
+            .insert(build_id.clone(), pid);
     }
 
     let task_id = build_id.clone();
@@ -744,7 +786,10 @@ pub async fn run_build(
 
         running_builds().lock().unwrap().remove(&task_id);
 
-        let exit_code = status.as_ref().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+        let exit_code = status
+            .as_ref()
+            .map(|s| s.code().unwrap_or(-1))
+            .unwrap_or(-1);
         let _ = output.send(format!("\n@@NEZHA_BUILD_DONE@@ exit={}\n", exit_code));
 
         // 成功时才刷新基准 commit（下一轮增量 diff 以此为基线）。
@@ -947,8 +992,7 @@ fn compute_incremental_blocking(
         name_deps.insert(p.name.clone(), p.dependents.clone());
     }
     let mut include: Vec<String> = changed_projects.clone();
-    let mut seen: std::collections::HashSet<String> =
-        changed_projects.iter().cloned().collect();
+    let mut seen: std::collections::HashSet<String> = changed_projects.iter().cloned().collect();
     let mut queue: Vec<String> = changed_projects.clone();
     while let Some(n) = queue.pop() {
         let deps = name_deps.get(&n).cloned().unwrap_or_default();
@@ -1072,7 +1116,8 @@ mod tests {
 
     impl TempRepo {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("nezha-build-test-{}", uuid::Uuid::new_v4()));
+            let path =
+                std::env::temp_dir().join(format!("nezha-build-test-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&path).unwrap();
             let out = Command::new("git").arg("init").arg(&path).output().unwrap();
             assert!(

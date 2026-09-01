@@ -136,7 +136,11 @@ pub struct YunxiaoSettings {
     pub organization_name: Option<String>,
     #[serde(rename = "projectId", default)]
     pub project_id: String,
-    #[serde(rename = "projectName", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "projectName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub project_name: Option<String>,
     #[serde(
         rename = "currentUserId",
@@ -315,9 +319,7 @@ fn clear_cached_versions() {
     *CACHED_CLAUDE_VERSION
         .get_or_init(|| Mutex::new(None))
         .lock() = None;
-    *CACHED_CODEX_VERSION
-        .get_or_init(|| Mutex::new(None))
-        .lock() = None;
+    *CACHED_CODEX_VERSION.get_or_init(|| Mutex::new(None)).lock() = None;
 }
 
 fn settings_lock() -> &'static Mutex<()> {
@@ -325,7 +327,8 @@ fn settings_lock() -> &'static Mutex<()> {
 }
 
 fn nezha_dir() -> Result<PathBuf, String> {
-    let home = crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let home =
+        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     Ok(home.join(".nezha"))
 }
 
@@ -336,7 +339,9 @@ fn settings_path() -> Result<PathBuf, String> {
 /// ConPTY 预加载 crash-loop 标记的唯一路径来源:platform/windows.rs 的预加载
 /// 与下方 save_use_sideloaded_conpty 的清除必须指向同一文件,不要各自拼路径。
 pub(crate) fn conpty_preload_marker_path() -> Option<PathBuf> {
-    nezha_dir().ok().map(|dir| dir.join(".conpty-preload-inflight"))
+    nezha_dir()
+        .ok()
+        .map(|dir| dir.join(".conpty-preload-inflight"))
 }
 
 fn detect_path(binary: &str) -> String {
@@ -374,7 +379,11 @@ fn path_file_name_eq(path: &Path, expected: &str) -> bool {
 
 #[cfg(windows)]
 fn find_scoped_package_root(path: &Path, scope: &str, package: &str) -> Option<PathBuf> {
-    let mut current = if path.is_dir() { Some(path) } else { path.parent() };
+    let mut current = if path.is_dir() {
+        Some(path)
+    } else {
+        path.parent()
+    };
     while let Some(dir) = current {
         let parent = dir.parent()?;
         if path_file_name_eq(dir, package) && path_file_name_eq(parent, scope) {
@@ -393,7 +402,12 @@ fn npm_package_root_from_shim(path: &Path, scope: &str, package: &str) -> Option
 }
 
 #[cfg(windows)]
-fn candidate_from_ancestors(path: &Path, scope: &str, package: &str, relative: &[&str]) -> Option<PathBuf> {
+fn candidate_from_ancestors(
+    path: &Path,
+    scope: &str,
+    package: &str,
+    relative: &[&str],
+) -> Option<PathBuf> {
     let package_root = find_scoped_package_root(path, scope, package)
         .or_else(|| npm_package_root_from_shim(path, scope, package))?;
     let mut candidate = package_root;
@@ -404,7 +418,9 @@ fn candidate_from_ancestors(path: &Path, scope: &str, package: &str, relative: &
 }
 
 #[cfg(windows)]
-fn codex_vendor_artifact_from_vendor_root(vendor_root: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+fn codex_vendor_artifact_from_vendor_root(
+    vendor_root: &Path,
+) -> Option<(PathBuf, Option<PathBuf>)> {
     if !vendor_root.is_dir() {
         return None;
     }
@@ -429,7 +445,11 @@ fn codex_vendor_artifact_from_vendor_root(vendor_root: &Path) -> Option<(PathBuf
 
 #[cfg(windows)]
 fn resolve_codex_vendor_artifact(path: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
-    if path_file_name_eq(path, "codex.exe") && path.parent().is_some_and(|parent| path_file_name_eq(parent, "codex")) {
+    if path_file_name_eq(path, "codex.exe")
+        && path
+            .parent()
+            .is_some_and(|parent| path_file_name_eq(parent, "codex"))
+    {
         let arch_root = path.parent()?.parent()?;
         let path_dir = arch_root.join("path");
         return Some((path.to_path_buf(), path_dir.is_dir().then_some(path_dir)));
@@ -458,7 +478,9 @@ fn resolve_codex_vendor_artifact(path: &Path) -> Option<(PathBuf, Option<PathBuf
             package_dirs.sort();
 
             for package_dir in package_dirs {
-                if let Some(found) = codex_vendor_artifact_from_vendor_root(&package_dir.join("vendor")) {
+                if let Some(found) =
+                    codex_vendor_artifact_from_vendor_root(&package_dir.join("vendor"))
+                {
                     return Some(found);
                 }
             }
@@ -513,7 +535,8 @@ fn resolve_agent_launch_spec_from_path(agent: &str, path: &str) -> AgentLaunchSp
         "codex" => {
             if let Some((program, path_dir)) = resolve_codex_vendor_artifact(resolved_path) {
                 let mut extra_env = Vec::new();
-                if let Some(path_value) = prepend_to_path(&path_dir.into_iter().collect::<Vec<_>>()) {
+                if let Some(path_value) = prepend_to_path(&path_dir.into_iter().collect::<Vec<_>>())
+                {
                     extra_env.push(("PATH".to_string(), path_value));
                 }
                 extra_env.push(("CODEX_MANAGED_BY_NPM".to_string(), "1".to_string()));
@@ -628,11 +651,7 @@ fn normalize_model_options(models: Vec<AgentModelOption>) -> Result<Vec<AgentMod
             if effort.is_empty() {
                 continue;
             }
-            validate_catalog_value(
-                effort,
-                "Reasoning effort",
-                MAX_REASONING_EFFORT_BYTES,
-            )?;
+            validate_catalog_value(effort, "Reasoning effort", MAX_REASONING_EFFORT_BYTES)?;
             if !reasoning_efforts.iter().any(|existing| existing == effort) {
                 reasoning_efforts.push(effort.to_string());
             }
@@ -643,7 +662,10 @@ fn normalize_model_options(models: Vec<AgentModelOption>) -> Result<Vec<AgentMod
             MAX_REASONING_EFFORT_BYTES,
         )?;
         if let Some(default_effort) = default_reasoning_effort.as_ref() {
-            if !reasoning_efforts.iter().any(|effort| effort == default_effort) {
+            if !reasoning_efforts
+                .iter()
+                .any(|effort| effort == default_effort)
+            {
                 reasoning_efforts.push(default_effort.clone());
             }
         }
@@ -805,7 +827,10 @@ pub fn save_app_settings(settings: AppSettings) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn save_agent_paths(claude_path: String, codex_path: String) -> Result<AppSettings, String> {
+pub async fn save_agent_paths(
+    claude_path: String,
+    codex_path: String,
+) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         let normalized = {
             let _guard = settings_lock().lock();
@@ -832,7 +857,10 @@ pub async fn save_agent_paths(claude_path: String, codex_path: String) -> Result
 }
 
 #[tauri::command]
-pub async fn save_dsh_settings(dsh_path: String, dsh_profile: String) -> Result<AppSettings, String> {
+pub async fn save_dsh_settings(
+    dsh_path: String,
+    dsh_profile: String,
+) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
@@ -1177,8 +1205,8 @@ fn parse_catalog_file_model(value: &Value) -> Option<AgentModelOption> {
 /// 路径优先取 ~/.codex/config.toml 的 model_catalog_json，缺省回退 ~/.codex/models.json。
 /// 文件不存在或解析不出模型时返回 Ok(None)，由调用方回退到 RPC。
 fn discover_codex_models_from_catalog_file() -> Result<Option<Vec<AgentModelOption>>, String> {
-    let home = crate::platform::home_dir()
-        .ok_or_else(|| "Cannot find home directory".to_string())?;
+    let home =
+        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
     let config_path = home.join(".codex").join("config.toml");
     let catalog_path = if config_path.exists() {
         let raw = fs::read_to_string(&config_path)
@@ -1219,8 +1247,14 @@ fn discover_codex_models_from_catalog_file() -> Result<Option<Vec<AgentModelOpti
     let models = value
         .get("models")
         .and_then(Value::as_array)
-        .ok_or_else(|| format!("Codex model catalog {} has no models array.", catalog_path.display()))?;
-    let options: Vec<AgentModelOption> = models.iter().filter_map(parse_catalog_file_model).collect();
+        .ok_or_else(|| {
+            format!(
+                "Codex model catalog {} has no models array.",
+                catalog_path.display()
+            )
+        })?;
+    let options: Vec<AgentModelOption> =
+        models.iter().filter_map(parse_catalog_file_model).collect();
     if options.is_empty() {
         return Ok(None);
     }
@@ -1276,17 +1310,15 @@ pub async fn refresh_agent_model_catalog(
     if discovered.is_empty() {
         return Err("Codex returned no models; the catalog was left unchanged.".to_string());
     }
-    let source_version =
-        tokio::task::spawn_blocking(detect_codex_version).await.unwrap_or_default();
+    let source_version = tokio::task::spawn_blocking(detect_codex_version)
+        .await
+        .unwrap_or_default();
 
     tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         let catalog = catalog_mut(&mut settings, "codex")?;
-        catalog.models = normalize_model_options(merge_synced_models(
-            discovered,
-            &catalog.models,
-        ))?;
+        catalog.models = normalize_model_options(merge_synced_models(discovered, &catalog.models))?;
         catalog.initialized = true;
         catalog.initialized_at = Some(chrono::Utc::now().timestamp_millis());
         catalog.source_version = source_version;
@@ -1589,7 +1621,9 @@ pub fn codex_version_gte(min_version: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn detect_agent_versions_for_settings(settings: AppSettings) -> Result<AgentVersions, String> {
+pub async fn detect_agent_versions_for_settings(
+    settings: AppSettings,
+) -> Result<AgentVersions, String> {
     tokio::task::spawn_blocking(move || detect_versions_for_settings(&settings))
         .await
         .map_err(|e| e.to_string())

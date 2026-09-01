@@ -453,26 +453,26 @@ fn parse_skill_entry(dir_path: &Path, name: &str) -> Skill {
     let skill_md = dir_path.join("SKILL.md");
     let (display_name, description, scope, project, build_command, has_error) =
         match fs::read_to_string(&skill_md) {
-        Ok(content) => {
-            let parsed = parse_frontmatter(&content);
-            (
-                parsed.name,
-                parsed.description,
-                parsed.scope,
-                parsed.project,
-                parsed.build_command,
+            Ok(content) => {
+                let parsed = parse_frontmatter(&content);
+                (
+                    parsed.name,
+                    parsed.description,
+                    parsed.scope,
+                    parsed.project,
+                    parsed.build_command,
+                    None,
+                )
+            }
+            Err(e) => (
                 None,
-            )
-        }
-        Err(e) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some(format!("Failed to read SKILL.md: {}", e)),
-        ),
-    };
+                None,
+                None,
+                None,
+                None,
+                Some(format!("Failed to read SKILL.md: {}", e)),
+            ),
+        };
     Skill {
         name: name.to_string(),
         display_name,
@@ -556,12 +556,7 @@ fn create_junction(target: &Path, link: &Path) -> std::io::Result<()> {
         .arg(link)
         .arg(target)
         .status()
-        .map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("启动 mklink 失败: {e}"),
-            )
-        })?;
+        .map_err(|e| std::io::Error::new(e.kind(), format!("启动 mklink 失败: {e}")))?;
     if status.success() {
         Ok(())
     } else {
@@ -752,7 +747,9 @@ async fn run_process_with_env(
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| format!("启动 {program} 失败: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 {program} 失败: {e}"))?;
     let stdout = child.stdout.take().ok_or("无法读取 git 标准输出")?;
     let stderr = child.stderr.take().ok_or("无法读取 git 错误输出")?;
     let stdout_task = tokio::spawn(read_pipe_to_end(stdout, "标准输出"));
@@ -786,7 +783,14 @@ async fn run_git(
     args: Vec<String>,
     current_dir: Option<PathBuf>,
 ) -> Result<(bool, String, String), String> {
-    run_process_with_env("git".to_string(), args, current_dir, Vec::new(), GIT_TIMEOUT).await
+    run_process_with_env(
+        "git".to_string(),
+        args,
+        current_dir,
+        Vec::new(),
+        GIT_TIMEOUT,
+    )
+    .await
 }
 
 fn truncate_git_error(err: &str) -> String {
@@ -898,11 +902,7 @@ async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String>
     .map_err(|e| e.to_string())?;
 
     if missing {
-        let mut args = vec![
-            "clone".to_string(),
-            "--depth".to_string(),
-            "1".to_string(),
-        ];
+        let mut args = vec!["clone".to_string(), "--depth".to_string(), "1".to_string()];
         if let Some(b) = &branch {
             args.push("--branch".to_string());
             args.push(b.clone());
@@ -1161,9 +1161,7 @@ fn register_hub_project(hub_path: &str) -> Result<(Project, bool, Vec<Project>),
     let mut projects = load_projects()?;
     let existing = projects
         .iter()
-        .find(|p| {
-            Path::new(&p.path).canonicalize().ok().as_deref() == Some(canonical.as_path())
-        })
+        .find(|p| Path::new(&p.path).canonicalize().ok().as_deref() == Some(canonical.as_path()))
         .cloned();
 
     let (project, created_new_project) = match existing {
@@ -1204,28 +1202,29 @@ pub async fn set_skill_hub_path(
     path: String,
     state: tauri::State<'_, SkillSourceWatcher>,
 ) -> Result<SetHubResult, String> {
-    let (result, hub_path) = tokio::task::spawn_blocking(move || -> Result<(SetHubResult, String), String> {
-        let canonical = canonicalize_hub_dir(&path)?;
-        let (project, created_new_project, projects) = register_hub_project(&canonical)?;
-        let config = SkillHubConfig {
-            hub_path: Some(canonical.clone()),
-            hub_project_id: Some(project.id.clone()),
-            created_at: Some(now_ms()),
-            ..Default::default()
-        };
-        save_hub_config_internal(&config)?;
-        Ok((
-            SetHubResult {
-                config,
-                project,
-                created_new_project,
-                projects,
-            },
-            canonical,
-        ))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let (result, hub_path) =
+        tokio::task::spawn_blocking(move || -> Result<(SetHubResult, String), String> {
+            let canonical = canonicalize_hub_dir(&path)?;
+            let (project, created_new_project, projects) = register_hub_project(&canonical)?;
+            let config = SkillHubConfig {
+                hub_path: Some(canonical.clone()),
+                hub_project_id: Some(project.id.clone()),
+                created_at: Some(now_ms()),
+                ..Default::default()
+            };
+            save_hub_config_internal(&config)?;
+            Ok((
+                SetHubResult {
+                    config,
+                    project,
+                    created_new_project,
+                    projects,
+                },
+                canonical,
+            ))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     rearm_skill_source_watcher(state.inner(), Some(&hub_path));
     Ok(result)
 }
@@ -1559,10 +1558,7 @@ pub async fn get_skill_data_status(
 /// 备份技能数据目录到 `~/.nezha/skill-backups/<技能名>/<时间戳>/`（本地，不入技能仓库 git），
 /// 保留最近 5 份。返回备份目录路径。
 #[tauri::command]
-pub async fn backup_skill_data(
-    skill_name: String,
-    project_id: String,
-) -> Result<String, String> {
+pub async fn backup_skill_data(skill_name: String, project_id: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         validate_skill_name(&skill_name)?;
         let skill_dir = resolve_skill_dir(&skill_name, &project_id)?;
@@ -1651,20 +1647,22 @@ pub async fn run_skill_data_build(
     .map_err(|e| e.to_string())??;
 
     let skill_dir_for_cmd = skill_dir.clone();
-    let build_command =
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let content = fs::read_to_string(skill_dir_for_cmd.join("SKILL.md"))
-                .map_err(|e| format!("读取 SKILL.md 失败: {e}"))?;
-            let parsed = parse_frontmatter(&content);
-            parsed
-                .build_command
-                .ok_or_else(|| "该技能未声明 build-command，无法自动重建".to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let build_command = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let content = fs::read_to_string(skill_dir_for_cmd.join("SKILL.md"))
+            .map_err(|e| format!("读取 SKILL.md 失败: {e}"))?;
+        let parsed = parse_frontmatter(&content);
+        parsed
+            .build_command
+            .ok_or_else(|| "该技能未声明 build-command，无法自动重建".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     // 空格分词；相对路径参数基于技能目录解析
-    let argv: Vec<String> = build_command.split_whitespace().map(str::to_string).collect();
+    let argv: Vec<String> = build_command
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
     if argv.is_empty() {
         return Err("build-command 为空".to_string());
     }
@@ -1683,14 +1681,8 @@ pub async fn run_skill_data_build(
         ("NEZHA_SKILL_DATA_DIR".to_string(), data_dir_str.clone()),
         ("HIS_REPO".to_string(), project_path),
     ];
-    let (ok, stdout, stderr) = run_process_with_env(
-        program,
-        args,
-        Some(data_dir.clone()),
-        envs,
-        BUILD_TIMEOUT,
-    )
-    .await?;
+    let (ok, stdout, stderr) =
+        run_process_with_env(program, args, Some(data_dir.clone()), envs, BUILD_TIMEOUT).await?;
     let combined = format!("{}{}", stdout.trim(), stderr.trim());
     let snippet = if combined.chars().count() > BUILD_OUTPUT_SNIPPET {
         let mut s: String = combined.chars().take(BUILD_OUTPUT_SNIPPET).collect();
@@ -1741,7 +1733,10 @@ pub async fn run_skill_data_build(
             let nothing_to_commit = out_commit.contains("nothing to commit")
                 || err_commit.contains("nothing to commit");
             if !ok_commit && !nothing_to_commit {
-                return Err(format!("提交技能数据失败：{}", truncate_git_error(&err_commit)));
+                return Err(format!(
+                    "提交技能数据失败：{}",
+                    truncate_git_error(&err_commit)
+                ));
             }
             if ok_commit {
                 let (ok_push, _out_push, err_push) = run_git(
@@ -2004,7 +1999,11 @@ pub async fn cleanup_installations_for_project(project_id: String) -> Result<usi
         let mut file = load_installations_internal();
         let original_len = file.installations.len();
 
-        for ins in file.installations.iter().filter(|i| i.project_id == project_id) {
+        for ins in file
+            .installations
+            .iter()
+            .filter(|i| i.project_id == project_id)
+        {
             let link = Path::new(&ins.link_path);
             if let Ok(meta) = fs::symlink_metadata(link) {
                 if meta.file_type().is_symlink() {
@@ -2013,7 +2012,8 @@ pub async fn cleanup_installations_for_project(project_id: String) -> Result<usi
             }
         }
 
-        file.installations.retain(|ins| ins.project_id != project_id);
+        file.installations
+            .retain(|ins| ins.project_id != project_id);
         let removed = original_len - file.installations.len();
         if removed > 0 {
             save_installations_internal(&file)?;
@@ -2266,9 +2266,10 @@ mod tests {
     #[test]
     fn skill_source_deserializes_legacy_type_field() {
         // 旧版本配置存的是 `type`，必须兼容读取，否则用户已保存的 git 来源会丢
-        let src: SkillSource =
-            serde_json::from_str(r#"{"type":"git","url":"https://codeup.aliyun.com/x/SkillHub.git"}"#)
-                .expect("legacy source parses");
+        let src: SkillSource = serde_json::from_str(
+            r#"{"type":"git","url":"https://codeup.aliyun.com/x/SkillHub.git"}"#,
+        )
+        .expect("legacy source parses");
         assert_eq!(src.source_type, "git");
         assert_eq!(
             src.url.as_deref(),
@@ -2291,8 +2292,7 @@ mod tests {
                 .map(|o| o.status.success())
                 .unwrap_or(false)
         };
-        if !run(&["init", "-q"]) || !run(&["add", "-A"]) || !run(&["commit", "-q", "-m", "init"])
-        {
+        if !run(&["init", "-q"]) || !run(&["add", "-A"]) || !run(&["commit", "-q", "-m", "init"]) {
             let _ = fs::remove_dir_all(&dir);
             return; // git 不可用（如无 user 配置）时跳过
         }
@@ -2486,7 +2486,8 @@ mod tests {
     #[test]
     fn legacy_installation_deserializes_without_scope() {
         let json = r#"{"skillName":"s","projectId":"p1","agent":"claude","installedAt":1,"linkPath":"l","targetPath":"t"}"#;
-        let ins: SkillInstallation = serde_json::from_str(json).expect("legacy installation parses");
+        let ins: SkillInstallation =
+            serde_json::from_str(json).expect("legacy installation parses");
         assert_eq!(ins.scope, "");
         assert_eq!(ins.project_id, "p1");
     }

@@ -4,11 +4,11 @@
 //!
 //! > ⚠️ 端点路径为最佳推断，集中定义在下方常量/函数中。由于 Codeup OpenAPI 需在已登录的环境才能实测，路径/字段若与实际情况有出入，改动应集中在 `CODUP_PREFIX` / `*_path()` / 解析函数里，避免散落。
 
+use crate::git::{path_to_string, resolve_repo_path, run_git};
+use crate::storage::{load_project_batches, load_projects, save_project_batches, Batch};
+use crate::yunxiao::{build_client, read_json_body, API_BASE};
 use serde::Serialize;
 use std::path::Path;
-use crate::git::{path_to_string, resolve_repo_path, run_git};
-use crate::storage::{Batch, load_project_batches, load_projects, save_project_batches};
-use crate::yunxiao::{API_BASE, build_client, read_json_body};
 
 /// Codeup API 前缀（相对接入点）。若实际为其它路径，仅需改这里。
 const CODUP_PREFIX: &str = "oapi/v1/codeup";
@@ -114,17 +114,22 @@ fn parse_codeup_remote(url: &str) -> Result<(String, String), String> {
 }
 
 /// 从本地项目（子模块）解析出 Codeup 仓库定位。
-async fn resolve_codeup_repo(project_path: &str, repo_path: Option<&str>) -> Result<CodeupRepo, String> {
+async fn resolve_codeup_repo(
+    project_path: &str,
+    repo_path: Option<&str>,
+) -> Result<CodeupRepo, String> {
     let cwd = resolve_repo_path(project_path, repo_path).await?;
-    let output = run_git(&cwd, &["remote", "get-url", "origin"]).map_err(|e| {
-        format!("读取 git 远端失败（请确认项目可访问远端）: {e}")
-    })?;
+    let output = run_git(&cwd, &["remote", "get-url", "origin"])
+        .map_err(|e| format!("读取 git 远端失败（请确认项目可访问远端）: {e}"))?;
     if !output.status.success() {
         return Err("未找到 git origin 远端，无法定位 Codeup 仓库".to_string());
     }
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let (org, repository) = parse_codeup_remote(&url)?;
-    Ok(CodeupRepo { org_id: org, repository })
+    Ok(CodeupRepo {
+        org_id: org,
+        repository,
+    })
 }
 
 /// 按仓库路径找到已注册的本地 Nezha 项目（git origin 可解析到同一 Codeup 仓库）。
@@ -140,7 +145,9 @@ async fn resolve_project_for_repo(repository: &str) -> Result<String, String> {
             }
         }
     }
-    Err(format!("本地未注册仓库 {repository}，无法拉取代码。请先将其注册为 Nezha 项目。"))
+    Err(format!(
+        "本地未注册仓库 {repository}，无法拉取代码。请先将其注册为 Nezha 项目。"
+    ))
 }
 
 /// 把 Codeup 仓库路径转成安全的本地目录名（杜绝 Windows 非法字符与路径穿越）。
@@ -183,7 +190,9 @@ async fn codeup_find_clone_url(repository: &str) -> Result<String, String> {
             }
         }
     }
-    Err(format!("未找到仓库 {repository} 的克隆地址（请确认其在 Codeup 组织内可见）。"))
+    Err(format!(
+        "未找到仓库 {repository} 的克隆地址（请确认其在 Codeup 组织内可见）。"
+    ))
 }
 
 /// 确保 `<root>` 成为一个可用 git 仓库：已是 git 仓库则跳过；否则 `git init` + 配置 origin。
@@ -202,7 +211,10 @@ async fn ensure_codeup_repo(root: &str, repository: &str) -> Result<(), String> 
     )
     .await?;
     if !init.status.success() {
-        return Err(format!("git init 失败: {}", String::from_utf8_lossy(&init.stderr).trim()));
+        return Err(format!(
+            "git init 失败: {}",
+            String::from_utf8_lossy(&init.stderr).trim()
+        ));
     }
     let url = codeup_find_clone_url(repository).await?;
     let add = crate::git::run_git_with_timeout(
@@ -252,7 +264,9 @@ async fn codeup_git_source(repository: &str, ensure_clone: bool) -> Result<Strin
     let root = codeup_worktree_root(repository).await?;
     if !Path::new(&root).join(".git").exists() {
         if !ensure_clone {
-            return Err(format!("本地未注册仓库 {repository}，且未在临时仓库基路径下 clone。"));
+            return Err(format!(
+                "本地未注册仓库 {repository}，且未在临时仓库基路径下 clone。"
+            ));
         }
         ensure_codeup_repo(&root, repository).await?;
     }
@@ -268,7 +282,9 @@ async fn codeup_repo_dir(repository: &str, ensure_clone: bool) -> Result<String,
     let root_str = strip_verbatim_prefix(&path_to_string(&root)?);
     if !Path::new(&root_str).join(".git").exists() {
         if !ensure_clone {
-            return Err(format!("本地未注册仓库 {repository}，且未在临时仓库基路径下 clone。"));
+            return Err(format!(
+                "本地未注册仓库 {repository}，且未在临时仓库基路径下 clone。"
+            ));
         }
         ensure_codeup_repo(&root_str, repository).await?;
     }
@@ -339,12 +355,9 @@ pub async fn codeup_branch_managers(
     let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
     let org = repo_org_id(&repo);
     let client = build_client()?;
-    let bytes = crate::yunxiao::get_yunxiao_json(
-        &client,
-        &token,
-        branch_rules_url(org, &repo.repository),
-    )
-    .await?;
+    let bytes =
+        crate::yunxiao::get_yunxiao_json(&client, &token, branch_rules_url(org, &repo.repository))
+            .await?;
     let json: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析分支规则失败: {e}"))?;
     let rules = json
@@ -431,7 +444,9 @@ pub async fn codeup_create_mr(
     )?;
     let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
     if let Some(dirty) = crate::git::worktree_dirty_reason(&worktree_path)? {
-        return Err(format!("提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"));
+        return Err(format!(
+            "提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"
+        ));
     }
 
     // 先非 force push 源分支，保证 MR 引用远端已有提交；再取提交时的 HEAD。
@@ -475,7 +490,11 @@ pub async fn codeup_create_mr(
         .or_else(|| json.get("mrId"))
         .or_else(|| json.get("result").and_then(|r| r.get("id")))
         .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| json.get("id").and_then(|v| v.as_i64()).map(|i| i.to_string()))
+        .or_else(|| {
+            json.get("id")
+                .and_then(|v| v.as_i64())
+                .map(|i| i.to_string())
+        })
         .ok_or_else(|| "创建合并请求后未取到 MR id".to_string())?;
 
     let mut batches = load_project_batches(project_id.clone())?;
@@ -537,7 +556,11 @@ async fn fetch_codeup_repositories() -> Result<Vec<CodeupRepository>, String> {
         out.push(CodeupRepository {
             id: item
                 .get("id")
-                .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_i64().map(|i| i.to_string())))
+                .and_then(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .or_else(|| v.as_i64().map(|i| i.to_string()))
+                })
                 .unwrap_or_default(),
             name: item
                 .get("name")
@@ -575,7 +598,11 @@ pub async fn codeup_list_pending_mrs(
     let client = build_client()?;
     let url_base = format!(
         "{API_BASE}/{CODUP_PREFIX}/organizations/{}/changeRequests",
-        crate::app_settings::load_app_settings().await?.yunxiao.organization_id.trim()
+        crate::app_settings::load_app_settings()
+            .await?
+            .yunxiao
+            .organization_id
+            .trim()
     );
     let mut out: Vec<CodeupMr> = Vec::new();
     for page in 1..=MAX_CHANGE_PAGES {
@@ -631,10 +658,7 @@ pub async fn codeup_list_pending_mrs(
             if mr_biz.is_empty() {
                 continue;
             }
-            let local_id = item
-                .get("localId")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
+            let local_id = item.get("localId").and_then(|v| v.as_i64()).unwrap_or(0);
             let ns = item
                 .get("nameWithNamespace")
                 .and_then(|v| v.as_str())
@@ -737,10 +761,7 @@ fn change_item_url(org: &str, repository_id: &str, mr_id: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn codeup_get_mr(
-    repository_id: String,
-    mr_id: String,
-) -> Result<CodeupMr, String> {
+pub async fn codeup_get_mr(repository_id: String, mr_id: String) -> Result<CodeupMr, String> {
     let (token, org_id) = load_creds().await?;
     let client = build_client()?;
     let url = change_item_url(&org_id, &repository_id, &mr_id);
@@ -806,13 +827,13 @@ pub async fn codeup_get_mr(
 
 /// 管理人「通过」（approve）一条 MR。动作子路径为最佳推断，需联调。
 #[tauri::command]
-pub async fn codeup_approve_mr(
-    repository_id: String,
-    mr_id: String,
-) -> Result<String, String> {
+pub async fn codeup_approve_mr(repository_id: String, mr_id: String) -> Result<String, String> {
     let (token, org_id) = load_creds().await?;
     let client = build_client()?;
-    let url = format!("{}/submitReview", change_item_url(&org_id, &repository_id, &mr_id));
+    let url = format!(
+        "{}/submitReview",
+        change_item_url(&org_id, &repository_id, &mr_id)
+    );
     let resp = client
         .post(url)
         .header("x-yunxiao-token", &token)
@@ -889,8 +910,7 @@ async fn codeup_create_temp_worktree(
     no_checkout: bool,
 ) -> Result<(String, String), String> {
     let worktrees_dir = Path::new(&worktree_root).join(".nezha").join("worktrees");
-    std::fs::create_dir_all(&worktrees_dir)
-        .map_err(|e| format!("创建 worktrees 目录失败: {e}"))?;
+    std::fs::create_dir_all(&worktrees_dir).map_err(|e| format!("创建 worktrees 目录失败: {e}"))?;
     let suffix = unique_mr_temp_suffix();
     let dir = worktrees_dir.join(format!("codeup-mr-{mr_id}-{suffix}"));
     let dir_str = strip_verbatim_prefix(&path_to_string(&dir)?);
@@ -910,7 +930,11 @@ async fn codeup_create_temp_worktree(
     }
     // 拉取目标分支：让工作区内的 `git diff origin/<target>...origin/<source>` 能解析，
     // 否则审查任务会因缺少分支 ref 而「加载不出来具体分支」。
-    if let Some(target) = target_branch.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+    if let Some(target) = target_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
         let fetch_target = crate::git::run_git_with_timeout(
             source_cwd.clone(),
             vec!["fetch".into(), "origin".into(), target.to_string()],
@@ -946,12 +970,9 @@ async fn codeup_create_temp_worktree(
     add_args.push("-b".into());
     add_args.push(local.clone());
     add_args.push(branch_ref);
-    let add = crate::git::run_git_with_timeout(
-        source_cwd,
-        add_args,
-        std::time::Duration::from_secs(600),
-    )
-    .await?;
+    let add =
+        crate::git::run_git_with_timeout(source_cwd, add_args, std::time::Duration::from_secs(600))
+            .await?;
     if !add.status.success() {
         return Err(format!(
             "创建 worktree 失败: {}",
@@ -987,16 +1008,15 @@ pub async fn codeup_review_mr(
     let root = codeup_worktree_root(&repository).await?;
     // 每次处理都重建全新临时 worktree，先清掉旧残留。
     codeup_cleanup_mr_temps(root.clone(), source.clone(), mr_id.clone()).await;
-    let (worktree_path, local_branch) =
-        codeup_create_temp_worktree(
-            source.clone(),
-            root.clone(),
-            source_branch.clone(),
-            Some(target_branch.clone()),
-            mr_id.clone(),
-            true,
-        )
-        .await?;
+    let (worktree_path, local_branch) = codeup_create_temp_worktree(
+        source.clone(),
+        root.clone(),
+        source_branch.clone(),
+        Some(target_branch.clone()),
+        mr_id.clone(),
+        true,
+    )
+    .await?;
     let result = crate::agent_assist::run_merge_code_review(
         root,
         None,
@@ -1035,7 +1055,11 @@ async fn run_git_with_retry(
             }
         }
     }
-    Err(if last_msg.is_empty() { "git 命令失败".to_string() } else { last_msg })
+    Err(if last_msg.is_empty() {
+        "git 命令失败".to_string()
+    } else {
+        last_msg
+    })
 }
 
 /// 显式「拉取代码」：使用**每仓库固定文件夹**（`<基路径>/<仓库>`）。
@@ -1075,7 +1099,13 @@ pub async fn codeup_pull_code(
     let branch_ref = format!("origin/{source_branch}");
     let _ = run_git_with_retry(
         root.clone(),
-        vec!["checkout".into(), "-f".into(), "-B".into(), local, branch_ref],
+        vec![
+            "checkout".into(),
+            "-f".into(),
+            "-B".into(),
+            local,
+            branch_ref,
+        ],
         std::time::Duration::from_secs(300),
         2,
     )
@@ -1112,12 +1142,14 @@ pub async fn codeup_read_review(
         Ok(r) => r,
         Err(_) => return Ok(None),
     };
-    let result_path = Path::new(&root).join(".nezha").join(format!("review-{mr_id}.json"));
+    let result_path = Path::new(&root)
+        .join(".nezha")
+        .join(format!("review-{mr_id}.json"));
     if !result_path.is_file() {
         return Ok(None);
     }
-    let raw = std::fs::read_to_string(&result_path)
-        .map_err(|e| format!("读取审查结果失败: {e}"))?;
+    let raw =
+        std::fs::read_to_string(&result_path).map_err(|e| format!("读取审查结果失败: {e}"))?;
     let parsed: Vec<crate::agent_assist::ReviewFinding> =
         serde_json::from_str(&raw).map_err(|e| format!("解析审查结果失败: {e}"))?;
     Ok(Some(parsed))
@@ -1140,8 +1172,8 @@ pub async fn codeup_read_review_report(
     if !report_path.is_file() {
         return Ok(None);
     }
-    let raw = std::fs::read_to_string(&report_path)
-        .map_err(|e| format!("读取审查报告失败: {e}"))?;
+    let raw =
+        std::fs::read_to_string(&report_path).map_err(|e| format!("读取审查报告失败: {e}"))?;
     Ok(Some(raw))
 }
 
@@ -1165,11 +1197,10 @@ pub async fn codeup_export_review_report(
         if !source.is_file() {
             return Err("该 MR 暂无审查报告，请先执行「代码审查」。".to_string());
         }
-        let content = std::fs::read_to_string(&source)
-            .map_err(|e| format!("读取审查报告失败: {e}"))?;
+        let content =
+            std::fs::read_to_string(&source).map_err(|e| format!("读取审查报告失败: {e}"))?;
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建导出目录失败: {e}"))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建导出目录失败: {e}"))?;
         }
         std::fs::write(&dest, content).map_err(|e| format!("写入审查报告失败: {e}"))?;
         Ok(dest_path)
@@ -1186,8 +1217,16 @@ pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), 
         Ok(r) => r,
         Err(_) => return Ok(()),
     };
-    let _ = std::fs::remove_file(Path::new(&root).join(".nezha").join(format!("pulled-{mr_id}")));
-    let _ = std::fs::remove_file(Path::new(&root).join(".nezha").join(format!("review-{mr_id}.json")));
+    let _ = std::fs::remove_file(
+        Path::new(&root)
+            .join(".nezha")
+            .join(format!("pulled-{mr_id}")),
+    );
+    let _ = std::fs::remove_file(
+        Path::new(&root)
+            .join(".nezha")
+            .join(format!("review-{mr_id}.json")),
+    );
     Ok(())
 }
 
@@ -1208,16 +1247,15 @@ pub async fn codeup_resolve_conflicts(
     let source = codeup_git_source(&repository, true).await?;
     let root = codeup_worktree_root(&repository).await?;
     codeup_cleanup_mr_temps(root.clone(), source.clone(), mr_id.clone()).await;
-    let (worktree_path, local_branch) =
-        codeup_create_temp_worktree(
-            source.clone(),
-            root.clone(),
-            source_branch.clone(),
-            Some(target_branch.clone()),
-            mr_id.clone(),
-            false,
-        )
-        .await?;
+    let (worktree_path, local_branch) = codeup_create_temp_worktree(
+        source.clone(),
+        root.clone(),
+        source_branch.clone(),
+        Some(target_branch.clone()),
+        mr_id.clone(),
+        false,
+    )
+    .await?;
     let result = codeup_resolve_conflicts_inner(
         root,
         worktree_path.clone(),
@@ -1247,7 +1285,10 @@ async fn codeup_resolve_conflicts_inner(
         ));
     }
     let target_ref = format!("origin/{target_branch}");
-    let merge = run_git(&worktree_path, &["merge", "--no-commit", "--no-ff", &target_ref])?;
+    let merge = run_git(
+        &worktree_path,
+        &["merge", "--no-commit", "--no-ff", &target_ref],
+    )?;
     if merge.status.success() {
         // 无冲突，还原 worktree 状态即可。
         let _ = run_git(&worktree_path, &["merge", "--abort"]);
@@ -1282,7 +1323,10 @@ async fn codeup_resolve_conflicts_inner(
 
 /// 供测试/调试：输出项目的 Codeup 定位信息（不含远端 URL 细节）。
 #[tauri::command]
-pub async fn codeup_resolve_repo(project_path: String, repo_path: Option<String>) -> Result<String, String> {
+pub async fn codeup_resolve_repo(
+    project_path: String,
+    repo_path: Option<String>,
+) -> Result<String, String> {
     let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
     Ok(format!("{}|{}", repo.org_id, repo.repository))
 }
@@ -1293,14 +1337,18 @@ mod tests {
 
     #[test]
     fn parses_https_codeup_remote() {
-        let (org, repo) = parse_codeup_remote("https://codeup.aliyun.com/641881e9b9581d62e8f8186e/HSP/HIS.git").unwrap();
+        let (org, repo) =
+            parse_codeup_remote("https://codeup.aliyun.com/641881e9b9581d62e8f8186e/HSP/HIS.git")
+                .unwrap();
         assert_eq!(org, "641881e9b9581d62e8f8186e");
         assert_eq!(repo, "HSP/HIS");
     }
 
     #[test]
     fn parses_git_ssh_codeup_remote() {
-        let (org, repo) = parse_codeup_remote("git@codeup.aliyun.com:641881e9b9581d62e8f8186e/HSP/HIS.git").unwrap();
+        let (org, repo) =
+            parse_codeup_remote("git@codeup.aliyun.com:641881e9b9581d62e8f8186e/HSP/HIS.git")
+                .unwrap();
         assert_eq!(org, "641881e9b9581d62e8f8186e");
         assert_eq!(repo, "HSP/HIS");
     }

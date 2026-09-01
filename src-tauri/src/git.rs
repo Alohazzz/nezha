@@ -1079,7 +1079,11 @@ pub async fn git_commit(
 ) -> Result<(), String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     let mut message = message;
-    if let Some(tag) = issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+    if let Some(tag) = issue_tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
         if !message.contains(tag) {
             message = format!("{}\n\n{}", message.trim_end(), tag);
         }
@@ -1118,7 +1122,12 @@ fn validate_commits_contain_tag(
     if missing.is_empty() {
         return Ok(());
     }
-    let shown = missing.iter().take(10).cloned().collect::<Vec<_>>().join("\n");
+    let shown = missing
+        .iter()
+        .take(10)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     let more = if missing.len() > 10 {
         format!("\n… 另有 {} 条提交", missing.len() - 10)
     } else {
@@ -1597,7 +1606,13 @@ pub(crate) fn ensure_path_under_worktrees_root(
 pub(crate) fn worktree_dirty_reason(worktree_path: &str) -> Result<Option<String>, String> {
     let output = run_git(
         worktree_path,
-        &["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"],
+        &[
+            "-c",
+            "core.quotePath=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ],
     )?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -1629,7 +1644,12 @@ pub(crate) async fn remote_branch_exists(
     tokio::task::spawn_blocking(move || {
         let output = run_git(
             &cwd,
-            &["ls-remote", "--heads", "origin", &format!("refs/heads/{branch}")],
+            &[
+                "ls-remote",
+                "--heads",
+                "origin",
+                &format!("refs/heads/{branch}"),
+            ],
         )?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
@@ -1649,7 +1669,15 @@ pub(crate) async fn local_branch_exists(
 ) -> Result<bool, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     tokio::task::spawn_blocking(move || {
-        let output = run_git(&cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")])?;
+        let output = run_git(
+            &cwd,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )?;
         Ok(output.status.success())
     })
     .await
@@ -1667,12 +1695,16 @@ pub(crate) async fn branch_unmerged_count(
     tokio::task::spawn_blocking(move || -> Result<u64, String> {
         let fetch_target = run_git(&cwd, &["fetch", "origin", &target])?;
         if !fetch_target.status.success() {
-            return Err(String::from_utf8_lossy(&fetch_target.stderr).trim().to_string());
+            return Err(String::from_utf8_lossy(&fetch_target.stderr)
+                .trim()
+                .to_string());
         }
         // 源分支可能尚未推送到远端：允许 fetch 失败（忽略“couldn't find remote ref”）。
         if let Ok(fetch_source) = run_git(&cwd, &["fetch", "origin", &source]) {
             if !fetch_source.status.success() {
-                let stderr = String::from_utf8_lossy(&fetch_source.stderr).trim().to_string();
+                let stderr = String::from_utf8_lossy(&fetch_source.stderr)
+                    .trim()
+                    .to_string();
                 if !stderr.to_lowercase().contains("find remote ref") {
                     return Err(stderr);
                 }
@@ -2091,7 +2123,10 @@ pub struct PatchPickPlan {
 
 /// 对每个请求的 commit，用 `git rev-list <commit> --not HEAD --reverse` 计算需要挑拣的
 /// 依赖序（最旧在前）；已存在于目标分支（HEAD 祖先）则标记 already_on_target 且 needed 为空。
-fn patch_pick_plan_blocking(cwd: &str, commit_hashes: &[String]) -> Result<Vec<PatchPickPlan>, String> {
+fn patch_pick_plan_blocking(
+    cwd: &str,
+    commit_hashes: &[String],
+) -> Result<Vec<PatchPickPlan>, String> {
     let mut plans = Vec::new();
     for hash in commit_hashes {
         let h = hash.trim();
@@ -2245,9 +2280,13 @@ fn parse_patch_pick_entries(stdout: &[u8], target_branch: &str) -> Vec<PatchPick
 fn list_patch_picks_blocking(cwd: &str) -> Result<Vec<PatchPickEntry>, String> {
     let branch_out = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if !branch_out.status.success() {
-        return Err(String::from_utf8_lossy(&branch_out.stderr).trim().to_string());
+        return Err(String::from_utf8_lossy(&branch_out.stderr)
+            .trim()
+            .to_string());
     }
-    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+    let branch = String::from_utf8_lossy(&branch_out.stdout)
+        .trim()
+        .to_string();
     let out = run_git(cwd, &["log", "--reverse", "--format=%H%x00%s%x00%b%x1e"])?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
@@ -2265,8 +2304,8 @@ pub async fn list_patch_picks(
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     ensure_path_under_worktrees_root(&project_path, &cwd, &worktree_path)?;
     tokio::task::spawn_blocking(move || list_patch_picks_blocking(&worktree_path))
-    .await
-    .map_err(|e| format!("List patch picks task panicked: {}", e))?
+        .await
+        .map_err(|e| format!("List patch picks task panicked: {}", e))?
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2352,7 +2391,11 @@ pub async fn commit_conflict_resolution(
             return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
         }
         let mut msg = message.trim().to_string();
-        if let Some(tag) = expected_issue_tag.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some(tag) = expected_issue_tag
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             msg = format!("{msg} {tag}");
         }
         let commit = run_git(&worktree_path, &["commit", "-m", &msg])?;
@@ -2369,9 +2412,9 @@ pub async fn commit_conflict_resolution(
 mod tests {
     use super::{
         build_commit_message_agent_args, dir_is_git_repo, discover_git_roots_blocking,
-        git_has_head, git_worktree_root, is_protected_project_relative_path,
-        list_untracked_files, parse_porcelain_z_status, path_to_string, resolve_repo_path_blocking,
-        run_git_check, untracked_files_under_directory, GitFileChange,
+        git_has_head, git_worktree_root, is_protected_project_relative_path, list_untracked_files,
+        parse_porcelain_z_status, path_to_string, resolve_repo_path_blocking, run_git_check,
+        untracked_files_under_directory, GitFileChange,
     };
     use std::{
         fs,
@@ -2667,10 +2710,9 @@ mod tests {
             build_commit_message_agent_args("codex", "msg", Some("fast-model"), Some("high"));
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
-        assert!(
-            args.windows(2)
-                .any(|w| w == ["-c", "model_reasoning_effort=\"high\""])
-        );
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["-c", "model_reasoning_effort=\"high\""]));
         assert_eq!(args.last(), Some(&"msg"));
     }
 
@@ -2777,7 +2819,10 @@ mod tests {
                    b77d2f1\0feat: 缴费页\0no marker\n\x1e";
         let entries = super::parse_patch_pick_entries(log.as_bytes(), "hotfix/2.5.1");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].source_commit, "9c21ba0000000000000000000000000000000000");
+        assert_eq!(
+            entries[0].source_commit,
+            "9c21ba0000000000000000000000000000000000"
+        );
         assert_eq!(entries[0].picked_commit, "a1f3c02");
         assert_eq!(entries[0].target_branch, "hotfix/2.5.1");
     }

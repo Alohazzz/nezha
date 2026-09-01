@@ -83,7 +83,8 @@ pub(crate) fn read_draft_file(
     if !target.exists() {
         return Ok(None);
     }
-    let meta = fs::metadata(&target).map_err(|e| format!("Failed to read draft metadata: {}", e))?;
+    let meta =
+        fs::metadata(&target).map_err(|e| format!("Failed to read draft metadata: {}", e))?;
     if meta.len() > MAX_DRAFT_READ_BYTES {
         return Err(format!(
             "Draft file too large ({} bytes, max {} bytes)",
@@ -114,8 +115,8 @@ pub(crate) fn list_backfill_drafts(project_path: &str) -> Result<Vec<(String, St
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for entry in fs::read_dir(&drafts_dir)
-        .map_err(|e| format!("Failed to read drafts dir: {}", e))?
+    for entry in
+        fs::read_dir(&drafts_dir).map_err(|e| format!("Failed to read drafts dir: {}", e))?
     {
         let entry = entry.map_err(|e| format!("Failed to read draft entry: {}", e))?;
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -167,8 +168,8 @@ pub(crate) fn read_backfill_consumed(
     if !target.exists() {
         return Ok(None);
     }
-    let raw =
-        fs::read_to_string(&target).map_err(|e| format!("Failed to read consumed marker: {}", e))?;
+    let raw = fs::read_to_string(&target)
+        .map_err(|e| format!("Failed to read consumed marker: {}", e))?;
     let v: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("Parse consumed marker failed: {e}"))?;
     let signature = v
@@ -199,8 +200,11 @@ pub(crate) fn write_backfill_consumed(
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create draft dir: {}", e))?;
     }
     let body = serde_json::json!({ "signature": signature, "workitemId": workitem_id });
-    fs::write(&target, serde_json::to_string(&body).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Failed to write consumed marker: {}", e))?;
+    fs::write(
+        &target,
+        serde_json::to_string(&body).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Failed to write consumed marker: {}", e))?;
     Ok(())
 }
 
@@ -253,7 +257,9 @@ pub(crate) fn gather_task_drafts(
     fs::create_dir_all(&dest_dir).map_err(|e| format!("Failed to create draft dir: {}", e))?;
 
     let mut copied = false;
-    for entry in fs::read_dir(&source_dir).map_err(|e| format!("Failed to read draft dir: {}", e))? {
+    for entry in
+        fs::read_dir(&source_dir).map_err(|e| format!("Failed to read draft dir: {}", e))?
+    {
         let entry = entry.map_err(|e| format!("Failed to read draft entry: {}", e))?;
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
@@ -281,11 +287,8 @@ mod tests {
     use super::*;
 
     fn temp_project(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "nezha-drafts-test-{}-{}",
-            tag,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("nezha-drafts-test-{}-{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -330,14 +333,18 @@ mod tests {
         fs::write(src.join("knowledge.json"), "[]").unwrap();
         fs::write(src.join("junk.txt"), "ignored").unwrap();
 
-        let copied = gather_task_drafts(wt.to_str().unwrap(), proj.to_str().unwrap(), "t1").unwrap();
+        let copied =
+            gather_task_drafts(wt.to_str().unwrap(), proj.to_str().unwrap(), "t1").unwrap();
         assert!(copied);
         let dest = proj.join(".nezha").join("drafts").join("t1");
         assert_eq!(
             fs::read_to_string(dest.join("discussion.md")).unwrap(),
             "draft"
         );
-        assert_eq!(fs::read_to_string(dest.join("knowledge.json")).unwrap(), "[]");
+        assert_eq!(
+            fs::read_to_string(dest.join("knowledge.json")).unwrap(),
+            "[]"
+        );
         assert!(!dest.join("junk.txt").exists());
         let _ = fs::remove_dir_all(&proj);
     }
@@ -347,7 +354,9 @@ mod tests {
         let proj = temp_project("noop");
         assert!(!gather_task_drafts(proj.to_str().unwrap(), proj.to_str().unwrap(), "t1").unwrap());
         let other = temp_project("nosrc");
-        assert!(!gather_task_drafts(other.to_str().unwrap(), proj.to_str().unwrap(), "t1").unwrap());
+        assert!(
+            !gather_task_drafts(other.to_str().unwrap(), proj.to_str().unwrap(), "t1").unwrap()
+        );
         let _ = fs::remove_dir_all(&proj);
         let _ = fs::remove_dir_all(&other);
     }
@@ -359,7 +368,11 @@ mod tests {
         let t2 = task_drafts_dir(proj.to_str().unwrap(), "t2");
         fs::create_dir_all(&t1).unwrap();
         fs::create_dir_all(&t2).unwrap();
-        fs::write(t1.join("backfill-issue.json"), r#"{"category":"Bug","subject":"a"}"#).unwrap();
+        fs::write(
+            t1.join("backfill-issue.json"),
+            r#"{"category":"Bug","subject":"a"}"#,
+        )
+        .unwrap();
         fs::write(
             t2.join("backfill-issue.json"),
             r#"{"category":"Req","subject":"b"}"#,
@@ -379,7 +392,9 @@ mod tests {
     #[test]
     fn list_backfill_drafts_missing_root_returns_empty() {
         let proj = temp_project("list_backfill_empty");
-        assert!(list_backfill_drafts(proj.to_str().unwrap()).unwrap().is_empty());
+        assert!(list_backfill_drafts(proj.to_str().unwrap())
+            .unwrap()
+            .is_empty());
         let _ = fs::remove_dir_all(&proj);
     }
 
@@ -388,14 +403,18 @@ mod tests {
         let proj = temp_project("consumed");
         let dir = task_drafts_dir(proj.to_str().unwrap(), "t1");
         fs::create_dir_all(&dir).unwrap();
-        assert!(read_backfill_consumed(proj.to_str().unwrap(), "t1").unwrap().is_none());
+        assert!(read_backfill_consumed(proj.to_str().unwrap(), "t1")
+            .unwrap()
+            .is_none());
         write_backfill_consumed(proj.to_str().unwrap(), "t1", "sig-abc", "wi-1").unwrap();
         let mark = read_backfill_consumed(proj.to_str().unwrap(), "t1")
             .unwrap()
             .unwrap();
         assert_eq!(mark, ("sig-abc".to_string(), "wi-1".to_string()));
         // 不同目录互不干扰
-        assert!(read_backfill_consumed(proj.to_str().unwrap(), "t2").unwrap().is_none());
+        assert!(read_backfill_consumed(proj.to_str().unwrap(), "t2")
+            .unwrap()
+            .is_none());
         let _ = fs::remove_dir_all(&proj);
     }
 

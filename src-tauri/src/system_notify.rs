@@ -82,7 +82,11 @@ pub fn notify_task_event(
     }
 
     let name = task_name(app, task_id);
-    let subject = if name.is_empty() { task_id } else { name.as_str() };
+    let subject = if name.is_empty() {
+        task_id
+    } else {
+        name.as_str()
+    };
     let body = match category {
         NotifyCategory::Confirm => format!("任务《{subject}》需要你的确认"),
         NotifyCategory::Complete => format!("任务《{subject}》已完成"),
@@ -148,12 +152,10 @@ mod tests {
         // 不同任务互不影响。
         assert!(!check_and_mark("t-2", NotifyCategory::Confirm));
         // 冷却窗口直接缩短为 0（测试专用路径：手动改表里的时间戳）。
-        cooldown_map()
-            .lock()
-            .insert(
-                ("t-1".to_string(), NotifyCategory::Confirm),
-                Instant::now() - Duration::from_secs(COOLDOWN_SECS + 1),
-            );
+        cooldown_map().lock().insert(
+            ("t-1".to_string(), NotifyCategory::Confirm),
+            Instant::now() - Duration::from_secs(COOLDOWN_SECS + 1),
+        );
         assert!(!check_and_mark("t-1", NotifyCategory::Confirm));
     }
 }

@@ -91,7 +91,11 @@ pub struct YunxiaoOrganization {
 pub struct YunxiaoProject {
     pub id: String,
     pub name: String,
-    #[serde(rename = "customCode", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "customCode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub custom_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -109,7 +113,11 @@ pub struct YunxiaoUserRef {
 pub struct YunxiaoStatus {
     #[serde(default)]
     pub name: String,
-    #[serde(rename = "displayName", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "displayName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub display_name: Option<String>,
     #[serde(rename = "nameEn", default, skip_serializing_if = "Option::is_none")]
     pub name_en: Option<String>,
@@ -121,7 +129,11 @@ pub struct YunxiaoStatus {
 pub struct YunxiaoCustomFieldEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
-    #[serde(rename = "displayValue", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "displayValue",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub display_value: Option<String>,
 }
 
@@ -151,7 +163,11 @@ pub struct YunxiaoWorkitem {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<YunxiaoStatus>,
-    #[serde(rename = "assignedTo", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "assignedTo",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub assigned_to: Option<YunxiaoUserRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creator: Option<YunxiaoUserRef>,
@@ -162,9 +178,17 @@ pub struct YunxiaoWorkitem {
     /// 描述正文中的图片数量（详情接口由 parse_workitem_response 从原始描述计算，列表接口为 0）。
     #[serde(default)]
     pub image_count: usize,
-    #[serde(rename = "categoryId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "categoryId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub category_id: Option<String>,
-    #[serde(rename = "logicalStatus", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "logicalStatus",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub logical_status: Option<String>,
 }
 
@@ -260,8 +284,8 @@ fn parse_current_user(bytes: &[u8]) -> Result<YunxiaoUserRef, String> {
         #[serde(rename = "userName", default)]
         user_name: String,
     }
-    let payload: CurrentUserPayload = serde_json::from_slice(bytes)
-        .map_err(|e| format!("解析云效当前用户失败: {e}"))?;
+    let payload: CurrentUserPayload =
+        serde_json::from_slice(bytes).map_err(|e| format!("解析云效当前用户失败: {e}"))?;
     Ok(YunxiaoUserRef {
         id: if payload.id.is_empty() {
             payload.user_id
@@ -368,9 +392,7 @@ fn strip_html_tags(input: &str) -> String {
 }
 
 /// description 字段反序列化：兼容字符串 / 富文本 JSON 对象 / 数组 / null。
-fn deserialize_optional_description<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
+fn deserialize_optional_description<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -381,8 +403,8 @@ where
 /// 解析 GetWorkitem 响应：兼容直接对象与 `{"result": {...}}` 包裹形态；
 /// 顺带从原始描述计算图片数量（供详情页提示「议题含 N 张图片」）。
 fn parse_workitem_response(bytes: &[u8]) -> Result<YunxiaoWorkitem, String> {
-    let mut value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
     if value
         .get("id")
         .and_then(serde_json::Value::as_str)
@@ -416,7 +438,8 @@ pub async fn yunxiao_get_current_user(token: String) -> Result<YunxiaoUserRef, S
         return Err("云效个人访问令牌不能为空".to_string());
     }
     let client = build_client()?;
-    let bytes = get_yunxiao_json(&client, token, format!("{API_BASE}/oapi/v1/platform/user")).await?;
+    let bytes =
+        get_yunxiao_json(&client, token, format!("{API_BASE}/oapi/v1/platform/user")).await?;
     parse_current_user(&bytes)
 }
 
@@ -561,7 +584,11 @@ pub async fn yunxiao_list_workitem_statuses(
     }
     let client = build_client()?;
     let mut lists: Vec<Vec<YunxiaoStatus>> = Vec::new();
-    for category in categories.iter().map(|c| c.trim()).filter(|c| !c.is_empty()) {
+    for category in categories
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+    {
         let types_url = format!(
             "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes?category={category}"
         );
@@ -751,7 +778,9 @@ fn extract_markdown_image_urls(text: &str) -> Vec<String> {
 /// 图片域名白名单：仅放行阿里云系域名，防 SSRF。
 fn is_allowed_image_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
-    host.ends_with(".aliyuncs.com") || host.ends_with(".alicdn.com") || host.ends_with(".aliyun.com")
+    host.ends_with(".aliyuncs.com")
+        || host.ends_with(".alicdn.com")
+        || host.ends_with(".aliyun.com")
 }
 
 /// 校验图片 URL：必须 https 且域名在白名单内。
@@ -934,8 +963,8 @@ pub async fn yunxiao_prepare_issue_images(
         "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
     );
     let bytes = get_yunxiao_json(&client, &token, url).await?;
-    let mut json: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
     if json
         .get("id")
         .and_then(serde_json::Value::as_str)
@@ -983,10 +1012,7 @@ pub async fn yunxiao_prepare_issue_images(
                 let file_path = attachments_dir.join(&filename);
                 if let Err(e) = std::fs::write(&file_path, &data) {
                     result.failed += 1;
-                    push_reported_error(
-                        &mut result.errors,
-                        format!("写入 {filename} 失败: {e}"),
-                    );
+                    push_reported_error(&mut result.errors, format!("写入 {filename} 失败: {e}"));
                 } else {
                     result.paths.push(file_path.to_string_lossy().into_owned());
                     result.downloaded += 1;
@@ -1027,14 +1053,7 @@ pub async fn yunxiao_create_workitem_comment(
         return Err(format!("评论内容超过 {MAX_COMMENT_CHARS} 字上限"));
     }
     let client = build_client()?;
-    post_workitem_comment(
-        &client,
-        &token,
-        &organization_id,
-        &workitem_id,
-        &content,
-    )
-    .await
+    post_workitem_comment(&client, &token, &organization_id, &workitem_id, &content).await
 }
 
 /// POST 创建评论（CreateWorkitemComment），返回评论 ID。
@@ -1060,8 +1079,8 @@ async fn post_workitem_comment(
     struct CommentCreated {
         id: String,
     }
-    let created: CommentCreated = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("解析云效创建评论响应失败: {e}"))?;
+    let created: CommentCreated =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效创建评论响应失败: {e}"))?;
     Ok(created.id)
 }
 
@@ -1358,11 +1377,9 @@ pub struct CreateKnowledgeIssueResult {
 }
 
 /// 获取当前令牌用户 ID（创建议题时作为指派人）。
-async fn fetch_current_user_id(
-    client: &reqwest::Client,
-    token: &str,
-) -> Result<String, String> {
-    let bytes = get_yunxiao_json(client, token, format!("{API_BASE}/oapi/v1/platform/user")).await?;
+async fn fetch_current_user_id(client: &reqwest::Client, token: &str) -> Result<String, String> {
+    let bytes =
+        get_yunxiao_json(client, token, format!("{API_BASE}/oapi/v1/platform/user")).await?;
     let user = parse_current_user(&bytes)?;
     if user.id.is_empty() {
         return Err("无法获取当前用户 ID".to_string());
@@ -1382,8 +1399,8 @@ async fn fetch_default_workitem_type_id(
         "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes?category={category}"
     );
     let bytes = get_yunxiao_json(client, token, url).await?;
-    let types: Vec<YunxiaoWorkitemType> = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("解析云效工作项类型失败: {e}"))?;
+    let types: Vec<YunxiaoWorkitemType> =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效工作项类型失败: {e}"))?;
     types
         .iter()
         .find(|t| t.category_id == category)
@@ -1440,14 +1457,9 @@ pub async fn yunxiao_create_knowledge_issue(
     // 2) 创建
     let client = build_client()?;
     let assigned_to = fetch_current_user_id(&client, &token).await?;
-    let workitem_type_id = fetch_default_workitem_type_id(
-        &client,
-        &token,
-        &organization_id,
-        &project_id,
-        "Req",
-    )
-    .await?;
+    let workitem_type_id =
+        fetch_default_workitem_type_id(&client, &token, &organization_id, &project_id, "Req")
+            .await?;
     let resp = client
         .post(format!(
             "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems"
@@ -1466,8 +1478,8 @@ pub async fn yunxiao_create_knowledge_issue(
         .await
         .map_err(|e| format!("请求云效创建议题失败: {e}"))?;
     let bytes = read_json_body(resp).await?;
-    let mut value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("解析云效创建议题响应失败: {e}"))?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效创建议题响应失败: {e}"))?;
     if value
         .get("id")
         .and_then(serde_json::Value::as_str)
@@ -1511,7 +1523,11 @@ pub struct BackfillIssueRequest {
     pub content_sections: Vec<BackfillContentSection>,
     #[serde(rename = "customFields", default)]
     pub custom_fields: Vec<YunxiaoCustomFieldValue>,
-    #[serde(rename = "sourceNote", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "sourceNote",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub source_note: Option<String>,
 }
 
@@ -1521,7 +1537,11 @@ pub struct CreateBackfillIssueResult {
     pub created: bool,
     #[serde(rename = "workitemId")]
     pub workitem_id: String,
-    #[serde(rename = "serialNumber", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "serialNumber",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub serial_number: Option<String>,
 }
 
@@ -1593,14 +1613,9 @@ pub async fn yunxiao_create_backfill_issue(
 
     let client = build_client()?;
     let assigned_to = fetch_current_user_id(&client, &token).await?;
-    let workitem_type_id = fetch_default_workitem_type_id(
-        &client,
-        &token,
-        &organization_id,
-        &project_id,
-        &category,
-    )
-    .await?;
+    let workitem_type_id =
+        fetch_default_workitem_type_id(&client, &token, &organization_id, &project_id, &category)
+            .await?;
 
     let mut body = serde_json::json!({
         "category": category,
@@ -1628,8 +1643,8 @@ pub async fn yunxiao_create_backfill_issue(
         .await
         .map_err(|e| format!("请求云效创建议题失败: {e}"))?;
     let bytes = read_json_body(resp).await?;
-    let mut value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("解析云效创建议题响应失败: {e}"))?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效创建议题响应失败: {e}"))?;
     if value
         .get("id")
         .and_then(serde_json::Value::as_str)
@@ -1676,9 +1691,7 @@ pub async fn list_backfill_drafts(project_path: String) -> Result<Vec<BackfillDr
     for (task_id, raw) in entries {
         match serde_json::from_str::<BackfillIssueRequest>(&raw) {
             Ok(request) => out.push(BackfillDraftEntry { task_id, request }),
-            Err(e) => eprintln!(
-                "[backfill] 解析 backfill-issue.json 失败 task_id={task_id}: {e}"
-            ),
+            Err(e) => eprintln!("[backfill] 解析 backfill-issue.json 失败 task_id={task_id}: {e}"),
         }
     }
     Ok(out)
@@ -1756,7 +1769,10 @@ mod tests {
         let item: YunxiaoWorkitem = serde_json::from_str(WORKITEM_JSON).expect("workitem parses");
         assert_eq!(item.id, "741d91e70b392b65ef95604c1f");
         assert_eq!(item.serial_number, "QHDK-29728");
-        assert_eq!(item.subject, "【芒市医共体】试剂出库查询，过滤框输入字符就报错");
+        assert_eq!(
+            item.subject,
+            "【芒市医共体】试剂出库查询，过滤框输入字符就报错"
+        );
         assert_eq!(item.status.as_ref().unwrap().name, "待处理");
         assert_eq!(item.assigned_to.as_ref().unwrap().name, "许宏民");
         let priority = item
@@ -1842,10 +1858,14 @@ mod tests {
 
     #[test]
     fn parses_get_workitem_direct_response() {
-        let item = parse_workitem_response(WORKITEM_JSON.as_bytes()).expect("direct response parses");
+        let item =
+            parse_workitem_response(WORKITEM_JSON.as_bytes()).expect("direct response parses");
         assert_eq!(item.id, "741d91e70b392b65ef95604c1f");
         assert_eq!(item.serial_number, "QHDK-29728");
-        assert_eq!(item.subject, "【芒市医共体】试剂出库查询，过滤框输入字符就报错");
+        assert_eq!(
+            item.subject,
+            "【芒市医共体】试剂出库查询，过滤框输入字符就报错"
+        );
     }
 
     #[test]
@@ -1963,9 +1983,7 @@ mod tests {
         extract_issue_description_urls(&description, &mut urls);
         assert_eq!(
             urls,
-            vec![
-                "https://devops.aliyun.com/projex/api/workitem/file/url?fileIdentifier=abc"
-            ]
+            vec!["https://devops.aliyun.com/projex/api/workitem/file/url?fileIdentifier=abc"]
         );
     }
 
@@ -1981,7 +1999,9 @@ mod tests {
     #[test]
     fn image_host_whitelist_checks_scheme_and_domain() {
         assert!(is_allowed_image_host("img.alicdn.com"));
-        assert!(is_allowed_image_host("yunxiao.oss-cn-hangzhou.aliyuncs.com"));
+        assert!(is_allowed_image_host(
+            "yunxiao.oss-cn-hangzhou.aliyuncs.com"
+        ));
         assert!(is_allowed_image_host("devops.aliyun.com"));
         assert!(!is_allowed_image_host("evil.example.com"));
         assert!(normalize_image_url("http://img.alicdn.com/a.png").is_none());
@@ -2012,8 +2032,16 @@ mod tests {
             ),
             Some("abc".to_string())
         );
-        assert_eq!(extract_file_identifier("https://img.alicdn.com/a.png"), None);
-        assert_eq!(extract_file_identifier("https://devops.aliyun.com/projex/api/workitem/file/url?fileIdentifier="), None);
+        assert_eq!(
+            extract_file_identifier("https://img.alicdn.com/a.png"),
+            None
+        );
+        assert_eq!(
+            extract_file_identifier(
+                "https://devops.aliyun.com/projex/api/workitem/file/url?fileIdentifier="
+            ),
+            None
+        );
         assert_eq!(extract_file_identifier(""), None);
     }
 
@@ -2123,8 +2151,15 @@ mod tests {
             },
         ];
         let map = build_create_custom_field_values(&fields);
-        assert_eq!(map.get("priority").and_then(|v| v.as_str()), Some("5461a5b1d0ae12fcdf98b048bb"));
-        assert_eq!(map.get("12870b90729a20c378a99c9463").and_then(|v| v.as_str()), Some("内部反馈"));
+        assert_eq!(
+            map.get("priority").and_then(|v| v.as_str()),
+            Some("5461a5b1d0ae12fcdf98b048bb")
+        );
+        assert_eq!(
+            map.get("12870b90729a20c378a99c9463")
+                .and_then(|v| v.as_str()),
+            Some("内部反馈")
+        );
         assert!(!map.contains_key("empty"));
     }
 

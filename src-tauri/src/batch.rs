@@ -9,7 +9,7 @@ use crate::git::{
     remote_branch_unmerged_count, resolve_repo_path, run_git, worktree_base_dir,
     worktree_dirty_reason,
 };
-use crate::storage::{Batch, load_project_batches, load_project_tasks, save_project_batches};
+use crate::storage::{load_project_batches, load_project_tasks, save_project_batches, Batch};
 
 const VALID_KINDS: &[&str] = &["feature", "patch", "release", "hotfix"];
 
@@ -113,10 +113,10 @@ pub async fn create_branch_batch(
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
 
     // 分支冲突预检（live remote + local ref），把「继续使用 / 改名」的选择交给创建者。
-    let remote_exists = remote_branch_exists(project_path.clone(), repo_path.clone(), branch.clone())
-        .await?;
-    let local_exists = local_branch_exists(project_path.clone(), repo_path.clone(), branch.clone())
-        .await?;
+    let remote_exists =
+        remote_branch_exists(project_path.clone(), repo_path.clone(), branch.clone()).await?;
+    let local_exists =
+        local_branch_exists(project_path.clone(), repo_path.clone(), branch.clone()).await?;
     if local_exists {
         return Err("本地已存在同名分支，请改名后创建".to_string());
     }
@@ -128,7 +128,11 @@ pub async fn create_branch_batch(
     }
 
     // 计划路径：创建者选的目录优先，缺省回落配置基路径 / 共享 hub / 项目内默认。
-    let worktree_path = match worktree_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let worktree_path = match worktree_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(dir) => PathBuf::from(dir).join(&id),
         None => worktree_base_dir(&project_path, &cwd).join(&id),
     };
@@ -147,7 +151,10 @@ pub async fn create_branch_batch(
                 .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
         }
         if worktree_path.exists() {
-            return Err(format!("Worktree path already exists: {}", worktree_path.display()));
+            return Err(format!(
+                "Worktree path already exists: {}",
+                worktree_path.display()
+            ));
         }
         let output = if use_existing_remote {
             let fetch = run_git(&cwd, &["fetch", "origin", &branch])?;
@@ -169,7 +176,14 @@ pub async fn create_branch_batch(
         } else {
             run_git(
                 &cwd,
-                &["worktree", "add", "-b", &branch, &worktree_str, &base_branch],
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &branch,
+                    &worktree_str,
+                    &base_branch,
+                ],
             )?
         };
         if !output.status.success() {
@@ -274,7 +288,11 @@ pub fn get_branch_batch(project_id: String, batch_id: String) -> Result<Option<B
 
 /// 关闭/合并分支批：merged=true 记为 merged，否则记为 closed，并写上 closedAt。
 #[tauri::command]
-pub fn close_branch_batch(project_id: String, batch_id: String, merged: bool) -> Result<Batch, String> {
+pub fn close_branch_batch(
+    project_id: String,
+    batch_id: String,
+    merged: bool,
+) -> Result<Batch, String> {
     let mut batches = load_project_batches(project_id.clone())?;
     let batch = batches
         .iter_mut()
@@ -307,7 +325,10 @@ pub async fn merge_branch_batch(
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "Batch not found".to_string())?;
     if !merge_allows_kind(&batch.kind) {
-        return Err(format!("批次类型 {} 是挑拣容器，不允许向上合并", batch.kind));
+        return Err(format!(
+            "批次类型 {} 是挑拣容器，不允许向上合并",
+            batch.kind
+        ));
     }
     let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
     let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str.clone());
@@ -323,13 +344,9 @@ pub async fn merge_branch_batch(
     .await?;
     // 合并成功后自动关批（status = merged）并删除 worktree/分支。
     let closed = close_branch_batch(project_id.clone(), batch_id, true)?;
-    let _ = crate::git::remove_task_worktree(
-        project_path,
-        effective_repo,
-        worktree_path,
-        batch.branch,
-    )
-    .await;
+    let _ =
+        crate::git::remove_task_worktree(project_path, effective_repo, worktree_path, batch.branch)
+            .await;
     Ok(MergeBatchResult {
         message,
         batch: closed,
@@ -337,7 +354,12 @@ pub async fn merge_branch_batch(
 }
 
 fn legacy_batch_worktree_path(project_path: &str, batch_id: &str) -> Result<String, String> {
-    path_to_string(&Path::new(project_path).join(".nezha").join("worktrees").join(batch_id))
+    path_to_string(
+        &Path::new(project_path)
+            .join(".nezha")
+            .join("worktrees")
+            .join(batch_id),
+    )
 }
 
 const NON_TERMINAL_TASK_STATUSES: &[&str] = &[
@@ -367,10 +389,10 @@ pub async fn check_branch_batch_branch(
     if branch.trim().is_empty() {
         return Err("源分支不能为空".to_string());
     }
-    let remote_exists = remote_branch_exists(project_path.clone(), repo_path.clone(), branch.clone())
-        .await?;
-    let local_exists = local_branch_exists(project_path.clone(), repo_path.clone(), branch.clone())
-        .await?;
+    let remote_exists =
+        remote_branch_exists(project_path.clone(), repo_path.clone(), branch.clone()).await?;
+    let local_exists =
+        local_branch_exists(project_path.clone(), repo_path.clone(), branch.clone()).await?;
     Ok(BranchConflictCheck {
         remote_exists,
         local_exists,
@@ -463,16 +485,21 @@ pub async fn delete_branch_batch(
                         run_git_ref(&cwd, &batch.branch)?
                     };
                     if actual != r {
-                        return Err("无法确认源分支最新提交（本地/远端不一致），禁止删除".to_string());
+                        return Err(
+                            "无法确认源分支最新提交（本地/远端不一致），禁止删除".to_string()
+                        );
                     }
                 }
                 _ => return Err("无法确认远端源分支，禁止删除".to_string()),
             }
         }
     } else {
-        let source_branch_exists =
-            local_branch_exists(project_path.clone(), effective_repo.clone(), batch.branch.clone())
-                .await?;
+        let source_branch_exists = local_branch_exists(
+            project_path.clone(),
+            effective_repo.clone(),
+            batch.branch.clone(),
+        )
+        .await?;
         let count = if source_branch_exists {
             branch_unmerged_count(
                 cwd.clone(),
@@ -525,7 +552,9 @@ pub async fn delete_branch_batch(
         let _ = run_git(&cwd2, &["worktree", "prune"]);
         let branch_out = run_git(&cwd2, &["branch", "-D", &branch_name])?;
         if !branch_out.status.success() {
-            let err = String::from_utf8_lossy(&branch_out.stderr).trim().to_string();
+            let err = String::from_utf8_lossy(&branch_out.stderr)
+                .trim()
+                .to_string();
             if !err.contains("not found") {
                 return Err(format!("删除本地分支失败: {err}"));
             }
@@ -546,7 +575,9 @@ pub async fn get_branch_batch_worktree_base(
 ) -> Result<String, String> {
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     tokio::task::spawn_blocking(move || {
-        Ok(worktree_base_dir(&project_path, &cwd).to_string_lossy().to_string())
+        Ok(worktree_base_dir(&project_path, &cwd)
+            .to_string_lossy()
+            .to_string())
     })
     .await
     .map_err(|e| format!("Worktree base task panicked: {e}"))?
@@ -574,14 +605,23 @@ mod tests {
 
     #[test]
     fn branch_name_generates_feature_prefix() {
-        assert_eq!(batch_branch_name("feature", "门诊挂号优化"), "feature/门诊挂号优化");
-        assert_eq!(batch_branch_name("feature", "batch p01"), "feature/batch-p01");
+        assert_eq!(
+            batch_branch_name("feature", "门诊挂号优化"),
+            "feature/门诊挂号优化"
+        );
+        assert_eq!(
+            batch_branch_name("feature", "batch p01"),
+            "feature/batch-p01"
+        );
     }
 
     #[test]
     fn branch_name_respects_kind_prefix() {
         assert_eq!(batch_branch_name("patch", "HIS 现场"), "patch/his-现场");
-        assert_eq!(batch_branch_name("hotfix", "2.5.1 收费端"), "hotfix/2.5.1-收费端");
+        assert_eq!(
+            batch_branch_name("hotfix", "2.5.1 收费端"),
+            "hotfix/2.5.1-收费端"
+        );
         assert_eq!(batch_branch_name("release", "v2.6.0"), "release/v2.6.0");
     }
 

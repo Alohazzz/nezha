@@ -138,7 +138,10 @@ mod tests {
     #[test]
     fn returns_none_when_section_missing() {
         assert_eq!(extract_value_score_section("普通评论内容"), None);
-        assert_eq!(extract_value_score_section("## 价值评估\n\n不是评分小节"), None);
+        assert_eq!(
+            extract_value_score_section("## 价值评估\n\n不是评分小节"),
+            None
+        );
     }
 
     #[test]
@@ -161,7 +164,10 @@ mod tests {
 
     #[test]
     fn parse_returns_none_without_index_line() {
-        assert_eq!(parse_value_score_index("## 价值评分\n\n- 议题类别：Req"), None);
+        assert_eq!(
+            parse_value_score_index("## 价值评分\n\n- 议题类别：Req"),
+            None
+        );
         assert_eq!(parse_value_score_index(""), None);
     }
 
@@ -195,8 +201,12 @@ mod tests {
 
     #[test]
     fn reappend_skips_when_summary_already_has_section() {
-        let summary = "正文\n\n## 价值评分（issue-value-scoring · 2026-08-24）\n\n- 核心指数：**9.0**";
-        let result = reappend_value_score_section(summary, Some("## 价值评分（issue-value-scoring · 2026-08-24）\n\n- 核心指数：**50.0**"));
+        let summary =
+            "正文\n\n## 价值评分（issue-value-scoring · 2026-08-24）\n\n- 核心指数：**9.0**";
+        let result = reappend_value_score_section(
+            summary,
+            Some("## 价值评分（issue-value-scoring · 2026-08-24）\n\n- 核心指数：**50.0**"),
+        );
         assert_eq!(result, summary);
     }
 
