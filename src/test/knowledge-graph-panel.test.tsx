@@ -51,7 +51,8 @@ describe("KnowledgeGraphPanel", () => {
   it("loads the bound graph, saves a card locally, and publishes saved changes", async () => {
     renderPanel();
 
-    await waitFor(() => expect(screen.getByText("HIS 知识图谱")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("HIS 知识图谱").length).toBeGreaterThan(0));
+    fireEvent.click(await screen.findByRole("button", { name: /Manage cards/ }));
     await screen.findByText("io");
     fireEvent.click(screen.getByText("io"));
     await waitFor(() => expect(document.querySelector(".knowledge-card-source")).toBeTruthy());

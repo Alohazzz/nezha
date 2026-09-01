@@ -46,6 +46,7 @@ export function KnowledgeGraphPanel({ projectPath }: { projectPath: string }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"overview" | "cards">("overview");
 
   const graph = graphs.find((item) => item.id === graphId);
   const visibleCards = useMemo(() => {
@@ -251,110 +252,140 @@ export function KnowledgeGraphPanel({ projectPath }: { projectPath: string }) {
   }, [graphId, pending, t]);
 
   return (
-    <div className="knowledge-graph-panel">
-      <div style={s.modalSection}>
-        <div style={s.modalSectionTitle}>{t("settings.knowledgeBinding")}</div>
-        <div style={s.modalField}>
-          <label style={s.modalLabel}>{t("settings.knowledgeTarget")}</label>
-          <Select
-            value={graphId || "none"}
-            onChange={(value) => value === "none"
-              ? invoke("unbind_knowledge_graph", { projectPath }).then(() => setGraphId("")).catch((error) => setError(String(error)))
-              : bind(value)}
-            options={[
-              { value: "none", label: t("settings.knowledgeTargetNone") },
-              ...graphs.map((item) => ({ value: item.id, label: item.name })),
-            ]}
+    mode === "cards" ? (
+      <div className="knowledge-card-page">
+        <button className="knowledge-breadcrumb" onClick={() => setMode("overview")}>
+          ← {t("settings.knowledgeBackOverview")}
+        </button>
+        <div className="knowledge-toolbar">
+          <input
+            className="knowledge-search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t("settings.knowledgeSearchCards")}
           />
-          <span style={s.modalLabelHint}>{t("settings.knowledgeTargetHint")}</span>
-        </div>
-      </div>
-
-      <div style={s.modalSection}>
-        <div style={s.modalSectionTitle}>{t("settings.knowledgeCreate")}</div>
-        <div style={s.modalField}>
-          <input style={s.modalInputFlex} value={newGraphId} onChange={(event) => setNewGraphId(event.target.value)} placeholder={t("settings.knowledgeGraphId")} />
-          <input style={s.modalInputFlex} value={newGraphName} onChange={(event) => setNewGraphName(event.target.value)} placeholder={t("settings.knowledgeGraphName")} />
-          <Select value={adapter} onChange={setAdapter} options={adapters.map((item) => ({ value: item.id, label: item.name }))} />
-          <button type="button" style={s.modalSaveBtn} onClick={create} disabled={busy}>{t("settings.knowledgeCreateAction")}</button>
-        </div>
-      </div>
-
-      <div style={s.modalSection}>
-        <div style={s.modalSectionTitle}>{t("settings.knowledgeScan")}</div>
-        <div style={s.settingsFlexRow}>
-          {graph && !graph.ready && (
-            <button type="button" style={s.modalSaveBtn} onClick={() => initialize().catch((error) => setError(String(error)))} disabled={busy}>
-              {t("settings.knowledgeInitialize")}
-            </button>
-          )}
-          <button type="button" style={s.modalSaveBtn} onClick={scan} disabled={busy || !graph || !graph.ready || !graph.scanAvailable}>{t("settings.knowledgeScanAction")}</button>
-          <button type="button" style={s.modalSaveBtn} onClick={publish} disabled={busy || pending.length === 0}>
+          <span className="knowledge-count">{cards.length}</span>
+          <button className="knowledge-toolbar-btn" onClick={() => setCardForm({ mode: "create", value: "" })} disabled={busy || !graphId}>
+            {t("settings.knowledgeCardCreate")}
+          </button>
+          <button className="knowledge-toolbar-btn" onClick={publish} disabled={busy || pending.length === 0}>
             {t("settings.knowledgePublish", { count: pending.length })}
           </button>
         </div>
         {status && <div style={s.modalLabelHint}>{status}</div>}
+        <div className="knowledge-card-layout">
+          <div className="knowledge-card-list">
+            {cardForm?.mode === "create" && (
+              <div className="knowledge-inline-form">
+                <input aria-label={t("settings.knowledgeCardName")} style={s.modalInputFlex} value={cardForm.value} onChange={(event) => setCardForm({ mode: "create", value: event.target.value })} />
+                <button type="button" style={s.modalSaveBtn} onClick={createCard} disabled={busy}>{t("common.create")}</button>
+                <button type="button" style={s.modalCancelBtn} onClick={() => setCardForm(null)}>{t("common.cancel")}</button>
+              </div>
+            )}
+            {visibleCards.map((card) => (
+              <button
+                key={card.module}
+                type="button"
+                className="knowledge-card-item"
+                data-active={card.module === activeCard}
+                onClick={() => openCard(card.module)}
+              >
+                {card.module}
+              </button>
+            ))}
+          </div>
+          <div className="knowledge-card-editor">
+            {activeCard ? (
+              <>
+                <div className="knowledge-editor-toolbar">
+                  <button type="button" style={s.modalSaveBtn} onClick={saveCard} disabled={busy}>{t("common.save")}</button>
+                  <button type="button" style={s.modalCancelBtn} onClick={() => setCardForm({ mode: "rename", value: activeCard })} disabled={busy}>{t("common.rename")}</button>
+                  <button type="button" style={s.modalCancelBtn} onClick={() => setDeleteOpen(true)} disabled={busy}>{t("common.delete")}</button>
+                </div>
+                {cardForm?.mode === "rename" && (
+                  <div className="knowledge-inline-form">
+                    <input aria-label={t("settings.knowledgeCardName")} style={s.modalInputFlex} value={cardForm.value} onChange={(event) => setCardForm({ mode: "rename", value: event.target.value })} />
+                    <button type="button" style={s.modalSaveBtn} onClick={renameCard} disabled={busy}>{t("common.rename")}</button>
+                    <button type="button" style={s.modalCancelBtn} onClick={() => setCardForm(null)}>{t("common.cancel")}</button>
+                  </div>
+                )}
+                <textarea className="knowledge-card-source" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} />
+                <RadixDialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
+                  <RadixDialog.Portal>
+                    <RadixDialog.Overlay className="knowledge-dialog-overlay" />
+                    <RadixDialog.Content className="knowledge-dialog">
+                      <RadixDialog.Title>{t("settings.knowledgeCardDeleteTitle")}</RadixDialog.Title>
+                      <RadixDialog.Description>{t("settings.knowledgeCardDeleteConfirm", { module: activeCard })}</RadixDialog.Description>
+                      <div style={s.settingsFlexRow}>
+                        <button type="button" style={s.modalCancelBtn} onClick={() => setDeleteOpen(false)}>{t("common.cancel")}</button>
+                        <button type="button" style={s.modalSaveBtn} onClick={deleteCard}>{t("common.delete")}</button>
+                      </div>
+                    </RadixDialog.Content>
+                  </RadixDialog.Portal>
+                </RadixDialog.Root>
+              </>
+            ) : (
+              <div className="knowledge-empty-editor">{t("settings.knowledgeCardSelect")}</div>
+            )}
+          </div>
+        </div>
+      </div>
+    ) : (
+      <div className="knowledge-overview">
+        <div style={s.modalSection}>
+          <div style={s.modalSectionTitle}>{t("settings.knowledgeBinding")}</div>
+          <div style={s.modalField}>
+            <label style={s.modalLabel}>{t("settings.knowledgeTarget")}</label>
+            <Select
+              value={graphId || "none"}
+              onChange={(value) => value === "none"
+                ? invoke("unbind_knowledge_graph", { projectPath }).then(() => setGraphId("")).catch((error) => setError(String(error)))
+                : bind(value)}
+              options={[
+                { value: "none", label: t("settings.knowledgeTargetNone") },
+                ...graphs.map((item) => ({ value: item.id, label: item.name })),
+              ]}
+            />
+            <span style={s.modalLabelHint}>{t("settings.knowledgeTargetHint")}</span>
+          </div>
+        </div>
+
+        {graph && (
+          <div className="knowledge-summary">
+            <div>
+              <div className="knowledge-summary-title">{graph.name}</div>
+              <div className="knowledge-summary-meta">
+                {graph.ready ? t("settings.knowledgeReady") : t("settings.knowledgeNotReady")}
+                {" · "}
+                {graph.adapter}
+              </div>
+            </div>
+            <div style={s.settingsFlexRow}>
+              {!graph.ready && (
+                <button type="button" style={s.modalSaveBtn} onClick={() => initialize().catch((error) => setError(String(error)))} disabled={busy}>
+                  {t("settings.knowledgeInitialize")}
+                </button>
+              )}
+              <button type="button" style={s.modalSaveBtn} onClick={scan} disabled={busy || !graph.ready || !graph.scanAvailable}>{t("settings.knowledgeScanAction")}</button>
+              <button type="button" style={s.modalSaveBtn} onClick={() => setMode("cards")} disabled={!graph.ready}>
+                {t("settings.knowledgeManageCards", { count: cards.length })}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div style={s.modalSection}>
+          <div style={s.modalSectionTitle}>{t("settings.knowledgeCreate")}</div>
+          <div style={s.modalField}>
+            <input style={s.modalInputFlex} value={newGraphId} onChange={(event) => setNewGraphId(event.target.value)} placeholder={t("settings.knowledgeGraphId")} />
+            <input style={s.modalInputFlex} value={newGraphName} onChange={(event) => setNewGraphName(event.target.value)} placeholder={t("settings.knowledgeGraphName")} />
+            <Select value={adapter} onChange={setAdapter} options={adapters.map((item) => ({ value: item.id, label: item.name }))} />
+            <button type="button" style={s.modalSaveBtn} onClick={create} disabled={busy}>{t("settings.knowledgeCreateAction")}</button>
+          </div>
+        </div>
+        {status && <div style={s.modalLabelHint}>{status}</div>}
         {error && <div style={s.settingsError}>{error}</div>}
       </div>
-
-      <div className="knowledge-card-layout">
-        <div className="knowledge-card-list">
-          <input style={s.modalInputFlex} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("settings.knowledgeSearchCards")} />
-          <button type="button" style={s.modalSaveBtn} onClick={() => setCardForm({ mode: "create", value: "" })} disabled={busy || !graphId}>{t("settings.knowledgeCardCreate")}</button>
-          {cardForm?.mode === "create" && (
-            <div className="knowledge-inline-form">
-              <input aria-label={t("settings.knowledgeCardName")} style={s.modalInputFlex} value={cardForm.value} onChange={(event) => setCardForm({ mode: "create", value: event.target.value })} />
-              <button type="button" style={s.modalSaveBtn} onClick={createCard} disabled={busy}>{t("common.create")}</button>
-              <button type="button" style={s.modalCancelBtn} onClick={() => setCardForm(null)}>{t("common.cancel")}</button>
-            </div>
-          )}
-          {visibleCards.map((card) => (
-            <button
-              key={card.module}
-              type="button"
-              className="knowledge-card-item"
-              data-active={card.module === activeCard}
-              onClick={() => openCard(card.module)}
-            >
-              {card.module}
-            </button>
-          ))}
-        </div>
-        <div className="knowledge-card-editor">
-          {activeCard ? (
-            <>
-              <div style={s.settingsFlexRow}>
-                <button type="button" style={s.modalSaveBtn} onClick={saveCard} disabled={busy}>{t("common.save")}</button>
-                <button type="button" style={s.modalCancelBtn} onClick={() => setCardForm({ mode: "rename", value: activeCard })} disabled={busy}>{t("common.rename")}</button>
-                <button type="button" style={s.modalCancelBtn} onClick={() => setDeleteOpen(true)} disabled={busy}>{t("common.delete")}</button>
-              </div>
-              {cardForm?.mode === "rename" && (
-                <div className="knowledge-inline-form">
-                  <input aria-label={t("settings.knowledgeCardName")} style={s.modalInputFlex} value={cardForm.value} onChange={(event) => setCardForm({ mode: "rename", value: event.target.value })} />
-                  <button type="button" style={s.modalSaveBtn} onClick={renameCard} disabled={busy}>{t("common.rename")}</button>
-                  <button type="button" style={s.modalCancelBtn} onClick={() => setCardForm(null)}>{t("common.cancel")}</button>
-                </div>
-              )}
-              <textarea className="knowledge-card-source" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} />
-              <RadixDialog.Root open={deleteOpen} onOpenChange={setDeleteOpen}>
-                <RadixDialog.Portal>
-                  <RadixDialog.Overlay className="knowledge-dialog-overlay" />
-                  <RadixDialog.Content className="knowledge-dialog">
-                    <RadixDialog.Title>{t("settings.knowledgeCardDeleteTitle")}</RadixDialog.Title>
-                    <RadixDialog.Description>{t("settings.knowledgeCardDeleteConfirm", { module: activeCard })}</RadixDialog.Description>
-                    <div style={s.settingsFlexRow}>
-                      <button type="button" style={s.modalCancelBtn} onClick={() => setDeleteOpen(false)}>{t("common.cancel")}</button>
-                      <button type="button" style={s.modalSaveBtn} onClick={deleteCard}>{t("common.delete")}</button>
-                    </div>
-                  </RadixDialog.Content>
-                </RadixDialog.Portal>
-              </RadixDialog.Root>
-            </>
-          ) : (
-            <div style={s.settingsLoading}>{t("settings.knowledgeCardSelect")}</div>
-          )}
-        </div>
-      </div>
-    </div>
+    )
   );
 }

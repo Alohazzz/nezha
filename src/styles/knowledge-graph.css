@@ -5,9 +5,112 @@
   flex-direction: column;
 }
 
+.knowledge-overview {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  padding: 0 2px;
+}
+
+.knowledge-card-page {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.knowledge-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-medium);
+  border-radius: 9px;
+  background: var(--bg-hover);
+}
+
+.knowledge-summary-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.knowledge-summary-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-hint);
+}
+
+.knowledge-breadcrumb {
+  align-self: flex-start;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.knowledge-breadcrumb:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.knowledge-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-search {
+  min-width: 0;
+  flex: 1;
+  padding: 8px 11px;
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.knowledge-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-hint);
+}
+
+.knowledge-toolbar-btn {
+  flex-shrink: 0;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 7px;
+  background: var(--primary-action-bg);
+  color: var(--primary-action-fg);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.knowledge-toolbar-btn:hover {
+  filter: brightness(1.08);
+}
+
+.knowledge-toolbar-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .knowledge-card-layout {
   display: grid;
-  min-height: 260px;
+  min-height: 0;
   flex: 1;
   gap: 12px;
   grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
@@ -41,6 +144,22 @@
   min-height: 0;
   flex-direction: column;
   gap: 8px;
+}
+
+.knowledge-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-empty-editor {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  flex: 1;
+  color: var(--text-hint);
+  font-size: 13px;
 }
 
 .knowledge-card-source {
