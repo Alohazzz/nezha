@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import * as RadixSelect from "@radix-ui/react-select";
-import { X, FolderOpen, ChevronDown, Check } from "lucide-react";
+import { X, FolderOpen } from "lucide-react";
 import { permissionModeLabel, type PermissionMode, type AgentType } from "../types";
 import { useI18n } from "../i18n";
 import s from "../styles";
+import { KnowledgeGraphPanel } from "./settings/KnowledgeGraphPanel";
+import { Select } from "./settings/Select";
 
 interface ProjectConfig {
   agent: {
@@ -20,6 +21,9 @@ interface ProjectConfig {
   worktree?: {
     base_path?: string;
   };
+  knowledge?: {
+    graphId?: string;
+  };
   [key: string]: unknown;
 }
 
@@ -28,58 +32,12 @@ const MIN_COMMIT_MESSAGE_TIMEOUT_SECS = 1;
 const MAX_COMMIT_MESSAGE_TIMEOUT_SECS = 120;
 const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS = 15;
 
-type NavKey = "project";
+type NavKey = "project" | "knowledge";
 
 const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
   { key: "project", label: "settings.projectSettings" },
+  { key: "knowledge", label: "settings.knowledge" },
 ];
-
-function Select({
-  value,
-  onChange,
-  options,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: Array<{ value: string; label: string }>;
-}) {
-  const [open, setOpen] = useState(false);
-  const current = options.find((o) => o.value === value);
-
-  return (
-    <RadixSelect.Root value={value} onValueChange={onChange} open={open} onOpenChange={setOpen}>
-      <RadixSelect.Trigger aria-label={current?.label ?? value} style={s.settingsSelectTrigger}>
-        <RadixSelect.Value>{current?.label ?? value}</RadixSelect.Value>
-        <RadixSelect.Icon asChild>
-          <ChevronDown size={13} style={open ? s.settingsSelectIconOpen : s.settingsSelectIcon} />
-        </RadixSelect.Icon>
-      </RadixSelect.Trigger>
-      <RadixSelect.Portal>
-        <RadixSelect.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
-          <RadixSelect.Viewport style={s.settingsSelectViewport}>
-            {options.map((opt) => {
-              const selected = opt.value === value;
-
-              return (
-                <RadixSelect.Item
-                  key={opt.value}
-                  value={opt.value}
-                  className="radix-select-item"
-                  style={selected ? s.settingsSelectOptionSelected : s.settingsSelectOption}
-                >
-                  <RadixSelect.ItemText>{opt.label}</RadixSelect.ItemText>
-                  <RadixSelect.ItemIndicator style={s.settingsSelectIndicator}>
-                    <Check size={13} style={s.settingsSelectCheck} />
-                  </RadixSelect.ItemIndicator>
-                </RadixSelect.Item>
-              );
-            })}
-          </RadixSelect.Viewport>
-        </RadixSelect.Content>
-      </RadixSelect.Portal>
-    </RadixSelect.Root>
-  );
-}
 
 function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClose: () => void }) {
   const { t } = useI18n();
@@ -96,8 +54,11 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<ProjectConfig>("read_project_config", { projectPath })
-      .then((c) => {
+    Promise.all([
+      invoke<ProjectConfig>("read_project_config", { projectPath }),
+      Promise.resolve([]),
+    ])
+      .then(([c]) => {
         setConfig(c);
         setAgentDefault(c.agent.default);
         const mode = c.agent.default_permission_mode;
@@ -361,7 +322,7 @@ export function SettingsDialog({
               style={activeNav === item.key ? s.settingsNavItemActive : s.settingsNavItem}
               onClick={() => setActiveNav(item.key)}
             >
-              <FolderOpen size={14} />
+              {item.key === "knowledge" ? "📚" : <FolderOpen size={14} />}
               {t(item.label)}
             </button>
           ))}
@@ -378,6 +339,9 @@ export function SettingsDialog({
 
           {activeNav === "project" && (
             <ProjectSettings projectPath={projectPath} onClose={onClose} />
+          )}
+          {activeNav === "knowledge" && (
+            <KnowledgeGraphPanel projectPath={projectPath} />
           )}
         </div>
       </div>

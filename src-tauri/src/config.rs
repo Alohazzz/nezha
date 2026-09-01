@@ -21,6 +21,10 @@ prompt_prefix = ""
 commit_prompt = "You are a git commit message generator. Based on the provided git diff, write a concise and descriptive commit message. Follow these rules:\n1. Use the imperative mood (e.g., \"Add feature\" not \"Added feature\")\n2. First line: type(scope): short summary (50 chars or less)\n   Types: feat, fix, docs, style, refactor, test, chore\n3. If needed, add a blank line then a brief body explaining what and why\n4. Output ONLY the commit message text, no explanations or markdown formatting"
 # Timeout in seconds when generating commit messages via the AI agent
 commit_message_timeout_secs = 15
+
+[knowledge]
+# Stable knowledge graph identity under the configured SkillHub. Empty disables knowledge sedimentation.
+graph_id = ""
 "#;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -45,6 +49,13 @@ pub struct GitConfig {
 
 fn default_commit_message_timeout_secs() -> u64 {
     DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+pub struct KnowledgeConfig {
+    /// SkillHub 中知识图谱身份，例如 `HIS`。空表示未启用知识沉淀。
+    #[serde(default)]
+    pub graph_id: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -73,6 +84,8 @@ pub struct ProjectConfig {
     pub build: crate::build::BuildConfig,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    #[serde(default)]
+    pub knowledge: KnowledgeConfig,
 }
 
 impl Default for ProjectConfig {
@@ -89,6 +102,7 @@ impl Default for ProjectConfig {
             },
             build: crate::build::BuildConfig::default(),
             worktree: WorktreeConfig::default(),
+            knowledge: KnowledgeConfig::default(),
         }
     }
 }
@@ -138,8 +152,7 @@ pub fn write_project_config(project_path: String, config: ProjectConfig) -> Resu
 }
 
 fn home_dir() -> Result<std::path::PathBuf, String> {
-    crate::platform::home_dir()
-        .ok_or_else(|| "Cannot find home directory".to_string())
+    crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())
 }
 
 fn agent_config_path(agent: &str) -> Result<std::path::PathBuf, String> {
@@ -164,7 +177,9 @@ pub fn read_agent_config_file(agent: String) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    fs::read_to_string(&path).map(Some).map_err(|e| e.to_string())
+    fs::read_to_string(&path)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 /// Writes raw content back to the agent's local settings file.

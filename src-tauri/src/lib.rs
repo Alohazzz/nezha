@@ -9,8 +9,8 @@ mod agent_assist;
 mod analytics;
 mod app_settings;
 mod batch;
-mod codeup;
 mod build;
+mod codeup;
 mod config;
 mod drafts;
 mod dsh;
@@ -26,8 +26,8 @@ mod pty;
 mod session;
 mod skills;
 mod storage;
-mod system_notify;
 mod subprocess;
+mod system_notify;
 mod usage;
 mod value_score;
 mod yunxiao;
@@ -242,9 +242,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         // 正常 bundle 里 default_window_icon() 恒为 Some(见 tauri.conf.json icons),
         // 这里只在异常配置/加载失败时留一条 dev 日志,避免变成静默黑箱。
         #[cfg(debug_assertions)]
-        eprintln!(
-            "[tray] default_window_icon() 返回 None:托盘将无图标,关到托盘后窗口可能难以找回"
-        );
+        eprintln!("[tray] default_window_icon() 返回 None:托盘将无图标,关到托盘后窗口可能难以找回");
     }
 
     builder.build(app)?;
@@ -442,42 +440,42 @@ pub fn run() {
             config::write_agent_config_file,
             storage::load_projects,
             storage::save_projects,
-    storage::load_project_tasks,
-    storage::save_project_tasks,
-    storage::load_project_batches,
-    storage::save_project_batches,
-    batch::create_branch_batch,
-    batch::list_branch_batches,
-    batch::get_branch_batch,
-    batch::close_branch_batch,
-    batch::merge_branch_batch,
-    batch::check_branch_batch_branch,
-    batch::open_branch_batch_worktree,
-    batch::delete_branch_batch,
-    batch::get_branch_batch_worktree_base,
-    codeup::codeup_resolve_repo,
-    codeup::codeup_branch_managers,
-    codeup::codeup_create_mr,
-    codeup::codeup_list_repositories,
-    codeup::codeup_list_pending_mrs,
-    codeup::codeup_get_mr,
-    codeup::codeup_approve_mr,
-    codeup::codeup_merge_mr,
-    codeup::codeup_review_mr,
-    codeup::codeup_pull_code,
-    codeup::codeup_is_pulled,
-    codeup::codeup_read_review,
-    codeup::codeup_read_review_report,
-    codeup::codeup_export_review_report,
-    codeup::codeup_cleanup_mr,
-    codeup::codeup_resolve_conflicts,
-    git::git_branch_diff_stats,
-    git::git_branch_diff_file,
-    git::git_patch_dependency_check,
-    git::cherry_pick_to_patch,
-    git::list_patch_picks,
-    git::get_conflict_context,
-    git::commit_conflict_resolution,
+            storage::load_project_tasks,
+            storage::save_project_tasks,
+            storage::load_project_batches,
+            storage::save_project_batches,
+            batch::create_branch_batch,
+            batch::list_branch_batches,
+            batch::get_branch_batch,
+            batch::close_branch_batch,
+            batch::merge_branch_batch,
+            batch::check_branch_batch_branch,
+            batch::open_branch_batch_worktree,
+            batch::delete_branch_batch,
+            batch::get_branch_batch_worktree_base,
+            codeup::codeup_resolve_repo,
+            codeup::codeup_branch_managers,
+            codeup::codeup_create_mr,
+            codeup::codeup_list_repositories,
+            codeup::codeup_list_pending_mrs,
+            codeup::codeup_get_mr,
+            codeup::codeup_approve_mr,
+            codeup::codeup_merge_mr,
+            codeup::codeup_review_mr,
+            codeup::codeup_pull_code,
+            codeup::codeup_is_pulled,
+            codeup::codeup_read_review,
+            codeup::codeup_read_review_report,
+            codeup::codeup_export_review_report,
+            codeup::codeup_cleanup_mr,
+            codeup::codeup_resolve_conflicts,
+            git::git_branch_diff_stats,
+            git::git_branch_diff_file,
+            git::git_patch_dependency_check,
+            git::cherry_pick_to_patch,
+            git::list_patch_picks,
+            git::get_conflict_context,
+            git::commit_conflict_resolution,
             app_settings::load_app_settings,
             app_settings::save_app_settings,
             app_settings::save_agent_paths,
@@ -518,6 +516,18 @@ pub fn run() {
             drafts::clear_backfill_draft,
             agent_assist::generate_yunxiao_writeback_summary,
             knowledge::knowledge_auto_writeback,
+            knowledge::list_knowledge_targets,
+            knowledge::list_knowledge_graph_adapters,
+            knowledge::bind_knowledge_graph,
+            knowledge::unbind_knowledge_graph,
+            knowledge::initialize_knowledge_graph,
+            knowledge::create_knowledge_graph,
+            knowledge::scan_knowledge_graph,
+            knowledge::list_knowledge_cards,
+            knowledge::save_knowledge_card,
+            knowledge::rename_knowledge_card,
+            knowledge::delete_knowledge_card,
+            knowledge::publish_knowledge_changes,
             agent_assist::generate_knowledge_sedimentation,
             notification::get_notifications,
             notification::mark_notification_read,

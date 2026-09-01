@@ -309,6 +309,7 @@ export function YunxiaoIssueDetailView({
     try {
       const category = detail?.categoryId ?? (formKind === "bug" ? "Bug" : "Req");
       const instructions = await invoke<string>("get_issue_discussion_instructions", {
+        projectPath,
         category,
         taskId: task.id,
       });

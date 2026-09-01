@@ -33,8 +33,15 @@ fn build_headless_agent_args(
     let mut args: Vec<OsString> = Vec::new();
     if agent == "codex" {
         args.extend(
-            ["exec", "--sandbox", "read-only", "--ephemeral", "-c", "approval_policy=\"never\""]
-                .map(OsString::from),
+            [
+                "exec",
+                "--sandbox",
+                "read-only",
+                "--ephemeral",
+                "-c",
+                "approval_policy=\"never\"",
+            ]
+            .map(OsString::from),
         );
         if let Some(model) = model {
             args.push("--model".into());
@@ -53,8 +60,15 @@ fn build_headless_agent_args(
         args.push(prompt.into());
     } else {
         args.extend(
-            ["-p", prompt, "--output-format", "text", "--permission-mode", "plan"]
-                .map(OsString::from),
+            [
+                "-p",
+                prompt,
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "plan",
+            ]
+            .map(OsString::from),
         );
         if !allow_read_tools {
             args.extend(["--tools", ""].map(OsString::from));
@@ -82,8 +96,17 @@ fn build_headless_writer_agent_args(
     let mut args: Vec<OsString> = Vec::new();
     if agent == "codex" {
         args.extend(
-            ["exec", "--sandbox", "workspace-write", "-a", "on-request", "--ephemeral", "-c", "approval_policy=\"never\""]
-                .map(OsString::from),
+            [
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "-a",
+                "on-request",
+                "--ephemeral",
+                "-c",
+                "approval_policy=\"never\"",
+            ]
+            .map(OsString::from),
         );
         if let Some(model) = model {
             args.push("--model".into());
@@ -102,8 +125,15 @@ fn build_headless_writer_agent_args(
         args.push(prompt.into());
     } else {
         args.extend(
-            ["-p", prompt, "--output-format", "text", "--permission-mode", "acceptEdits"]
-                .map(OsString::from),
+            [
+                "-p",
+                prompt,
+                "--output-format",
+                "text",
+                "--permission-mode",
+                "acceptEdits",
+            ]
+            .map(OsString::from),
         );
         args.push("--no-session-persistence".into());
         if let Some(model) = model {
@@ -425,9 +455,15 @@ pub async fn generate_task_name(
     let full_prompt = build_naming_prompt(&truncated_prompt, summary.as_deref());
 
     // 4. 调用 agent 子进程（kill-on-timeout）
-    let output =
-        run_headless_agent_with_timeout(&agent, &project_path, &full_prompt, NAMING_TIMEOUT, false, None)
-            .await?;
+    let output = run_headless_agent_with_timeout(
+        &agent,
+        &project_path,
+        &full_prompt,
+        NAMING_TIMEOUT,
+        false,
+        None,
+    )
+    .await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -457,7 +493,12 @@ const GRILLING_INSTRUCTIONS: &str = "请用 grilling 流程走完决策树：一
 
 const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；每个结论都要有可复现的证据，不凭感觉猜。";
 
-const KNOWLEDGE_GRAPH_INSTRUCTION: &str = "另外，开始前先使用 his-knowledge-graph 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关 HIS 模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
+fn knowledge_graph_instruction(target: &crate::knowledge::KnowledgeTarget) -> String {
+    format!(
+        "另外，开始前先使用 `{}` 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。",
+        target.id
+    )
+}
 
 /// 价值评分技能指令：讨论/分析得出结论后，用 issue-value-scoring 技能产出「价值评分」
 /// 小节并追加到 discussion.md，供回写云效写「价值评分」字段（Req 核心指数 / Bug 优先指数）。
@@ -480,51 +521,83 @@ const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
 - 与图谱冲突的结论标注「与现状冲突，需复核」
 - section 限定：定位 / 职责 / 关键实体与数据表 / 依赖与相关模块 / 业务规则与已知坑 / 验证记录
 - confidence：confirmed（已确认）/ pending（待验证）
-- JSON 示例：[{ "module": "Nto.His.Register", "section": "业务规则与已知坑", "content": "…", "evidence": "…", "confidence": "confirmed", "suggestedTitle": "…" }]"#;
+- JSON 示例：[{ "module": "<目标知识库中的模块名>", "section": "业务规则与已知坑", "content": "…", "evidence": "…", "confidence": "confirmed", "suggestedTitle": "…" }]"#;
 
 /// 讨论/修改过程的工作产物落盘指令：方案汇总 + 知识沉淀候选。
 /// 让 Agent 在会话过程中把产物写到 `.nezha/drafts/<taskId>/`（相对 cwd），
 /// 「回写云效 / 知识沉淀」按钮直接读取，避免点击时重新 headless 生成。
-fn draft_instructions(task_id: &str) -> String {
+fn draft_instructions(
+    task_id: &str,
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+) -> String {
+    let knowledge_section = knowledge_target.map_or_else(String::new, |target| {
+        format!(
+            r#"
+
+2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
+   - {knowledge_rules}
+   - 每条候选必须携带 "knowledgeGraphId"，值必须是：{target_graph_id}
+   - 输出 JSON 数组写入该文件，无候选则写 `[]`；只输出 JSON，不要附加说明文字。"#,
+            task_id = task_id,
+            knowledge_rules = KNOWLEDGE_SEDIMENTATION_RULES,
+            target_graph_id = target.id,
+        )
+    });
     format!(
         r#"── 工作产物落盘（必须执行）────────────────────────────
-本任务的工作产物需要写入本地临时文件，供任务完成后的「回写云效」与「知识沉淀」直接读取。请在你当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录维护两个文件（目录不存在就先创建）：
+本任务的工作产物需要写入本地临时文件，供任务完成后的「回写云效」{knowledge_purpose}直接读取。请在你当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录维护文件（目录不存在就先创建）：
 
 1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的「修改方案汇总」：
    - 讨论/分析得出结论后立即创建并写入；后续结论更新时整体覆盖写，只保留最新版。
    - 内容需自包含：议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、分析结论、最终修改方案、验证方式与结果、关联 commit（如已提交）。
    - 末尾追加 `## 价值评分` 小节（见上方价值评分指令）：Req 写核心指数、Bug 写优先指数，并附一句话结论；回写云效时该小节写入议题「价值评分」字段，不随评论发布。
    - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。
-
-2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
-   - {knowledge_rules}
-   - 输出 JSON 数组写入该文件，无候选则写 `[]`；只输出 JSON，不要附加说明文字。"#,
+{knowledge_section}"#,
         task_id = task_id,
-        knowledge_rules = KNOWLEDGE_SEDIMENTATION_RULES,
+        knowledge_purpose = if knowledge_section.is_empty() {
+            ""
+        } else {
+            "与「知识沉淀」"
+        },
     )
 }
 
 /// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无；
-/// Req 与 Bug 都会追加 his-knowledge-graph 技能指令与工作产物落盘指令。
-pub fn issue_discussion_instructions(category: &str, task_id: &str) -> Option<String> {
+/// 配置了项目知识库时追加对应图谱指令与知识候选落盘指令。
+pub fn issue_discussion_instructions(
+    category: &str,
+    task_id: &str,
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+) -> Option<String> {
     let flow = match category.trim().to_lowercase().as_str() {
         "req" => GRILLING_INSTRUCTIONS,
         "bug" => DIAGNOSING_BUGS_INSTRUCTIONS,
         _ => return None,
     };
+    let knowledge_graph = knowledge_target
+        .map(knowledge_graph_instruction)
+        .unwrap_or_default();
     Some(format!(
-        "{flow}\n{KNOWLEDGE_GRAPH_INSTRUCTION}\n{BACKFILL_SKILL_INSTRUCTION}\n{VALUE_SCORE_INSTRUCTION}\n\n{draft}",
-        draft = draft_instructions(task_id)
+        "{flow}\n{knowledge_graph}\n{BACKFILL_SKILL_INSTRUCTION}\n{VALUE_SCORE_INSTRUCTION}\n\n{draft}",
+        draft = draft_instructions(task_id, knowledge_target)
     ))
 }
 
 /// 前端在拼「发起讨论」prompt 时调用，取对应 Skill 的流程指令文本（无则为空串）。
 #[tauri::command]
-pub fn get_issue_discussion_instructions(
+pub async fn get_issue_discussion_instructions(
+    project_path: String,
     category: String,
     task_id: String,
 ) -> Result<String, String> {
-    Ok(issue_discussion_instructions(&category, &task_id).unwrap_or_default())
+    // 讨论本身不因未配置知识库而阻断；只是不注入图谱指令和知识候选落盘要求。
+    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
+        .await
+        .ok();
+    Ok(
+        issue_discussion_instructions(&category, &task_id, knowledge_target.as_ref())
+            .unwrap_or_default(),
+    )
 }
 
 /// 合并代码审查规则（作为可维护的 `merge-code-review` Skill 的默认文本；前端取用并拼进
@@ -573,8 +646,7 @@ fn extract_review_findings(stdout: &str) -> Result<Vec<ReviewFinding>, String> {
             let inner = &prefix[open_start + OPEN.len()..];
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
-                return serde_json::from_str(trimmed)
-                    .map_err(|e| format!("解析审查结果失败: {e}"));
+                return serde_json::from_str(trimmed).map_err(|e| format!("解析审查结果失败: {e}"));
             }
         }
     }
@@ -602,17 +674,26 @@ pub async fn run_merge_code_review(
     let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     let project = project_path.clone();
     let wt = worktree_path.clone();
-    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&project, &cwd, &wt))
-        .await
-        .map_err(|e| format!("校验线程错误: {e}"))??;
+    tokio::task::spawn_blocking(move || {
+        crate::git::ensure_path_under_worktrees_root(&project, &cwd, &wt)
+    })
+    .await
+    .map_err(|e| format!("校验线程错误: {e}"))??;
 
     // 让 Agent 在图内自行读取 diff（它有 git 权限），再逐项校验。
     let prompt = format!(
         "{}\n\n──── 本次需审查的改动 ────\n请先在当前工作区运行 `git diff {base_branch}...{branch}` 查看，再按上述规则逐项校验并输出 <REVIEW> JSON。",
         MERGE_CODE_REVIEW_INSTRUCTIONS
     );
-    let output = run_headless_agent_with_timeout(&agent, &worktree_path, &prompt, REVIEW_TIMEOUT, true, None)
-        .await?;
+    let output = run_headless_agent_with_timeout(
+        &agent,
+        &worktree_path,
+        &prompt,
+        REVIEW_TIMEOUT,
+        true,
+        None,
+    )
+    .await?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -710,16 +791,28 @@ pub async fn run_conflict_resolution(
     let cwd = crate::git::resolve_repo_path(&project_path, repo_path.as_deref()).await?;
     let project = project_path.clone();
     let wt = worktree_path.clone();
-    tokio::task::spawn_blocking(move || crate::git::ensure_path_under_worktrees_root(&project, &cwd, &wt))
-        .await
-        .map_err(|e| format!("校验线程错误: {e}"))??;
+    tokio::task::spawn_blocking(move || {
+        crate::git::ensure_path_under_worktrees_root(&project, &cwd, &wt)
+    })
+    .await
+    .map_err(|e| format!("校验线程错误: {e}"))??;
 
-    let ctx = crate::git::get_conflict_context(project_path.clone(), repo_path.clone(), worktree_path.clone())
-        .await?;
+    let ctx = crate::git::get_conflict_context(
+        project_path.clone(),
+        repo_path.clone(),
+        worktree_path.clone(),
+    )
+    .await?;
     if ctx.conflicted_files.is_empty() {
         return Ok("没有需要解决的冲突".to_string());
     }
-    let output = run_headless_writer_agent_with_timeout(&agent, &worktree_path, &ctx.prompt, Duration::from_secs(300)).await?;
+    let output = run_headless_writer_agent_with_timeout(
+        &agent,
+        &worktree_path,
+        &ctx.prompt,
+        Duration::from_secs(300),
+    )
+    .await?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -729,7 +822,10 @@ pub async fn run_conflict_resolution(
     if !remaining.is_empty() {
         return Err(format!("仍有冲突未解决: {}", remaining.join(", ")));
     }
-    Ok(format!("已解决 {} 个冲突文件，等你确认后提交", ctx.conflicted_files.len()))
+    Ok(format!(
+        "已解决 {} 个冲突文件，等你确认后提交",
+        ctx.conflicted_files.len()
+    ))
 }
 
 // ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
@@ -774,7 +870,10 @@ fn truncate_supplement_input(text: String) -> String {
     if text.chars().count() <= MAX_SUPPLEMENT_INPUT_CHARS {
         text
     } else {
-        text.chars().take(MAX_SUPPLEMENT_INPUT_CHARS).collect::<String>() + "…"
+        text.chars()
+            .take(MAX_SUPPLEMENT_INPUT_CHARS)
+            .collect::<String>()
+            + "…"
     }
 }
 
@@ -839,9 +938,15 @@ pub async fn generate_issue_supplement(
     let truncated = truncate_supplement_input(issue_text);
     let prompt = build_supplement_prompt(kind, &truncated, link.trim());
 
-    let output =
-        run_headless_agent_with_timeout(&agent, &project_path, &prompt, SUPPLEMENT_TIMEOUT, false, None)
-            .await?;
+    let output = run_headless_agent_with_timeout(
+        &agent,
+        &project_path,
+        &prompt,
+        SUPPLEMENT_TIMEOUT,
+        false,
+        None,
+    )
+    .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -916,10 +1021,7 @@ fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, Stri
             s
         }
     };
-    (
-        truncate(commits),
-        truncate(diff_stat),
-    )
+    (truncate(commits), truncate(diff_stat))
 }
 
 fn build_writeback_prompt(
@@ -1052,14 +1154,12 @@ pub async fn generate_yunxiao_writeback_summary(
         .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
 
     // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
+    // 旧草稿没有图谱绑定或绑定不一致时不使用，重新按当前绑定提取。
     if !force.unwrap_or(false) {
-        if let Some(draft) = crate::drafts::read_draft_file(
-            &project_path,
-            &task_id,
-            "discussion.md",
-        )
-        .map_err(|e| format!("读取讨论草稿失败: {e}"))?
-        .filter(|s| !s.trim().is_empty())
+        if let Some(draft) =
+            crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
+                .map_err(|e| format!("读取讨论草稿失败: {e}"))?
+                .filter(|s| !s.trim().is_empty())
         {
             return Ok(draft);
         }
@@ -1067,21 +1167,20 @@ pub async fn generate_yunxiao_writeback_summary(
 
     // 重新生成（force=true）会跳过草稿走 headless 润色，这里先把草稿里的
     // 「价值评分」小节保留下来，生成后原样拼回（评分只读、随议题字段回写，不随评论发布）。
-    let preserved_score_section = crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
-        .ok()
-        .flatten()
-        .and_then(|draft| {
-            crate::value_score::extract_value_score_section(&draft).map(str::to_string)
-        });
+    let preserved_score_section =
+        crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
+            .ok()
+            .flatten()
+            .and_then(|draft| {
+                crate::value_score::extract_value_score_section(&draft).map(str::to_string)
+            });
 
     let cwd = if let Some(repo) = repo_path.as_deref().filter(|r| !r.trim().is_empty()) {
         let repo_trim = repo.trim();
         let repo_for_validation = repo_trim.to_string();
-        tokio::task::spawn_blocking(move || {
-            validate_project_path_for_naming(&repo_for_validation)
-        })
-        .await
-        .map_err(|e| format!("repo_path 校验线程错误: {e}"))??;
+        tokio::task::spawn_blocking(move || validate_project_path_for_naming(&repo_for_validation))
+            .await
+            .map_err(|e| format!("repo_path 校验线程错误: {e}"))??;
         repo_trim.to_string()
     } else {
         project_path.clone()
@@ -1099,7 +1198,11 @@ pub async fn generate_yunxiao_writeback_summary(
     .map_err(|e| format!("收集 git 事实线程错误: {e}"))?;
 
     // 会话摘要：供「基于会话」撰写汇总；校验失败/文件超限时降级为无会话模式。
-    let session_text = match session_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let session_text = match session_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(raw) => {
             let project_for_session = project_path.clone();
             let is_codex = agent == "codex";
@@ -1135,8 +1238,15 @@ pub async fn generate_yunxiao_writeback_summary(
         &commits,
         &diff_stat,
     );
-    let output = run_headless_agent_with_timeout(&agent, &project_path, &prompt, WRITEBACK_TIMEOUT, false, None)
-        .await?;
+    let output = run_headless_agent_with_timeout(
+        &agent,
+        &project_path,
+        &prompt,
+        WRITEBACK_TIMEOUT,
+        false,
+        None,
+    )
+    .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1168,15 +1278,20 @@ pub struct KnowledgeSuggestion {
     pub evidence: String,
     pub confidence: String,
     pub suggested_title: String,
+    /// 生成候选时绑定的知识图谱，防止配置切换后旧草稿跨库写入。
+    #[serde(default)]
+    pub knowledge_graph_id: String,
 }
 
-const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于下面的会话过程与云效议题信息，对照 HIS 知识图谱，识别「有价值且图谱中没有」的知识，按给定格式输出候选。
+const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于下面的会话过程与云效议题信息，对照项目绑定的知识图谱，识别「有价值且图谱中没有」的知识，按给定格式输出候选。
 
 严格遵循下方 <KNOWLEDGE_RULES> 内的提取规则，并按其判定标准、比对方法与输出格式输出。
 
 <KNOWLEDGE_RULES>
 {knowledge_rules}
 </KNOWLEDGE_RULES>
+
+每条候选必须携带 "knowledgeGraphId"，值必须是：{target_graph_id}
 
 ──── 云效议题 ────
 编号：{serial_number}
@@ -1189,7 +1304,10 @@ const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于
 {session_text}
 
 ──── 知识图谱数据目录 ────
+技能目录：{graph_skill_dir}
 {graph_data_dir}
+
+先读取技能目录下的 SKILL.md，再按数据目录查询图谱。
 
 ──── 项目根目录 ────
 {project_path}
@@ -1204,7 +1322,9 @@ fn build_sedimentation_prompt(
     link: &str,
     fields_text: &str,
     session_text: &str,
+    graph_skill_dir: &str,
     graph_data_dir: &str,
+    target_graph_id: &str,
     project_path: &str,
 ) -> String {
     let placeholder = |s: &str| -> String {
@@ -1221,14 +1341,16 @@ fn build_sedimentation_prompt(
         .replace("{link}", &placeholder(link))
         .replace("{fields_text}", &placeholder(fields_text))
         .replace("{session_text}", &placeholder(session_text))
+        .replace("{graph_skill_dir}", graph_skill_dir.trim())
         .replace("{graph_data_dir}", graph_data_dir.trim())
+        .replace("{target_graph_id}", target_graph_id.trim())
         .replace("{project_path}", project_path.trim())
 }
 
 /// 解析候选知识 JSON 数组并规范化字段（模块/段落缺失的条目丢弃）。
 fn parse_suggestions_json(inner: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
-    let parsed: Vec<serde_json::Value> = serde_json::from_str(inner)
-        .map_err(|e| format!("解析候选知识 JSON 失败: {e}"))?;
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(inner).map_err(|e| format!("解析候选知识 JSON 失败: {e}"))?;
     let mut out = Vec::new();
     for item in parsed {
         let module = item
@@ -1243,13 +1365,22 @@ fn parse_suggestions_json(inner: &str) -> Result<Vec<KnowledgeSuggestion>, Strin
             .unwrap_or("")
             .trim()
             .to_string();
+        let knowledge_graph_id = item
+            .get("knowledgeGraphId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if module.is_empty() || section.is_empty() {
             continue; // 缺关键字段的条目丢弃
         }
         let truncate = |s: &str| -> String {
             let t = s.trim();
             if t.chars().count() > MAX_SUGGESTION_FIELD_CHARS {
-                t.chars().take(MAX_SUGGESTION_FIELD_CHARS).collect::<String>() + "…"
+                t.chars()
+                    .take(MAX_SUGGESTION_FIELD_CHARS)
+                    .collect::<String>()
+                    + "…"
             } else {
                 t.to_string()
             }
@@ -1257,8 +1388,16 @@ fn parse_suggestions_json(inner: &str) -> Result<Vec<KnowledgeSuggestion>, Strin
         out.push(KnowledgeSuggestion {
             module,
             section,
-            content: truncate(item.get("content").and_then(serde_json::Value::as_str).unwrap_or("")),
-            evidence: truncate(item.get("evidence").and_then(serde_json::Value::as_str).unwrap_or("")),
+            content: truncate(
+                item.get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+            ),
+            evidence: truncate(
+                item.get("evidence")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(""),
+            ),
             confidence: item
                 .get("confidence")
                 .and_then(serde_json::Value::as_str)
@@ -1270,6 +1409,7 @@ fn parse_suggestions_json(inner: &str) -> Result<Vec<KnowledgeSuggestion>, Strin
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or(""),
             ),
+            knowledge_graph_id,
         });
     }
     Ok(out)
@@ -1283,9 +1423,9 @@ fn extract_suggestions(stdout: &str) -> Result<Vec<KnowledgeSuggestion>, String>
         .rfind(CLOSE)
         .and_then(|close_pos| {
             let prefix = &stdout[..close_pos];
-            prefix.rfind(OPEN).map(|open_pos| {
-                prefix[open_pos + OPEN.len()..].trim().to_string()
-            })
+            prefix
+                .rfind(OPEN)
+                .map(|open_pos| prefix[open_pos + OPEN.len()..].trim().to_string())
         })
         .ok_or_else(|| "未找到 <SUGGESTIONS> 输出标签".to_string())?;
     parse_suggestions_json(&inner)
@@ -1325,37 +1465,40 @@ pub async fn generate_knowledge_sedimentation(
         .await
         .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
 
+    // 项目绑定哪个知识库，就对照哪个知识库；未绑定/不可用时直接失败，避免默认误入 HIS。
+    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path.clone()).await?;
+    let graph_data_dir = knowledge_target.data_dir.clone();
+
     // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
     if !force.unwrap_or(false) {
-        if let Some(raw) = crate::drafts::read_draft_file(
-            &project_path,
-            &task_id,
-            "knowledge.json",
-        )
-        .map_err(|e| format!("读取知识沉淀草稿失败: {e}"))?
-        .filter(|s| !s.trim().is_empty())
+        if let Some(raw) = crate::drafts::read_draft_file(&project_path, &task_id, "knowledge.json")
+            .map_err(|e| format!("读取知识沉淀草稿失败: {e}"))?
+            .filter(|s| !s.trim().is_empty())
         {
             if let Ok(suggestions) = parse_knowledge_suggestions(&raw) {
-                return Ok(suggestions);
+                let bound_to_target = suggestions
+                    .iter()
+                    .all(|suggestion| suggestion.knowledge_graph_id == knowledge_target.id);
+                if bound_to_target {
+                    return Ok(suggestions);
+                }
+                eprintln!(
+                    "[sedimentation] draft knowledge.json bound to another graph; regenerating"
+                );
+            } else {
+                eprintln!(
+                    "[sedimentation] draft knowledge.json parse failed, falling back to headless"
+                );
             }
-            eprintln!("[sedimentation] draft knowledge.json parse failed, falling back to headless");
         }
     }
 
-    // 降级路径的图谱数据目录（his-knowledge-graph 仍保留；缺失时降级为无目录提示）。
-    let graph_data_dir =
-        tokio::task::spawn_blocking(move || -> String {
-            crate::skills::configured_hub_path()
-                .map(|hub| Path::new(&hub).join("his-knowledge-graph").join("data"))
-                .filter(|p| p.is_dir())
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "（无）".to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-
     // 会话摘要（校验失败/超限时降级为无会话模式）
-    let session_text = match session_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let session_text = match session_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(raw) => {
             let project_for_session = project_path.clone();
             let is_codex = agent == "codex";
@@ -1390,7 +1533,9 @@ pub async fn generate_knowledge_sedimentation(
         &link,
         &fields_text,
         &session_text,
+        &knowledge_target.skill_dir,
         &graph_data_dir,
+        &knowledge_target.id,
         &project_path,
     );
     let output = run_headless_agent_with_timeout(
@@ -1414,6 +1559,19 @@ pub async fn generate_knowledge_sedimentation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_knowledge_target() -> crate::knowledge::KnowledgeTarget {
+        crate::knowledge::KnowledgeTarget {
+            id: "ICUCIS".to_string(),
+            name: "ICUCIS 重症系统知识图谱".to_string(),
+            adapter: "icucis".to_string(),
+            graph_dir: "C:/skills/knowledge-graphs/ICUCIS".to_string(),
+            skill_dir: "C:/skills/knowledge-graph".to_string(),
+            data_dir: "C:/skills/knowledge-graphs/ICUCIS/data".to_string(),
+            ready: true,
+            scan_available: true,
+        }
+    }
 
     #[test]
     fn writeback_prompt_includes_session_and_pr_sections() {
@@ -1541,10 +1699,12 @@ mod tests {
 
     #[test]
     fn issue_instructions_map_req_to_grilling() {
-        let text = issue_discussion_instructions("Req", "task-123").expect("Req has instructions");
+        let target = sample_knowledge_target();
+        let text = issue_discussion_instructions("Req", "task-123", Some(&target))
+            .expect("Req has instructions");
         assert!(text.contains("grilling"));
         assert!(text.contains("What/Why/Scope"));
-        assert!(text.contains("his-knowledge-graph"));
+        assert!(text.contains("ICUCIS"));
         assert!(text.contains("issue-value-scoring"));
         assert!(text.contains("## 价值评分"));
         assert!(text.contains(".nezha/drafts/task-123/discussion.md"));
@@ -1558,10 +1718,12 @@ mod tests {
 
     #[test]
     fn issue_instructions_map_bug_to_diagnosing_bugs() {
-        let text = issue_discussion_instructions("Bug", "task-123").expect("Bug has instructions");
+        let target = sample_knowledge_target();
+        let text = issue_discussion_instructions("Bug", "task-123", Some(&target))
+            .expect("Bug has instructions");
         assert!(text.contains("diagnosing-bugs"));
         assert!(text.contains("变红"));
-        assert!(text.contains("his-knowledge-graph"));
+        assert!(text.contains("ICUCIS"));
         assert!(text.contains("issue-value-scoring"));
         assert!(text.contains("优先指数"));
         assert!(text.contains("discussion.md"));
@@ -1569,9 +1731,20 @@ mod tests {
 
     #[test]
     fn issue_instructions_none_for_task_and_unknown() {
-        assert!(issue_discussion_instructions("Task", "task-123").is_none());
-        assert!(issue_discussion_instructions("", "task-123").is_none());
-        assert!(issue_discussion_instructions("  ", "task-123").is_none());
+        let target = sample_knowledge_target();
+        assert!(issue_discussion_instructions("Task", "task-123", Some(&target)).is_none());
+        assert!(issue_discussion_instructions("", "task-123", Some(&target)).is_none());
+        assert!(issue_discussion_instructions("  ", "task-123", Some(&target)).is_none());
+    }
+
+    #[test]
+    fn issue_instructions_omit_knowledge_without_target() {
+        let text =
+            issue_discussion_instructions("Req", "task-123", None).expect("Req has instructions");
+        assert!(text.contains("grilling"));
+        assert!(!text.contains("knowledge-graph"));
+        assert!(!text.contains("knowledge.json"));
+        assert!(text.contains("discussion.md"));
     }
 
     #[test]
@@ -1656,12 +1829,16 @@ mod tests {
             "链接",
             "字段",
             "会话",
+            "C:/skills/ICUCIS",
             "C:/data",
+            "ICUCIS",
             "C:/proj",
         );
         assert!(prompt.contains("技能规则"));
         assert!(prompt.contains("QHDK-1"));
+        assert!(prompt.contains("C:/skills/ICUCIS"));
         assert!(prompt.contains("C:/data"));
+        assert!(prompt.contains("ICUCIS"));
         assert!(prompt.contains("C:/proj"));
     }
 
@@ -1691,10 +1868,9 @@ mod tests {
         );
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
-        assert!(
-            args.windows(2)
-                .any(|w| w == ["-c", "model_reasoning_effort=\"high\""])
-        );
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["-c", "model_reasoning_effort=\"high\""]));
         // 轻量模型旗标必须位于 positional prompt 之前
         let model_pos = args.iter().position(|a| *a == "fast-model").unwrap();
         let prompt_pos = args.iter().position(|a| *a == "prompt text").unwrap();
@@ -1750,7 +1926,8 @@ mod tests {
     #[test]
     fn extract_review_findings_falls_back_to_raw_json() {
         let findings =
-            extract_review_findings("[{\"rule\":\"x\",\"status\":\"warn\",\"message\":\"m\"}]").unwrap();
+            extract_review_findings("[{\"rule\":\"x\",\"status\":\"warn\",\"message\":\"m\"}]")
+                .unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].message, "m");
     }

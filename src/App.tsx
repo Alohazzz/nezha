@@ -1843,6 +1843,8 @@ function App() {
   ): Promise<string[]> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
+    const project = projects.find((candidate) => candidate.id === task.projectId);
+    if (!project) throw new Error("Project not found");
     const appSettings = await invoke<{
       yunxiao?: YunxiaoSettings;
       knowledge?: KnowledgeSettings;
@@ -1861,13 +1863,15 @@ function App() {
     // 一次提交合并成一条云效知识议题（所有候选进同一描述，不再每条一个议题）。
     const serial = task.yunxiaoSerialNumber ?? "";
     const taskLabel = (task.name ?? task.prompt).slice(0, 60);
-    const title = `【知识沉淀】${serial ? `${serial} ` : ""}${taskLabel}（${suggestions.length} 条）`;
+    const graphLabel = suggestions[0]?.knowledgeGraphId ?? "未绑定";
+    const title = `【知识沉淀】【${graphLabel}】${serial ? `${serial} ` : ""}${taskLabel}（${suggestions.length} 条）`;
     const candidateSections = suggestions
       .map(
         (s, i) =>
           [
             `### ${i + 1}. ${s.module} / ${s.section}`,
             `目标模块卡片：${s.module}（data/modules/${s.module}.md）`,
+            `目标知识库：${s.knowledgeGraphId || "未绑定"}`,
             "",
             s.content,
             "",
@@ -1920,7 +1924,7 @@ function App() {
       try {
         const writeback = await invoke<KnowledgeWritebackResult>(
           "knowledge_auto_writeback",
-          { suggestions, agent },
+          { projectPath: project.path, suggestions, agent },
         );
         if (writeback.allPassed && writeback.writtenCount > 0) {
           await invoke("yunxiao_complete_workitem", {

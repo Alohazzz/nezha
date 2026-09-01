@@ -290,6 +290,8 @@ export interface KnowledgeSuggestion {
   evidence: string;
   confidence: "confirmed" | "pending";
   suggestedTitle: string;
+  /** 生成候选时绑定的知识图谱 SkillHub 目录名，用于防止跨项目知识库回写。 */
+  knowledgeGraphId?: string;
 }
 
 /** 创建知识沉淀审核议题的结果。 */
