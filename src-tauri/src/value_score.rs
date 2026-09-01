@@ -70,25 +70,6 @@ fn first_number(s: &str) -> Option<f64> {
     None
 }
 
-/// 从完整回写内容中剥离评分小节：返回（评论正文，评分小节）。
-/// 小节不存在时返回（原文 trim，None）。
-pub fn strip_value_score_section(text: &str) -> (String, Option<String>) {
-    let Some(section) = extract_value_score_section(text) else {
-        return (text.trim().to_string(), None);
-    };
-    let start = section.as_ptr() as usize - text.as_ptr() as usize;
-    let end = start + section.len();
-    let before = text[..start].trim_end();
-    let after = text[end..].trim_start();
-    let comment = match (before.is_empty(), after.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => after.to_string(),
-        (false, true) => before.to_string(),
-        (false, false) => format!("{before}\n\n{after}"),
-    };
-    (comment, Some(section.to_string()))
-}
-
 /// 把保留的评分小节拼回重新生成的汇总末尾（幂等：汇总已含小节或没有保留值时原样返回）。
 pub fn reappend_value_score_section(summary: &str, preserved: Option<&str>) -> String {
     let summary = summary.trim_end();
@@ -169,24 +150,6 @@ mod tests {
             None
         );
         assert_eq!(parse_value_score_index(""), None);
-    }
-
-    #[test]
-    fn strips_section_from_middle_keeping_rest() {
-        let text = "开头总结\n\n## 价值评分（issue-value-scoring · 2026-08-24）\n\n- 核心指数：**12.0**\n\n## 结尾备注\n\n补充说明";
-        let (comment, section) = strip_value_score_section(text);
-        assert_eq!(comment, "开头总结\n\n## 结尾备注\n\n补充说明");
-        let section = section.expect("应剥离出评分小节");
-        assert!(section.starts_with("## 价值评分"));
-        assert!(section.contains("12.0"));
-    }
-
-    #[test]
-    fn strip_returns_original_when_no_section() {
-        let text = "只有评论内容";
-        let (comment, section) = strip_value_score_section(text);
-        assert_eq!(comment, "只有评论内容");
-        assert_eq!(section, None);
     }
 
     #[test]

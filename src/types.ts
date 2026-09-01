@@ -430,13 +430,22 @@ export interface YunxiaoIssueImagesPrepared {
 
 /** 云效提交总结回写结果：评论必已发布；价值评分字段写入状态与警告分开返回。 */
 export interface YunxiaoWritebackResult {
-  commentId: string;
+  /** 开发向评论 ID */
+  devCommentId: string;
+  /** 测试向评论 ID（测试内容为空时未发布，为 null） */
+  testCommentId: string | null;
   /** 解析出的评分指数（四舍五入），无评分小节时为 null */
   scoreValue: number | null;
   /** 「价值评分」字段是否写入成功 */
   fieldWritten: boolean;
   /** 非阻断警告（评分缺失 / 字段未找到 / 字段写入失败） */
   warning: string | null;
+}
+
+/** 云效回写草稿：开发向 + 测试向两条评论。 */
+export interface YunxiaoWritebackDraft {
+  devComment: string;
+  testComment: string;
 }
 
 export const PERM_LABELS: Record<PermissionMode, string> = {

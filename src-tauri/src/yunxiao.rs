@@ -1088,7 +1088,9 @@ async fn post_workitem_comment(
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct YunxiaoWritebackResult {
-    pub comment_id: String,
+    pub dev_comment_id: String,
+    /// 测试向评论 ID（测试内容为空时未发布，为 None）。
+    pub test_comment_id: Option<String>,
     /// 解析出的评分指数（四舍五入），无评分小节时为 None。
     pub score_value: Option<i32>,
     /// 「价值评分」字段是否写入成功。
@@ -1097,14 +1099,18 @@ pub struct YunxiaoWritebackResult {
     pub warning: Option<String>,
 }
 
-/// 提交总结回写：先发布评论（剥离评分小节），再把「价值评分」写入议题字段。
-/// 评论发布后字段写入失败不阻断（返回 warning，前端提供「补写字段」入口）。
+/// 提交总结回写：发布两条评论（开发向 + 测试向），再把「价值评分」写入议题字段。
+/// - 开发向评论保留「价值评分」推导小节（面向开发解释评分由来）；
+/// - 评分数值同时从开发向评论解析并写入议题「价值评分」字段；
+/// - 测试向评论为空时跳过发布（test_comment_id=None）。
+/// 字段写入失败不阻断（返回 warning，前端提供「补写字段」入口）。
 #[tauri::command]
 pub async fn yunxiao_writeback_with_score(
     token: String,
     organization_id: String,
     workitem_id: String,
-    content: String,
+    dev_content: String,
+    test_content: String,
 ) -> Result<YunxiaoWritebackResult, String> {
     let token = token.trim().to_string();
     let organization_id = organization_id.trim().to_string();
@@ -1112,34 +1118,47 @@ pub async fn yunxiao_writeback_with_score(
     if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
         return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
     }
-    let (comment_text, score_section) =
-        crate::value_score::strip_value_score_section(content.trim());
-    if comment_text.is_empty() {
-        return Err("评论内容不能为空".to_string());
+    let dev_content = dev_content.trim();
+    let test_content = test_content.trim();
+    if dev_content.is_empty() {
+        return Err("开发向评论不能为空".to_string());
     }
-    if comment_text.chars().count() > MAX_COMMENT_CHARS {
-        return Err(format!("评论内容超过 {MAX_COMMENT_CHARS} 字上限"));
+    if dev_content.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("开发向评论超过 {MAX_COMMENT_CHARS} 字上限"));
     }
-    let score_value = score_section
-        .as_deref()
+    if test_content.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("测试向评论超过 {MAX_COMMENT_CHARS} 字上限"));
+    }
+    // 从开发向评论解析「价值评分」数值（评分小节保留在开发向评论正文里，随评论发布）。
+    let score_value = crate::value_score::extract_value_score_section(dev_content)
         .and_then(crate::value_score::parse_value_score_index)
         .map(|v| v.round() as i32);
 
-    // 1) 评论先发布（评分小节不随评论发布）
     let client = build_client()?;
-    let comment_id = post_workitem_comment(
-        &client,
-        &token,
-        &organization_id,
-        &workitem_id,
-        &comment_text,
-    )
-    .await?;
+    // 1) 先发布开发向评论（含评分推导小节）。
+    let dev_comment_id =
+        post_workitem_comment(&client, &token, &organization_id, &workitem_id, dev_content).await?;
+    // 2) 测试向评论非空时再发布。
+    let test_comment_id = if test_content.is_empty() {
+        None
+    } else {
+        Some(
+            post_workitem_comment(
+                &client,
+                &token,
+                &organization_id,
+                &workitem_id,
+                test_content,
+            )
+            .await?,
+        )
+    };
 
-    // 2) 评分写入议题字段（失败不阻断，返回 warning）
+    // 3) 评分写入议题字段（失败不阻断，返回 warning）
     let Some(score_value) = score_value else {
         return Ok(YunxiaoWritebackResult {
-            comment_id,
+            dev_comment_id,
+            test_comment_id,
             score_value: None,
             field_written: false,
             warning: Some("未检测到价值评分小节，未写入议题字段".to_string()),
@@ -1149,13 +1168,15 @@ pub async fn yunxiao_writeback_with_score(
         .await
     {
         Ok(()) => Ok(YunxiaoWritebackResult {
-            comment_id,
+            dev_comment_id,
+            test_comment_id,
             score_value: Some(score_value),
             field_written: true,
             warning: None,
         }),
         Err(warning) => Ok(YunxiaoWritebackResult {
-            comment_id,
+            dev_comment_id,
+            test_comment_id,
             score_value: Some(score_value),
             field_written: false,
             warning: Some(warning),

@@ -15,6 +15,7 @@ import type {
   TaskDisplayWindow,
   FontFamily,
   KnowledgeSuggestion,
+  YunxiaoWritebackDraft,
   YunxiaoWritebackResult,
 } from "../types";
 import { TaskPanel } from "./TaskPanel";
@@ -49,7 +50,7 @@ import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
-import { issueTag, splitValueScoreSection } from "../utils/yunxiao";
+import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useToast } from "./Toast";
@@ -175,10 +176,14 @@ export function ProjectPage({
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
-  onGenerateWritebackSummary: (taskId: string, force?: boolean) => Promise<string>;
+  onGenerateWritebackSummary: (
+    taskId: string,
+    force?: boolean,
+  ) => Promise<YunxiaoWritebackDraft>;
   onWritebackYunxiao: (
     taskId: string,
-    content: string,
+    devContent: string,
+    testContent: string,
   ) => Promise<YunxiaoWritebackResult>;
   onRetryWritebackScoreField: (taskId: string, value: number) => Promise<void>;
   onGenerateKnowledgeSedimentation: (
@@ -500,7 +505,8 @@ export function ProjectPage({
   // ── 云效回写弹窗（V3）：生成汇总预览 → 人工确认 → 发布评论 ──────────────
   const [writebackDialog, setWritebackDialog] = useState<{
     taskId: string;
-    preview: string;
+    devPreview: string;
+    testPreview: string;
     generating: boolean;
     posting: boolean;
     error: string | null;
@@ -524,7 +530,8 @@ export function ProjectPage({
             }
           : {
               taskId,
-              preview: "",
+              devPreview: "",
+              testPreview: "",
               generating: true,
               posting: false,
               error: null,
@@ -535,10 +542,10 @@ export function ProjectPage({
             },
       );
       try {
-        const summary = await onGenerateWritebackSummary(taskId, force);
+        const draft = await onGenerateWritebackSummary(taskId, force);
         setWritebackDialog((prev) =>
           prev && prev.taskId === taskId
-            ? { ...prev, preview: summary, generating: false }
+            ? { ...prev, devPreview: draft.devComment, testPreview: draft.testComment, generating: false }
             : prev,
         );
       } catch (err) {
@@ -561,10 +568,11 @@ export function ProjectPage({
 
   const postWriteback = useCallback(async () => {
     if (!writebackDialog || writebackDialog.posting || writebackDialog.generating) return;
-    const content = writebackDialog.preview.trim();
-    if (!content) {
+    const devContent = writebackDialog.devPreview.trim();
+    const testContent = writebackDialog.testPreview.trim();
+    if (!devContent) {
       setWritebackDialog((prev) =>
-        prev ? { ...prev, error: t("yunxiao.writeback.empty") } : prev,
+        prev ? { ...prev, error: t("yunxiao.writeback.devEmpty") } : prev,
       );
       return;
     }
@@ -572,7 +580,11 @@ export function ProjectPage({
       prev ? { ...prev, posting: true, error: null } : prev,
     );
     try {
-      const result = await onWritebackYunxiao(writebackDialog.taskId, content);
+      const result = await onWritebackYunxiao(
+        writebackDialog.taskId,
+        devContent,
+        testContent,
+      );
       const serial = projectTasks.find((c) => c.id === writebackDialog.taskId)
         ?.yunxiaoSerialNumber;
       showToast(t("yunxiao.writeback.postSuccess", { serial: serial ?? "" }), "success");
@@ -1242,13 +1254,12 @@ export function ProjectPage({
       {writebackDialog &&
         (() => {
           const writebackTask = projectTasks.find((c) => c.id === writebackDialog.taskId);
-          const split = splitValueScoreSection(writebackDialog.preview);
           return (
             <YunxiaoWritebackDialog
               serialNumber={writebackTask?.yunxiaoSerialNumber ?? ""}
               title={writebackTask?.name ?? writebackTask?.prompt.slice(0, 80) ?? ""}
-              preview={split.comment}
-              scoreSection={split.scoreSection}
+              devPreview={writebackDialog.devPreview}
+              testPreview={writebackDialog.testPreview}
               generating={writebackDialog.generating}
               posting={writebackDialog.posting}
               error={writebackDialog.error}
@@ -1256,16 +1267,14 @@ export function ProjectPage({
               fieldRetrying={writebackDialog.fieldRetrying}
               retryScoreValue={writebackDialog.retryScoreValue}
               posted={writebackDialog.posted}
-              onPreviewChange={(value) =>
+              onDevChange={(value) =>
                 setWritebackDialog((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        preview: split.scoreSection
-                          ? `${value}\n\n${split.scoreSection}`
-                          : value,
-                      }
-                    : prev,
+                  prev ? { ...prev, devPreview: value } : prev,
+                )
+              }
+              onTestChange={(value) =>
+                setWritebackDialog((prev) =>
+                  prev ? { ...prev, testPreview: value } : prev,
                 )
               }
               onRetryField={() => void retryWritebackScoreField()}
