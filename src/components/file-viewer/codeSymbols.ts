@@ -43,6 +43,8 @@ const BLOCK_KEYWORDS = new Set([
   "extends", "implements", "default", "match", "when", "where", "unless",
   "until", "begin", "then", "do", "end", "def", "fn", "func", "let", "var",
   "const", "struct", "trait", "impl", "use", "pub", "mod", "select",
+  "foreach", "using", "lock", "fixed", "checked", "unchecked", "from",
+  "group", "join", "into", "orderby", "descending", "ascending",
 ]);
 
 const MODIFIERS =
@@ -54,6 +56,14 @@ const MODIFIERS =
 // 名称允许紧跟泛型 <...>，括号内允许任意参数，返回值类型以 : 开头且不含 '{'。
 const METHOD_RE = new RegExp(
   "^(\\s+)" + MODIFIERS + "([A-Za-z_$][\\w$]*)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?::[^{]*)?\\{",
+);
+
+// 返回类型感知的方法识别（C# / Java / C 等：`[modifiers] [returnType] name(...) {`）。
+// returnType 泛型/数组/可空/完全限定名均可，用贪婪 token 回溯让"(前的最后一个标识符"当作方法名。
+const RETURN_METHOD_RE = new RegExp(
+  "^(\\s+)" + MODIFIERS +
+  "(?:[A-Za-z_][\\w<>\\[\\],.?]*\\s+)+" +
+  "([A-Za-z_]\\w*)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?:\\s*\\{)?\\s*$",
 );
 
 /** 从缩进推导大纲层级：0 缩进 = 1，每 2 格 +1，最深 5 */
@@ -101,7 +111,8 @@ function getFamily(fileName: string): string {
   return "none";
 }
 
-const BRACE_FAMILIES = new Set(["ts", "c", "cs", "kt", "swift"]);
+const METHOD_FAMILIES = new Set(["ts"]);
+const RETURN_METHOD_FAMILIES = new Set(["cs", "java", "c"]);
 
 function rulesFor(family: string): Rule[] {
   switch (family) {
@@ -137,7 +148,7 @@ function rulesFor(family: string): Rule[] {
       ];
     case "java":
       return [
-        { re: /^\s*(?:public|protected|private|static|final|abstract|sealed|strictfp|@interface)\s+(?:class|interface|enum|@interface)\s+([A-Za-z_]\w*)/, kind: "other" },
+        { re: /^\s*(?:(?:public|protected|private|static|final|abstract|sealed|strictfp)\s+)*(?:class|interface|enum)\s+([A-Za-z_]\w*)/, kind: "other" },
         { re: /^\s*record\s+([A-Za-z_]\w*)/, kind: "class" },
       ];
     case "c":
@@ -147,23 +158,23 @@ function rulesFor(family: string): Rule[] {
       ];
     case "cs":
       return [
-        { re: /^\s*(?:public|private|protected|internal|static|sealed|abstract|partial|readonly|record)?\s*class\s+([A-Za-z_]\w*)/, kind: "class" },
-        { re: /^\s*(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)?\s*interface\s+([A-Za-z_]\w*)/, kind: "interface" },
-        { re: /^\s*(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)?\s*enum\s+([A-Za-z_]\w*)/, kind: "enum" },
-        { re: /^\s*(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)?\s*record\s+([A-Za-z_]\w*)/, kind: "class" },
-        { re: /^\s*(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)?\s*struct\s+([A-Za-z_]\w*)/, kind: "struct" },
+        { re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)\s+)*class\s+([A-Za-z_]\w*)/, kind: "class" },
+        { re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial)\s+)*interface\s+([A-Za-z_]\w*)/, kind: "interface" },
+        { re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract)\s+)*enum\s+([A-Za-z_]\w*)/, kind: "enum" },
+        { re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)\s+)*record\s+([A-Za-z_]\w*)/, kind: "class" },
+        { re: /^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly)\s+)*struct\s+([A-Za-z_]\w*)/, kind: "struct" },
       ];
     case "swift":
       return [
-        { re: /^\s*(?:public|private|internal|fileprivate|open|static|final|class|struct|enum|protocol|extension)\s+func\s+([A-Za-z_]\w*)\s*[<(]/, kind: "function" },
-        { re: /^\s*(?:public|private|internal|fileprivate|open|final)?\s*(?:class|struct|enum)\s+([A-Za-z_]\w*)/, kind: "other" },
-        { re: /^\s*(?:public|private|internal|fileprivate|open)?\s*protocol\s+([A-Za-z_]\w*)/, kind: "interface" },
-        { re: /^\s*(?:public|private|internal|fileprivate|open)?\s*extension\s+([A-Za-z_]\w*)/, kind: "module" },
+        { re: /^\s*(?:(?:public|private|internal|fileprivate|open|static|final|class|struct|enum|protocol|extension)\s+)*func\s+([A-Za-z_]\w*)\s*[<(]/, kind: "function" },
+        { re: /^\s*(?:(?:public|private|internal|fileprivate|open|final)\s+)*(?:class|struct|enum)\s+([A-Za-z_]\w*)/, kind: "other" },
+        { re: /^\s*(?:(?:public|private|internal|fileprivate|open)\s+)*protocol\s+([A-Za-z_]\w*)/, kind: "interface" },
+        { re: /^\s*(?:(?:public|private|internal|fileprivate|open)\s+)*extension\s+([A-Za-z_]\w*)/, kind: "module" },
       ];
     case "kt":
       return [
-        { re: /^\s*(?:public|private|protected|internal|open|final|abstract|override|suspend|inline|data|sealed|inner)?\s*(?:fun)\s+([A-Za-z_]\w*)\s*[<(]/, kind: "function" },
-        { re: /^\s*(?:public|private|protected|internal|open|final|abstract|data|sealed|enum|annotation)?\s*(?:class|interface|object|enum class)\s+([A-Za-z_]\w*)/, kind: "other" },
+        { re: /^\s*(?:(?:public|private|protected|internal|open|final|abstract|override|suspend|inline|data|sealed|inner)\s+)*fun\s+([A-Za-z_]\w*)\s*[<(]/, kind: "function" },
+        { re: /^\s*(?:(?:public|private|protected|internal|open|final|abstract|data|sealed|annotation)\s+)*(?:class|interface|object|enum\s+class)\s+([A-Za-z_]\w*)/, kind: "other" },
       ];
     case "rb":
       return [
@@ -199,7 +210,8 @@ export function extractCodeSymbols(fileName: string, content: string): CodeSymbo
   if (family === "none") return [];
 
   const rules = rulesFor(family);
-  const methodEnabled = BRACE_FAMILIES.has(family);
+  const methodEnabled = METHOD_FAMILIES.has(family) || RETURN_METHOD_FAMILIES.has(family);
+  const useReturnTypeMethod = RETURN_METHOD_FAMILIES.has(family);
   const symbols: CodeSymbol[] = [];
   const lines = content.split("\n");
 
@@ -223,7 +235,7 @@ export function extractCodeSymbols(fileName: string, content: string): CodeSymbo
 
     // 大括号语言：缩进的 "名称(...)  {" 视为方法
     if (methodEnabled && /^\s+/.test(raw)) {
-      const m = METHOD_RE.exec(raw);
+      const m = (useReturnTypeMethod ? RETURN_METHOD_RE : METHOD_RE).exec(raw);
       if (m && m[2] && !BLOCK_KEYWORDS.has(m[2])) {
         symbols.push({ name: m[2], line, kind: "method", depth });
       }

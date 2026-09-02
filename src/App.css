@@ -967,35 +967,6 @@ body {
   font-family: var(--font-mono);
 }
 
-/* ── CodeMirror find/replace panel: keep it stable, never shrink ── */
-/* 默认面板随输入框宽度收缩、多行布局在窄面板里被挤压；这里强制固定
-   输入框宽度并用 flex 换行，避免「next 后面板变小」的观感问题。 */
-.cm-panel.cm-search {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 300px;
-  padding: 4px 6px;
-}
-
-.cm-panel.cm-search .cm-textfield {
-  width: 200px;
-  min-width: 200px;
-  flex: 0 0 auto;
-}
-
-.cm-panel.cm-search .cm-textfield[name="replace"] {
-  width: 180px;
-  min-width: 180px;
-}
-
-/* 原面板用 <br> 分两行；flex 下改为整行换行，保留搜索/替换各一行 */
-.cm-panel.cm-search br {
-  flex-basis: 100%;
-  height: 0;
-}
-
 /* ── File Viewer (shiki syntax highlighting) ────────────────────── */
 .file-viewer-code {
   -webkit-user-select: text;
