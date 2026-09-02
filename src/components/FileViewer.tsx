@@ -12,6 +12,8 @@ import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import { useLanguageExtension } from "./file-viewer/languageExtensions";
 import { CommentableEditor } from "./file-viewer/CommentableEditor";
 import { CommentDrawer } from "./file-viewer/CommentDrawer";
+import { CodeOutline } from "./file-viewer/CodeOutline";
+import { extractCodeSymbols } from "./file-viewer/codeSymbols";
 import { joinProjectPath, type CommentDraft, type ReviewComment } from "./file-viewer/reviewComments";
 import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type { ThemeVariant } from "../types";
@@ -184,6 +186,7 @@ function FilePreviewPane({
   onCreateComment,
   jumpRequest,
   onJumpHandled,
+  onJumpToLine,
 }: {
   filePath: string;
   fileName: string;
@@ -193,6 +196,7 @@ function FilePreviewPane({
   onCreateComment: (draft: CommentDraft) => void;
   jumpRequest: { line: number; seq: number } | null;
   onJumpHandled: () => void;
+  onJumpToLine: (line: number) => void;
 }) {
   const editorTheme =
     themeVariant === "dark" || themeVariant === "midnight"
@@ -216,6 +220,11 @@ function FilePreviewPane({
   const { html: markdownHtml, toc } = useMemo(
     () => (isMarkdown && content !== null ? renderMarkdownWithToc(content) : { html: "", toc: [] }),
     [isMarkdown, content],
+  );
+
+  const codeSymbols = useMemo(
+    () => (!isMarkdown && !isPreviewableImage && content !== null ? extractCodeSymbols(fileName, content) : []),
+    [isMarkdown, isPreviewableImage, fileName, content],
   );
 
   const jumpToHeading = (id: string) => {
@@ -395,17 +404,24 @@ function FilePreviewPane({
                 )}
               </div>
             ) : (
-              <CommentableEditor
-                value={content}
-                onChange={handleChange}
-                theme={editorTheme}
-                baseExtensions={extensions}
-                filePath={filePath}
-                projectPath={projectPath}
-                onCreateComment={onCreateComment}
-                jumpRequest={jumpRequest}
-                onJumpHandled={onJumpHandled}
-              />
+              <div className="code-outline-pane">
+                <div className="code-outline-editor">
+                  <CommentableEditor
+                    value={content}
+                    onChange={handleChange}
+                    theme={editorTheme}
+                    baseExtensions={extensions}
+                    filePath={filePath}
+                    projectPath={projectPath}
+                    onCreateComment={onCreateComment}
+                    jumpRequest={jumpRequest}
+                    onJumpHandled={onJumpHandled}
+                  />
+                </div>
+                {codeSymbols.length > 0 && (
+                  <CodeOutline symbols={codeSymbols} onJump={onJumpToLine} />
+                )}
+              </div>
             )
           ) : null)}
       </div>
@@ -570,6 +586,11 @@ export function FileViewer({
     },
     [projectPath, tabs, activeTab?.path, onSelectTab],
   );
+
+  // 代码大纲点击符号 → 定位到对应行（当前文件已激活，无需切 tab）。
+  const handleJumpToLine = useCallback((line: number) => {
+    setJumpReq((prev) => ({ line, seq: (prev?.seq ?? 0) + 1 }));
+  }, []);
 
   if (!activeTab) return null;
 
@@ -854,6 +875,7 @@ export function FileViewer({
                 onCreateComment={onCreateComment}
                 jumpRequest={isActive ? jumpReq : null}
                 onJumpHandled={handleJumpHandled}
+                onJumpToLine={handleJumpToLine}
               />
             </div>
           );
