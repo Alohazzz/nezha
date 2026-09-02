@@ -823,6 +823,179 @@ body {
   padding-left: 68px;
 }
 
+/* ── Code outline (symbol navigation) ───────────────────────────── */
+/* 与 md-preview-pane 同构：正文 + 右侧固定大纲栏 */
+.code-outline-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+
+.code-outline-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.code-outline {
+  flex-shrink: 0;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border-dim);
+  overflow: hidden;
+  font-family: var(--font-ui);
+  min-height: 0;
+}
+
+.code-outline-collapsed {
+  width: 32px;
+}
+
+.code-outline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.code-outline-collapsed .code-outline-toggle {
+  justify-content: center;
+  padding: 7px 4px;
+}
+
+.code-outline-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.code-outline-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 4px 6px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-dim);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.code-outline-empty {
+  padding: 8px 10px;
+  color: var(--text-hint);
+  font-size: 11.5px;
+}
+
+.code-outline-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.code-outline-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.code-outline-item.active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.code-outline-item[data-depth="1"] {
+  padding-left: 8px;
+}
+.code-outline-item[data-depth="2"] {
+  padding-left: 20px;
+}
+.code-outline-item[data-depth="3"] {
+  padding-left: 32px;
+}
+.code-outline-item[data-depth="4"] {
+  padding-left: 44px;
+}
+.code-outline-item[data-depth="5"] {
+  padding-left: 56px;
+}
+.code-outline-item[data-depth="6"] {
+  padding-left: 68px;
+}
+
+.code-outline-kind {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  color: var(--text-hint);
+  font-size: 11px;
+}
+
+.code-outline-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-outline-line {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-hint);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+/* ── CodeMirror find/replace panel: keep it stable, never shrink ── */
+/* 默认面板随输入框宽度收缩、多行布局在窄面板里被挤压；这里强制固定
+   输入框宽度并用 flex 换行，避免「next 后面板变小」的观感问题。 */
+.cm-panel.cm-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 300px;
+  padding: 4px 6px;
+}
+
+.cm-panel.cm-search .cm-textfield {
+  width: 200px;
+  min-width: 200px;
+  flex: 0 0 auto;
+}
+
+.cm-panel.cm-search .cm-textfield[name="replace"] {
+  width: 180px;
+  min-width: 180px;
+}
+
+/* 原面板用 <br> 分两行；flex 下改为整行换行，保留搜索/替换各一行 */
+.cm-panel.cm-search br {
+  flex-basis: 100%;
+  height: 0;
+}
+
 /* ── File Viewer (shiki syntax highlighting) ────────────────────── */
 .file-viewer-code {
   -webkit-user-select: text;
