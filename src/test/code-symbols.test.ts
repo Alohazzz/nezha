@@ -82,4 +82,35 @@ func (s *Server) Handle() {}
     expect(extractCodeSymbols("README.md", "# hi")).toEqual([]);
     expect(extractCodeSymbols("App.tsx", "// nothing here")).toEqual([]);
   });
+
+  it("extracts C# methods with return types (not just the class)", () => {
+    const symbols = extractCodeSymbols(
+      "RaditBusFacade.cs",
+      `public partial class RaditBusFacade
+{
+    #region 入院登记
+    /// <summary>
+    /// 获取住院号
+    /// </summary>
+    private string getInpatientNo(string hosId, string clientID)
+    {
+        var sNo = string.Empty;
+    }
+
+    public Task<bool> SaveRecordAsync(int id)
+    {
+        if (id <= 0) return false;
+    }
+    public string Name { get; set; }
+    #endregion
+}
+`,
+    );
+    const names = symbols.map((s) => `${s.kind}:${s.name}`);
+    expect(names).toContain("class:RaditBusFacade");
+    expect(names).toContain("method:getInpatientNo");
+    // 不应把属性 / 控制流 / 局部变量误报为方法
+    expect(names.some((n) => n.startsWith("method:Name"))).toBe(false);
+    expect(names.some((n) => n.startsWith("method:if") || n.startsWith("method:var"))).toBe(false);
+  });
 });
