@@ -894,12 +894,37 @@ async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String>
     let repo_dir = cache_root.join(sanitize_repo_dir_name(&url));
     let repo_dir_str = repo_dir.to_string_lossy().into_owned();
 
-    let missing = tokio::task::spawn_blocking({
+    let mut missing = tokio::task::spawn_blocking({
         let repo_dir = repo_dir.clone();
         move || !repo_dir.join(".git").exists()
     })
     .await
     .map_err(|e| e.to_string())?;
+
+    // `.git` 存在 ≠ 可用克隆：一次被中断的 clone、或手工搬进来的残缺目录都会留下一个
+    // git 无法识别的 `.git`（`git status` 会报 "not a git repository"）。这里先用 git
+    // 实证校验仓库有效性，非法则清掉缓存走全新 clone，让同步能自愈而不是硬报错。
+    if !missing {
+        let (ok_repo, _out_repo, _err_repo) = run_git(
+            vec![
+                "-C".to_string(),
+                repo_dir_str.clone(),
+                "rev-parse".to_string(),
+                "--is-inside-work-tree".to_string(),
+            ],
+            None,
+        )
+        .await?;
+        if !ok_repo {
+            let dir_to_remove = repo_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                let _ = std::fs::remove_dir_all(&dir_to_remove);
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            missing = true;
+        }
+    }
 
     if missing {
         let mut args = vec!["clone".to_string(), "--depth".to_string(), "1".to_string()];
