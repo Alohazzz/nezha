@@ -13,6 +13,12 @@ import {
 
 type ComposerSource = "bubble" | "line" | "menu";
 
+/** 临时诊断探针：定位「搜索 next 后焦点离开/面板消失」。仅 dev 输出，定位后删除。 */
+const debugSearch = (...args: unknown[]) => {
+  // eslint-disable-next-line no-console
+  if (import.meta.env.DEV) console.debug("[DEBUG-srch]", ...args);
+};
+
 interface AnchorState {
   startLine: number;
   endLine: number;
@@ -125,6 +131,18 @@ export function CommentableEditor({
 
   const editorExtensions = useMemo(() => {
     const selectionListener = EditorView.updateListener.of((update) => {
+      // 搜索 next/prev 事务（userEvent: "select.search"）：记录面板是否存在、焦点状态。
+      const isSearchTxn = update.transactions.some((tr) => tr.isUserEvent("select.search"));
+      if (isSearchTxn) {
+        const active = document.activeElement;
+        debugSearch("next txn", {
+          panel: update.view.dom.querySelector(".cm-search") ? "present" : "ABSENT",
+          activeTag: active?.tagName ?? "none",
+          activeClass: active?.getAttribute?.("class") ?? "",
+          hasFocus: document.hasFocus(),
+          selectionHead: update.state.selection.main.head,
+        });
+      }
       if (!update.selectionSet && !update.docChanged) return;
       const view = update.view;
       const sel = view.state.selection.main;
@@ -202,6 +220,7 @@ export function CommentableEditor({
           searchKeymap: true,
         }}
         onCreateEditor={(view) => {
+          debugSearch("editor (re)created");
           viewRef.current = view;
           const pending = pendingJumpRef.current;
           if (pending) {
