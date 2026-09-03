@@ -6,7 +6,7 @@ use crate::storage::atomic_write;
 const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS: u64 = 15;
 
 const DEFAULT_CONFIG: &str = r#"# Nezha project configuration
-# https://github.com/hanshuaikang/nezha
+# https://github.com/Alohazzz/nezha
 
 [agent]
 # Default agent to use for new tasks: "claude" or "codex"

@@ -4,13 +4,13 @@
   "version": "0.8.5",
   "description": "An Agent-First Application For Vibe Coding",
   "author": "Hanshuaikang",
-  "homepage": "https://github.com/hanshuaikang/nezha",
+  "homepage": "https://github.com/Alohazzz/nezha",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hanshuaikang/nezha.git"
+    "url": "git+https://github.com/Alohazzz/nezha.git"
   },
   "bugs": {
-    "url": "https://github.com/hanshuaikang/nezha/issues"
+    "url": "https://github.com/Alohazzz/nezha/issues"
   },
   "type": "module",
   "scripts": {

@@ -1,7 +1,7 @@
 # 需求：云效「补录议题」——Skill 驱动的讨论中发现即建议题 + 自动待办（v1）
 
 > 状态：**需求文档（待评审）**——先评审方向，再进入 issue-first 提案流程。
-> 仓库：https://github.com/hanshuaikang/nezha
+> 仓库：https://github.com/Alohazzz/nezha
 > 承接：`yunxiao-issues-integration-v1.md`（正向导入）、`yunxiao-v3-close-loop-and-images.md`（回写闭环）、
 > `yunxiao-draft-persistence-v4.md`（草稿落盘）。本提案补齐**反向**场景：讨论/执行中发现新问题 → 补录议题并自动关联。
 

@@ -15,8 +15,6 @@ export type NavKey =
   | "skills"
   | "gitSource"
   | "about"
-  | "thanks"
-  | "community"
   | "claude"
   | "codex"
   | "dsh";
@@ -169,7 +167,7 @@ export interface AgentVersions {
 
 export type AgentKey = "claude" | "codex" | "dsh";
 
-export type NavSection = "application" | "agents" | "community" | "about";
+export type NavSection = "application" | "agents" | "about";
 
 export interface AppSettingsNavItem {
   key: NavKey;

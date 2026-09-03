@@ -12,9 +12,9 @@
   多项目工作区, 快速切换多个项目下的 AI 会话 · 实时终端 · 会话自动发现 · 原生 Git 集成 · Git Worktree 支持 · 轻量级代码编辑器 · Skill 管理 
 </p>
 <p align="center">
-  <a href="https://github.com/hanshuaikang/nezha/actions/workflows/checks.yml"><img alt="Checks" src="https://img.shields.io/github/actions/workflow/status/hanshuaikang/nezha/checks.yml?label=checks"></a>
-  <a href="https://github.com/hanshuaikang/nezha/releases"><img alt="Release" src="https://img.shields.io/github/v/release/hanshuaikang/nezha"></a>
-  <a href="https://github.com/hanshuaikang/nezha/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/hanshuaikang/nezha"></a>
+  <a href="https://github.com/Alohazzz/nezha/actions/workflows/checks.yml"><img alt="Checks" src="https://img.shields.io/github/actions/workflow/status/Alohazzz/nezha/checks.yml?label=checks"></a>
+  <a href="https://github.com/Alohazzz/nezha/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Alohazzz/nezha"></a>
+  <a href="https://github.com/Alohazzz/nezha/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Alohazzz/nezha"></a>
 </p>
 
 <div align="center">
@@ -26,7 +26,7 @@
         </a>
       </td>
       <td align="center">
-        <a href="https://hellogithub.com/repository/hanshuaikang/nezha" target="_blank" rel="noopener noreferrer">
+        <a href="https://hellogithub.com/repository/Alohazzz/nezha" target="_blank" rel="noopener noreferrer">
           <img src="https://abroad.hellogithub.com/v1/widgets/recommend.svg?rid=4dd4bd67871b461fa8bd3641d803db05&claim_uid=uT2Sc8Xli4PUA76&theme=neutral" alt="Featured｜HelloGitHub" width="155" height="48" />
         </a>
       </td>

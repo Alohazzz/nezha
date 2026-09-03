@@ -1,7 +1,7 @@
 # 需求：云效议题集成 —— 查看议题、导入待办任务、看板待办列启动会话
 
 > 状态：**需求文档（待评审）**——先评审方向，再进入 issue-first 提案流程。
-> 仓库：https://github.com/hanshuaikang/nezha
+> 仓库：https://github.com/Alohazzz/nezha
 > 对应功能：Nezha 桌面端新增「云效议题」全屏视图；议题可一键导入为本地待办任务；
 > 任务看板新增「待办」列；从待办任务直接启动 Agent 会话。
 

@@ -10,8 +10,7 @@ use crate::TaskManager;
 
 // ── Remotes & guards ─────────────────────────────────────────────────────────
 
-// 发布物源与仓库保持一致（git remote / notifications feed 都在 Alohazzz/nezha）。
-// Cargo.toml 里的 repository 是旧值（hanshuaikang/nezha），这里以实际远端为准。
+// 发布物源与仓库保持一致（git remote / Cargo.toml / notifications feed 都在 Alohazzz/nezha）。
 const RELEASE_URL: &str = "https://api.github.com/repos/Alohazzz/nezha/releases/latest";
 const DOWNLOAD_PREFIX: &str = "https://github.com/Alohazzz/nezha/releases/download/";
 const API_PREFIX: &str = "https://api.github.com/";

@@ -6,7 +6,7 @@ import { OPEN_UPDATE_DIALOG_EVENT } from "../../hooks/useUpdate";
 import s from "../../styles";
 import appLogo from "../../assets/app-logo.png";
 
-const GITHUB_REPO_URL = "https://github.com/hanshuaikang/nezha";
+const GITHUB_REPO_URL = "https://github.com/Alohazzz/nezha";
 
 export function AboutPanel() {
   const { t } = useI18n();
