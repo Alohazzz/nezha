@@ -195,6 +195,9 @@ export function RunningView({
     : !onFork || (task.agent !== "dsh" && !resumeSessionId)
       ? t("running.forkUnavailable")
       : undefined;
+  // 合并审核发起的 codeup 任务（分支合并/代码审查/处理冲突）已由 Agent 用 git/接口完成合并，
+  // 不再展示「合并到 <base>」的 worktree 合并按钮，避免与 git 合并重复/冲突。
+  const isCodeupMrTask = (task.name ?? "").match(/^(分支合并|代码审查|处理冲突)\s/);
 
   const handleGenerateClick = async () => {
     if (generatingName || isActive) return;
@@ -490,6 +493,7 @@ export function RunningView({
           task.worktreePath &&
           task.worktreeBranch &&
           !task.worktreeDiscarded &&
+          !isCodeupMrTask &&
           onMergeWorktree && (
             <button
               style={{

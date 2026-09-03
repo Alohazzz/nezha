@@ -1284,6 +1284,17 @@ pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), 
             .join(".nezha")
             .join(format!("review-{mr_id}.json")),
     );
+
+    // 合并/审查成功后自动清理该 MR 的临时 checkout：先脱离 `codeup-mr-<id>` 分支，
+    // 再删除该分支，让共享文件夹不再残留该 MR 的工作区。保留 .git 克隆与 pulled 标记，
+    // 避免下次对同一仓库重克隆。全程 best-effort，失败不影响主流程（如分支已被删除）。
+    let cleanup_root = root.clone();
+    let temp_branch = format!("codeup-mr-{mr_id}");
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = crate::git::run_git(&cleanup_root, &["checkout", "-f", "--detach", "HEAD"]);
+        let _ = crate::git::run_git(&cleanup_root, &["branch", "-D", temp_branch.as_str()]);
+    })
+    .await;
     Ok(())
 }
 
