@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { ExternalLink, Star } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { OPEN_UPDATE_DIALOG_EVENT } from "../../hooks/useUpdate";
 import s from "../../styles";
 import appLogo from "../../assets/app-logo.png";
 
@@ -93,6 +94,16 @@ export function AboutPanel() {
                 {GITHUB_REPO_URL}
                 <ExternalLink size={13} />
               </a>
+            </div>
+
+            <div>
+              <button
+                style={s.updateSecondaryBtn}
+                onClick={() => window.dispatchEvent(new Event(OPEN_UPDATE_DIALOG_EVENT))}
+                data-testid="about-check-update"
+              >
+                {t("update.checkUpdate")}
+              </button>
             </div>
           </div>
 

@@ -41,11 +41,14 @@ ignore = "0.4"
 toml = "0.8"
 libc = "0.2"
 parking_lot = "0.12"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 uuid = { version = "1", features = ["v4"] }
 trash = "=5.2.6"
 font-kit = "=0.14.3"
 zstd = "0.13"
+futures-util = "0.3"
+sha2 = "0.10"
+hex = "0.4"
 
 # 仅 Windows:关闭到托盘后进程常驻,需单实例守卫防止再次打开图标时启动重复后端
 # (两套 watcher/hook 抢写同一批 ~/.nezha 文件)。

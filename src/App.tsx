@@ -63,6 +63,7 @@ import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
 import { KanbanView, OPEN_KANBAN_VIEW_EVENT } from "./components/KanbanView";
+import { UpdateController } from "./components/update/UpdateController";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut, isToggleKanbanShortcut } from "./shortcuts";
 import { APP_PLATFORM } from "./platform";
@@ -2466,6 +2467,7 @@ function App() {
           />
         </div>
       )}
+      <UpdateController />
     </div>
   );
 }
