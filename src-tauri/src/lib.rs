@@ -28,6 +28,7 @@ mod skills;
 mod storage;
 mod subprocess;
 mod system_notify;
+mod update;
 mod usage;
 mod value_score;
 mod yunxiao;
@@ -532,6 +533,10 @@ pub fn run() {
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,
+            update::check_for_update,
+            update::download_update,
+            update::launch_update_installer,
+            update::notify_update_available,
             usage::read_usage_snapshot,
             hooks::get_hook_status,
             hooks::get_hook_readiness,

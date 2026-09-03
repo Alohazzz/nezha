@@ -554,6 +554,24 @@ export interface NotificationResult {
   unreadCount: number;
 }
 
+export interface UpdateAsset {
+  name: string;
+  size: number;
+  digest: string | null;
+  url: string;
+  supported: boolean;
+}
+
+export interface UpdateInfo {
+  version: string;
+  tag: string;
+  body: string | null;
+  publishedAt: string | null;
+  currentVersion: string;
+  supported: boolean;
+  asset: UpdateAsset | null;
+}
+
 export interface UsageWindow {
   usedPercent: number;
   remainingPercent: number;
