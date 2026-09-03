@@ -9,6 +9,7 @@ import s from "../../styles";
 
 const STATUS_LABEL: Record<string, string> = {
   UNDER_REVIEW: "评审中",
+  TO_BE_MERGED: "待合并",
   MERGED: "已合并",
   CLOSED: "已关闭",
   APPROVED: "已通过",
@@ -16,6 +17,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 function statusBadge(state: string) {
   if (state === "MERGED" || state === "APPROVED") return s.bbBadgeDone;
+  if (state === "TO_BE_MERGED") return s.bbBadgeWarn;
   if (state === "CLOSED") return s.bbBadge;
   return s.bbBadgeActive;
 }
@@ -235,17 +237,36 @@ export function MergeHubView({
           ))}
         </select>
         <button type="button" style={s.bbBtnGhost} onClick={() => void load(repoFilter)} disabled={loading}>
-          <RefreshCw size={13} />
-          刷新
+          <RefreshCw size={13} className={loading ? "spin" : undefined} />
+          {loading ? "刷新中…" : "刷新"}
         </button>
       </div>
 
       {notice && <div style={s.bbGateHint}>{notice}</div>}
       {error && <div style={s.bbGateHint}>{error}</div>}
+      {loading && mrs.length > 0 && (
+        <div style={s.bbRefreshing}>
+          <RefreshCw size={13} className="spin" />
+          正在刷新合并请求…
+        </div>
+      )}
+      {busyId && (
+        <div style={s.bbRefreshing}>
+          <RefreshCw size={13} className="spin" />
+          正在执行：
+          {busyAction === "pull" ? "拉取代码" : busyAction === "review" ? "代码审查" : busyAction === "merge" ? "分支合并" : "操作"}…
+        </div>
+      )}
 
       <div style={s.bbList}>
+        {loading && mrs.length === 0 && (
+          <div style={s.bbRefreshing}>
+            <RefreshCw size={16} className="spin" />
+            正在加载合并请求…
+          </div>
+        )}
         {!loading && mrs.length === 0 && (
-          <div style={s.bbEmpty}>当前无待你审核的合并请求。</div>
+          <div style={s.bbEmpty}>当前无待处理或待合并的合并请求。</div>
         )}
         {mrs.map((mr) => (
           <div key={mr.id} style={s.bbCard}>

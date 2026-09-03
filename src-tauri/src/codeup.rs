@@ -8,6 +8,7 @@ use crate::git::{path_to_string, resolve_repo_path, run_git};
 use crate::storage::{load_project_batches, load_projects, save_project_batches, Batch};
 use crate::yunxiao::{build_client, read_json_body, API_BASE};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Codeup API 前缀（相对接入点）。若实际为其它路径，仅需改这里。
@@ -148,6 +149,27 @@ async fn resolve_project_for_repo(repository: &str) -> Result<String, String> {
     Err(format!(
         "本地未注册仓库 {repository}，无法拉取代码。请先将其注册为 Nezha 项目。"
     ))
+}
+
+/// 一次性构建「Codeup 仓库路径 → 已注册本地项目路径」映射。
+///
+/// 遍历所有已注册项目、每个项目只做一次 git origin 解析；此后列表里每条 MR 直接查表即可，
+/// 避免原先「每条 MR × 每个项目」各跑一次 git 的 O(MR × 项目数) 开销。同名仓库保留首个命中。
+async fn build_repo_to_project_map() -> HashMap<String, String> {
+    let Ok(projects) = load_projects() else {
+        return HashMap::new();
+    };
+    let mut map = HashMap::new();
+    for project in &projects {
+        if project.path.trim().is_empty() {
+            continue;
+        }
+        if let Ok(repo) = resolve_codeup_repo(&project.path, None).await {
+            map.entry(repo.repository)
+                .or_insert_with(|| project.path.clone());
+        }
+    }
+    map
 }
 
 /// 把 Codeup 仓库路径转成安全的本地目录名（杜绝 Windows 非法字符与路径穿越）。
@@ -512,6 +534,10 @@ pub async fn codeup_create_mr(
 }
 
 /// changeRequests 分页上限（每页 20），只取最近若干页；已开启 MR 按更新时间靠前。
+/// 单次分页拉取条数（云效接口实测支持 perPage，可显著减少翻页次数、加快列表加载）。
+/// 接口若不识别该参数仍会按默认 20 条返回，下方 MIN_CHANGE_PAGE_SIZE 兜底保证不会漏页。
+const CHANGE_PAGE_SIZE: u32 = 100;
+const MIN_CHANGE_PAGE_SIZE: usize = 20;
 const MAX_CHANGE_PAGES: u32 = 10;
 
 /// 把 `nameWithNamespace`（org / group / repo）折算成仓库路径（如 "HSP/HIS"）。
@@ -605,8 +631,15 @@ pub async fn codeup_list_pending_mrs(
             .trim()
     );
     let mut out: Vec<CodeupMr> = Vec::new();
+    // 一次性解析所有已注册项目的 Codeup 仓库映射，供下方逐条 MR 查表（避免 O(MR × 项目数) 的 git 调用）。
+    let repo_to_project = build_repo_to_project_map().await;
+    // 每仓库只算一次「基路径固定文件夹」与「确定性兜底路径」，避免对重复仓库反复读应用设置。
+    let mut root_cache: HashMap<String, String> = HashMap::new();
+    let mut dir_path_cache: HashMap<String, String> = HashMap::new();
+    // 记录首页实际返回条数（用于识别真正末页），并对每一页统计「开放状态 MR 数量」用于早停。
+    let mut expected_page_len: Option<usize> = None;
     for page in 1..=MAX_CHANGE_PAGES {
-        let url = format!("{url_base}?page={page}");
+        let url = format!("{url_base}?page={page}&perPage={CHANGE_PAGE_SIZE}");
         let bytes = match crate::yunxiao::get_yunxiao_json(&client, &token, url).await {
             Ok(b) => b,
             // 第一页失败直接暴露给前端，避免把「请求/凭据失败」误显示成「无可审核 MR」。
@@ -631,15 +664,21 @@ pub async fn codeup_list_pending_mrs(
         if arr.is_empty() {
             break;
         }
+        let page_len = arr.len();
+        expected_page_len.get_or_insert(page_len);
+        let mut open_on_page = 0usize;
         for item in arr {
             let state = item
                 .get("state")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            if state != "UNDER_REVIEW" {
+            // 与云效「已开启」口径对齐：评审中 + 已通过(待合并) 都展示。
+            // 是否冲突/有冲突 是独立标记（hasConflict），不在此处过滤 —— 有/无冲突都显示。
+            if state != "UNDER_REVIEW" && state != "TO_BE_MERGED" && state != "APPROVED" {
                 continue;
             }
+            open_on_page += 1;
             let project_id = item
                 .get("projectId")
                 .and_then(|v| v.as_i64().map(|i| i.to_string()))
@@ -680,13 +719,28 @@ pub async fn codeup_list_pending_mrs(
                 .unwrap_or_default();
             let repo_path = namespace_to_repo_path(&ns);
             // 已注册项目路径：前端把审查/冲突任务挂在项目上必须依赖它（保持原样）。
-            let registered_project = resolve_project_for_repo(&repo_path).await.ok();
+            // 直接查一次性构建的仓库→项目映射，不再对每条 MR 遍历所有项目。
+            let registered_project = repo_to_project.get(&repo_path).cloned();
             // 固定文件夹路径（基路径下）：用于探测 MR 是否已拉取（只读，不触发 clone）；
             // 未注册仓库时兜底把该确定性路径给前端，让「代码审查」能自动定位、无需手动注册。
-            let root = codeup_repo_dir(&repo_path, false).await.unwrap_or_default();
+            let root = match root_cache.get(&repo_path) {
+                Some(r) => r.clone(),
+                None => {
+                    let r = codeup_repo_dir(&repo_path, false).await.unwrap_or_default();
+                    root_cache.insert(repo_path.clone(), r.clone());
+                    r
+                }
+            };
             let project_path = match &registered_project {
                 Some(p) => p.clone(),
-                None => codeup_repo_dir_path(&repo_path).await.unwrap_or_default(),
+                None => match dir_path_cache.get(&repo_path) {
+                    Some(d) => d.clone(),
+                    None => {
+                        let d = codeup_repo_dir_path(&repo_path).await.unwrap_or_default();
+                        dir_path_cache.insert(repo_path.clone(), d.clone());
+                        d
+                    }
+                },
             };
             let pulled = if root.is_empty() {
                 false
@@ -746,7 +800,13 @@ pub async fn codeup_list_pending_mrs(
                 worktree_path: if pulled { root.clone() } else { String::new() },
             });
         }
-        if arr.len() < 20 {
+        // 云效按近期活跃排序，评审中/待合并的 MR 集中在前部；一旦某一页（非首页）没有开放状态 MR，
+        // 说明已扫完开放集群，可提前结束，避免为几千条历史 MR 一路翻满 10 页。
+        if open_on_page == 0 && page > 1 {
+            break;
+        }
+        // 兜底：到达真实末页（某页返回条数少于首页）也停止。
+        if page_len < expected_page_len.unwrap_or(page_len) || page_len < MIN_CHANGE_PAGE_SIZE {
             break;
         }
     }
@@ -1217,11 +1277,8 @@ pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), 
         Ok(r) => r,
         Err(_) => return Ok(()),
     };
-    let _ = std::fs::remove_file(
-        Path::new(&root)
-            .join(".nezha")
-            .join(format!("pulled-{mr_id}")),
-    );
+    // 保留 `.nezha/pulled-<mrId>`：表示该 MR 已拉取过，清理后仍显示「已拉取」，避免每次都要重拉。
+    // 真正发起审查/合并任务时，`codeup_pull_code` 仍会 fetch + checkout 最新代码，不影响新鲜度。
     let _ = std::fs::remove_file(
         Path::new(&root)
             .join(".nezha")

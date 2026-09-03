@@ -705,20 +705,12 @@ function App() {
           if (codeupCleanup) {
             delete codeupTaskCleanupRef.current[task_id];
             if (codeupCleanup.kind === "merge" && status === "done") {
-              // 分支合并任务：Agent 已把源分支推回，收尾由宿主调 Codeup 接口真正合并 MR。
-              invoke("codeup_merge_mr", {
-                repositoryId: codeupCleanup.repositoryId,
+              // 分支合并任务：已由 Agent 用 git 将合并结果推送到目标分支完成合并，无需再调 Codeup 接口。
+              showToast("MR 已通过 git 推送合并到目标分支", "success");
+              invoke("codeup_cleanup_mr", {
+                repository: codeupCleanup.repository,
                 mrId: String(codeupCleanup.mrId),
-                mergeType: "merge",
-              })
-                .then(() => showToast("MR 已合并完成", "success"))
-                .catch((e) => showToast(`MR 合并失败: ${String(e)}`, "error"))
-                .finally(() =>
-                  invoke("codeup_cleanup_mr", {
-                    repository: codeupCleanup.repository,
-                    mrId: String(codeupCleanup.mrId),
-                  }).catch(() => {}),
-                );
+              }).catch(() => {});
             } else {
               invoke("codeup_cleanup_mr", {
                 repository: codeupCleanup.repository,
@@ -982,13 +974,13 @@ function App() {
         `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。`;
     } else if (kind === "merge") {
       prompt =
-        `你是 MR 合并助手。请在当前工作区完成把 ${mr.sourceBranch} 合并进 ${mr.targetBranch} 的操作：\n` +
-        `1. 运行 \`git fetch origin ${mr.targetBranch}\`\n` +
-        `2. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`\n` +
-        `3. 若存在冲突，修改代码解决冲突；若无冲突，执行 \`git merge --abort\` 并告知无冲突\n` +
-        `4. 解决后运行 \`git add -A\` 与 \`git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`\n` +
-        `5. 运行 \`git push origin HEAD:${mr.sourceBranch}\`\n` +
-        `完成后简要说明结果。真正的 MR 合并将由系统在任务结束后调用 Codeup 接口完成。`;
+        `你是 MR 合并助手。请仅用 git 命令在当前工作区完成把 ${mr.sourceBranch} 合并进 ${mr.targetBranch}，不要调用任何接口/平台合并功能：\n` +
+        `1. 运行 \`git fetch origin ${mr.sourceBranch} origin/${mr.targetBranch}\`\n` +
+        `2. 运行 \`git checkout ${mr.sourceBranch}\`（已在该分支则跳过）\n` +
+        `3. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`；若有冲突，修改代码解决；没有冲突也保留合并结果，不要执行 \`git merge --abort\`\n` +
+        `4. 运行 \`git add -A\` 与 \`git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`\n` +
+        `5. 运行 \`git push origin HEAD:${mr.targetBranch}\`，把合并结果直接推送到目标分支从而完成合并\n` +
+        `完成后简要说明结果。`;
     } else {
       prompt =
         `你是合并冲突解决助手。请在当前工作区按步骤完成并把结果推回源分支：\n` +

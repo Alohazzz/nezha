@@ -139,6 +139,15 @@ const branchBatch = {
     color: "var(--text-hint)",
     fontSize: 13,
   },
+  bbRefreshing: {
+    display: "flex",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 6,
+    padding: "8px 0",
+    color: "var(--text-hint)",
+    fontSize: 12,
+  },
   bbMissingNotice: {
     background: "var(--bg-card)",
     border: "1px solid var(--border-dim)",
