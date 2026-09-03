@@ -1813,6 +1813,55 @@ pub async fn create_task_worktree(
     .map_err(|e| format!("Worktree task panicked: {}", e))?
 }
 
+/// 把源分支解析为可在 `cwd` 中直接使用的引用名。
+///
+/// 合并审核（`codeup_pull_code`）在固定文件夹里把源分支 checkout 成 `codeup-mr-<id>`，
+/// 源分支名本身（如 `hotfix/xxx`）在仓库里往往只有 `refs/remotes/origin/<branch>` 远程跟踪
+/// ref，甚至完全没有被拉取。直接用裸分支名 `git worktree add --detach <path> <branch>`
+/// 会报 `invalid reference`。这里依次尝试：
+/// 1. 本地 `refs/heads/<branch>` 已存在 → 直接用（保留可能未推送到远端的本地提交）；
+/// 2. 否则 `git fetch origin <branch>` 刷新后使用 `refs/remotes/origin/<branch>`；
+/// 3. 仍不可解析 → 返回明确错误。
+fn resolve_source_branch_ref(cwd: &str, branch: &str) -> Result<String, String> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err("源分支不能为空".to_string());
+    }
+
+    // 1) 本地分支已存在。
+    let local = run_git(
+        cwd,
+        &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")],
+    )?;
+    if local.status.success() {
+        return Ok(branch.to_string());
+    }
+
+    // 2) 拉取远端源分支，使 refs/remotes/origin/<branch> 可用。
+    //    远端没有该分支时 git 的报错属正常缺失（"couldn't find remote ref"），继续走本地缓存判断；
+    //    其它错误（网络/权限等）直接抛出。
+    let fetch = run_git(cwd, &["fetch", "origin", branch])?;
+    if !fetch.status.success() {
+        let stderr = String::from_utf8_lossy(&fetch.stderr).to_lowercase();
+        if !stderr.contains("couldn't find remote ref") && !stderr.contains("find remote ref") {
+            return Err(String::from_utf8_lossy(&fetch.stderr).trim().to_string());
+        }
+    }
+
+    // 3) 使用远程跟踪 ref。
+    let remote = run_git(
+        cwd,
+        &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")],
+    )?;
+    if remote.status.success() {
+        return Ok(format!("origin/{branch}"));
+    }
+
+    Err(format!(
+        "无法解析源分支 '{branch}'：本地 refs/heads 与 refs/remotes/origin 均不存在该引用"
+    ))
+}
+
 #[tauri::command]
 pub async fn merge_task_worktree(
     project_path: String,
@@ -1837,7 +1886,9 @@ pub async fn merge_task_worktree(
         let temp_str = path_to_string(&temp)?;
         // 清掉可能残留的同名临时 worktree。
         let _ = run_git(&cwd, &["worktree", "remove", "--force", &temp_str]);
-        let add = run_git(&cwd, &["worktree", "add", "--detach", &temp_str, &branch])?;
+        // 源分支可能并非本地分支（合并审核场景下只有 origin/<branch>），先解析成可用的引用。
+        let source_ref = resolve_source_branch_ref(&cwd, &branch)?;
+        let add = run_git(&cwd, &["worktree", "add", "--detach", &temp_str, &source_ref])?;
         if !add.status.success() {
             return Err(format!(
                 "创建临时 merge worktree 失败: {}",
@@ -1852,7 +1903,7 @@ pub async fn merge_task_worktree(
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
             {
-                validate_commits_contain_tag(&cwd, &base_branch, &branch, tag)?;
+                validate_commits_contain_tag(&cwd, &base_branch, &source_ref, tag)?;
             }
             let head_out = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
             if !head_out.status.success() {
@@ -1861,7 +1912,7 @@ pub async fn merge_task_worktree(
             let original_branch = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
             if original_branch == base_branch {
                 // 主仓正在 base 上，直接合并（保留 merge commit 让历史可追溯）。
-                let merge_out = run_git(&cwd, &["merge", "--no-ff", &branch])?;
+                let merge_out = run_git(&cwd, &["merge", "--no-ff", &source_ref])?;
                 let combined = format!(
                     "{}{}",
                     String::from_utf8_lossy(&merge_out.stdout),
@@ -1876,7 +1927,7 @@ pub async fn merge_task_worktree(
                 return Ok(combined.trim().to_string());
             }
             // 主仓不在 base：用 `git fetch . <src>:<dst>` 把任务分支 ff 到 base ref，不动主仓 HEAD。
-            let refspec = format!("{}:{}", branch, base_branch);
+            let refspec = format!("{}:{}", source_ref, base_branch);
             let ff_out = run_git(&cwd, &["fetch", ".", &refspec])?;
             if !ff_out.status.success() {
                 let err = String::from_utf8_lossy(&ff_out.stderr);
@@ -2413,8 +2464,8 @@ mod tests {
     use super::{
         build_commit_message_agent_args, dir_is_git_repo, discover_git_roots_blocking,
         git_has_head, git_worktree_root, is_protected_project_relative_path, list_untracked_files,
-        parse_porcelain_z_status, path_to_string, resolve_repo_path_blocking, run_git_check,
-        untracked_files_under_directory, GitFileChange,
+        parse_porcelain_z_status, path_to_string, resolve_repo_path_blocking,
+        resolve_source_branch_ref, run_git_check, untracked_files_under_directory, GitFileChange,
     };
     use std::{
         fs,
@@ -2449,6 +2500,136 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn resolves_source_branch_to_origin_ref_when_only_on_remote() {
+        // 复现「合并审核」场景：源分支只在 origin 上（本地无 refs/heads/<branch>），
+        // 直接 `git worktree add --detach <path> <branch>` 会报 invalid reference。
+        let repo = TempRepo::new();
+        let repo_path = repo.path_string();
+
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo.path)
+                .output()
+                .unwrap()
+        };
+        let run_ok = |args: &[&str]| {
+            let out = git(args);
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+
+        run_ok(&["init", "-q"]);
+        run_ok(&["config", "user.email", "t@t.com"]);
+        run_ok(&["config", "user.name", "t"]);
+        fs::write(repo.path.join("readme.txt"), "base").unwrap();
+        run_ok(&["add", "-A"]);
+        run_ok(&["commit", "-qm", "init"]);
+
+        let remote_dir = std::env::temp_dir().join(format!(
+            "nezha-git-test-remote-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let remote_str = path_to_string(&remote_dir).unwrap();
+        Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&remote_dir)
+            .output()
+            .unwrap();
+        run_ok(&["remote", "add", "origin", &remote_str]);
+
+        let branch = "feature/merge-review-only-on-remote";
+        run_ok(&["branch", branch]);
+        run_ok(&["push", "-q", "origin", branch]);
+        // 删除本地分支，模拟合并审核只在固定文件夹 checkout 成 codeup-mr-<id> 的情形。
+        run_ok(&["branch", "-D", branch]);
+
+        let resolved = resolve_source_branch_ref(&repo_path, branch).unwrap();
+        assert_eq!(resolved, format!("origin/{branch}"));
+
+        // 用解析后的引用能真正创建临时 worktree（修复前这里会 invalid reference）。
+        let temp = repo.path.join(".nezha/worktrees/merge-prep-test");
+        fs::create_dir_all(temp.parent().unwrap()).unwrap();
+        let out = git(&["worktree", "add", "--detach", temp.to_str().unwrap(), &resolved]);
+        assert!(
+            out.status.success(),
+            "worktree add with resolved ref failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn resolves_source_branch_uses_local_ref_when_present() {
+        let repo = TempRepo::new();
+        let repo_path = repo.path_string();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo.path)
+                .output()
+                .unwrap()
+        };
+        let run_ok = |args: &[&str]| {
+            let out = git(args);
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run_ok(&["init", "-q"]);
+        run_ok(&["config", "user.email", "t@t.com"]);
+        run_ok(&["config", "user.name", "t"]);
+        fs::write(repo.path.join("readme.txt"), "base").unwrap();
+        run_ok(&["add", "-A"]);
+        run_ok(&["commit", "-qm", "init"]);
+
+        let branch = "feature/local-branch";
+        run_ok(&["branch", branch]);
+        let resolved = resolve_source_branch_ref(&repo_path, branch).unwrap();
+        assert_eq!(resolved, branch);
+    }
+
+    #[test]
+    fn rejects_unresolvable_source_branch() {
+        let repo = TempRepo::new();
+        let repo_path = repo.path_string();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&repo.path)
+                .output()
+                .unwrap()
+        };
+        let run_ok = |args: &[&str]| {
+            let out = git(args);
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run_ok(&["init", "-q"]);
+        run_ok(&["config", "user.email", "t@t.com"]);
+        run_ok(&["config", "user.name", "t"]);
+        fs::write(repo.path.join("readme.txt"), "base").unwrap();
+        run_ok(&["add", "-A"]);
+        run_ok(&["commit", "-qm", "init"]);
+
+        // 无 origin 远程，且本地不存在该分支。
+        let result = resolve_source_branch_ref(&repo_path, "no/such-branch");
+        assert!(result.is_err());
     }
 
     #[test]
