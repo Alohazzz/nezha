@@ -193,7 +193,7 @@ function statusColor(status: ProjStatus): string {
   if (status === "ok") return "var(--success, #30a46c)";
   if (status === "failed") return "var(--danger, #e5484d)";
   if (status === "building") return "var(--accent, #4f8cff)";
-  return "var(--fg-muted, #6a6a6a)";
+  return "var(--text-muted)";
 }
 
 export function BuildPanel({
@@ -699,7 +699,7 @@ export function BuildPanel({
                 </div>
               ))}
               {e.toolchain.slice(0, 4).map((t, i) => (
-                <div key={`tc${i}`} style={{ ...s.failedItemInfo, paddingLeft: 22, color: "var(--fg-muted, #9a9a9a)" }}>
+                <div key={`tc${i}`} style={{ ...s.failedItemInfo, paddingLeft: 22, color: "var(--text-muted)" }}>
                   [工具链] {t}
                 </div>
               ))}
@@ -1192,7 +1192,7 @@ function BranchSelect({
               minWidth: 200,
               maxHeight: 260,
               overflowY: "auto",
-              background: "var(--bg-elevated, #242424)",
+              background: "var(--bg-card)",
               border: "1px solid var(--border-dim, #2a2a2a)",
               borderRadius: 8,
               boxShadow: "0 8px 24px rgba(0,0,0,.4)",
@@ -1209,14 +1209,13 @@ function BranchSelect({
                   justifyContent: "space-between",
                   gap: 8,
                   fontSize: 12,
-                  color: b === repo.branch ? "var(--accent, #4f8cff)" : "var(--fg, #e6e6e6)",
+                  color: b === repo.branch ? "var(--accent, #4f8cff)" : "var(--text-primary)",
                   padding: "6px 8px",
                   borderRadius: 6,
                   cursor: "pointer",
                 }}
                 onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background =
-                    "rgba(255,255,255,.06)";
+                  (e.currentTarget as HTMLDivElement).style.background = "var(--bg-hover)";
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLDivElement).style.background = "transparent";
