@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use pulldown_cmark::{html, Options, Parser};
 
 pub(crate) const API_BASE: &str = "https://openapi-rdc.aliyuncs.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -1056,6 +1057,249 @@ pub async fn yunxiao_create_workitem_comment(
     post_workitem_comment(&client, &token, &organization_id, &workitem_id, &content).await
 }
 
+/// 把 Markdown 转成云效工作项富文本 `content`（CreateWorkitemComment 的 content 字段要求富文本 JSON 字符串）。
+///
+/// 云效富文本规范（实测确认，含临时议题 3cddd161d3ca59dd3c52e5acc0 复验）：评论/描述 `content` 是一个 JSON 字符串，
+/// 形如 `{"htmlValue":"<article class=\"4ever-article\">…</article>","jsonMLValue":["root",{},…]}`，且
+/// `contentFormat="RICHTEXT"`。**`jsonMLValue` 必须是合法的 JSONML 树，绝不能是空数组 `[]`**——空数组会触发云效前端
+/// `jsonMLToValue` 抛 `Cannot find any rule which match`，导致议题页白屏。
+///
+/// 这里用 pulldown-cmark 解析 Markdown，同时生成 htmlValue 与完整 jsonMLValue 双份。
+/// 节点映射（均经实测确认合法）：标题 → `h3`（加粗 span），段落 → `p`，加粗 → leaf `bold:true`；
+/// 列表项 / 代码块 / 引用为规避未实测的节点类型，降级为带前缀的 `p` 段落（不崩、可读）。
+fn markdown_to_yunxiao_rich_text(markdown: &str) -> String {
+    let md = markdown.trim();
+    if md.is_empty() {
+        return String::new();
+    }
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_TASKLISTS);
+
+    // 生成 htmlValue：直接渲染 HTML 包进 4ever-article 容器（阅读态富文本）。
+    let mut body = String::new();
+    html::push_html(&mut body, Parser::new_ext(md, opts));
+    let html_value = format!("<article class=\"4ever-article\">{body}</article>");
+
+    // 生成 jsonMLValue：root 下仅 p + span(leaf)，每行纯文本（云效评论最小可接受结构，保证不崩）。
+    let jsonml_value = md_to_safe_jsonml(md);
+
+    serde_json::json!({
+        "htmlValue": html_value,
+        "jsonMLValue": jsonml_value,
+    })
+    .to_string()
+}
+
+/// 生成云效「评论 / 描述」能渲染的 jsonMLValue 富文本树。
+///
+/// 规则引擎（实测：QHDK-30023 临时议题 + QHDK-29994 评论对比，以及黄金模板评论 22971651）：
+/// - 块节点结构是 `["tag", attrs, child1, child2, ...]`，children 直接是第 3 位起的子节点，**不能**包成数组；
+/// - 标题 → `h3`（leaf 带 `bold/sz/szUnit`），段落 → `p`，行内 `**x**` → bold leaf；
+/// - 不接受空数组、多余嵌套数组、未实测节点（table/ul/ol/blockquote）——这些会触发 jsonMLToValue 崩。
+/// 因此这里把标题/加粗映射为 h3/bold leaf，列表/引用/代码块降级为带前缀的 p 段落，并剥离 Markdown/HTML 残留。
+fn md_to_safe_jsonml(markdown: &str) -> serde_json::Value {
+    // 按云效编辑器黄金模板（实测 QHDK-30023 评论 id=22971651 阅读态富文本正常且不崩）生成 JSONML。
+    // 标题 -> h3 (leaf bold+sz+szUnit)，正文 -> p，行内 **x** -> bold leaf；列表/引用用前缀段落。
+    let mut blocks: Vec<serde_json::Value> = Vec::new();
+    let mut in_code = false;
+
+    fn flush_para(spans: Vec<serde_json::Value>) -> serde_json::Value {
+        // 云效 JSONML 的块节点结构是 `["tag", attrs, child1, child2, ...]`：children 直接是 Node 的
+        // 第 3 位起多个参数，**不能**再用一个数组包住 children（`["p",{},[span]]` 会触发 jsonMLToValue 崩）。
+        let mut arr = vec![serde_json::Value::String("p".to_string()), serde_json::json!({})];
+        arr.extend(spans);
+        serde_json::Value::Array(arr)
+    }
+    fn text_span(text: &str, bold: bool) -> serde_json::Value {
+        if bold {
+            serde_json::json!(["span", {"data-type":"text"}, ["span", {"bold":true,"sz":14,"szUnit":"pt","data-type":"leaf"}, text]])
+        } else {
+            serde_json::json!(["span", {"data-type":"text"}, ["span", {"data-type":"leaf"}, text]])
+        }
+    }
+    fn heading_node(text: &str) -> serde_json::Value {
+        serde_json::json!(["h3", {"spacing":{"before":12,"after":12,"line":0.8529411764705882}},
+            ["span", {"data-type":"text"}, ["span", {"bold":true,"sz":14,"szUnit":"pt","data-type":"leaf"}, text]]])
+    }
+
+    for raw_line in markdown.lines() {
+        let line = raw_line.trim_end();
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") { in_code = !in_code; continue; }
+        if trimmed.is_empty() { continue; }
+
+        if in_code {
+            let text = strip_markdown_line(line);
+            if !text.is_empty() { blocks.push(flush_para(vec![text_span(&text, false)])); }
+            continue;
+        }
+
+        // 标题（H1-H6 统一映射为 h3，云效评论只认 h3）
+        if trimmed.starts_with('#') {
+            let title = strip_markdown_line(trimmed.trim_start_matches('#'));
+            if !title.is_empty() { blocks.push(heading_node(&title)); }
+            continue;
+        }
+        // 无序列表
+        if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+            let t = strip_markdown_line(trimmed.trim_start_matches(['-','*','+']).trim());
+            if !t.is_empty() { blocks.push(flush_para(vec![text_span(&format!("- {}", t), false)])); }
+            continue;
+        }
+        // 有序列表：数字.
+        if let Some(digits) = strip_ordered_prefix(trimmed) {
+            let t = strip_markdown_line(digits);
+            if !t.is_empty() { blocks.push(flush_para(vec![text_span(&t, false)])); }
+            continue;
+        }
+        // 引用
+        if trimmed.starts_with("> ") || trimmed.starts_with('>') {
+            let t = strip_markdown_line(trimmed.trim_start_matches('>').trim());
+            if !t.is_empty() { blocks.push(flush_para(vec![text_span(&format!("▏ {}", t), false)])); }
+            continue;
+        }
+
+        // 待办清单 [- x] / [x]
+        if trimmed.starts_with("[x]") || trimmed.starts_with("[ ]") || trimmed.starts_with("[X]") {
+            let t = strip_markdown_line(trimmed);
+            if !t.is_empty() { blocks.push(flush_para(vec![text_span(&t, false)])); }
+            continue;
+        }
+
+        // 普通段落：先在含 ** 的原文上拆出 bold 片段，再对每段剥掉其余 Markdown。
+        let spans = split_inline_bold(trimmed);
+        if !spans.is_empty() {
+            blocks.push(flush_para(spans));
+        }
+    }
+
+    if blocks.is_empty() {
+        blocks.push(flush_para(vec![text_span("", false)]));
+    }
+    serde_json::Value::Array(vec![
+        serde_json::Value::String("root".to_string()),
+        serde_json::json!({}),
+        serde_json::Value::Array(blocks),
+    ])
+}
+
+/// 去掉有序列表的 "1. " 等数字前缀，返回剩余部分。
+fn strip_ordered_prefix(line: &str) -> Option<&str> {
+    let mut chars = line.chars();
+    let mut digit_count = 0;
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_digit() { digit_count += 1; } else { break; }
+    }
+    if digit_count == 0 { return None; }
+    let rest = line[digit_count..].trim_start();
+    if let Some(r) = rest.strip_prefix(".") { Some(r.trim_start()) } else { None }
+}
+
+/// 把含 `**` 的原文按加粗态拆成「普通 / 加粗」交替的 span 序列；每段再剥离其余 Markdown。
+fn split_inline_bold(text: &str) -> Vec<serde_json::Value> {
+    let mut spans = Vec::new();
+    let mut bold = false;
+    let mut rest = text;
+    loop {
+        let idx = rest.find("**");
+        let segment = match idx {
+            Some(i) => {
+                let seg = &rest[..i];
+                rest = &rest[i + 2..];
+                seg
+            }
+            None => {
+                let seg = rest;
+                rest = "";
+                seg
+            }
+        };
+        let cleaned = strip_markdown_line(segment);
+        if !cleaned.is_empty() {
+            spans.push(text_span_leaf(&cleaned, bold));
+        }
+        bold = !bold;
+        if idx.is_none() {
+            break;
+        }
+    }
+    if spans.is_empty() { spans.push(text_span_leaf("", false)); }
+    spans
+}
+
+fn text_span_leaf(text: &str, bold: bool) -> serde_json::Value {
+    if bold {
+        serde_json::json!(["span", {"data-type":"text"}, ["span", {"bold":true,"sz":14,"szUnit":"pt","data-type":"leaf"}, text]])
+    } else {
+        serde_json::json!(["span", {"data-type":"text"}, ["span", {"data-type":"leaf"}, text]])
+    }
+}
+
+fn strip_markdown_line(line: &str) -> String {
+    let mut s = line.trim().to_string();
+    // 标题前缀：连续 # 后跟空格
+    s = s.replace("# ", "").replace("#", "");
+    // 任务清单勾选框 [x] / [ ]
+    s = s.replace("[x]", "").replace("[X]", "").replace("[ ]", "").replace("[]", "");
+    // 加粗/斜体/删除线标记
+    for pat in ["**", "__", "~~", "*", "_"] {
+        s = s.replace(pat, "");
+    }
+    // 行内代码反引号
+    s = s.replace('`', "");
+    // 链接 / 图片：保留文字部分，去 URL；图片残留的 ! 去掉
+    s = replace_markdown_links(&s);
+    s = s.replace("![", "").replace("!", "");
+    // HTML 标签整体剥离（<u>、<del>、<br>、<input ...> 等），避免把 < > 当特殊符号带入
+    s = strip_inline_html_tags(&s);
+    // 表格行：'|' 替换为空格
+    s = s.replace('|', " ");
+    s.trim().to_string()
+}
+
+/// 剥离整行内的 HTML/类标签片段（<u>…</u> → 中间文本；孤立标签直接去掉）。
+fn strip_inline_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '<' {
+            for c2 in chars.by_ref() {
+                if c2 == '>' { break; }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// 把 `[文字](url)` / `![alt](url)` 还原成「文字」，去括号与 URL。
+fn replace_markdown_links(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            if let Some(close) = s[i + 1..].find(']') {
+                let label = &s[i + 1..i + 1 + close];
+                let rest = &s[i + 1 + close + 1..];
+                if let Some(rest) = rest.strip_prefix('(') {
+                    if let Some(end) = rest.find(')') {
+                        out.push_str(label);
+                        i = i + 1 + close + 1 + 1 + end + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(s[i..].chars().next().unwrap_or(' '));
+        i += s[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    out
+}
+
 /// POST 创建评论（CreateWorkitemComment），返回评论 ID。
 async fn post_workitem_comment(
     client: &reqwest::Client,
@@ -1133,12 +1377,15 @@ pub async fn yunxiao_writeback_with_score(
     let score_value = crate::value_score::extract_value_score_section(dev_content)
         .and_then(crate::value_score::parse_value_score_index)
         .map(|v| v.round() as i32);
+    // 发送前把 Markdown 转成云效富文本 JSON（评分解析已在原始 Markdown 上完成，转换不破坏评分链路）。
+    let dev_rich = markdown_to_yunxiao_rich_text(dev_content);
+    let test_rich = markdown_to_yunxiao_rich_text(test_content);
 
     let client = build_client()?;
     // 1) 先发布开发向评论（含评分推导小节）。
     let dev_comment_id =
-        post_workitem_comment(&client, &token, &organization_id, &workitem_id, dev_content).await?;
-    // 2) 测试向评论非空时再发布。
+        post_workitem_comment(&client, &token, &organization_id, &workitem_id, &dev_rich).await?;
+    // 2) 测试向评论非空时再发布（test_content 非空则 test_rich 必非空）。
     let test_comment_id = if test_content.is_empty() {
         None
     } else {
@@ -1148,7 +1395,7 @@ pub async fn yunxiao_writeback_with_score(
                 &token,
                 &organization_id,
                 &workitem_id,
-                test_content,
+                &test_rich,
             )
             .await?,
         )
@@ -1455,6 +1702,8 @@ pub async fn yunxiao_create_knowledge_issue(
     if description.chars().count() > MAX_COMMENT_CHARS {
         return Err(format!("议题描述超过 {MAX_COMMENT_CHARS} 字上限"));
     }
+    // description 字段要求富文本 JSON 字符串（与评论一致），否则云效把 Markdown 当纯文本显示。
+    let description = markdown_to_yunxiao_rich_text(&description);
 
     // 1) 去重：搜索项目内最近需求议题，标题完全一致视为已存在
     let page = yunxiao_search_workitems(
@@ -1627,10 +1876,12 @@ pub async fn yunxiao_create_backfill_issue(
     if subject.is_empty() {
         return Err("议题标题不能为空".to_string());
     }
-    let description = build_backfill_description(&request);
-    if description.chars().count() > MAX_COMMENT_CHARS {
+    let description_md = build_backfill_description(&request);
+    if description_md.chars().count() > MAX_COMMENT_CHARS {
         return Err(format!("议题描述超过 {MAX_COMMENT_CHARS} 字上限"));
     }
+    // description 字段与评论 content 一样要求富文本 JSON 字符串，否则云效把 Markdown 当纯文本显示（## 等裸露）。
+    let description = markdown_to_yunxiao_rich_text(&description_md);
 
     let client = build_client()?;
     let assigned_to = fetch_current_user_id(&client, &token).await?;
@@ -2196,4 +2447,148 @@ mod tests {
         assert!(json.contains("\"serialNumber\":\"QHDK-123\""));
         assert!(!json.contains("workitem_id"));
     }
+
+    /// 断言 content 是合法的富文本 JSON 字符串，且 jsonMLValue 为非空合法树（root 开头）。
+    fn assert_valid_rich_text(md: &str) -> serde_json::Value {
+        let rich = markdown_to_yunxiao_rich_text(md);
+        let value: serde_json::Value =
+            serde_json::from_str(&rich).expect("富文本必须是合法 JSON 字符串");
+        let html = value.get("htmlValue").and_then(|v| v.as_str()).expect("有 htmlValue");
+        assert!(html.starts_with("<article class=\"4ever-article\">"));
+        assert!(html.ends_with("</article>"));
+        let jsonml = value.get("jsonMLValue").expect("有 jsonMLValue");
+        let arr = jsonml.as_array().expect("jsonMLValue 必须是数组");
+        assert!(!arr.is_empty(), "jsonMLValue 绝不能是空数组（会致云效白屏）");
+        assert_eq!(arr[0], serde_json::Value::String("root".to_string()));
+        value
+    }
+
+    #[test]
+    fn markdown_to_rich_text_root_has_heading_and_paragraph() {
+        let value = assert_valid_rich_text("# 标题\n\n正文段落");
+        let jsonml = value.get("jsonMLValue").unwrap().as_array().unwrap();
+        let blocks = jsonml[2].as_array().expect("root 第 2 项是 block 数组");
+        let value_str = value.to_string();
+        // 标题 -> h3，正文 -> p；两者都应存在。
+        assert!(blocks.iter().any(|b| b.get(0).and_then(|v| v.as_str()) == Some("h3")),
+            "标题应映射为 h3: {value_str}");
+        assert!(blocks.iter().any(|b| b.get(0).and_then(|v| v.as_str()) == Some("p")),
+            "正文应映射为 p: {value_str}");
+        // h3 结构必须与黄金模板一致（children 直接是 span，leaf 带 bold+sz+szUnit，无多余嵌套数组）。
+        assert!(value_str.contains("\"bold\":true"), "h3 leaf 应带 bold:true: {value_str}");
+        assert!(value_str.contains("\"sz\":14"), "h3 leaf 应带 sz:14: {value_str}");
+        assert!(!value_str.contains("\"data-type\":\"text\"},[["), "text children 不得多套数组: {value_str}");
+    }
+
+    #[test]
+    fn markdown_to_rich_text_inline_bold_uses_golden_leaf() {
+        let value = assert_valid_rich_text("这是**加粗**文字");
+        let jsonml = value.get("jsonMLValue").unwrap().to_string();
+        // 富文本实现应把 **加粗** 转成带 bold+sz 的 leaf（黄金模板），而非剥离。
+        assert!(jsonml.contains("\"bold\":true"), "行内加粗应生成 bold leaf: {jsonml}");
+        assert!(jsonml.contains("\"sz\":14") && jsonml.contains("\"szUnit\":\"pt\""), "bold leaf 应带 sz/szUnit: {jsonml}");
+        assert!(jsonml.contains("加粗"), "应保留加粗文字: {jsonml}");
+        assert!(!jsonml.contains("\"data-type\":\"text\"},[["), "不得多套嵌套数组: {jsonml}");
+    }
+
+    #[test]
+    fn markdown_to_rich_text_list_and_code_downgrade_to_plain_paragraph() {
+        // 列表/代码块降级为带前缀的纯文本 p 段落，root 下仅 p。
+        let value = assert_valid_rich_text("- 条目一\n- 条目二\n\n```\nlet x = 1;\n```");
+        let jsonml = value.get("jsonMLValue").unwrap().to_string();
+        assert!(!jsonml.contains("\"ul\"") && !jsonml.contains("\"ol\""));
+        assert!(!jsonml.contains("\"li\"") && !jsonml.contains("\"code\""));
+        assert!(!jsonml.contains("\"table\"") && !jsonml.contains("\"blockquote\""));
+        assert!(jsonml.contains("条目一"));
+        assert!(jsonml.contains("let x = 1;"));
+    }
+
+    #[test]
+    fn markdown_to_rich_text_empty_returns_empty() {
+        assert_eq!(markdown_to_yunxiao_rich_text("   "), "");
+        assert_eq!(markdown_to_yunxiao_rich_text(""), "");
+    }
+
+    #[test]
+    fn markdown_to_rich_text_jsonml_matches_known_good_nesting() {
+        // 黄金样本：实测在云效议题 3cddd161d3ca59dd3c52e5acc0 上能正常渲染（不白屏）的 p 段落结构。
+        // p.children 必须是 `["span",{"data-type":"text"},["span",{"data-type":"leaf"},"文本"]]`，
+        // 即 text 的 children 直接是 leaf 节点，**不能**再多套一层数组。
+        let value = assert_valid_rich_text("这是普通段落，用于验证渲染。");
+        let value_str = value.to_string();
+        // 生成结果中不得出现「text 的 children 再套数组」的错误形态：`"text"},[[` 
+        assert!(
+            !value_str.contains("\"data-type\":\"text\"},[["),
+            "jsonMLValue 的 text children 多套了一层数组，会导致云效 jsonMLToValue 崩，生成: {value_str}"
+        );
+        // 必须存在合法形态：`"text"},["span",{"data-type":"leaf"},"文本"]`
+        assert!(
+            value_str.contains("\"data-type\":\"text\"},[\"span\",{\"data-type\":\"leaf\"}"),
+            "应为合法嵌套（text.children 直接是 leaf），生成: {value_str}"
+        );
+    }
+
+    #[test]
+    fn markdown_to_rich_text_strips_inline_markdown() {
+        // 评论只支持纯文本 leaf，因此绝不能把 `**`、`#`、反引号、`|` 等 Markdown 原样带进 jsonMLValue。
+        let md = concat!(
+            "# 标题\n",
+            "这是**加粗**和`行内代码`。\n",
+            "| 表头 | 表头2 |\n",
+            "| 甲 | 乙 |\n",
+            "[链接文字](https://example.com)\n",
+            "- 列表项\n",
+        );
+        let value = assert_valid_rich_text(md);
+        let jsonml = value.get("jsonMLValue").unwrap().to_string();
+        // 不得残留 Markdown 符号
+        assert!(!jsonml.contains("**"), "不应残留 **，jsonMLValue: {jsonml}");
+        assert!(!jsonml.contains("\"#\""), "不应残留 #，jsonMLValue: {jsonml}");
+        assert!(!jsonml.contains('`'), "不应残留反引号，jsonMLValue: {jsonml}");
+        assert!(!jsonml.contains('|'), "不应残留竖线，jsonMLValue: {jsonml}");
+        // 链接还原为文字、URL 被去掉
+        assert!(jsonml.contains("链接文字"));
+        assert!(jsonml.contains("加粗"));
+        assert!(jsonml.contains("行内代码"));
+    }
+    #[test]
+    fn markdown_to_rich_text_strips_html_tags_and_checkboxes() {
+        let md = "- [x] 已完成**任务**：<u>下划线</u>与`代码`\n- [ ] 待办\n![示例图片](https://example.com/a.png)\n普通 <del>删除</del> 文字";
+        let value = assert_valid_rich_text(md);
+        let jsonml = value.get("jsonMLValue").unwrap().to_string();
+        assert!(!jsonml.contains("<u>"), "不应残留 <u> 标签: {jsonml}");
+        assert!(!jsonml.contains("<del>"), "不应残留 <del> 标签: {jsonml}");
+        assert!(!jsonml.contains("[x]"), "不应残留 [x]: {jsonml}");
+        assert!(!jsonml.contains("!["), "不应残留 ![ 图片语法: {jsonml}");
+        assert!(!jsonml.contains("**"), "不应残留 **: {jsonml}");
+        assert!(jsonml.contains("下划线"), "应保留下划线文字: {jsonml}");
+        assert!(jsonml.contains("已完成任务"), "应保留任务文字: {jsonml}");
+    }
+
+
+    #[test]
+    fn backfill_description_converts_to_rich_text_json() {
+        // build_backfill_description 产出 Markdown；发送前需经 markdown_to_yunxiao_rich_text 转成
+        // 云效可渲染的富文本 JSON 字符串，否则 `## 标题` 会被当纯文本显示。
+        let request = BackfillIssueRequest {
+            category: "Bug".to_string(),
+            subject: "医保主表合同单位回写不匹配".to_string(),
+            content_sections: vec![
+                BackfillContentSection { label: "缺陷描述".to_string(), text: "合同单位回写后主表不匹配。".to_string() },
+                BackfillContentSection { label: "发生频率".to_string(), text: "必现".to_string() },
+            ],
+            custom_fields: vec![],
+            source_note: Some("来源议题：QHDK-29728".to_string()),
+        };
+        let md = build_backfill_description(&request);
+        assert!(md.contains("## 缺陷描述"), "build 应产出 Markdown: {md}");
+        let desc = markdown_to_yunxiao_rich_text(&md);
+        let value: serde_json::Value = serde_json::from_str(&desc).expect("应为合法 JSON 字符串");
+        let jsonml = value.get("jsonMLValue").and_then(|v| v.as_array()).expect("有 jsonMLValue");
+        assert!(!jsonml.is_empty(), "jsonMLValue 不能为空");
+        let s = value.to_string();
+        assert!(!s.contains("\"data-type\":\"text\"},[["), "description jsonML 不得嵌套数组: {s}");
+        assert!(s.contains("\"h3\""), "标题应映射为 h3: {s}");
+    }
+
 }
