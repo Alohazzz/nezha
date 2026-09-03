@@ -11,7 +11,10 @@ use crate::storage::atomic_write;
 
 // ── Security: hardcoded allowed notification source ──────────────────────────
 
-const NOTIFICATIONS_URL: &str = "https://nezha.hanshutx.com/notifications.json";
+// 通知数据源：默认指向仓库根目录的 notifications.json。
+// 改为其它仓库/地址时只需改这一行；下面 allowed_url_prefix() 会自动跟随该地址做域名校验。
+// 注意：地址必须是公开的（GitHub raw 不对私有仓库的未认证请求返回内容）。
+const NOTIFICATIONS_URL: &str = "https://raw.githubusercontent.com/Alohazzz/nezha/main/notifications.json";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024; // 1MB limit
 const FETCH_INTERVAL_SECS: i64 = 3600; // 1 hour
 const REQUEST_TIMEOUT_SECS: u64 = 15;
@@ -178,6 +181,16 @@ fn sanitize_url(url: &Option<String>) -> Option<String> {
     })
 }
 
+/// The expected URL prefix derived from NOTIFICATIONS_URL (its scheme + host + path with the
+/// filename stripped). Used to verify the final response URL, so a changed feed URL keeps the
+/// domain guard in sync without silently broadening it to other hosts.
+fn allowed_url_prefix() -> String {
+    match NOTIFICATIONS_URL.rsplit_once('/') {
+        Some((base, _)) => format!("{base}/"),
+        None => NOTIFICATIONS_URL.to_string(),
+    }
+}
+
 /// Simple semver comparison (major.minor.patch).
 fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     let parse = |s: &str| -> Vec<u64> {
@@ -241,7 +254,8 @@ async fn fetch_remote() -> Result<Vec<RemoteNotification>, String> {
 
     // Verify response is from the expected domain (guard against redirect tricks)
     let final_url = resp.url().as_str();
-    if !final_url.starts_with("https://nezha.hanshutx.com/") {
+    let expected_prefix = allowed_url_prefix();
+    if !final_url.starts_with(&expected_prefix) {
         return Err(format!("Unexpected response URL: {final_url}"));
     }
 

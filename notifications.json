@@ -1,0 +1,28 @@
+{
+  "notifications": [
+    {
+      "id": "v0.6.7",
+      "level": "info",
+      "title": "Nezha v0.6.7 released",
+      "body": "1. Agent 支持选择 agent 响应模型；\n2. 为代理页面添加空状态提示和重试；\n3. 修复 timeline 面板与 diff 脚本的连接。",
+      "body_zh": "1. Agent 支持选择 agent 响应模型；\n2. 为代理页面添加空状态提示和重试；\n3. 修复 timeline 面板与 diff 脚本的连接。",
+      "url": "https://github.com/Alohazzz/nezha/releases",
+      "created_at": "2026-06-01",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
+      "id": "v0.6.6",
+      "level": "info",
+      "title": "Nezha v0.6.6 released",
+      "body": "1. Windows 终端性能大幅优化，恢复 Codex 表现的问题；\n2. 添加通过右键打开终端至外部浏览器/工具；\n3. 新增全新的工具栏快捷键并同步变更的工具子菜单；\n4. Windows 关闭页面在单个实例中优化；\n5. 支持项目内终端扩展配置分析。",
+      "body_zh": "1. Windows 终端性能大幅优化，恢复 Codex 表现的问题；\n2. 添加通过右键打开终端至外部浏览器/工具；\n3. 新增全新的工具栏快捷键并同步变更的工具子菜单；\n4. Windows 关闭页面在单个实例中优化；\n5. 支持项目内终端扩展配置分析。",
+      "url": "https://github.com/Alohazzz/nezha/releases",
+      "created_at": "2026-06-01",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    }
+  ]
+}
