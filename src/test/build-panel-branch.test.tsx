@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { BuildPanel } from "../components/build/BuildPanel";
+import { I18nProvider } from "../i18n";
 
 const invokeMock = vi.fn();
 
@@ -83,7 +84,11 @@ describe("BuildPanel branch switching", () => {
       }
     });
 
-    render(<BuildPanel projectPath="/workspace/HIS" width={400} />);
+    render(
+      <I18nProvider>
+        <BuildPanel projectPath="/workspace/HIS" width={400} />
+      </I18nProvider>,
+    );
 
     // Initial load: only the visible root repo renders, hidden submodule stays away.
     expect(await screen.findByText("选择分支")).toBeInTheDocument();

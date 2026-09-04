@@ -1,0 +1,265 @@
+/* ── 右侧面板共享设计语言（rp-*）────────────────────────────────────
+   与 git-history / git-changes 的面板骨架保持同一套设计语言：
+   bg-sidebar 面板根 + 48px 标题栏 + 安静文本/图标按钮 + bg-card 搜索框
+   + danger-surface 错误条 + 居中空态。尺寸、圆角、配色与 git-history.css 一致。 */
+
+.rp-root {
+  width: var(--rp-width, 280px);
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border-dim);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rp-header {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.rp-titlebar {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 4px;
+}
+
+.rp-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 标题旁的计数 / 元信息小徽标（同 git-history ref-chip 语法） */
+.rp-count-chip {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 标题栏安静文本按钮（同 git-history-sync-btn） */
+.rp-text-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  background: transparent;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s,
+    opacity 0.15s;
+}
+
+.rp-text-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+}
+
+.rp-text-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 忙碌态与主要操作共用 primary-action 实底（如「新建 PR」「发布」） */
+.rp-text-btn[data-busy="true"],
+.rp-text-btn[data-variant="primary"] {
+  background: var(--primary-action-bg);
+  border-color: var(--primary-action-bg);
+  color: var(--primary-action-fg);
+}
+
+.rp-text-btn[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--primary-action-hover);
+  border-color: var(--primary-action-hover);
+  color: var(--primary-action-fg);
+}
+
+/* 标题栏图标按钮（同 git-history-icon-btn） */
+.rp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-hint);
+  cursor: pointer;
+}
+
+.rp-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.rp-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.rp-text-btn:focus-visible,
+.rp-icon-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* 标题栏下的次级控制行（搜索框 / 选择器），同 git-history-search-shell */
+.rp-toolbar-row {
+  padding: 8px 10px 4px;
+  flex-shrink: 0;
+}
+
+/* 搜索框（同 git-history-search-box） */
+.rp-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+}
+
+.rp-search-icon {
+  flex-shrink: 0;
+  color: var(--text-hint);
+}
+
+.rp-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-ui);
+}
+
+.rp-search-input::placeholder {
+  color: var(--text-hint);
+}
+
+/* ── 反馈 ──────────────────────────────────────────────────────── */
+
+/* 常规状态行（拉取完成 / 已保存 等一句话反馈） */
+.rp-info {
+  flex-shrink: 0;
+  padding: 5px 12px 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 错误条（同 git-history-error） */
+.rp-error {
+  flex-shrink: 0;
+  margin: 0 10px 4px;
+  padding: 6px 10px;
+  background: var(--danger-surface);
+  border: 1px solid var(--danger-border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--danger-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 加载 / 空态（同 git-history-state） */
+.rp-empty {
+  padding: 20px 16px;
+  font-size: 12px;
+  color: var(--text-hint);
+  text-align: center;
+}
+
+.rp-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ── 面板内通用按钮（内容区操作，比标题栏文本按钮略大） ───────────── */
+.rp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s,
+    opacity 0.15s;
+}
+
+.rp-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-medium);
+}
+
+.rp-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.rp-btn[data-variant="primary"] {
+  background: var(--primary-action-bg);
+  border-color: var(--primary-action-bg);
+  color: var(--primary-action-fg);
+}
+
+.rp-btn[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--primary-action-hover);
+  border-color: var(--primary-action-hover);
+}
+
+.rp-btn[data-variant="danger"] {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--fg-on-accent);
+}
+
+.rp-btn[data-variant="danger"]:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.rp-btn[data-block="true"] {
+  flex: 1;
+}
+
+.rp-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

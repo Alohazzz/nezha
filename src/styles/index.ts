@@ -1,7 +1,6 @@
 import type React from "react";
 
 import { common } from "./common";
-import { build } from "./build";
 import { branchBatch } from "./branch-batch";
 import { dialogs } from "./dialogs";
 import { font } from "./font";
@@ -19,7 +18,6 @@ import { yunxiao } from "./yunxiao";
 
 const s = {
   ...layout,
-  ...build,
   ...panels,
   ...terminal,
   ...dialogs,
@@ -40,7 +38,6 @@ export default s;
 
 export {
   common,
-  build,
   branchBatch,
   dialogs,
   font,

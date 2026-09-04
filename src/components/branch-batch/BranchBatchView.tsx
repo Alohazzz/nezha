@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Plus, Send, Trash2, X } from "lucide-react";
 import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
-import s from "../../styles";
+import { rpRootStyle } from "../../styles/right-panel";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
 import { SubmitMrDialog } from "./SubmitMrDialog";
 
@@ -20,13 +20,12 @@ const STATUS_LABEL: Record<BranchBatchStatus, string> = {
 
 const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 
-function statusStyle(status: BranchBatchStatus) {
-  if (status === "active") return s.bbBadgeActive;
-  if (status === "conflict") return s.bbBadgeConflict;
-  if (status === "approved") return s.bbBadgeDone;
-  if (status === "rejected") return s.bbBadgeConflict;
-  if (status === "merged") return s.bbBadgeDone;
-  return s.bbBadge;
+/** 状态 → 徽标色调（pr-badge data-tone），与右侧面板设计语言的语义色一致。 */
+function statusTone(status: BranchBatchStatus): string | undefined {
+  if (status === "active") return "active";
+  if (status === "conflict" || status === "rejected") return "conflict";
+  if (status === "approved" || status === "merged") return "done";
+  return undefined;
 }
 
 export function BranchBatchView({
@@ -38,6 +37,7 @@ export function BranchBatchView({
   worktreeScope,
   onScopeChange,
   onClose,
+  width = 280,
 }: {
   projectPath: string;
   projectId: string;
@@ -47,6 +47,7 @@ export function BranchBatchView({
   worktreeScope: string;
   onScopeChange: (path: string) => void;
   onClose: () => void;
+  width?: number;
 }) {
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -132,36 +133,37 @@ export function BranchBatchView({
   const canSubmit = (batch: BranchBatch) => batch.status === "active";
 
   const renderBatchCard = (batch: BranchBatch, missing = false) => (
-    <div key={batch.id} style={s.bbCard}>
-      <div style={s.bbCardHead}>
-        <span style={s.bbCardTitle}>{batch.name}</span>
-        <span style={statusStyle(batch.status)}>{STATUS_LABEL[batch.status]}</span>
-        <span style={s.bbBadge}>{batch.kind}</span>
-        {missing && <span style={s.bbBadgeWarn}>WorkTree 缺失</span>}
-        {batch.runRootMissing && <span style={s.bbBadgeWarn}>运行程序缺失</span>}
+    <div key={batch.id} className="pr-card">
+      <div className="pr-card-head">
+        <span className="pr-card-title">{batch.name}</span>
+        <span className="pr-badge" data-tone={statusTone(batch.status)}>
+          {STATUS_LABEL[batch.status]}
+        </span>
+        <span className="pr-badge">{batch.kind}</span>
+        {missing && <span className="pr-badge" data-tone="warn">WorkTree 缺失</span>}
+        {batch.runRootMissing && <span className="pr-badge" data-tone="warn">运行程序缺失</span>}
         {batch.status !== "merged" &&
           batch.status !== "closed" &&
           Date.now() - batch.createdAt > OVERDUE_MS && (
-            <span style={s.bbBadgeWarn}>超期</span>
+            <span className="pr-badge" data-tone="warn">超期</span>
           )}
-        <div style={s.bbFill} />
         {batch.additions != null && batch.deletions != null && (
-          <span style={s.bbMetric}>
-            <span style={s.bbBadgeDone}>+{batch.additions}</span>
-            <span style={s.bbBadgeConflict}>-{batch.deletions}</span>
+          <span className="pr-metric">
+            <span className="pr-metric-add">+{batch.additions}</span>
+            <span className="pr-metric-del">-{batch.deletions}</span>
           </span>
         )}
       </div>
-      <div style={s.bbCardSub}>
-        <span style={s.bbCardMono}>{batch.branch}</span>
+      <div className="pr-card-sub">
+        <span className="pr-card-mono">{batch.branch}</span>
         <span>← {batch.baseBranch}</span>
         <span>→ {batch.targetBranch}</span>
         <span>{(batch.taskIds ?? []).length} 个议题</span>
       </div>
-      <div style={s.bbCardActions}>
+      <div className="pr-card-actions">
         <button
           type="button"
-          style={s.bbBtnGhost}
+          className="rp-btn"
           disabled={missing || busyId === batch.id}
           onClick={() => void handleOpen(batch)}
         >
@@ -170,7 +172,8 @@ export function BranchBatchView({
         </button>
         <button
           type="button"
-          style={s.bbBtnPrimary}
+          className="rp-btn"
+          data-variant="primary"
           disabled={!canSubmit(batch) || missing || busyId === batch.id}
           onClick={() => setSubmitBatch(batch)}
         >
@@ -179,7 +182,7 @@ export function BranchBatchView({
         </button>
         <button
           type="button"
-          style={s.bbBtnGhost}
+          className="rp-btn"
           disabled={busyId === batch.id}
           onClick={() => void handleDelete(batch)}
         >
@@ -191,36 +194,42 @@ export function BranchBatchView({
   );
 
   return (
-    <div style={s.bbView}>
-      <div style={s.bbHeader}>
-        <button type="button" style={s.bbBackBtn} onClick={onClose}>
-          <X size={14} />
-          关闭
-        </button>
-        <div style={s.bbFill} />
-        <button type="button" style={s.bbBtnPrimary} onClick={() => setShowCreate(true)}>
-          <Plus size={14} />
-          新建 PR
-        </button>
+    <div className="rp-root" style={rpRootStyle(width)}>
+      <div className="rp-header">
+        <div className="rp-titlebar">
+          <span className="rp-title">PR</span>
+          <button
+            type="button"
+            className="rp-text-btn"
+            data-variant="primary"
+            onClick={() => setShowCreate(true)}
+          >
+            <Plus size={11} />
+            新建 PR
+          </button>
+          <button type="button" className="rp-icon-btn" onClick={onClose} title="关闭">
+            <X size={13} />
+          </button>
+        </div>
       </div>
 
-      {notice && <div style={s.bbError}>{notice}</div>}
+      {notice && <div className="rp-error">{notice}</div>}
 
-      <div style={s.bbList}>
+      <div className="pr-body">
         {scopedBatches.length === 0 && (
-          <div style={s.bbEmpty}>当前 worktree 无关联 PR，点击「新建 PR」创建。</div>
+          <div className="rp-empty">当前 worktree 无关联 PR，点击「新建 PR」创建。</div>
         )}
         {scopedBatches.map((batch) => renderBatchCard(batch))}
-      </div>
 
-      {missingBatches.length > 0 && (
-        <div style={s.bbList}>
-          <div style={s.bbMissingNotice}>
-            以下批次记录仍保留，但 worktree 目录已不存在；可确认分支不需要后清理。
-          </div>
-          {missingBatches.map((batch) => renderBatchCard(batch, true))}
-        </div>
-      )}
+        {missingBatches.length > 0 && (
+          <>
+            <div className="pr-notice">
+              以下批次记录仍保留，但 worktree 目录已不存在；可确认分支不需要后清理。
+            </div>
+            {missingBatches.map((batch) => renderBatchCard(batch, true))}
+          </>
+        )}
+      </div>
 
       {showCreate && (
         <CreateBranchBatchDialog

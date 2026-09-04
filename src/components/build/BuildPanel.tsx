@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { Check, ChevronDown, Hammer, RefreshCw, Play, X, GitBranch } from "lucide-react";
-import s from "../../styles";
+import { useI18n } from "../../i18n";
+import { rpRootStyle } from "../../styles/right-panel";
 
 interface BuildRepo {
   name: string;
@@ -237,6 +238,7 @@ export function BuildPanel({
     repoPath: string;
   }) => void;
 }) {
+  const { t } = useI18n();
   const [repos, setRepos] = useState<BuildRepo[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [config, setConfig] = useState<BuildConfig | null>(null);
@@ -704,99 +706,93 @@ export function BuildPanel({
   const currentStageLabel = buildingProj?.StageLabel ?? "";
 
   const errorCard = (
-    <div style={s.card}>
-      <div style={s.cardTitle}>错误信息列表</div>
+    <div className="build-card">
+      <div className="build-card-title">错误信息列表</div>
       {errorList.length === 0 ? (
-        <div style={s.meta}>构建失败后在此列出失败项目及报错。</div>
+        <div className="build-meta">构建失败后在此列出失败项目及报错。</div>
       ) : (
         <div>
           {errorList.slice(0, 40).map((e) => (
-            <div
-              key={e.project}
-              style={{ padding: "4px 0", borderBottom: "1px solid var(--border-dim, #262626)" }}
-            >
-              <div style={s.repoRow}>
+            <div key={e.project} className="build-error-item">
+              <div className="build-row">
                 <input
                   type="checkbox"
                   checked={fixedProjects.includes(e.project)}
                   onChange={() => void toggleFixed(e.project)}
                 />
-                <span
-                  style={{
-                    color: fixedProjects.includes(e.project)
-                      ? "var(--success, #30a46c)"
-                      : "var(--danger, #e5484d)",
-                  }}
-                >
+                <span className="build-error-name" data-fixed={fixedProjects.includes(e.project)}>
                   {e.project}
                 </span>
               </div>
               {e.depFailed.length > 0 && (
-                <div style={{ ...s.failedItemInfo, paddingLeft: 22, color: "var(--warning, #f5a623)" }}>
+                <div className="build-error-info" data-tone="warn">
                   依赖失败: {e.depFailed.join(", ")}
                 </div>
               )}
               {e.errors.slice(0, 6).map((err, i) => (
-                <div key={i} style={{ ...s.failedItemInfo, paddingLeft: 22 }}>
+                <div key={i} className="build-error-info">
                   {err}
                 </div>
               ))}
               {e.toolchain.slice(0, 4).map((t, i) => (
-                <div key={`tc${i}`} style={{ ...s.failedItemInfo, paddingLeft: 22, color: "var(--text-muted)" }}>
+                <div key={`tc${i}`} className="build-error-info" data-tone="muted">
                   [工具链] {t}
                 </div>
               ))}
             </div>
           ))}
-          {errorList.length > 40 && <div style={s.meta}>… 共 {errorList.length} 个失败项目</div>}
+          {errorList.length > 40 && <div className="build-meta">… 共 {errorList.length} 个失败项目</div>}
         </div>
       )}
       {errorList.length > 0 && (
-        <div style={{ ...s.buttonRow, marginTop: 8 }}>
+        <div className="build-actions">
           <button
-            style={{ ...s.buttonSmall, ...s.buttonPrimary }}
+            className="rp-btn"
+            data-variant="primary"
             onClick={() => handleCreateFixTask()}
           >
             发起修复任务
           </button>
-          <button style={s.buttonSmall} onClick={() => void exportErrors()}>
+          <button className="rp-btn" onClick={() => void exportErrors()}>
             导出错误信息
           </button>
         </div>
       )}
-      {exportMsg && <div style={{ ...s.meta, marginTop: 6 }}>{exportMsg}</div>}
+      {exportMsg && <div className="build-meta build-export-msg">{exportMsg}</div>}
     </div>
   );
 
   const monitorBody = (
-    <div style={s.fsBody}>
-      <div style={s.fsLeft}>
+    <div className="build-fs-body">
+      <div className="build-fs-left">
         {failedProjects.length > 0 && (
-          <div style={{ ...s.card, marginBottom: 10 }}>
-            <div style={s.cardTitle}>失败项目（连锁影响）</div>
+          <div className="build-card">
+            <div className="build-card-title">失败项目（连锁影响）</div>
             {failedProjects.map((p) => (
-              <div key={p.Path} style={s.failedItem}>
-                <span>{p.Name}</span>
+              <div key={p.Path} className="build-row">
+                <span className="build-error-name">{p.Name}</span>
                 {(p.Dependents?.length ?? 0) > 0 && (
-                  <span style={s.failedItemInfo}>依赖它的 {p.Dependents!.length} 个需关注</span>
+                  <span className="build-error-info">
+                    依赖它的 {p.Dependents!.length} 个需关注
+                  </span>
                 )}
               </div>
             ))}
           </div>
         )}
           {errorCard}
-        <div style={s.card}>
-          <div style={s.cardTitle}>阶段流水线</div>
+        <div className="build-card">
+          <div className="build-card-title">阶段流水线</div>
           {stageOrder.map((st) => {
             const projects = groupedByStage.get(st.Label) ?? [];
             const done = projects.filter((p) => projStatus[toFileNoExt(p.Path)] === "ok").length;
             const fail = projects.filter((p) => projStatus[toFileNoExt(p.Path)] === "failed").length;
             const building = projects.filter((p) => projStatus[toFileNoExt(p.Path)] === "building").length;
             return (
-              <div key={st.Name} style={s.stageGroup}>
-                <div style={s.stageHead}>
+              <div key={st.Name} className="build-stage-group">
+                <div className="build-stage-head">
                   <span>{st.Label}</span>
-                  <span style={s.meta}>
+                  <span className="build-meta">
                     {done}/{st.Count}
                     {building ? ` · 构建中 ${building}` : ""}
                     {fail ? ` · 失败 ${fail}` : ""}
@@ -805,75 +801,67 @@ export function BuildPanel({
                 {projects.slice(0, 10).map((p) => {
                   const status = projStatus[toFileNoExt(p.Path)] ?? "pending";
                   return (
-                    <div key={p.Path} style={s.projRow}>
-                      <span style={{ ...s.projDot, background: statusColor(status) }} />
+                    <div key={p.Path} className="build-proj-row">
+                      <span className="build-proj-dot" style={{ background: statusColor(status) }} />
                       <span>{p.Name}</span>
                     </div>
                   );
                 })}
-                {projects.length > 10 && <div style={s.meta}>… 共 {projects.length} 个项目</div>}
+                {projects.length > 10 && <div className="build-meta">… 共 {projects.length} 个项目</div>}
               </div>
             );
           })}
         </div>
       </div>
-      <div style={s.fsRight}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            padding: "8px 12px",
-            borderBottom: "1px solid var(--border-dim, #262626)",
-          }}
-        >
-          <span style={s.meta}>原始输出</span>
-          <button style={s.buttonSmall} onClick={() => setLogText("")}>
+      <div className="build-fs-right">
+        <div className="build-fs-right-head">
+          <span className="build-meta">原始输出</span>
+          <button className="rp-btn" onClick={() => setLogText("")}>
             清空
           </button>
         </div>
-        <div style={s.fsLog}>{logText || "(等待输出…)"}</div>
+        <div className="build-fs-log">{logText || "(等待输出…)"}</div>
       </div>
     </div>
   );
 
   const fullscreenRoot = createPortal(
-    <div style={s.fsRoot}>
-      <div style={s.fsHeader}>
-        <div style={s.fsTitle}>
-          <Hammer size={16} />
+    <div className="build-fs-root">
+      <div className="build-fs-header">
+        <div className="build-fs-title">
+          <Hammer size={15} />
           <span>构建</span>
         </div>
-        <div style={s.fsBanner}>
-          <span style={s.meta}>分支</span>
+        <div className="build-fs-banner">
+          <span className="build-meta">分支</span>
           <span>{branchBanner || "—"}</span>
         </div>
-        <div style={s.meta}>
+        <div className="build-meta">
           ok {okCount}/{totalProjects}
           {failedProjects.length > 0 ? ` · 失败 ${failedProjects.length}` : ""}
           {runningId ? " · 运行中" : ""}
         </div>
-        <div style={s.fsActions}>
-          <button style={s.buttonSmall} onClick={() => setView("collapsed")}>
+        <div className="build-fs-actions">
+          <button className="rp-btn" onClick={() => setView("collapsed")}>
             收起
           </button>
           {runningId && (
-            <button style={{ ...s.buttonSmall, ...s.buttonDanger }} onClick={handleCancel}>
+            <button className="rp-btn" data-variant="danger" onClick={handleCancel}>
               取消
             </button>
           )}
-          <button style={s.buttonSmall} onClick={() => setView("panel")}>
+          <button className="rp-btn" onClick={() => setView("panel")}>
             退出构建视图
           </button>
         </div>
       </div>
-      <div style={{ padding: "8px 16px 0" }}>
-        <div style={s.progressText}>
+      <div className="build-fs-progress">
+        <div className="build-progress-text">
           进度 {progDone}/{progTotal} · {progressPct}% · {currentStageLabel || "—"} · 用时{" "}
           {fmtDur(buildElapsed)}
         </div>
-        <div style={s.progressTrack}>
-          <div style={{ ...s.progressFill, width: `${progressPct}%` }} />
+        <div className="build-progress-track">
+          <div className="build-progress-fill" style={{ width: `${progressPct}%` }} />
         </div>
       </div>
       {monitorBody}
@@ -882,18 +870,18 @@ export function BuildPanel({
   );
 
   const collapsedBar = createPortal(
-    <div style={s.collapseBar}>
+    <div className="build-collapse-bar">
       <Hammer size={13} />
       <span>构建中：{branchBanner || "—"}</span>
-      <span style={s.collapseBarSpacer} />
-      <span style={s.meta}>
+      <span className="build-collapse-spacer" />
+      <span className="build-meta">
         ok {okCount}/{totalProjects}
         {failedProjects.length > 0 ? ` · 失败 ${failedProjects.length}` : ""}
       </span>
-      <button style={s.buttonSmall} onClick={() => setView("fullscreen")}>
+      <button className="rp-btn" onClick={() => setView("fullscreen")}>
         展开
       </button>
-      <button style={{ ...s.buttonSmall, ...s.buttonDanger }} onClick={handleCancel}>
+      <button className="rp-btn" data-variant="danger" onClick={handleCancel}>
         取消
       </button>
     </div>,
@@ -901,24 +889,23 @@ export function BuildPanel({
   );
 
   const sidePanel = (
-    <div style={{ ...s.panelRoot, width }}>
-      <div style={s.header}>
-        <div style={s.headerTitle}>
-          <Hammer size={15} />
-          <span>构建</span>
+    <div className="rp-root" style={rpRootStyle(width)}>
+      <div className="rp-header">
+        <div className="rp-titlebar">
+          <span className="rp-title">{t("toolbar.build")}</span>
+          <button type="button" className="rp-text-btn" onClick={() => setView("fullscreen")}>
+            全屏
+          </button>
         </div>
-        <button style={s.buttonSmall} onClick={() => setView("fullscreen")}>
-          全屏
-        </button>
       </div>
 
-      <div style={s.scroll}>
+      <div className="build-scroll">
         {/* 仓库 */}
-        <div style={s.card}>
-          <div style={s.cardTitle}>仓库拉取</div>
-          {repos.length === 0 && <div style={s.meta}>未发现 git 仓库</div>}
+        <div className="build-card">
+          <div className="build-card-title">仓库拉取</div>
+          {repos.length === 0 && <div className="build-meta">未发现 git 仓库</div>}
           {repos.map((r) => (
-            <div key={r.name} style={s.repoRow}>
+            <div key={r.name} className="build-row">
               <input
                 type="checkbox"
                 checked={selected.has(r.name)}
@@ -931,29 +918,29 @@ export function BuildPanel({
                   })
                 }
               />
-              <span style={s.repoName} title={r.path}>
+              <span className="build-row-name" title={r.path}>
                 {r.name}
               </span>
               <BranchSelect repo={r} onChange={(b) => void handleBranch(r, b)} />
               {r.missing ? (
-                <span style={{ ...s.badge, color: "var(--danger, #e5484d)" }}>缺失</span>
+                <span className="build-badge" data-tone="danger">缺失</span>
               ) : r.dirty ? (
-                <span style={{ ...s.badge, color: "var(--warning, #f5a623)" }}>脏</span>
+                <span className="build-badge" data-tone="warn">脏</span>
               ) : null}
             </div>
           ))}
-          <div style={{ ...s.buttonRow, marginTop: 8 }}>
-            <button style={s.button} onClick={handlePull}>
+          <div className="build-actions">
+            <button className="rp-btn" data-block="true" onClick={handlePull}>
               拉取
             </button>
-            <button style={s.button} onClick={() => void handleAnalyze()}>
+            <button className="rp-btn" data-block="true" onClick={() => void handleAnalyze()}>
               分析/计划
             </button>
-            <button style={s.button} onClick={() => void load()}>
+            <button className="rp-btn" data-block="true" onClick={() => void load()}>
               <RefreshCw size={12} />
               刷新
             </button>
-            <button style={s.button} onClick={() => void handleRefreshBaseline()}>
+            <button className="rp-btn" data-block="true" onClick={() => void handleRefreshBaseline()}>
               <RefreshCw size={12} />
               刷新基线
             </button>
@@ -961,15 +948,12 @@ export function BuildPanel({
         </div>
 
         {pullResults.length > 0 && (
-          <div style={s.card}>
+          <div className="build-card">
             {pullResults.map((r) => (
               <div
                 key={r.name}
-                style={{
-                  ...s.statusLine,
-                  fontSize: 11,
-                  color: r.ok ? undefined : "var(--danger, #e5484d)",
-                }}
+                className="build-status build-pull-line"
+                data-tone={r.ok ? undefined : "error"}
               >
                 {r.ok ? "✓" : "×"} {r.name}: {shortPull(r.message)}
               </div>
@@ -979,37 +963,35 @@ export function BuildPanel({
 
         {/* 构建分支横幅 */}
         {branchBanner && (
-          <div style={s.banner}>
-            <span style={s.meta}>构建分支</span>
+          <div className="build-banner">
+            <span className="build-meta">构建分支</span>
             <span>{branchBanner}</span>
           </div>
         )}
 
         {/* 构建 */}
-        <div style={s.card}>
-          <div style={s.cardTitle}>构建</div>
-          <div style={s.segRow}>
+        <div className="build-card">
+          <div className="build-card-title">构建</div>
+          <div className="build-seg-row">
             {(["full", "incremental", "failed"] as const).map((m) => (
               <button
                 key={m}
-                style={{ ...s.segBtn, ...(mode === m ? s.segActive : null) }}
+                className="build-seg-btn"
+                data-active={mode === m}
                 onClick={() => setMode(m)}
               >
                 {m === "full" ? "全量" : m === "incremental" ? "增量" : "仅失败"}
               </button>
             ))}
           </div>
-          <div style={{ ...s.buttonRow, marginTop: 8 }}>
+          <div className="build-actions">
             {runningId ? (
-              <button style={{ ...s.button, ...s.buttonDanger }} onClick={handleCancel}>
+              <button className="rp-btn" data-block="true" data-variant="danger" onClick={handleCancel}>
                 <X size={13} />
                 取消
               </button>
             ) : (
-              <button
-                style={{ ...s.button, ...s.buttonPrimary }}
-                onClick={handleRun}
-              >
+              <button className="rp-btn" data-block="true" data-variant="primary" onClick={handleRun}>
                 <Play size={13} />
                 运行构建
               </button>
@@ -1017,25 +999,25 @@ export function BuildPanel({
           </div>
           {runningId && (
             <div>
-              <div style={s.progressText}>
+              <div className="build-progress-text">
                 进度 {progDone}/{progTotal} · {progressPct}%
                 {currentStageLabel ? ` · ${currentStageLabel}` : ""}
-                <span style={s.meta}> · 用时 {fmtDur(buildElapsed)}</span>
+                <span className="build-meta"> · 用时 {fmtDur(buildElapsed)}</span>
               </div>
-              <div style={s.progressTrack}>
-                <div style={{ ...s.progressFill, width: `${progressPct}%` }} />
+              <div className="build-progress-track">
+                <div className="build-progress-fill" style={{ width: `${progressPct}%` }} />
               </div>
             </div>
           )}
         </div>
 
-        {statusText && <div style={s.statusLine}>{statusText}</div>}
-        {error && <div style={{ ...s.statusLine, ...s.errText }}>{error}</div>}
-        {state.updated_at && <div style={s.meta}>上次构建基线: {state.updated_at}</div>}
+        {statusText && <div className="build-status">{statusText}</div>}
+        {error && <div className="rp-error">{error}</div>}
+        {state.updated_at && <div className="build-meta">上次构建基线: {state.updated_at}</div>}
           {errorCard}
 
         {plan?.Scope && (
-          <div style={s.meta}>
+          <div className="build-meta">
             范围：{plan.Scope.TotalProjects} 项目 / 排除 {plan.Scope.CoreExcluded} / 编译{" "}
             {plan.Scope.ToBuild}
           </div>
@@ -1043,24 +1025,24 @@ export function BuildPanel({
 
         {/* 环境检查 */}
         {plan && (
-          <div style={s.card}>
-            <div style={s.cardTitle}>环境检查</div>
-            <div style={s.meta}>外部依赖 dll 引用 {totalRefs} 处</div>
+          <div className="build-card">
+            <div className="build-card-title">环境检查</div>
+            <div className="build-meta">外部依赖 dll 引用 {totalRefs} 处</div>
             {missingExternal.length > 0 ? (
-              <div style={{ ...s.statusLine, ...s.errText }}>
+              <div className="build-status" data-tone="error">
                 缺失 {missingExternal.length} 个：{missingExternal.slice(0, 6).join(", ")}
                 {missingExternal.length > 6 ? " …" : ""}
               </div>
             ) : (
-              <div style={{ ...s.statusLine, ...s.okText }}>外部依赖齐全</div>
+              <div className="build-status" data-tone="ok">外部依赖齐全</div>
             )}
             {conflicts.length > 0 && (
-              <div style={{ ...s.statusLine, ...s.warnText }}>
+              <div className="build-status" data-tone="warn">
                 版本冲突 {conflicts.length} 个：{conflicts.slice(0, 3).map((c) => c.Dll).join(", ")}
               </div>
             )}
             {(plan.RefIssues?.length ?? 0) > 0 && (
-              <div style={{ ...s.statusLine, ...s.warnText }}>
+              <div className="build-status" data-tone="warn">
                 引用健康 {plan.RefIssues!.length} 处：{" "}
                 {plan.RefIssues!.slice(0, 5)
                   .map((r) => `${r.Project}(${r.Type})`)
@@ -1072,18 +1054,18 @@ export function BuildPanel({
 
         {/* 阶段流水线 */}
         {stageOrder.length > 0 && (
-          <div style={s.card}>
-            <div style={s.cardTitle}>阶段流水线</div>
+          <div className="build-card">
+            <div className="build-card-title">阶段流水线</div>
             {stageOrder.map((st) => {
               const projects = groupedByStage.get(st.Label) ?? [];
               const done = projects.filter((p) => projStatus[toFileNoExt(p.Path)] === "ok").length;
               const fail = projects.filter((p) => projStatus[toFileNoExt(p.Path)] === "failed").length;
               const building = projects.filter((p) => projStatus[toFileNoExt(p.Path)] === "building").length;
               return (
-                <div key={st.Name} style={s.stageGroup}>
-                  <div style={s.stageHead}>
+                <div key={st.Name} className="build-stage-group">
+                  <div className="build-stage-head">
                     <span>{st.Label}</span>
-                    <span style={s.meta}>
+                    <span className="build-meta">
                       {done}/{st.Count}
                       {building ? ` · 构建中 ${building}` : ""}
                       {fail ? ` · 失败 ${fail}` : ""}
@@ -1092,13 +1074,13 @@ export function BuildPanel({
                   {projects.slice(0, 10).map((p) => {
                     const status = projStatus[toFileNoExt(p.Path)] ?? "pending";
                     return (
-                      <div key={p.Path} style={s.projRow}>
-                        <span style={{ ...s.projDot, background: statusColor(status) }} />
+                      <div key={p.Path} className="build-proj-row">
+                        <span className="build-proj-dot" style={{ background: statusColor(status) }} />
                         <span>{p.Name}</span>
                       </div>
                     );
                   })}
-                  {projects.length > 10 && <div style={s.meta}>… 共 {projects.length} 个项目</div>}
+                  {projects.length > 10 && <div className="build-meta">… 共 {projects.length} 个项目</div>}
                 </div>
               );
             })}
@@ -1107,41 +1089,41 @@ export function BuildPanel({
 
         {/* 原始输出 */}
         <div>
-          <button style={s.button} onClick={() => setLogOpen((v) => !v)}>
+          <button className="rp-btn" data-block="true" onClick={() => setLogOpen((v) => !v)}>
             {logOpen ? "收起原始输出" : "展开原始输出"}
           </button>
           {logOpen && (
-            <div style={{ ...s.logBox, marginTop: 8 }}>
-              <div style={s.logScroll}>{logText || "(等待输出…)"}</div>
+            <div className="build-log-box">
+              <div className="build-log-scroll">{logText || "(等待输出…)"}</div>
             </div>
           )}
         </div>
 
         {/* 配置 */}
-        <div style={s.card}>
-          <div style={s.cardTitle}>构建配置</div>
+        <div className="build-card">
+          <div className="build-card-title">构建配置</div>
           {config ? (
             <div>
-              <div style={s.configField}>
-                <label style={s.configLabel}>脚本路径（留空自动探测）</label>
+              <div className="build-field">
+                <label className="build-label">脚本路径（留空自动探测）</label>
                 <input
-                  style={s.configInput}
+                  className="build-input"
                   value={config.script_path}
                   onChange={(e) => setConfig({ ...config, script_path: e.target.value })}
                 />
               </div>
-              <div style={s.configField}>
-                <label style={s.configLabel}>MSBuild 路径（留空自动探测）</label>
+              <div className="build-field">
+                <label className="build-label">MSBuild 路径（留空自动探测）</label>
                 <input
-                  style={s.configInput}
+                  className="build-input"
                   value={config.msbuild_path}
                   onChange={(e) => setConfig({ ...config, msbuild_path: e.target.value })}
                 />
               </div>
-              <div style={s.configField}>
-                <label style={s.configLabel}>并行度 MaxParallel（1=串行，2-8 并行）</label>
+              <div className="build-field">
+                <label className="build-label">并行度 MaxParallel（1=串行，2-8 并行）</label>
                 <input
-                  style={s.configInput}
+                  className="build-input"
                   type="number"
                   min={1}
                   max={8}
@@ -1149,14 +1131,14 @@ export function BuildPanel({
                   onChange={(e) => setConfig({ ...config, max_parallel: Number(e.target.value) })}
                 />
               </div>
-              <div style={s.buttonRow}>
-                <button style={s.button} onClick={handleConfigSave}>
+              <div className="build-actions">
+                <button className="rp-btn" onClick={handleConfigSave}>
                   保存配置
                 </button>
               </div>
             </div>
           ) : (
-            <div style={s.meta}>未读取到配置</div>
+            <div className="build-meta">未读取到配置</div>
           )}
         </div>
       </div>
@@ -1215,7 +1197,7 @@ function BranchSelect({
     <>
       <button
         ref={btnRef}
-        style={s.branchTrigger}
+        className="build-branch-trigger"
         disabled={disabled}
         onClick={(e) => {
           e.stopPropagation();
@@ -1231,42 +1213,16 @@ function BranchSelect({
         pos &&
         createPortal(
           <div
-            style={{
-              position: "fixed",
-              top: pos.top,
-              left: pos.left,
-              zIndex: 2147483000,
-              minWidth: 200,
-              maxHeight: 260,
-              overflowY: "auto",
-              background: "var(--bg-card)",
-              border: "1px solid var(--border-dim, #2a2a2a)",
-              borderRadius: 8,
-              boxShadow: "0 8px 24px rgba(0,0,0,.4)",
-              padding: 4,
-            }}
+            className="build-branch-menu"
+            style={{ top: pos.top, left: pos.left }}
             onClick={(e) => e.stopPropagation()}
           >
             {repo.branches.map((b) => (
-              <div
+              <button
                 key={b}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  fontSize: 12,
-                  color: b === repo.branch ? "var(--accent, #4f8cff)" : "var(--text-primary)",
-                  padding: "6px 8px",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = "var(--bg-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = "transparent";
-                }}
+                type="button"
+                className="build-branch-item"
+                data-active={b === repo.branch}
                 onClick={() => {
                   onChange(b);
                   setOpen(false);
@@ -1274,7 +1230,7 @@ function BranchSelect({
               >
                 <span>{b}</span>
                 {b === repo.branch && <Check size={13} />}
-              </div>
+              </button>
             ))}
           </div>,
           document.body,

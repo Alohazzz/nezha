@@ -1191,6 +1191,7 @@ export function ProjectPage({
                 worktreeScope={worktreeScope}
                 onScopeChange={handleScopeChange}
                 onClose={() => handleTogglePanel("branch-batch")}
+                width={rightPanelWidth}
               />
             </ErrorBoundary>
           )}
@@ -1223,6 +1224,7 @@ export function ProjectPage({
               <KnowledgePanel
                 projectPath={project.path}
                 onOpenCard={openKnowledgeCard}
+                width={rightPanelWidth}
               />
             </ErrorBoundary>
           )}

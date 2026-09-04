@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Loader2, RefreshCw, Search } from "lucide-react";
 import { useI18n } from "../../i18n";
+import { rpRootStyle } from "../../styles/right-panel";
 import { cardAbsPath } from "./knowledgeComments";
 import { KnowledgeCardItem } from "./KnowledgeCardItem";
 
@@ -28,10 +30,12 @@ interface KnowledgeCard {
 export function KnowledgePanel({
   projectPath,
   onOpenCard,
+  width = 280,
 }: {
   projectPath: string;
   /** 点击卡片：在主窗体以 Markdown 打开对应卡片文件。 */
   onOpenCard: (module: string, absPath: string, graphId: string) => void;
+  width?: number;
 }) {
   const { t } = useI18n();
   const [graphId, setGraphId] = useState("");
@@ -111,36 +115,49 @@ export function KnowledgePanel({
   }, [graphId, t, refresh]);
 
   return (
-    <div className="kpanel">
-      <div className="kpanel-toolbar">
-        <div className="kpanel-toolbar-search">
-          <input
-            className="knowledge-search"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={t("knowledgePanel.searchCards")}
-          />
-          <span className="knowledge-count">{cards.length}</span>
-        </div>
-        <div className="kpanel-toolbar-actions">
-          <button className="knowledge-toolbar-btn" onClick={() => void refresh()} disabled={busy}>
-            {t("common.refresh")}
+    <div className="rp-root" style={rpRootStyle(width)}>
+      <div className="rp-header">
+        <div className="rp-titlebar">
+          <span className="rp-title">{t("knowledgePanel.title")}</span>
+          <span className="rp-count-chip">{cards.length}</span>
+          <button
+            type="button"
+            className="rp-icon-btn"
+            onClick={() => void refresh()}
+            disabled={busy}
+            title={t("common.refresh")}
+          >
+            <RefreshCw size={13} className={busy ? "rp-spin" : undefined} />
           </button>
           <button
-            className="knowledge-toolbar-btn"
+            type="button"
+            className="rp-text-btn"
+            data-variant={pending.length > 0 ? "primary" : undefined}
             onClick={() => void publish()}
             disabled={busy}
           >
+            {busy && <Loader2 size={11} className="rp-spin" />}
             {t("knowledgePanel.publish", { count: pending.length })}
           </button>
         </div>
+        <div className="rp-toolbar-row">
+          <div className="rp-search-box">
+            <Search size={12} className="rp-search-icon" />
+            <input
+              className="rp-search-input"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={t("knowledgePanel.searchCards")}
+            />
+          </div>
+        </div>
       </div>
 
-      {status && <div className="kpanel-status">{status}</div>}
-      {error && <div className="kpanel-error">{error}</div>}
+      {status && <div className="rp-info">{status}</div>}
+      {error && <div className="rp-error">{error}</div>}
 
       {!target || !target.ready ? (
-        <div className="kpanel-empty">{t("knowledgePanel.noGraphBound")}</div>
+        <div className="rp-empty">{t("knowledgePanel.noGraphBound")}</div>
       ) : (
         <div className="kpanel-list">
           {visibleCards.map((card) => (
@@ -160,7 +177,7 @@ export function KnowledgePanel({
             />
           ))}
           {visibleCards.length === 0 && (
-            <div className="kpanel-empty-editor">{t("knowledgePanel.selectCard")}</div>
+            <div className="rp-empty">{t("knowledgePanel.selectCard")}</div>
           )}
         </div>
       )}
