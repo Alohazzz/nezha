@@ -43,6 +43,7 @@ import { GitDiffViewer } from "./GitDiffViewer";
 import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
+import { KnowledgePanel } from "./knowledge/KnowledgePanel";
 import { BranchBatchView } from "./branch-batch/BranchBatchView";
 import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
 import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
@@ -1216,6 +1217,19 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
+          {rightPanel === "knowledge" && (
+            <ErrorBoundary label="知识库">
+              <KnowledgePanel
+                projectPath={project.path}
+                projectTasks={projectTasks}
+                repoPath={subRepoPath}
+                onInput={onInput}
+                onResumeTaskAndSend={onResumeTaskAndSend}
+                onSubmitTask={onSubmitTask}
+                showToast={showToast}
+              />
+            </ErrorBoundary>
+          )}
         </div>
       </div>
       )}
@@ -1244,6 +1258,9 @@ export function ProjectPage({
       {sendDialog && (
         <CommentSendDialog
           comments={sendDialog.comments}
+          labelFor={(c) =>
+            `${c.path}:${c.startLine}${c.endLine !== c.startLine ? `-${c.endLine}` : ""}`
+          }
           tasks={projectTasks}
           defaultTaskId={resolveTargetTask(projectTasks)?.id ?? null}
           onClose={() => setSendDialog(null)}

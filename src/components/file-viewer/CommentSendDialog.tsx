@@ -5,15 +5,12 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { STATUS_LABEL, type Task } from "../../types";
 import s from "../../styles";
 import { useI18n } from "../../i18n";
-import { isSendableStatus, type ReviewComment } from "./reviewComments";
+import { isSendableStatus } from "./reviewComments";
 
 export type SendMode = "direct" | "resume" | "new";
 
-function locationLabel(comment: ReviewComment): string {
-  return `${comment.path}:${comment.startLine}${
-    comment.endLine !== comment.startLine ? `-${comment.endLine}` : ""
-  }`;
-}
+/** 发送对话框只依赖评论的 id + 正文；标签由调用方通过 labelFor 提供。 */
+type SendableComment = { id: string; text: string };
 
 /**
  * 发送对话框（决策 9 + R3）：
@@ -21,16 +18,22 @@ function locationLabel(comment: ReviewComment): string {
  * - 目标存活：直接发送；running 中发送需确认打断
  * - 目标已结束：提供「恢复会话再发 / 作为新任务发」双选项
  */
-export function CommentSendDialog({
+export function CommentSendDialog<T extends SendableComment>({
   comments,
+  labelFor,
   tasks,
   defaultTaskId,
+  allowNewTask = false,
   onClose,
   onSend,
 }: {
-  comments: ReviewComment[];
+  comments: T[];
+  /** 每条评论在对话框里的定位描述（如 `路径:行号` / 模块名）。 */
+  labelFor: (comment: T) => string;
   tasks: Task[];
   defaultTaskId: string | null;
+  /** 即使目标任务仍存活也展示「作为新任务发」（知识库修改等跨仓库写入场景）。 */
+  allowNewTask?: boolean;
   onClose: () => void;
   onSend: (taskId: string, mode: SendMode) => void;
 }) {
@@ -102,7 +105,7 @@ export function CommentSendDialog({
           <div style={s.rcSendCommentList}>
             {comments.map((comment) => (
               <div key={comment.id} style={s.rcSendCommentLoc} title={comment.text}>
-                {locationLabel(comment)} — {comment.text.slice(0, 60)}
+                {labelFor(comment)} — {comment.text.slice(0, 60)}
               </div>
             ))}
           </div>
@@ -120,6 +123,15 @@ export function CommentSendDialog({
           {task && live ? (
             <button type="button" style={s.rcSendBtnPrimary} onClick={() => void handleDirectSend()}>
               {t("reviewComments.send")}
+            </button>
+          ) : null}
+          {task && live && allowNewTask ? (
+            <button
+              type="button"
+              style={s.rcSendBtnPrimary}
+              onClick={() => onSend(task.id, "new")}
+            >
+              {t("reviewComments.newTaskSend")}
             </button>
           ) : null}
           {task && !live ? (

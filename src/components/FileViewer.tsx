@@ -1,13 +1,16 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Marked } from "marked";
-import DOMPurify from "dompurify";
 import * as Popover from "@radix-ui/react-popover";
 import { X, AlertCircle, Eye, PencilLine, MoreHorizontal, List } from "lucide-react";
 import { getFileColor } from "../utils";
 import { EditorView } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
+import {
+  isMarkdownFileName as isMarkdownFile,
+  renderMarkdownWithToc,
+  type TocEntry,
+} from "../utils/markdown";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import { useLanguageExtension } from "./file-viewer/languageExtensions";
 import { CommentableEditor } from "./file-viewer/CommentableEditor";
@@ -18,43 +21,6 @@ import { joinProjectPath, type CommentDraft, type ReviewComment } from "./file-v
 import type { OpenFileTab } from "../hooks/useProjectPanels";
 import type { ThemeVariant } from "../types";
 import { useI18n } from "../i18n";
-
-function isMarkdownFile(fileName: string): boolean {
-  const ext = fileName.split(".").pop()?.toLowerCase();
-  return ext === "md" || ext === "mdx" || ext === "markdown";
-}
-
-type TocEntry = { depth: number; text: string; id: string };
-
-// Render markdown to sanitized HTML and extract a table of contents in a single
-// pass, so heading ids in the HTML and the TOC anchors are guaranteed to match.
-function renderMarkdownWithToc(content: string): { html: string; toc: TocEntry[] } {
-  const used = new Set<string>();
-  const toc: TocEntry[] = [];
-  const instance = new Marked({
-    renderer: {
-      heading(token) {
-        const inlineHtml = this.parser.parseInline(token.tokens);
-        const plain = inlineHtml.replace(/<[^>]*>/g, "").trim();
-        const base =
-          plain
-            .toLowerCase()
-            .replace(/[^\w一-龥 -]/g, "")
-            .replace(/\s+/g, "-")
-            .replace(/-+/g, "-")
-            .replace(/^-+|-+$/g, "") || "section";
-        let id = base;
-        let n = 1;
-        while (used.has(id)) id = `${base}-${n++}`;
-        used.add(id);
-        toc.push({ depth: token.depth, text: plain, id });
-        return `<h${token.depth} id="${id}">${inlineHtml}</h${token.depth}>\n`;
-      },
-    },
-  });
-  const html = instance.parse(content, { async: false }) as string;
-  return { html: DOMPurify.sanitize(html), toc };
-}
 
 function isPreviewableImageFile(fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase();
