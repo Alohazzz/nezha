@@ -1963,6 +1963,75 @@ function App() {
     return createdIds;
   }
 
+  /** 构建补录绑定待办任务对象（议题 Y ↔ 本地任务，`derivedFrom*` 溯源）。 */
+  function buildBackfillTask(
+    sourceTask: Task,
+    draft: BackfillIssueRequest,
+    workitemId: string,
+    serialNumber: string | undefined,
+  ): { task: Task; prompt: string } {
+    const now = Date.now();
+    const name = `${serialNumber ? `${serialNumber} ` : ""}${draft.subject}`.trim();
+    const bodyLines = draft.contentSections
+      .filter((s) => s.text.trim())
+      .map((s) => `${s.label}：${s.text.trim()}`);
+    const prompt = [
+      draft.subject,
+      ...bodyLines,
+      "---",
+      `云效议题：${serialNumber ?? ""}`,
+      `来源任务：${sourceTask.name ?? sourceTask.prompt.slice(0, 80)}`,
+      `来源议题 ID：${sourceTask.yunxiaoWorkitemId ?? ""}`,
+      `议题 ID：${workitemId}`,
+    ].join("\n");
+    const task: Task = {
+      id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+      projectId: sourceTask.projectId,
+      name,
+      prompt,
+      agent: sourceTask.agent,
+      permissionMode: sourceTask.permissionMode,
+      status: "todo",
+      createdAt: now,
+      updatedAt: now,
+      yunxiaoWorkitemId: workitemId,
+      yunxiaoSerialNumber: serialNumber,
+      derivedFromTaskId: sourceTask.id,
+      derivedFromWorkitemId: sourceTask.yunxiaoWorkitemId,
+    };
+    return { task, prompt };
+  }
+
+  /** 把绑定待办写入 state + 持久化；若已存在相同 `yunxiaoWorkitemId` 则返回 false（幂等）。 */
+  function addBackfillTask(task: Task, projectId: string): boolean {
+    let added = false;
+    setTasks((prev) => {
+      if (prev.some((candidate) => candidate.yunxiaoWorkitemId === task.yunxiaoWorkitemId)) {
+        return prev;
+      }
+      added = true;
+      const next = [task, ...prev];
+      persistProjectTasks(projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    return added;
+  }
+
+  /**
+   * 补建/对账补录绑定待办：若本地还没有携带该 `yunxiaoWorkitemId` 的任务，则补建并持久化。
+   * 用于「消费标记已存在但本地任务缺失」的历史孤儿场景——保证云效议题只要建出，就有 1:1 待办。
+   */
+  function reconcileBackfillTask(
+    sourceTask: Task,
+    draft: BackfillIssueRequest,
+    workitemId: string,
+  ): boolean {
+    if (!workitemId) return false;
+    if (tasksRef.current.some((t) => t.yunxiaoWorkitemId === workitemId)) return false;
+    const { task } = buildBackfillTask(sourceTask, draft, workitemId, undefined);
+    return addBackfillTask(task, sourceTask.projectId);
+  }
+
   /** 消费一份已读到的补录议题草稿：建云效议题 Y + 绑定待办任务，并按草稿实际目录清草稿（幂等）。 */
   async function processBackfillDraft(
     sourceTask: Task,
@@ -1982,6 +2051,8 @@ function App() {
       { projectPath: effectivePath, taskId: draftTaskId },
     ).catch(() => null);
     if (consumed && consumed.signature === signature) {
+      // 议题已在云效建过：若绑定待办缺失（历史孤儿/中断），借标记里的 workitemId 补建，保证 1:1。
+      reconcileBackfillTask(sourceTask, draft, consumed.workitemId);
       await invoke("clear_backfill_draft", {
         projectPath: effectivePath,
         taskId: draftTaskId,
@@ -2001,53 +2072,21 @@ function App() {
         request: draft,
       });
       if (!created.created) return;
-      // 记录消费标记（幂等），即使 Agent 之后重复写入同一内容也不会再建。
+      // 先建并持久化绑定待办，再写消费标记：顺序反过来会在「议题已建、待办未落盘」时，
+      // 因标记命中而永久跳过，导致云效议题没有绑定本地任务。
+      const { task } = buildBackfillTask(
+        sourceTask,
+        draft,
+        created.workitemId,
+        created.serialNumber,
+      );
+      const added = addBackfillTask(task, sourceTask.projectId);
       await invoke("write_backfill_consumed", {
         projectPath: effectivePath,
         taskId: draftTaskId,
         signature,
         workitemId: created.workitemId,
       }).catch(() => {});
-
-      const now = Date.now();
-      const name = `${created.serialNumber ? `${created.serialNumber} ` : ""}${draft.subject}`.trim();
-      const bodyLines = draft.contentSections
-        .filter((s) => s.text.trim())
-        .map((s) => `${s.label}：${s.text.trim()}`);
-      const prompt = [
-        draft.subject,
-        ...bodyLines,
-        "---",
-        `云效议题：${created.serialNumber ?? ""}`,
-        `来源任务：${sourceTask.name ?? sourceTask.prompt.slice(0, 80)}`,
-        `来源议题 ID：${sourceTask.yunxiaoWorkitemId ?? ""}`,
-        `议题 ID：${created.workitemId}`,
-      ].join("\n");
-      const task: Task = {
-        id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
-        projectId: sourceTask.projectId,
-        name,
-        prompt,
-        agent: sourceTask.agent,
-        permissionMode: sourceTask.permissionMode,
-        status: "todo",
-        createdAt: now,
-        updatedAt: now,
-        yunxiaoWorkitemId: created.workitemId,
-        yunxiaoSerialNumber: created.serialNumber,
-        derivedFromTaskId: sourceTask.id,
-        derivedFromWorkitemId: sourceTask.yunxiaoWorkitemId,
-      };
-      let added = false;
-      setTasks((prev) => {
-        if (prev.some((candidate) => candidate.yunxiaoWorkitemId === created.workitemId)) {
-          return prev;
-        }
-        added = true;
-        const next = [task, ...prev];
-        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-        return next;
-      });
       await invoke("clear_backfill_draft", {
         projectPath: effectivePath,
         taskId: draftTaskId,
