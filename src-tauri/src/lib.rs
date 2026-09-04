@@ -19,6 +19,7 @@ mod fs;
 mod fs_watcher;
 mod git;
 mod hooks;
+mod http;
 mod knowledge;
 mod notification;
 mod platform;

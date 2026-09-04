@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,7 +13,7 @@ use crate::TaskManager;
 // 发布物源与仓库保持一致（git remote / Cargo.toml / notifications feed 都在 Alohazzz/nezha）。
 const RELEASE_URL: &str = "https://api.github.com/repos/Alohazzz/nezha/releases/latest";
 const DOWNLOAD_PREFIX: &str = "https://github.com/Alohazzz/nezha/releases/download/";
-const API_PREFIX: &str = "https://api.github.com/";
+const API_HOST: &str = "api.github.com";
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 600;
 const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024; // 安装包大小上限
@@ -111,11 +111,73 @@ fn select_windows_asset(assets: &[GhAsset]) -> Option<GhAsset> {
     assets.iter().find(|a| a.name.ends_with(suffix)).cloned()
 }
 
+/// 判断 URL 是否落在 GitHub 官方域名内（含资产 CDN）。
+/// 允许 `github.com`、`*.github.com`、`githubusercontent.com`、`*.githubusercontent.com`，
+/// 用于替代“只能停留在下载前缀/API 前缀”的字符串判断，避免重定向到第三方域名
+/// 造成域名绕过，同时兼容 GitHub 下载实际跳往的 `release-assets.githubusercontent.com`。
+fn is_trusted_github_url(url: &reqwest::Url) -> bool {
+    match url.host_str() {
+        Some(host) => {
+            host == "github.com"
+                || host == "githubusercontent.com"
+                || host.ends_with(".github.com")
+                || host.ends_with(".githubusercontent.com")
+        }
+        None => false,
+    }
+}
+
+/// 判断 `child` 是否位于 `parent` 目录内。
+/// Windows 下 `fs::canonicalize()` 会返回带 `\\?\` 前缀的 verbatim path，
+/// 直接与普通路径做 `starts_with` 会失败；这里统一去掉该前缀，并在 Windows 上
+/// 做大小写不敏感的组件级前缀比较（同时兼容通过 junction/symlink 解析后的真实路径）。
+fn path_is_within(parent: &Path, child: &Path) -> bool {
+    fn strip_verbatim(p: &Path) -> PathBuf {
+        let s = p.to_string_lossy();
+        s.strip_prefix(r"\\?\")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| p.to_path_buf())
+    }
+    let parent = strip_verbatim(parent);
+    let child = strip_verbatim(child);
+    let parent_parts: Vec<String> = parent
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let child_parts: Vec<String> = child
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if child_parts.len() < parent_parts.len() {
+        return false;
+    }
+    parent_parts
+        .iter()
+        .zip(child_parts.iter())
+        .all(|(p, c)| {
+            if cfg!(target_os = "windows") {
+                p.eq_ignore_ascii_case(c)
+            } else {
+                p == c
+            }
+        })
+}
+
 fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .redirect(reqwest::redirect::Policy::none()) // 禁重定向，防域名绕过
-        .user_agent(format!("Nezha-Update/{APP_VERSION}"))
+    crate::http::add_system_proxy(
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            // 仅跟随 GitHub 官方域名内的重定向；跳转到第三方域名即停止，
+            // 配合下方 resp.url() 域名校验，避免通过重定向绕过校验/伪造。
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if is_trusted_github_url(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
+            .user_agent(format!("Nezha-Update/{APP_VERSION}")),
+    )
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))
 }
@@ -135,8 +197,14 @@ pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
         .map_err(|e| format!("Fetch failed: {e}"))?;
 
     // 校验响应域名，防重定向/伪造。
-    if !resp.url().as_str().starts_with(API_PREFIX) {
+    if !is_trusted_github_url(resp.url()) {
         return Err(format!("Unexpected response URL: {}", resp.url()));
+    }
+    if resp.status().is_redirection() {
+        return Err(format!(
+            "Update check was redirected (HTTP {}), likely caused by a proxy rerouting the GitHub API. Please allow {API_HOST} through your proxy.",
+            resp.status()
+        ));
     }
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -208,7 +276,7 @@ pub async fn download_update(
         .await
         .map_err(|e| format!("Download failed: {e}"))?;
 
-    if !resp.url().as_str().starts_with(DOWNLOAD_PREFIX) {
+    if !is_trusted_github_url(resp.url()) {
         return Err("Unexpected download URL".into());
     }
     if !resp.status().is_success() {
@@ -275,10 +343,13 @@ pub async fn launch_update_installer(
 
     let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     let install = PathBuf::from(&installer_path);
+    let canonical_cache = cache_dir
+        .canonicalize()
+        .unwrap_or_else(|_| cache_dir.clone());
     let canonical_install = install
         .canonicalize()
         .map_err(|_| "Installer not found".to_string())?;
-    if !canonical_install.starts_with(cache_dir) {
+    if !path_is_within(&canonical_cache, &canonical_install) {
         return Err("Installer path outside cache directory".into());
     }
     if canonical_install.extension().and_then(|e| e.to_str()) != Some("exe") {
@@ -289,13 +360,29 @@ pub async fn launch_update_installer(
     #[cfg(target_os = "windows")]
     task_manager.kill_all_children();
 
+    // 防止并发/重复触发导致安装器被拉起两次（app.exit 前存在短暂窗口期）。
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static INSTALLER_SPAWNING: AtomicBool = AtomicBool::new(false);
+    if INSTALLER_SPAWNING.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+
     // 进程创建是阻塞操作，放进 spawn_blocking 避免阻塞 async runtime。
     let spawned = tokio::task::spawn_blocking(move || {
         std::process::Command::new(&canonical_install).spawn()
     })
-    .await
-    .map_err(|e| format!("Spawn task failed: {e}"))?;
-    spawned.map_err(|e| format!("Failed to launch installer: {e}"))?;
+    .await;
+    match spawned {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            INSTALLER_SPAWNING.store(false, Ordering::SeqCst);
+            return Err(format!("Failed to launch installer: {e}"));
+        }
+        Err(e) => {
+            INSTALLER_SPAWNING.store(false, Ordering::SeqCst);
+            return Err(format!("Spawn task failed: {e}"));
+        }
+    }
 
     app.exit(0);
     Ok(())

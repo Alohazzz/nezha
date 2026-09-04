@@ -1,6 +1,6 @@
 [package]
 name = "nezha"
-version = "0.8.5"
+version = "0.9.0"
 description = "An agent-first vibe coding application"
 authors = ["hanshuaikang"]
 edition = "2021"
@@ -55,6 +55,7 @@ hex = "0.4"
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-winrt-notification = "0.7"
+winreg = "0.10"
 
 [profile.dev]
 debug = 0
