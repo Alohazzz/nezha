@@ -422,6 +422,7 @@ pub fn run() {
             build::build_checkout_branch,
             build::read_build_state,
             build::write_build_state,
+            build::refresh_build_state,
             build::read_build_plan,
             build::read_build_output_progress,
             build::read_build_fix_status,

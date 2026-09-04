@@ -170,6 +170,29 @@ function buildFixPrompt(
   return out.join("\n");
 }
 
+/**
+ * 生成与 build.rs::run_build 成功回调一致的回写脚本：
+ * 以主仓库目录名 + `.gitmodules` 里每个子模块名为 key，记录各自 `git rev-parse HEAD`，
+ * 写入 `<root>/.nezha/build-state.json`，供下次「增量」构建做 diff 基线。
+ * 内容全为 ASCII，用 `Set-Content -Encoding ascii`（无 BOM）写出，serde_json 可直接解析。
+ */
+function buildBaselineCommand(root: string): string {
+  return [
+    "$root = '" + root + "'",
+    "$last = [ordered]@{}",
+    "$last[(Split-Path $root -Leaf)] = (git -C $root rev-parse HEAD)",
+    "git -C $root config --file .gitmodules --get-regexp '^submodule\\..*\\.path$' | ForEach-Object {",
+    "  $k, $v = $_ -split '\\s+',2",
+    "  if ($k -match '^submodule\\.(.+)\\.path$') {",
+    "    $p = Join-Path $root $v",
+    "    if (Test-Path $p) { $last[$Matches[1]] = (git -C $p rev-parse HEAD) }",
+    "  }",
+    "}",
+    "@{ last_built = $last; updated_at = (Get-Date -Format o) } | ConvertTo-Json -Depth 5 |",
+    "  Set-Content -Encoding ascii (Join-Path $root '.nezha\\build-state.json')",
+  ].join("\n");
+}
+
 function computeFailedClosure(seed: string[], plan: Plan | null): string[] {
   const nameDeps = new Map<string, string[]>();
   for (const p of plan?.Projects ?? []) nameDeps.set(p.Name, p.Dependents ?? []);
@@ -397,6 +420,19 @@ export function BuildPanel({
     }
   }, [projectPath, load]);
 
+  const handleRefreshBaseline = useCallback(async () => {
+    setError("");
+    setStatusText("刷新构建基线…");
+    try {
+      const st = await invoke<BuildState>("refresh_build_state", { projectPath });
+      setState(st);
+      setStatusText(`已刷新构建基线（${Object.keys(st.last_built).length} 个仓库）`);
+    } catch (e) {
+      setError(String(e));
+      setStatusText("");
+    }
+  }, [projectPath]);
+
   const markProject = useCallback((pathOrName: string, status: ProjStatus) => {
     const key = toFileNoExt(pathOrName);
     if (!key) return;
@@ -436,10 +472,17 @@ export function BuildPanel({
       "第一步：用只读工具读取 " +
       logPath +
       "（已生成的错误日志文件），先总结出主要错误类别与失败项目；\n" +
-      "第二步：按优先级逐个修复（尽量最小改动，必要时重新构建验证）；\n" +
-      "每修复好一个项目，把该项目名写入 " +
+      "第二步：按优先级逐个修复（尽量最小改动，必要时重新构建验证）；每修复好一个项目，把该项目名写入 " +
       statusPath +
       " 的 fixed 数组（JSON，保留其它项）作为“已完成”标记。\n\n" +
+      "第三步：所有失败项目都已修复且重新构建验证通过（进程退出码为 0）后，在 PowerShell 里执行下面这段命令，" +
+      "把当前各仓库 commit 回写到项目增量基线 " +
+      projectPath.replace(/\\/g, "/") +
+      "/.nezha/build-state.json。否则下次「增量」构建仍会提示「无基于上次构建基准确认的变更」。\n" +
+      "```powershell\n" +
+      buildBaselineCommand(projectPath) +
+      "\n```\n" +
+      "若当前 shell 不是 PowerShell，先进入 PowerShell 再执行；执行完请确认 .nezha/build-state.json 已生成且含 last_built 字段，才算收尾。\n\n" +
       "【失败项目（详细错误见日志文件）】\n" +
       (failNames || "(见日志文件)");
     const params = {
@@ -909,6 +952,10 @@ export function BuildPanel({
             <button style={s.button} onClick={() => void load()}>
               <RefreshCw size={12} />
               刷新
+            </button>
+            <button style={s.button} onClick={() => void handleRefreshBaseline()}>
+              <RefreshCw size={12} />
+              刷新基线
             </button>
           </div>
         </div>

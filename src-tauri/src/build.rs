@@ -495,6 +495,31 @@ pub fn write_build_state(project_path: String, state: BuildState) -> Result<(), 
     crate::storage::atomic_write(&p, &raw)
 }
 
+/// 立即用当前所有仓库 HEAD 刷新增量基线（无需先跑一次成功的 `run_build`）。
+/// 用于：Agent 修复任务 / 外部全量构建之后，让下次「增量」能直接基于当前代码 diff。
+/// 复刻 `run_build` 成功回调的写基线路，返回刷新后的 `BuildState` 供前端直接更新 UI。
+#[tauri::command]
+pub async fn refresh_build_state(project_path: String) -> Result<BuildState, String> {
+    validate_project_path(&project_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let repos = discover_repos_blocking(&project_path)?;
+        let mut state = read_build_state_blocking(&project_path);
+        for r in &repos {
+            if r.missing {
+                continue;
+            }
+            if let Ok(sha) = git_head(&r.path) {
+                state.last_built.insert(r.name.clone(), sha);
+            }
+        }
+        state.updated_at = Some(now_iso());
+        write_build_state_blocking(&project_path, &state)?;
+        Ok(state)
+    })
+    .await
+    .map_err(|e| format!("refresh_build_state panicked: {e}"))?
+}
+
 /// 读取 ps1 生成的 `Log/build-plan.json`（环境检查 + 阶段计划 + 外部依赖清单）。
 #[tauri::command]
 pub fn read_build_plan(project_path: String) -> Result<Option<serde_json::Value>, String> {
@@ -920,6 +945,7 @@ fn compute_incremental_blocking(
 
     // 1) 汇总变更文件（绝对路径）
     let mut changed_abs: Vec<String> = Vec::new();
+    let mut had_baseline = false;
     for r in &repos {
         if !selected.iter().any(|s| s == &r.name) {
             continue;
@@ -933,6 +959,7 @@ fn compute_incremental_blocking(
         if base.is_empty() {
             continue;
         }
+        had_baseline = true;
         let range = format!("{}..HEAD", base);
         let out = run_git_in(&r.path, &["diff", &range, "--name-only"])?;
         if !out.status.success() {
@@ -947,8 +974,14 @@ fn compute_incremental_blocking(
         }
     }
     if changed_abs.is_empty() {
+        if !had_baseline {
+            return Err(
+                "缺少构建基线（.nezha/build-state.json），无法进行增量编译；请先执行「全量构建」或点「刷新基线」建立基线。".to_string(),
+            );
+        }
         return Err(
-            "无基于上次构建基准确认的变更，或不具备增量条件（可先全量构建一次）".to_string(),
+            "自上次构建基线以来未检测到变更，无需增量编译；若确认有改动，请检查仓库/分支选择是否正确。"
+                .to_string(),
         );
     }
 
