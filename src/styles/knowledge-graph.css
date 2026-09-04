@@ -288,71 +288,9 @@
   transform: translate(-50%, -50%);
 }
 
-/* ── 右侧工具栏知识库面板（kpanel-*）────────────────────────────── */
-.kpanel {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 8px;
-  overflow: hidden;
-  padding: 10px 10px 10px 12px;
-}
-
-.kpanel-toolbar {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 7px;
-}
-
-.kpanel-toolbar .knowledge-search {
-  min-width: 0;
-  flex: 1;
-}
-
-.kpanel-toolbar-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.kpanel-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.kpanel-status {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.kpanel-error {
-  font-size: 12px;
-  color: #e5484d;
-}
-
-.kpanel-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  flex: 1;
-  padding: 0 8px;
-  color: var(--text-hint);
-  font-size: 13px;
-  text-align: center;
-}
-
-.kpanel-body {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  gap: 10px;
-}
-
+/* ── 右侧工具栏知识库面板（kpanel-*）──────────────────────────────
+   面板骨架（标题栏 / 搜索框 / 状态反馈）已迁移到 right-panel.css 的 rp-* 共享类，
+   这里只保留卡片列表本体。 */
 .kpanel-list {
   display: flex;
   min-height: 0;
@@ -361,82 +299,5 @@
   gap: 6px;
   overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 2px;
-}
-
-.kpanel-preview {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.kpanel-preview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.kpanel-preview-head strong {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.kpanel-preview-body {
-  min-height: 0;
-  flex: 1;
-  overflow: auto;
-  padding: 8px 10px;
-  border: 1px solid var(--border-medium);
-  border-radius: 6px;
-  background: var(--bg-panel);
-}
-
-.kpanel-empty-editor {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  flex: 1;
-  color: var(--text-hint);
-  font-size: 13px;
-}
-
-.kpanel-modify {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border-top: 1px solid var(--border-dim);
-  padding-top: 8px;
-}
-
-.kpanel-modify-head {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.kpanel-modify-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.kpanel-secondary-btn {
-  padding: 7px 14px;
-  border: 1px solid var(--border-medium);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12.5px;
-}
-
-.kpanel-secondary-btn:hover {
-  background: var(--bg-hover);
+  padding: 10px;
 }

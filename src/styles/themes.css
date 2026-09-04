@@ -84,6 +84,9 @@
   --warning-surface: rgba(234, 179, 8, 0.1);
   --warning-code-bg: rgba(234, 179, 8, 0.15);
   --warning-border: rgba(234, 179, 8, 0.3);
+  --success-surface: rgba(46, 160, 67, 0.12);
+  --success-border: rgba(46, 160, 67, 0.3);
+  --success-fg: #1f8f46;
   --danger-surface: rgba(248, 81, 73, 0.1);
   --danger-border: rgba(248, 81, 73, 0.3);
   --danger-fg: #f85149;
@@ -261,6 +264,7 @@ html.dark {
   --usage-danger: #f87171;
   --usage-codex: #c4b5fd;
 
+  --success-fg: #3fb950;
   --danger-fg: #f85149;
   --diff-add-fg: #3fb950;
   --diff-add-marker-bg: rgba(46, 160, 67, 0.28);

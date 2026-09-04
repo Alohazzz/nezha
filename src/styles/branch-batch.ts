@@ -1,24 +1,10 @@
 import type React from "react";
 
 const branchBatch = {
-  bbView: {
-    flex: 1,
-    minWidth: 0,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 12,
-    overflow: "auto",
-    padding: 16,
-  },
   bbHeader: {
     display: "flex",
     alignItems: "center" as const,
     gap: 10,
-  },
-  bbTitle: {
-    fontSize: 16,
-    fontWeight: 800,
-    color: "var(--text-primary)",
   },
   bbBackBtn: {
     display: "inline-flex" as const,
@@ -128,11 +114,6 @@ const branchBatch = {
     color: "var(--warning)",
     borderColor: "var(--warning-border)",
   },
-  bbMetric: {
-    display: "inline-flex" as const,
-    alignItems: "center" as const,
-    gap: 4,
-  },
   bbEmpty: {
     padding: "48px 0",
     textAlign: "center" as const,
@@ -146,14 +127,6 @@ const branchBatch = {
     gap: 6,
     padding: "8px 0",
     color: "var(--text-hint)",
-    fontSize: 12,
-  },
-  bbMissingNotice: {
-    background: "var(--bg-card)",
-    border: "1px solid var(--border-dim)",
-    borderRadius: 12,
-    padding: 14,
-    color: "var(--text-secondary)",
     fontSize: 12,
   },
   bbDialogOverlay: {

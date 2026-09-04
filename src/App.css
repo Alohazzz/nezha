@@ -1,6 +1,9 @@
 @import "./styles/themes.css";
 @import "./styles/font-selector.css";
 @import "./styles/git-history.css";
+@import "./styles/right-panel.css";
+@import "./styles/build.css";
+@import "./styles/branch-batch.css";
 @import "./styles/knowledge-graph.css";
 @import "./styles/layout.css";
 @import "./styles/app-settings.css";

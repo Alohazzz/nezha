@@ -1,0 +1,121 @@
+/* ── PR 面板视图（pr-*，branch-batch 右侧面板）─────────────────────
+   面板骨架（rp-root / rp-header / rp-* 按钮）来自 right-panel.css 共享设计语言；
+   这里只保留 PR 批次卡片列表样式。弹窗（CreateBranchBatchDialog /
+   SubmitMrDialog）与 MergeHubView 仍使用 branch-batch.ts 的 bb-* 样式。 */
+
+.pr-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pr-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.pr-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pr-card-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-card-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  color: var(--text-hint);
+  font-size: 10.5px;
+  min-width: 0;
+}
+
+.pr-card-mono {
+  font-family: var(--font-mono);
+}
+
+.pr-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+/* 状态徽标：中性 / 进行中(accent) / 已完成(success) / 冲突(danger) / 超期(warning) */
+.pr-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.pr-badge[data-tone="active"] {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.pr-badge[data-tone="done"] {
+  background: var(--success-surface);
+  color: var(--success-fg);
+}
+
+.pr-badge[data-tone="conflict"] {
+  background: var(--danger-surface);
+  color: var(--danger-fg);
+}
+
+.pr-badge[data-tone="warn"] {
+  background: var(--warning-surface);
+  color: var(--warning);
+}
+
+/* diff 计量（+新增 / -删除），同 git-history-add / git-history-delete */
+.pr-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.pr-metric-add {
+  color: var(--diff-add-fg);
+}
+
+.pr-metric-del {
+  color: var(--diff-delete-fg);
+}
+
+/* worktree 缺失批次的保留提示 */
+.pr-notice {
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
