@@ -249,6 +249,7 @@ export function ProjectPage({
     openRightPanel,
     handleTogglePanel,
     handleFileSelect,
+    openKnowledgeCard,
     handleFileTabSelect,
     handleFileTabClose,
     handleCloseOtherFileTabs,
@@ -1221,12 +1222,7 @@ export function ProjectPage({
             <ErrorBoundary label="知识库">
               <KnowledgePanel
                 projectPath={project.path}
-                projectTasks={projectTasks}
-                repoPath={subRepoPath}
-                onInput={onInput}
-                onResumeTaskAndSend={onResumeTaskAndSend}
-                onSubmitTask={onSubmitTask}
-                showToast={showToast}
+                onOpenCard={openKnowledgeCard}
               />
             </ErrorBoundary>
           )}

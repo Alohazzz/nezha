@@ -8,7 +8,16 @@ type RightPanel =
   | "branch-batch"
   | "knowledge"
   | null;
-type OpenFileTab = { path: string; name: string };
+type OpenFileTab = {
+  path: string;
+  name: string;
+  /** 普通项目文件缺省；知识库卡片为 "knowledge"，内容经 read_knowledge_card_content 读取。 */
+  kind?: "project" | "knowledge";
+  /** kind === "knowledge" 时的模块名（卡片文件名去掉 .md）。 */
+  module?: string;
+  /** kind === "knowledge" 时绑定知识库的 id（保存卡片时用）。 */
+  graphId?: string;
+};
 
 type OpenDiff =
   | { kind: "file"; filePath: string; staged: boolean; label: string }
@@ -46,6 +55,24 @@ export function useProjectPanels() {
       tabs: prev.tabs.some((tab) => tab.path === path) ? prev.tabs : [...prev.tabs, { path, name }],
       activePath: path,
     }));
+  }, []);
+
+  const openKnowledgeCard = useCallback((module: string, absPath: string, graphId: string) => {
+    setOpenDiff(null);
+    setOpenFilesState((prev) => {
+      const existing = prev.tabs.find((tab) => tab.path === absPath);
+      const tab: OpenFileTab = existing ?? {
+        path: absPath,
+        name: `${module}.md`,
+        kind: "knowledge",
+        module,
+        graphId,
+      };
+      return {
+        tabs: existing ? prev.tabs : [...prev.tabs, tab],
+        activePath: absPath,
+      };
+    });
   }, []);
 
   const handleFileTabSelect = useCallback((path: string) => {
@@ -188,6 +215,7 @@ export function useProjectPanels() {
     openRightPanel,
     handleTogglePanel,
     handleFileSelect,
+    openKnowledgeCard,
     handleFileTabSelect,
     handleFileTabClose,
     handleCloseOtherFileTabs,

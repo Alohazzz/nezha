@@ -80,6 +80,10 @@ pub struct KnowledgeGraphAdapter {
     pub name: String,
 }
 
+/// 新建模块卡片的通用模板；`<module>` 占位符在创建卡片时会被替换为模块名。
+/// 与知识图谱技能的 module-card-guide.md 对齐，含「UI 界面 / 入口」节点。
+const MODULE_CARD_TEMPLATE: &str = "# <module>\n\n## 定位\n\n## 职责\n\n## 关键实体 / 数据表\n\n## 依赖与相关模块\n\n## 业务规则 / 已知坑\n\n## UI 界面 / 入口\n\n## 验证记录\n";
+
 #[tauri::command]
 pub async fn list_knowledge_graph_adapters() -> Result<Vec<KnowledgeGraphAdapter>, String> {
     tokio::task::spawn_blocking(move || -> Result<Vec<KnowledgeGraphAdapter>, String> {
@@ -284,15 +288,15 @@ pub async fn create_knowledge_graph(
         if graph_dir.exists() { return Err(format!("图谱已存在：{graph_id}")); }
         let data = graph_dir.join("data");
         let io = |e: std::io::Error| e.to_string();
-        std::fs::create_dir_all(data.join("modules")).map_err(io)?;
+        // 注册图谱：只写 graph.toml 与空 data 目录并绑定项目配置。
+        // 骨架（modules/_template.md/index.md/graph.json）交给「初始化骨架」生成，
+        // 这样新建项目能走「创建图谱 → 初始化骨架」两步，初始化按钮不会因 ready=true 被隐藏。
+        std::fs::create_dir_all(&data).map_err(io)?;
         std::fs::write(graph_dir.join("graph.toml"), format!("id = \"{graph_id}\"\nname = \"{}\"\nadapter = \"{adapter}\"\n", name.trim())).map_err(io)?;
-        std::fs::write(data.join("_template.md"), "# <module>\n\n## 定位\n\n## 职责\n\n## 关键实体 / 数据表\n\n## 依赖与相关模块\n\n## 业务规则 / 已知坑\n\n## 验证记录\n").map_err(io)?;
-        std::fs::write(data.join("index.md"), "# Knowledge Graph\n\n## Modules\n\n| Module | Card |\n|---|---|\n").map_err(io)?;
-        std::fs::write(data.join("graph.json"), "{\n  \"modules\": [],\n  \"dependencies\": []\n}\n").map_err(io)?;
         let mut config = crate::config::read_project_config(project_path.clone())?;
         config.knowledge.graph_id = graph_id.clone();
         crate::config::write_project_config(project_path, config)?;
-        Ok(KnowledgeTarget { id: graph_id, name: name.trim().into(), adapter, graph_dir: graph_dir.to_string_lossy().into_owned(), skill_dir: generic.to_string_lossy().into_owned(), data_dir: data.to_string_lossy().into_owned(), ready: true, scan_available: true })
+        Ok(KnowledgeTarget { id: graph_id, name: name.trim().into(), adapter, graph_dir: graph_dir.to_string_lossy().into_owned(), skill_dir: generic.to_string_lossy().into_owned(), data_dir: data.to_string_lossy().into_owned(), ready: false, scan_available: false })
     }).await.map_err(|e| format!("创建图谱线程错误: {e}"))?
 }
 
@@ -336,7 +340,7 @@ pub async fn initialize_knowledge_graph(
         std::fs::create_dir_all(&modules).map_err(io)?;
         let template = data.join("_template.md");
         if !template.exists() {
-            std::fs::write(&template, "# <module>\n\n## 定位\n\n## 职责\n\n## 关键实体 / 数据表\n\n## 依赖与相关模块\n\n## 业务规则 / 已知坑\n\n## 验证记录\n").map_err(io)?;
+            std::fs::write(&template, MODULE_CARD_TEMPLATE).map_err(io)?;
         }
         let index = data.join("index.md");
         if !index.exists() {
@@ -405,6 +409,10 @@ pub async fn list_knowledge_cards(graph_id: String) -> Result<Vec<KnowledgeModul
     tokio::task::spawn_blocking(move || -> Result<Vec<KnowledgeModuleCard>, String> {
         let dir = Path::new(&graph.data_dir).join("modules");
         let mut cards = Vec::new();
+        // 图谱尚未「初始化骨架」时没有 data/modules 目录，按空列表返回，避免前端报错。
+        if !dir.is_dir() {
+            return Ok(cards);
+        }
         for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
             let path = entry.map_err(|e| e.to_string())?.path();
             if path.extension().and_then(|v| v.to_str()) != Some("md") {
@@ -427,6 +435,61 @@ pub async fn list_knowledge_cards(graph_id: String) -> Result<Vec<KnowledgeModul
     })
     .await
     .map_err(|e| format!("读取模块卡片线程错误: {e}"))?
+}
+
+/// 读取当前项目绑定知识库的某张模块卡片全文（用于在主窗体以 Markdown 打开）。
+/// 路径由绑定图谱的 data_dir + 校验过的 module 推导，不接受任意路径。
+#[tauri::command]
+pub async fn read_knowledge_card_content(
+    project_path: String,
+    module: String,
+) -> Result<String, String> {
+    let target = resolve_knowledge_target(project_path).await?;
+    let path = module_card_path(&target, &module)?;
+    tokio::task::spawn_blocking(move || std::fs::read_to_string(path).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("读取知识库卡片线程错误: {e}"))?
+}
+
+/// 列出知识库仓库中相对 HEAD 有未提交改动的模块卡片名（用于「发布」按钮）。
+/// 只扫描 `data/modules/*.md`，一次性 `git status --porcelain` 解析，避免逐卡查询。
+#[tauri::command]
+pub async fn list_modified_knowledge_cards(graph_id: String) -> Result<Vec<String>, String> {
+    let graph = graph_by_id_async(graph_id.clone()).await?;
+    let result = crate::git::run_git_with_timeout(
+        graph.graph_dir.clone(),
+        vec![
+            "status".into(),
+            "--porcelain".into(),
+            "--".into(),
+            "data/modules".into(),
+        ],
+        std::time::Duration::from_secs(10),
+    )
+    .await?;
+    if !result.status.success() {
+        return Err(format!(
+            "读取知识库变更失败: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let mut modules = Vec::new();
+    for line in stdout.lines() {
+        // porcelain 行：`XY path`（XY 为状态标志，path 可能含空格，取第二个字段即可）。
+        let mut parts = line.split_whitespace();
+        let _status = parts.next();
+        let Some(path) = parts.next() else { continue };
+        let norm = path.replace('\\', "/");
+        let Some(idx) = norm.rfind("data/modules/") else { continue };
+        let rest = &norm[idx + "data/modules/".len()..];
+        let Some(module) = rest.strip_suffix(".md") else { continue };
+        if module_is_safe(module) && !modules.contains(&module.to_string()) {
+            modules.push(module.to_string());
+        }
+    }
+    modules.sort();
+    Ok(modules)
 }
 
 #[tauri::command]
@@ -972,6 +1035,18 @@ mod tests {
             normalize_section(" 业务规则 / 已知坑 "),
             normalize_section("业务规则与已知坑")
         );
+        assert_eq!(
+            normalize_section("UI 界面 / 入口"),
+            normalize_section("UI界面与入口")
+        );
+    }
+
+    #[test]
+    fn matches_ui_entry_section_heading() {
+        let doc = "# M\n\n## UI 界面 / 入口\n\n（待补充）\n";
+        let lines: Vec<&str> = doc.lines().collect();
+        assert!(find_section_heading(&lines, "UI界面与入口").is_some());
+        assert!(find_section_heading(&lines, "UI 界面 / 入口").is_some());
     }
 
     #[test]

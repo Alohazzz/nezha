@@ -527,6 +527,8 @@ pub fn run() {
             knowledge::create_knowledge_graph,
             knowledge::scan_knowledge_graph,
             knowledge::list_knowledge_cards,
+            knowledge::read_knowledge_card_content,
+            knowledge::list_modified_knowledge_cards,
             knowledge::save_knowledge_card,
             knowledge::rename_knowledge_card,
             knowledge::delete_knowledge_card,

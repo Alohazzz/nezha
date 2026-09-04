@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { KnowledgeCardItem } from "../knowledge/KnowledgeCardItem";
 import { Select } from "./Select";
 
 interface KnowledgeGraph {
@@ -283,15 +284,13 @@ export function KnowledgeGraphPanel({ projectPath }: { projectPath: string }) {
               </div>
             )}
             {visibleCards.map((card) => (
-              <button
+              <KnowledgeCardItem
                 key={card.module}
-                type="button"
-                className="knowledge-card-item"
-                data-active={card.module === activeCard}
+                module={card.module}
+                active={card.module === activeCard}
+                modified={pending.includes(relativePath(card.module))}
                 onClick={() => openCard(card.module)}
-              >
-                {card.module}
-              </button>
+              />
             ))}
           </div>
           <div className="knowledge-card-editor">

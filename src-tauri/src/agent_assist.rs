@@ -520,7 +520,7 @@ const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
 - 按价值排序提取：业务规则/已知坑 > 关键实体/数据表映射 > 模块职责修正/依赖补充 > 验证记录
 - 必须有依据（代码位置 / 文档 / 用户确认）；无依据一律不提取；排除图谱已有内容与纯实现细节
 - 与图谱冲突的结论标注「与现状冲突，需复核」
-- section 限定：定位 / 职责 / 关键实体与数据表 / 依赖与相关模块 / 业务规则与已知坑 / 验证记录
+- section 限定：定位 / 职责 / 关键实体与数据表 / 依赖与相关模块 / 业务规则与已知坑 / UI界面与入口 / 验证记录
 - confidence：confirmed（已确认）/ pending（待验证）
 - JSON 示例：[{ "module": "<目标知识库中的模块名>", "section": "业务规则与已知坑", "content": "…", "evidence": "…", "confidence": "confirmed", "suggestedTitle": "…" }]"#;
 

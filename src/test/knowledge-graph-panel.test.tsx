@@ -71,4 +71,27 @@ describe("KnowledgeGraphPanel", () => {
       message: "docs(knowledge): update HIS graph",
     });
   });
+
+  it("shows the initialize skeleton button when the bound graph is not ready", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "list_knowledge_targets") {
+        return Promise.resolve([{ id: "HIS", name: "HIS 知识图谱", adapter: "his", ready: false, scanAvailable: false }]);
+      }
+      if (command === "list_knowledge_graph_adapters") {
+        return Promise.resolve([{ id: "his", name: "HIS" }]);
+      }
+      if (command === "read_project_config") {
+        return Promise.resolve({ knowledge: { graph_id: "HIS" } });
+      }
+      if (command === "list_knowledge_cards") {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPanel();
+
+    await waitFor(() => expect(screen.getAllByText("HIS 知识图谱").length).toBeGreaterThan(0));
+    expect(screen.getByRole("button", { name: /Initialize skeleton/ })).toBeTruthy();
+  });
 });

@@ -125,18 +125,108 @@
 }
 
 .knowledge-card-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
   padding: 7px 9px;
-  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
-  border-radius: 6px;
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   cursor: pointer;
   text-align: left;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 
-.knowledge-card-item:hover,
+.knowledge-card-item:hover {
+  background: var(--bg-hover);
+}
+
 .knowledge-card-item[data-active="true"] {
-  background: var(--hover-bg, rgba(128, 128, 128, 0.16));
+  background: var(--accent-subtle);
+  border-color: var(--accent-soft);
+}
+
+/* 活动卡片左侧的强调竖条 */
+.knowledge-card-item::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: -1px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.knowledge-card-item[data-active="true"]::before {
+  opacity: 1;
+}
+
+.kpi-glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.kpi-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.kpi-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-ns {
+  overflow: hidden;
+  color: var(--text-hint);
+  font-size: 10.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-badge {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--accent-soft);
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .knowledge-card-editor {
@@ -205,18 +295,33 @@
   flex: 1;
   flex-direction: column;
   gap: 8px;
+  overflow: hidden;
   padding: 10px 10px 10px 12px;
 }
 
 .kpanel-toolbar {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
 }
 
 .kpanel-toolbar .knowledge-search {
   min-width: 0;
   flex: 1;
+}
+
+.kpanel-toolbar-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kpanel-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .kpanel-status {
@@ -251,11 +356,12 @@
 .kpanel-list {
   display: flex;
   min-height: 0;
-  flex-shrink: 0;
-  min-width: 130px;
+  flex: 1;
   flex-direction: column;
   gap: 6px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .kpanel-preview {

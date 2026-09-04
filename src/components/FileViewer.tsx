@@ -149,6 +149,9 @@ function FilePreviewPane({
   projectPath,
   themeVariant,
   previewMode,
+  knowledge = false,
+  module,
+  knowledgeGraphId,
   onCreateComment,
   jumpRequest,
   onJumpHandled,
@@ -159,6 +162,12 @@ function FilePreviewPane({
   projectPath: string;
   themeVariant: ThemeVariant;
   previewMode: boolean;
+  /** 知识库卡片标签：内容经 read_knowledge_card_content 读取，只读预览。 */
+  knowledge?: boolean;
+  /** knowledge 为 true 时的模块名。 */
+  module?: string;
+  /** knowledge 为 true 时绑定知识库 id（保存卡片用）。 */
+  knowledgeGraphId?: string;
   onCreateComment: (draft: CommentDraft) => void;
   jumpRequest: { line: number; seq: number } | null;
   onJumpHandled: () => void;
@@ -227,17 +236,23 @@ function FilePreviewPane({
     setError(null);
     setSaveStatus("idle");
 
-    const loadFile = isPreviewableImage
-      ? invoke<ImagePreviewData>("read_image_preview", { path: filePath, projectPath }).then((preview) => {
-          if (cancelled) return;
-          setImagePreview(preview);
-          setLoading(false);
-        })
-      : invoke<string>("read_file_content", { path: filePath, projectPath }).then((nextContent) => {
+    const loadFile = knowledge
+      ? invoke<string>("read_knowledge_card_content", { projectPath, module }).then((nextContent) => {
           if (cancelled) return;
           setContent(nextContent);
           setLoading(false);
-        });
+        })
+      : isPreviewableImage
+        ? invoke<ImagePreviewData>("read_image_preview", { path: filePath, projectPath }).then((preview) => {
+            if (cancelled) return;
+            setImagePreview(preview);
+            setLoading(false);
+          })
+        : invoke<string>("read_file_content", { path: filePath, projectPath }).then((nextContent) => {
+            if (cancelled) return;
+            setContent(nextContent);
+            setLoading(false);
+          });
 
     loadFile
       .catch((err) => {
@@ -249,7 +264,7 @@ function FilePreviewPane({
     return () => {
       cancelled = true;
     };
-  }, [filePath, projectPath, isPreviewableImage]);
+  }, [filePath, projectPath, isPreviewableImage, knowledge, module]);
 
   useEffect(
     () => () => {
@@ -268,7 +283,15 @@ function FilePreviewPane({
     setSaveStatus("saving");
     saveTimerRef.current = setTimeout(async () => {
       try {
-        await invoke("write_file_content", { path: filePath, content: value, projectPath });
+        if (knowledge) {
+          await invoke("save_knowledge_card", {
+            graphId: knowledgeGraphId,
+            module,
+            content: value,
+          });
+        } else {
+          await invoke("write_file_content", { path: filePath, content: value, projectPath });
+        }
         setSaveStatus("saved");
         savedResetRef.current = setTimeout(() => setSaveStatus("idle"), 2000);
       } catch {
@@ -838,6 +861,9 @@ export function FileViewer({
                 projectPath={projectPath}
                 themeVariant={themeVariant}
                 previewMode={previewModes[tab.path] ?? isMarkdownFile(tab.name)}
+                knowledge={tab.kind === "knowledge"}
+                module={tab.module}
+                knowledgeGraphId={tab.graphId}
                 onCreateComment={onCreateComment}
                 jumpRequest={isActive ? jumpReq : null}
                 onJumpHandled={handleJumpHandled}
