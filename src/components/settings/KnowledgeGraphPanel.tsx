@@ -36,7 +36,8 @@ export function KnowledgeGraphPanel({ projectPath }: { projectPath: string }) {
   const [graphId, setGraphId] = useState("");
   const [newGraphId, setNewGraphId] = useState("");
   const [newGraphName, setNewGraphName] = useState("");
-  const [adapter, setAdapter] = useState("his");
+  // 新建图谱不默认选中适配器：让用户显式选择，避免新知识库被悄悄绑定成 HIS。
+  const [adapter, setAdapter] = useState("");
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [activeCard, setActiveCard] = useState("");
   const [draft, setDraft] = useState("");
@@ -378,8 +379,22 @@ export function KnowledgeGraphPanel({ projectPath }: { projectPath: string }) {
           <div style={s.modalField}>
             <input style={s.modalInputFlex} value={newGraphId} onChange={(event) => setNewGraphId(event.target.value)} placeholder={t("settings.knowledgeGraphId")} />
             <input style={s.modalInputFlex} value={newGraphName} onChange={(event) => setNewGraphName(event.target.value)} placeholder={t("settings.knowledgeGraphName")} />
-            <Select value={adapter} onChange={setAdapter} options={adapters.map((item) => ({ value: item.id, label: item.name }))} />
-            <button type="button" style={s.modalSaveBtn} onClick={create} disabled={busy}>{t("settings.knowledgeCreateAction")}</button>
+            <Select
+              value={adapter || "none"}
+              onChange={(value) => setAdapter(value === "none" ? "" : value)}
+              options={[
+                { value: "none", label: t("settings.knowledgeAdapterPlaceholder") },
+                ...adapters.map((item) => ({ value: item.id, label: item.name })),
+              ]}
+            />
+            <button
+              type="button"
+              style={s.modalSaveBtn}
+              onClick={create}
+              disabled={busy || !adapter || !newGraphId.trim() || !newGraphName.trim()}
+            >
+              {t("settings.knowledgeCreateAction")}
+            </button>
           </div>
         </div>
         {status && <div style={s.modalLabelHint}>{status}</div>}

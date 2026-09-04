@@ -94,4 +94,26 @@ describe("KnowledgeGraphPanel", () => {
     await waitFor(() => expect(screen.getAllByText("HIS 知识图谱").length).toBeGreaterThan(0));
     expect(screen.getByRole("button", { name: /Initialize skeleton/ })).toBeTruthy();
   });
+
+  it("does not pre-select the HIS adapter when creating a graph", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "list_knowledge_targets") return Promise.resolve([]);
+      if (command === "list_knowledge_graph_adapters") {
+        return Promise.resolve([
+          { id: "his", name: "HIS" },
+          { id: "icucis", name: "ICUCIS" },
+        ]);
+      }
+      if (command === "read_project_config") return Promise.resolve({ knowledge: { graph_id: "" } });
+      return Promise.resolve(null);
+    });
+
+    renderPanel();
+
+    // 适配器下拉默认显示占位符，而不是 HIS。
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Choose adapter" })).toBeTruthy());
+    // 未选择适配器时创建按钮保持禁用。
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create.hasAttribute("disabled")).toBe(true);
+  });
 });
