@@ -929,18 +929,18 @@ export function BuildPanel({
               ) : null}
             </div>
           ))}
-          <div className="build-actions">
-            <button className="rp-btn" data-block="true" onClick={handlePull}>
+          <div className="build-actions-grid">
+            <button className="rp-btn" onClick={handlePull}>
               拉取
             </button>
-            <button className="rp-btn" data-block="true" onClick={() => void handleAnalyze()}>
+            <button className="rp-btn" onClick={() => void handleAnalyze()}>
               分析/计划
             </button>
-            <button className="rp-btn" data-block="true" onClick={() => void load()}>
+            <button className="rp-btn" onClick={() => void load()}>
               <RefreshCw size={12} />
               刷新
             </button>
-            <button className="rp-btn" data-block="true" onClick={() => void handleRefreshBaseline()}>
+            <button className="rp-btn" onClick={() => void handleRefreshBaseline()}>
               <RefreshCw size={12} />
               刷新基线
             </button>

@@ -122,6 +122,15 @@
 
 .build-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* 仓库拉取的四个操作固定 2×2 排布：窄面板（最小 180px）下单行必然溢出 */
+.build-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 8px;
 }
