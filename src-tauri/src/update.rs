@@ -12,6 +12,7 @@ use crate::TaskManager;
 
 // 发布物源与仓库保持一致（git remote / Cargo.toml / notifications feed 都在 Alohazzz/nezha）。
 const RELEASE_URL: &str = "https://api.github.com/repos/Alohazzz/nezha/releases/latest";
+const RELEASE_LATEST_PAGE_URL: &str = "https://github.com/Alohazzz/nezha/releases/latest";
 const DOWNLOAD_PREFIX: &str = "https://github.com/Alohazzz/nezha/releases/download/";
 const API_HOST: &str = "api.github.com";
 const REQUEST_TIMEOUT_SECS: u64 = 15;
@@ -42,6 +43,22 @@ struct GhAsset {
 }
 
 // ── Frontend-facing types ────────────────────────────────────────────────────
+
+/// API 请求失败分类：`RateLimited`（403/429，共享代理出口 IP 的未认证配额被打满时
+/// 触发绕过代理的直连重试）；其余错误直接走页面兜底。
+enum ApiFetchError {
+    RateLimited(String),
+    Other(String),
+}
+
+impl std::fmt::Display for ApiFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiFetchError::RateLimited(msg) => write!(f, "{msg}"),
+            ApiFetchError::Other(msg) => write!(f, "{msg}"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +111,18 @@ fn sanitize_filename(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_' || *c == ' ')
         .collect()
+}
+
+/// 从 `/Alohazzz/nezha/releases/tag/v0.10.0` 这类 302 目标路径解析最后的 tag 段。
+/// 仅接受 v/数字开头的段，避免把 releases/latest 等页面路径误判为版本号。
+fn parse_latest_tag_from_path(path: &str) -> Option<String> {
+    let tag = path.trim_end_matches('/').rsplit('/').next()?.trim();
+    let valid = !tag.is_empty()
+        && tag
+            .chars()
+            .next()
+            .map_or(false, |c| c == 'v' || c.is_ascii_digit());
+    valid.then(|| tag.to_string())
 }
 
 // ── Asset selection ──────────────────────────────────────────────────────────
@@ -163,8 +192,17 @@ fn path_is_within(parent: &Path, child: &Path) -> bool {
         })
 }
 
-fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
-    crate::http::add_system_proxy(
+fn apply_proxy(builder: reqwest::ClientBuilder, use_system_proxy: bool) -> reqwest::ClientBuilder {
+    if use_system_proxy {
+        crate::http::add_system_proxy(builder)
+    } else {
+        // 显式禁用所有代理：reqwest 默认还会读 HTTP_PROXY 等环境变量。
+        builder.no_proxy()
+    }
+}
+
+fn build_http_client(timeout_secs: u64, use_system_proxy: bool) -> Result<reqwest::Client, String> {
+    apply_proxy(
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
             // 仅跟随 GitHub 官方域名内的重定向；跳转到第三方域名即停止，
@@ -177,45 +215,109 @@ fn build_http_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
                 }
             }))
             .user_agent(format!("Nezha-Update/{APP_VERSION}")),
+        use_system_proxy,
     )
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))
 }
 
+/// 不跟随重定向的客户端：用于从 releases/latest 的 302 Location 头解析最新 tag。
+fn build_no_redirect_client(
+    timeout_secs: u64,
+    use_system_proxy: bool,
+) -> Result<reqwest::Client, String> {
+    apply_proxy(
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent(format!("Nezha-Update/{APP_VERSION}")),
+        use_system_proxy,
+    )
+    .build()
+    .map_err(|e| format!("HTTP client error: {e}"))
+}
+
+/// 从 GitHub API 的错误响应体提取 `message` 字段（如 rate limit 的官方说明），
+/// 让「HTTP 403 Forbidden」这类裸状态码带上可行动的原因。
+fn extract_api_error_message(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(str::to_owned))
+}
+
 // ── Tauri commands ───────────────────────────────────────────────────────────
 
-/// 检查是否有更新的正式版本。返回 None 表示已是最新。
-/// success + latest tag 仅在「latest > 当前版本」时返回 Some。
-#[tauri::command]
-pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
-    let client = build_http_client(REQUEST_TIMEOUT_SECS)?;
+/// 调 GitHub API 获取最新 release。`use_system_proxy=false` 时绕过代理直连。
+async fn fetch_latest_release_via_api(use_system_proxy: bool) -> Result<GhRelease, ApiFetchError> {
+    let client = build_http_client(REQUEST_TIMEOUT_SECS, use_system_proxy)
+        .map_err(ApiFetchError::Other)?;
     let resp = client
         .get(RELEASE_URL)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| format!("Fetch failed: {e}"))?;
+        .map_err(|e| ApiFetchError::Other(format!("Fetch failed: {e}")))?;
 
     // 校验响应域名，防重定向/伪造。
     if !is_trusted_github_url(resp.url()) {
-        return Err(format!("Unexpected response URL: {}", resp.url()));
+        return Err(ApiFetchError::Other(format!(
+            "Unexpected response URL: {}",
+            resp.url()
+        )));
     }
     if resp.status().is_redirection() {
-        return Err(format!(
+        return Err(ApiFetchError::Other(format!(
             "Update check was redirected (HTTP {}), likely caused by a proxy rerouting the GitHub API. Please allow {API_HOST} through your proxy.",
             resp.status()
-        ));
+        )));
     }
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        let detail = extract_api_error_message(&body).unwrap_or_else(|| format!("HTTP {status}"));
+        // 403/429 几乎都是共享出口 IP 的未认证配额被打满，归入 RateLimited 以触发直连重试。
+        return Err(match status.as_u16() {
+            403 | 429 => ApiFetchError::RateLimited(detail),
+            _ => ApiFetchError::Other(detail),
+        });
     }
 
-    let release: GhRelease = resp
-        .json()
+    resp.json()
         .await
-        .map_err(|e| format!("Invalid JSON: {e}"))?;
+        .map_err(|e| ApiFetchError::Other(format!("Invalid JSON: {e}")))
+}
 
-    // 仅当最新版严格大于当前版本时才提示；否则视为已最新。
+/// 通过 github.com 的 releases/latest 302 Location 解析最新 tag。
+/// 该页面不占 api.github.com 的未认证限额，可作 API 被限流时的兜底；依次尝试系统代理与直连。
+async fn fetch_latest_tag_via_redirect() -> Result<String, String> {
+    let mut last_err = String::new();
+    for use_system_proxy in [true, false] {
+        let client = build_no_redirect_client(REQUEST_TIMEOUT_SECS, use_system_proxy)?;
+        match client.head(RELEASE_LATEST_PAGE_URL).send().await {
+            Ok(resp) => {
+                if let Some(location) = resp
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                {
+                    let url = reqwest::Url::parse(location)
+                        .map_err(|_| format!("Invalid redirect location: {location}"))?;
+                    if !is_trusted_github_url(&url) {
+                        return Err(format!("Unexpected redirect location: {location}"));
+                    }
+                    return parse_latest_tag_from_path(url.path())
+                        .ok_or_else(|| format!("No tag in redirect location: {location}"));
+                }
+                last_err = format!("HTTP {} (no redirect location)", resp.status());
+            }
+            Err(e) => last_err = format!("Release page fetch failed: {e}"),
+        }
+    }
+    Err(last_err)
+}
+
+/// 由 release 数据构造前端结果；仅当最新版严格大于当前版本时返回 Some（已最新 → None）。
+fn build_update_info(release: &GhRelease) -> Result<Option<UpdateInfo>, String> {
     if compare_versions(&release.tag_name, APP_VERSION) != std::cmp::Ordering::Greater {
         return Ok(None);
     }
@@ -232,13 +334,44 @@ pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
 
     Ok(Some(UpdateInfo {
         version: release.tag_name.trim_start_matches('v').to_string(),
-        tag: release.tag_name,
-        body: release.body,
-        published_at: release.published_at,
+        tag: release.tag_name.clone(),
+        body: release.body.clone(),
+        published_at: release.published_at.clone(),
         current_version: APP_VERSION.to_string(),
         supported: supported_windows && asset.as_ref().map_or(false, |a| a.supported),
         asset,
     }))
+}
+
+/// 检查是否有更新的正式版本。返回 None 表示已是最新。
+///
+/// 降级链：API(系统代理) → API(直连，仅限 403/429) → releases/latest 页面 302 解析 tag。
+/// 走到最后一级时资产信息缺失，前端自动降级为「前往 Releases」手动下载。
+#[tauri::command]
+pub async fn check_for_update() -> Result<Option<UpdateInfo>, String> {
+    let mut last_err: String = match fetch_latest_release_via_api(true).await {
+        Ok(release) => return build_update_info(&release),
+        Err(ApiFetchError::RateLimited(msg)) => {
+            match fetch_latest_release_via_api(false).await {
+                Ok(release) => return build_update_info(&release),
+                Err(direct_err) => format!("{msg}; direct retry failed: {direct_err}"),
+            }
+        }
+        Err(ApiFetchError::Other(e)) => e,
+    };
+
+    match fetch_latest_tag_via_redirect().await {
+        Ok(tag) => {
+            return build_update_info(&GhRelease {
+                tag_name: tag,
+                body: None,
+                published_at: None,
+                assets: Vec::new(),
+            });
+        }
+        Err(e) => last_err = format!("{last_err}; {e}"),
+    }
+    Err(last_err)
 }
 
 /// 下载指定安装包到应用缓存目录，流式写文件并逐步回传进度（0..1）。
@@ -268,7 +401,7 @@ pub async fn download_update(
         .map_err(|e| e.to_string())?;
     let install_path = cache_dir.join(format!("nezha-update-{filename}"));
 
-    let client = build_http_client(DOWNLOAD_TIMEOUT_SECS)?;
+    let client = build_http_client(DOWNLOAD_TIMEOUT_SECS, true)?;
     let resp = client
         .get(&url)
         .header("Accept", "application/octet-stream")
@@ -451,5 +584,54 @@ mod tests {
         let v = parse_version("v1.2.3-beta.1");
         // 比较只取前三个数值段；后缀段归一为 0，不影响大小比较。
         assert_eq!(&v[..3], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn parse_latest_tag_from_path_accepts_only_version_segments() {
+        assert_eq!(
+            parse_latest_tag_from_path("/Alohazzz/nezha/releases/tag/v0.10.0"),
+            Some("v0.10.0".to_string())
+        );
+        // 非 tag 段（页面路径 / 空段）一律拒绝。
+        assert_eq!(parse_latest_tag_from_path("/Alohazzz/nezha/releases/latest"), None);
+        assert_eq!(parse_latest_tag_from_path("/Alohazzz/nezha/releases/tag/"), None);
+        assert_eq!(parse_latest_tag_from_path(""), None);
+    }
+
+    #[test]
+    fn extract_api_error_message_surfaces_rate_limit_reason() {
+        let body = r#"{"message":"API rate limit exceeded for 103.172.182.27.","documentation_url":"https://docs.github.com/rest"}"#;
+        assert_eq!(
+            extract_api_error_message(body).as_deref(),
+            Some("API rate limit exceeded for 103.172.182.27.")
+        );
+        assert_eq!(extract_api_error_message("not json"), None);
+        assert_eq!(extract_api_error_message(r#"{"foo":1}"#), None);
+    }
+
+    #[test]
+    fn build_update_info_degrades_gracefully_without_assets() {
+        // 兜底路径只有 tag、没有资产信息：应返回 supported=false 的降级结果（前端走「前往 Releases」）。
+        let release = GhRelease {
+            tag_name: "v99.0.0".to_string(),
+            body: None,
+            published_at: None,
+            assets: Vec::new(),
+        };
+        let info = build_update_info(&release)
+            .unwrap()
+            .expect("newer version should yield Some");
+        assert_eq!(info.tag, "v99.0.0");
+        assert!(info.asset.is_none());
+        assert!(!info.supported);
+
+        // 已是最新时返回 None。
+        let current = GhRelease {
+            tag_name: format!("v{APP_VERSION}"),
+            body: None,
+            published_at: None,
+            assets: Vec::new(),
+        };
+        assert!(build_update_info(&current).unwrap().is_none());
     }
 }
