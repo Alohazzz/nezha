@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { javascript } from "@codemirror/lang-javascript";
+import { vue } from "@codemirror/lang-vue";
 import { python } from "@codemirror/lang-python";
 import { rust } from "@codemirror/lang-rust";
 import { go } from "@codemirror/lang-go";
@@ -129,7 +130,9 @@ function getSynchronousLanguageExtension(fileName: string): Extension {
 
 export async function loadLanguageExtension(fileName: string): Promise<Extension> {
   if (getFileExtension(fileName) === "vue") {
-    const { vue } = await import("@codemirror/lang-vue");
+    // vue 唯一静态 import（其余语言在 getSynchronousLanguageExtension）。
+    // 曾用动态 import：vitest 全量并发下偶发解析出双实例副本，vue parser
+    // 内部依赖跨实例失配导致插值 token 丢失（file-viewer-language 间歇失败）。
     return vue();
   }
 

@@ -136,23 +136,44 @@ export interface YunxiaoConditionsInput {
   selectedStatusIds?: string[];
 }
 
+/** 议题编号 token（如 QHDK-30074 / ABC-12：字母前缀-数字）。 */
+const ISSUE_SERIAL_TOKEN = /\b[A-Za-z][A-Za-z0-9]*-\d+\b/g;
+
 /**
  * 把标题搜索 + 我负责的 + 状态多选拼成云效 conditions JSON 字符串。
  * 无任何条件时返回 undefined（后端保持默认空条件）。所有条件放同一 conditionGroup（AND）。
+ *
+ * 编号搜索：query 为单个议题编号（字母前缀-数字，如 QHDK-30074）时改走
+ * serialNumber 条件（实测有效；标题 CONTAINS 匹配不到编号）。混合输入
+ * （编号 + 其他词）仍走标题搜索；多编号 AND 语义不可靠，不支持。
  */
 export function buildYunxiaoConditions(input: YunxiaoConditionsInput): string | undefined {
   const conditions: YunxiaoCondition[] = [];
 
   const query = input.query?.trim();
   if (query) {
-    conditions.push({
-      className: "string",
-      fieldIdentifier: "subject",
-      format: "input",
-      operator: "CONTAINS",
-      toValue: null,
-      value: [query],
-    });
+    const serialMatch = query.match(ISSUE_SERIAL_TOKEN);
+    const isSingleSerial =
+      serialMatch !== null && serialMatch.length === 1 && serialMatch[0] === query;
+    if (isSingleSerial) {
+      conditions.push({
+        className: "string",
+        fieldIdentifier: "serialNumber",
+        format: "input",
+        operator: "CONTAINS",
+        toValue: null,
+        value: [query.toUpperCase()],
+      });
+    } else {
+      conditions.push({
+        className: "string",
+        fieldIdentifier: "subject",
+        format: "input",
+        operator: "CONTAINS",
+        toValue: null,
+        value: [query],
+      });
+    }
   }
 
   const currentUserId = input.currentUserId?.trim();
