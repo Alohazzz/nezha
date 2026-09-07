@@ -86,6 +86,8 @@ pub async fn create_branch_batch(
     use_existing_remote: bool,
     // 创建者自行选择的代码目录（worktree 落在其下的 `<目录>/<批id>`）；缺省回落配置基路径。
     worktree_dir: Option<String>,
+    // 议题编号列表（commit 门禁与 MR 关联用）；多议题联合方案生成待办时传入。
+    issue_serial_numbers: Option<Vec<String>>,
 ) -> Result<Batch, String> {
     if id.trim().is_empty() {
         return Err("Batch id is required".to_string());
@@ -211,7 +213,7 @@ pub async fn create_branch_batch(
             closed_at: None,
             additions: None,
             deletions: None,
-            issue_serial_numbers: vec![],
+            issue_serial_numbers: issue_serial_numbers.unwrap_or_default(),
             mr_id: None,
             mr_status: None,
             worktree_path: Some(worktree_str.clone()),

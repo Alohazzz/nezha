@@ -12,6 +12,10 @@ import type {
   FontFamily,
   SkillHubConfig,
   YunxiaoWorkitem,
+  AgentType,
+  PermissionMode,
+  Plan,
+  PlanIssue,
 } from "../types";
 import type { ProjectRenameResult } from "../projectName";
 import { SidebarFooterActions } from "./SidebarFooterActions";
@@ -104,6 +108,9 @@ export function WelcomePage({
   skillHubConfig,
   onEnterSkillHub,
   onImportYunxiaoIssue,
+  onCreateYunxiaoPlan,
+  onStartYunxiaoPlanDiscussion,
+  onCancelYunxiaoPlan,
 }: {
   projects: Project[];
   allProjects: Project[];
@@ -134,6 +141,14 @@ export function WelcomePage({
   skillHubConfig: SkillHubConfig | null;
   onEnterSkillHub: () => void;
   onImportYunxiaoIssue: (issue: YunxiaoWorkitem, targetProjectId: string) => Promise<boolean>;
+  onCreateYunxiaoPlan: (targetProjectId: string, issues: PlanIssue[]) => Plan;
+  onStartYunxiaoPlanDiscussion: (
+    planId: string,
+    prompt: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) => void;
+  onCancelYunxiaoPlan: (planId: string) => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -231,6 +246,9 @@ export function WelcomePage({
             tasks={tasks}
             onBack={() => setView("projects")}
             onImportIssue={onImportYunxiaoIssue}
+            onCreatePlan={onCreateYunxiaoPlan}
+            onStartPlanDiscussion={onStartYunxiaoPlanDiscussion}
+            onCancelPlan={onCancelYunxiaoPlan}
           />
         ) : view === "timeline" ? (
           <TimelineView

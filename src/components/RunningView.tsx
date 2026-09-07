@@ -33,6 +33,7 @@ import {
   CheckCircle2,
   Send,
   Layers,
+  BookOpenText,
   Terminal as TerminalIcon,
 } from "lucide-react";
 
@@ -98,6 +99,7 @@ export function RunningView({
   onDiscardWorktree,
   onOpenWriteback,
   onOpenKnowledgeSedimentation,
+  onOpenPlanPreview,
   onOpenWorktreeTerminal,
   onReconnect,
   onMarkDone,
@@ -126,6 +128,8 @@ export function RunningView({
   onDiscardWorktree?: () => Promise<void>;
   onOpenWriteback?: () => void;
   onOpenKnowledgeSedimentation?: () => void;
+  /** 打开右侧「方案预览」面板（任务关联了 Plan 时出现顶栏「方案」按钮）。 */
+  onOpenPlanPreview?: () => void;
   onOpenWorktreeTerminal?: () => void;
   onReconnect: () => void;
   onMarkDone: () => void;
@@ -459,6 +463,12 @@ export function RunningView({
             </button>
           )}
         </div>
+        {task.planId && onOpenPlanPreview && (
+          <button type="button" style={s.cancelBtn} onClick={onOpenPlanPreview}>
+            <BookOpenText size={12} strokeWidth={2.5} />
+            <span>{t("plan.previewButton")}</span>
+          </button>
+        )}
         {isActive && (
           <>
             {task.worktreePath && !task.worktreeDiscarded && onOpenWorktreeTerminal && (
@@ -493,6 +503,7 @@ export function RunningView({
           task.worktreePath &&
           task.worktreeBranch &&
           !task.worktreeDiscarded &&
+          !task.batchId &&
           !isCodeupMrTask &&
           onMergeWorktree && (
             <button
@@ -523,6 +534,7 @@ export function RunningView({
           task.worktreePath &&
           task.worktreeBranch &&
           !task.worktreeDiscarded &&
+          !task.batchId &&
           onDiscardWorktree && (
           <button
             style={{

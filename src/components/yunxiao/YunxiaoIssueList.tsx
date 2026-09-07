@@ -20,6 +20,9 @@ export function YunxiaoIssueList({
   loading,
   loadingMore,
   importedIds,
+  selectedIds,
+  selectionMode,
+  onToggleSelect,
   onImport,
   onLoadMore,
 }: {
@@ -28,6 +31,12 @@ export function YunxiaoIssueList({
   loading: boolean;
   loadingMore: boolean;
   importedIds: ReadonlySet<string>;
+  /** 多选模式下的已选议题 id。 */
+  selectedIds: ReadonlySet<string>;
+  /** 是否处于多选模式（已选 ≥1 时为 true，隐藏单条导入按钮）。 */
+  selectionMode: boolean;
+  /** 勾选/取消勾选（imported 议题由父级拦截置灰）。 */
+  onToggleSelect: (issue: YunxiaoWorkitem) => void;
   onImport: (issue: YunxiaoWorkitem) => void;
   onLoadMore: () => void;
 }) {
@@ -50,6 +59,7 @@ export function YunxiaoIssueList({
         issues.map((issue) => {
           const imported = importedIds.has(issue.id);
           const hover = hoverIssueId === issue.id;
+          const checked = selectedIds.has(issue.id);
           const priority = getYunxiaoPriority(issue);
           const meta: string[] = [
             issue.status?.displayName ?? issue.status?.name ?? t("yunxiao.statusUnknown"),
@@ -62,10 +72,23 @@ export function YunxiaoIssueList({
           return (
             <div
               key={issue.id}
-              style={hover ? s.yunxiaoIssueCardHover : s.yunxiaoIssueCard}
+              style={
+                checked ? s.yunxiaoIssueCardSelected : hover ? s.yunxiaoIssueCardHover : s.yunxiaoIssueCard
+              }
               onMouseEnter={() => setHoverIssueId(issue.id)}
               onMouseLeave={() => setHoverIssueId(null)}
             >
+              <label
+                style={imported ? s.yunxiaoIssueCheckDisabled : s.yunxiaoIssueCheck}
+                title={imported ? t("yunxiao.importDuplicate") : undefined}
+              >
+                <input
+                  type="checkbox"
+                  disabled={imported}
+                  checked={checked}
+                  onChange={() => onToggleSelect(issue)}
+                />
+              </label>
               <span style={s.yunxiaoIssueSerial}>{issue.serialNumber}</span>
               <div style={s.yunxiaoIssueBody}>
                 <div style={s.yunxiaoIssueSubject}>{issue.subject}</div>
@@ -82,7 +105,7 @@ export function YunxiaoIssueList({
                   <Check size={12} strokeWidth={2.5} />
                   {t("yunxiao.imported")}
                 </span>
-              ) : (
+              ) : !selectionMode ? (
                 <button
                   type="button"
                   style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
@@ -90,7 +113,7 @@ export function YunxiaoIssueList({
                 >
                   {t("yunxiao.import")}
                 </button>
-              )}
+              ) : null}
             </div>
           );
         })

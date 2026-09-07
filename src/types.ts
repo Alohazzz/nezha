@@ -280,6 +280,39 @@ export interface Task {
   derivedFromTaskId?: string;
   /** 起源云效议题 ID：补充的议题来自哪个已有议题的讨论发现（来源追溯） */
   derivedFromWorkitemId?: string;
+  /** 多议题联合方案 id：执行任务与临时讨论任务通过它关联 Plan */
+  planId?: string;
+  /** 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree） */
+  yunxiaoPlanDiscussion?: boolean;
+}
+
+/** 多议题联合方案（Plan）的议题快照：发起时从云效列表抄录，预览/确认页离线可用。 */
+export interface PlanIssue {
+  workitemId: string;
+  serialNumber: string;
+  subject: string;
+  /** 云效类别（Req / Task / Bug）；未知为空 */
+  category?: string;
+}
+
+/** 方案生命周期：讨论中 → 已定稿 → 执行中 → 已完成；cancelled = 已取消。 */
+export type PlanStatus = "draft" | "finalized" | "executing" | "completed" | "cancelled";
+
+/** 多议题联合方案：一份方案覆盖 N 个云效议题；正文与图片在项目内
+ *  `.nezha/plans/<planId>/`（plan.md + images/），元数据持久化在 plans.json。 */
+export interface Plan {
+  id: string;
+  projectId: string;
+  name: string;
+  /** 议题快照（有序 = 建议执行顺序） */
+  issues: PlanIssue[];
+  status: PlanStatus;
+  /** 承载方案讨论的临时任务 id */
+  discussionTaskId?: string;
+  /** 生成待办时创建的分支批 id */
+  batchId?: string;
+  createdAt: number;
+  finalizedAt?: number;
 }
 
 /** 知识沉淀候选：一条对应一个云效审核议题。 */

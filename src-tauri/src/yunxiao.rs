@@ -924,7 +924,10 @@ async fn download_issue_image(
     Ok((bytes.to_vec(), ext.to_string()))
 }
 
-/// 发起讨论前调用：拉取议题全量描述 → 提取图片 URL → 下载到 `.nezha/attachments/<taskId>/`。
+/// 发起讨论前调用：拉取议题全量描述 → 提取图片 URL → 下载归档。
+/// - 单议题路径：`task_id` 归档到 `.nezha/attachments/<taskId>/`；
+/// - 多议题联合方案路径：`plan_id` 归档到 `.nezha/plans/<planId>/images/<workitemId>/`
+///   （按议题分目录，多议题图片互不覆盖；任务尚不存在，故挂在 Plan 下）。
 /// 返回本地路径与统计；前端据 `failed == total` 决定是否阻断发起。
 #[tauri::command]
 pub async fn yunxiao_prepare_issue_images(
@@ -932,7 +935,8 @@ pub async fn yunxiao_prepare_issue_images(
     organization_id: String,
     workitem_id: String,
     project_path: String,
-    task_id: String,
+    task_id: Option<String>,
+    plan_id: Option<String>,
 ) -> Result<IssueImagesPrepared, String> {
     let token = token.trim().to_string();
     let organization_id = organization_id.trim().to_string();
@@ -940,23 +944,41 @@ pub async fn yunxiao_prepare_issue_images(
     if token.is_empty() || organization_id.is_empty() || workitem_id.is_empty() {
         return Err("缺少云效令牌、组织 ID 或工作项 ID".to_string());
     }
-    let task_id = task_id.trim();
-    if task_id.is_empty()
-        || task_id == "."
-        || task_id == ".."
-        || task_id.contains('/')
-        || task_id.contains('\\')
-    {
-        return Err("非法的任务 ID".to_string());
-    }
+    let is_simple_id = |value: &str| {
+        !value.is_empty()
+            && value != "."
+            && value != ".."
+            && !value.contains('/')
+            && !value.contains('\\')
+    };
+    let archive_dir = match plan_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(plan) => {
+            if !is_simple_id(plan) {
+                return Err("非法的方案 ID".to_string());
+            }
+            crate::storage::plan_dir(&project_path, plan)
+                .join("images")
+                .join(&workitem_id)
+        }
+        None => match task_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(task_id) if is_simple_id(task_id) => Path::new(&project_path)
+                .join(".nezha")
+                .join("attachments")
+                .join(task_id),
+            _ => return Err("非法的任务 ID".to_string()),
+        },
+    };
     let project = Path::new(&project_path)
         .canonicalize()
         .map_err(|e| format!("项目路径无效: {e}"))?;
     if !project.is_dir() {
         return Err("项目路径不是目录".to_string());
     }
-    let attachments_dir = project.join(".nezha").join("attachments").join(task_id);
-    std::fs::create_dir_all(&attachments_dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+    std::fs::create_dir_all(&archive_dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
 
     // 1) 拉全量详情原始 JSON（保留富文本/HTML 结构，避免图片被文本化剥掉）
     let client = build_client()?;
@@ -1010,7 +1032,7 @@ pub async fn yunxiao_prepare_issue_images(
         {
             Ok((data, ext)) => {
                 let filename = format!("image-{:02}.{}", result.downloaded + 1, ext);
-                let file_path = attachments_dir.join(&filename);
+                let file_path = archive_dir.join(&filename);
                 if let Err(e) = std::fs::write(&file_path, &data) {
                     result.failed += 1;
                     push_reported_error(&mut result.errors, format!("写入 {filename} 失败: {e}"));
@@ -1026,6 +1048,60 @@ pub async fn yunxiao_prepare_issue_images(
         }
     }
     Ok(result)
+}
+
+// ── 多议题联合方案（Plan）────────────────────────────────────────────────────
+
+/// 删除多议题联合方案：仍有任务引用（task.planId）时拒绝；
+/// 否则从 plans.json 移除记录，并尽力清掉项目内 `.nezha/plans/<planId>/` 目录。
+/// 目录删除失败不回滚记录（残留目录无害），仅把失败信息带给前端提示。
+#[tauri::command]
+pub async fn delete_yunxiao_plan(
+    project_path: String,
+    project_id: String,
+    plan_id: String,
+) -> Result<(), String> {
+    let plan_id = plan_id.trim().to_string();
+    if plan_id.is_empty() || plan_id.contains('/') || plan_id.contains('\\') || plan_id.contains("..")
+    {
+        return Err("非法的方案 ID".to_string());
+    }
+    let project = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let canonical = Path::new(&project_path)
+            .canonicalize()
+            .map_err(|e| format!("项目路径无效: {e}"))?;
+        if !canonical.is_dir() {
+            return Err("项目路径不是目录".to_string());
+        }
+
+        // 引用检查：任一任务的 planId 指向本方案则拒绝删除。
+        let tasks = crate::storage::load_project_tasks(project_id.clone())?;
+        if tasks
+            .iter()
+            .any(|t| t.plan_id.as_deref() == Some(plan_id.as_str()))
+        {
+            return Err("仍有任务关联本方案（先解绑或删除这些任务）".to_string());
+        }
+
+        let mut plans = crate::storage::load_project_plans(project_id.clone())?;
+        let before = plans.len();
+        plans.retain(|p| p.id != plan_id);
+        if plans.len() == before {
+            return Err("方案不存在".to_string());
+        }
+        crate::storage::save_project_plans(project_id, plans)?;
+
+        // 记录已删，目录清理失败只提示不回滚（避免半删态）。
+        let dir = crate::storage::plan_dir(&canonical, &plan_id);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)
+                .map_err(|e| format!("方案记录已删除，但清理目录失败: {e}"))?;
+        }
+        Ok(String::new())
+    })
+    .await
+    .map_err(|e| format!("删除方案线程错误: {e}"))??;
+    Ok(())
 }
 
 // ── 议题评论回写（闭环）──────────────────────────────────────────────────────
