@@ -26,7 +26,6 @@ import type {
   Plan,
   PlanIssue,
   PlanStatus,
-  BranchBatch,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -1673,16 +1672,13 @@ function App() {
   }
 
   /**
-   * 方案定稿后的「生成待办」：按确认页顺序建批（一分支 + 一 worktree + 议题门禁），
-   * 再生成 N 个执行待办（一议题一任务，任务↔议题 1:1，批内共用工作区，整批一个 MR）。
+   * 方案定稿后的「生成待办」：按确认页顺序直接生成 N 个执行待办（一议题一任务，
+   * 任务↔议题 1:1），不自动建批——任务跑在当前工作区，是否归批由用户后续手动决定。
    */
   async function handleGeneratePlanTodos(input: {
     planId: string;
     /** 确认页调整后的议题顺序（已剔除冲突项） */
     issues: PlanIssue[];
-    batchName: string;
-    baseBranch: string;
-    targetBranch: string;
     agent: AgentType;
     permissionMode: PermissionMode;
   }): Promise<boolean> {
@@ -1795,55 +1791,16 @@ function App() {
       });
     }
 
-    // 4) 建批（分支 + worktree + issueSerialNumbers 门禁）；worktree 目录缺省回落配置基路径。
-    let worktreeBase = "";
-    try {
-      worktreeBase = await invoke<string>("get_branch_batch_worktree_base", {
-        projectPath: project.path,
-      });
-    } catch {
-      // 回落项目内默认路径（后端处理）
-    }
-    let batch: BranchBatch;
-    try {
-      batch = await invoke<BranchBatch>("create_branch_batch", {
-        projectPath: project.path,
-        projectId: project.id,
-        id: crypto.randomUUID(),
-        name: input.batchName,
-        kind: "feature",
-        baseBranch: input.baseBranch,
-        targetBranch: input.targetBranch || input.baseBranch,
-        taskIds,
-        worktreeDir: worktreeBase || undefined,
-        issueSerialNumbers: input.issues.map((issue) => issue.serialNumber),
-      });
-    } catch (e) {
-      showToast(t("plan.batchCreateFailed", { error: String(e) }), "error");
-      return false;
-    }
-
-    // 5) 生成待办（挂批字段：共用 worktree/分支）+ 方案转执行中。
+    // 4) 生成待办（普通 todo，跑在当前工作区；不带批/worktree 字段）+ 方案转执行中。
     setTasks((prev) => {
-      const next = [
-        ...tasksToCreate.map((task) => ({
-          ...task,
-          batchId: batch.id,
-          worktreePath: batch.worktreePath,
-          worktreeBranch: batch.branch,
-          baseBranch: batch.baseBranch,
-          worktreeRepo: batch.worktreeRepo,
-          branchKind: batch.kind,
-        })),
-        ...prev,
-      ];
+      const next = [...tasksToCreate, ...prev];
       persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
       return next;
     });
     setPlans((prev) => {
       const next = prev.map((p) =>
         p.id === plan.id
-          ? { ...p, status: "executing" as PlanStatus, batchId: batch.id, issues: input.issues }
+          ? { ...p, status: "executing" as PlanStatus, issues: input.issues }
           : p,
       );
       persistProjectPlans(plan.projectId, next);

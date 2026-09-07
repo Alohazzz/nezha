@@ -30,7 +30,6 @@ export function PlanPreviewPanel({
   plan,
   tasks,
   projectPath,
-  defaultBaseBranch,
   onCreateTodos,
   onDeletePlan,
   onClose,
@@ -38,13 +37,9 @@ export function PlanPreviewPanel({
   plan: Plan;
   tasks: Task[];
   projectPath: string;
-  defaultBaseBranch: string;
   onCreateTodos: (input: {
     planId: string;
     issues: PlanIssue[];
-    batchName: string;
-    baseBranch: string;
-    targetBranch: string;
     agent: AgentType;
     permissionMode: PermissionMode;
   }) => Promise<boolean>;
@@ -235,8 +230,6 @@ export function PlanPreviewPanel({
           <GeneratePlanTodosDialog
             plan={plan}
             tasks={tasks}
-            defaultBaseBranch={defaultBaseBranch}
-            defaultBatchName={plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber))}
             onCreateTodos={async (input) => {
               const ok = await onCreateTodos(input);
               if (ok) setShowGenerate(false);
