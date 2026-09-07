@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, BarChart3 } from "lucide-react";
 import type {
   Project,
   Task,
@@ -21,6 +21,7 @@ import type { ProjectRenameResult } from "../projectName";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
+import { WeeklyReportView } from "./weekly-report/WeeklyReportView";
 import { YunxiaoView } from "./yunxiao/YunxiaoView";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { MergeHubView } from "./codeup/MergeHubView";
@@ -152,7 +153,7 @@ export function WelcomePage({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup">(
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup" | "weekly">(
     "projects",
   );
 
@@ -210,6 +211,12 @@ export function WelcomePage({
               active={view === "codeup"}
               onClick={() => setView("codeup")}
             />
+            <SidebarItem
+              icon={<BarChart3 size={15} />}
+              label={t("welcome.weekly")}
+              active={view === "weekly"}
+              onClick={() => setView("weekly")}
+            />
           </nav>
 
           <div style={s.sidebarFooter}>
@@ -235,7 +242,9 @@ export function WelcomePage({
           </div>
         </div>
 
-        {view === "codeup" ? (
+        {view === "weekly" ? (
+          <WeeklyReportView />
+        ) : view === "codeup" ? (
           <MergeHubView
             onBack={() => setView("projects")}
             onStartCodeupTask={onStartCodeupTask}

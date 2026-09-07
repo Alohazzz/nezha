@@ -14,6 +14,7 @@ import { task } from "./task";
 import { terminal } from "./terminal";
 import { timeline } from "./timeline";
 import { update } from "./update";
+import { weeklyReport } from "./weekly-report";
 import { yunxiao } from "./yunxiao";
 
 const s = {
@@ -29,6 +30,7 @@ const s = {
   ...kanban,
   ...skillHub,
   ...reviewComments,
+  ...weeklyReport,
   ...yunxiao,
   ...branchBatch,
   ...update,
@@ -51,5 +53,6 @@ export {
   terminal,
   timeline,
   update,
+  weeklyReport,
   yunxiao,
 };
