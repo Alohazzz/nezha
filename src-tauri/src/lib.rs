@@ -31,6 +31,7 @@ mod subprocess;
 mod system_notify;
 mod update;
 mod usage;
+mod weekly_report;
 mod value_score;
 mod yunxiao;
 
@@ -417,6 +418,7 @@ pub fn run() {
             git::remove_task_worktree,
             git::worktree_diff_stats,
             analytics::read_session_metrics,
+            weekly_report::build_weekly_report,
             build::read_build_config,
             build::write_build_config,
             build::discover_build_repos,
