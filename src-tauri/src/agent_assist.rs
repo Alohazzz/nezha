@@ -698,7 +698,12 @@ pub async fn get_plan_discussion_instructions(
 }
 
 /// 方案执行流程：方案已定稿，直接执行；发现方案与代码现实冲突即停。
-const PLAN_EXECUTION_FLOW: &str = "方案优先：本议题的修改方案已在「本议题方案（已定稿）」中定稿（来自多云题联合讨论），按方案直接执行改动，不要再把用户盘问一轮。执行中发现方案与代码现实冲突（文件/函数不存在、方案假设错误、影响面比方案判断更大）时，停下来在会话中说明冲突点并给出建议，等用户决策后再继续；不要擅自偏离方案。";
+/// 执行动作统一走 implement 技能（把「本议题方案」当作 spec/工单落地）。
+const PLAN_EXECUTION_FLOW: &str = "方案优先：本议题的修改方案已在「本议题方案（已定稿）」中定稿（来自多云题联合讨论），按方案直接执行改动，不要再把用户盘问一轮。请使用 implement 技能执行本次改动：把「本议题方案」当作 spec/工单，按该技能的流程落地实现并自验。执行中发现方案与代码现实冲突（文件/函数不存在、方案假设错误、影响面比方案判断更大）时，停下来在会话中说明冲突点并给出建议，等用户决策后再继续；不要擅自偏离方案。";
+
+/// 方案执行的知识认知指令：直接让 Agent 调用 knowledge-graph 技能建立模块认知
+///（图谱选择由技能按项目 graph.toml 自行解析，不在此注入具体图谱 id）。
+const PLAN_KNOWLEDGE_INSTRUCTION: &str = "另外，开始前先使用 knowledge-graph 技能：按技能说明查询本项目绑定的知识图谱，建立对相关模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
 
 /// 方案执行任务的产物落盘：评分与影响范围进任务自己的 discussion.md；
 /// 「修改方案汇总」由方案文档提供（回写时自动合并），不在此重复维护。
@@ -732,14 +737,12 @@ fn plan_execution_draft_instructions(
     )
 }
 
-/// 方案执行任务的完整指令：流程 + 图谱 + 评分 + 补录 + 产物落盘。
+/// 方案执行任务的完整指令：流程（implement 执行 + knowledge-graph 认知）+ 评分 + 补录 + 产物落盘。
 pub fn plan_execution_instructions(
     task_id: &str,
     knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
 ) -> String {
-    let knowledge_graph = knowledge_target
-        .map(knowledge_graph_instruction)
-        .unwrap_or_default();
+    let knowledge_graph = PLAN_KNOWLEDGE_INSTRUCTION;
     format!(
         "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{value_score}\n\n{backfill}\n\n{draft}",
         flow = PLAN_EXECUTION_FLOW,
