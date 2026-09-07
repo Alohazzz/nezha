@@ -138,7 +138,7 @@ export function YunxiaoView({
     statusCategories,
     setSettings,
   );
-  const { conditions } = filters;
+  const { conditions, filtersReady } = filters;
 
   const loadIssues = useCallback(
     async (nextPage: number, append: boolean) => {
@@ -185,11 +185,14 @@ export function YunxiaoView({
 
   useEffect(() => {
     if (!configured || connectMode || !settingsLoaded) return;
+    // 过滤偏好恢复完成前不发首查：无条件请求会先返回全量列表，
+    // 恢复后的条件重查再覆盖——表现为「选了过滤却显示全部」的闪烁/竞态。
+    if (!filtersReady) return;
     setIssues([]);
     setTotal(0);
     setPage(0);
     loadIssues(1, false);
-  }, [configured, connectMode, settingsLoaded, category, conditions, loadIssues]);
+  }, [configured, connectMode, settingsLoaded, filtersReady, category, conditions, loadIssues]);
 
   const importedIds = useMemo(() => {
     const set = new Set<string>();

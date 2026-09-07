@@ -62,7 +62,9 @@ export function useYunxiaoFilters(
     setCurrentUserNameInput(settings.currentUserName ?? "");
   }, [settings.currentUserId, settings.currentUserName]);
 
-  // 过滤偏好：按项目从 localStorage 恢复。
+  // 过滤偏好：按项目从 localStorage 恢复。恢复值同步写入 debounced 态
+  // （挂载恢复不是用户连续点击，无需防抖）——否则首查会以无条件发出，
+  // 出现「过滤已选中但列表显示全部」的竞态（issue：云效列表过滤失效）。
   useEffect(() => {
     if (!enabled || !projectId) return;
     const raw = localStorage.getItem(`${YUNXIAO_FILTERS_PREFIX}${projectId}`);
@@ -70,15 +72,19 @@ export function useYunxiaoFilters(
       const saved = raw
         ? (JSON.parse(raw) as { assignedToMe?: unknown; statusIds?: unknown })
         : null;
-      setAssignedToMe(saved?.assignedToMe === true);
-      setSelectedStatusIds(
-        Array.isArray(saved?.statusIds)
-          ? saved.statusIds.filter((x): x is string => typeof x === "string")
-          : [],
-      );
+      const assigned = saved?.assignedToMe === true;
+      const statusIds = Array.isArray(saved?.statusIds)
+        ? saved.statusIds.filter((x): x is string => typeof x === "string")
+        : [];
+      setAssignedToMe(assigned);
+      setSelectedStatusIds(statusIds);
+      setDebouncedAssignedToMe(assigned);
+      setDebouncedStatusIds(statusIds);
     } catch {
       setAssignedToMe(false);
       setSelectedStatusIds([]);
+      setDebouncedAssignedToMe(false);
+      setDebouncedStatusIds([]);
     }
     setLoadedFiltersProjectId(projectId);
   }, [enabled, projectId]);
@@ -220,6 +226,9 @@ export function useYunxiaoFilters(
     [debouncedQuery, debouncedAssignedToMe, currentUser?.id, debouncedStatusIds],
   );
 
+  /** 本项目的过滤偏好已恢复（首查应等待此标志，避免无条件请求先发出）。 */
+  const filtersReady = enabled && loadedFiltersProjectId === projectId;
+
   return {
     query,
     setQuery,
@@ -238,5 +247,6 @@ export function useYunxiaoFilters(
     currentUserNameInput,
     setCurrentUserNameInput,
     conditions,
+    filtersReady,
   };
 }

@@ -125,6 +125,26 @@ describe("buildYunxiaoConditions", () => {
     ]);
   });
 
+  it("query 为单个议题编号时走 serialNumber 精确查询（大小写归一）", () => {
+    const conditions = JSON.parse(buildYunxiaoConditions({ query: "qhdk-30074" })!);
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "string",
+        fieldIdentifier: "serialNumber",
+        format: "input",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["QHDK-30074"],
+      },
+    ]);
+  });
+
+  it("query 含编号加其他文字时仍走标题搜索（编号 NOT 全等 query）", () => {
+    const conditions = JSON.parse(buildYunxiaoConditions({ query: "QHDK-30074 医嘱" })!);
+    expect(conditions.conditionGroups[0][0].fieldIdentifier).toBe("subject");
+    expect(conditions.conditionGroups[0][0].value).toEqual(["QHDK-30074 医嘱"]);
+  });
+
   it("状态多选生成 status CONTAINS 条件并保留全部选中 id", () => {
     const conditions = JSON.parse(
       buildYunxiaoConditions({ selectedStatusIds: ["100005", "100006"] })!,
