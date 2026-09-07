@@ -51,6 +51,9 @@ export function WeeklyReportView() {
     invoke<WeeklyReport>("build_weekly_report", { week })
       .then((r) => { if (alive) setReport(r); })
       .catch((e) => { if (alive) setError(String(e)); });
+    invoke<string>("generate_weekly_summary", { week })
+      .then((s) => { if (alive) { setSummary(s); setSummaryLoading(false); } })
+      .catch((e) => { if (alive) { setSummaryError(String(e)); setSummaryLoading(false); } });
     return () => { alive = false; };
   }, [offset]);
 
@@ -118,7 +121,7 @@ export function WeeklyReportView() {
           <div style={s.summaryHead}>
             <div style={s.summaryTitle}>{t("weekly.summaryTitle")}</div>
             <button style={s.btn} onClick={generateSummary} disabled={summaryLoading || !report}>
-              {t("weekly.summaryGenerate")}
+              {summary ? t("weekly.summaryRegenerate") : t("weekly.summaryGenerate")}
             </button>
           </div>
           {summaryLoading ? (
