@@ -59,6 +59,9 @@ export function PlanPreviewPanel({
     [tasks, plan.id],
   );
   const canDelete = linkedTasks.length === 0 && !plan.discussionTaskId;
+  // 「生成待办」在讨论定稿后的任何状态都可用（执行中/已完成的方案可重新生成待办，
+  // 例如旧待办被取消删除后想重跑）；仅「讨论中」锁定——plan.md 仍在被会话覆盖更新。
+  const canGenerate = plan.status !== "draft" && markdown.trim().length > 0;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -162,16 +165,15 @@ export function PlanPreviewPanel({
           <div style={s.planPreviewHeadSide}>
             <button
               type="button"
-              style={
-                plan.status === "finalized" && markdown.trim()
-                  ? s.knowledgePrimaryBtn
-                  : s.knowledgePrimaryBtnDisabled
-              }
-              disabled={plan.status !== "finalized" || !markdown.trim()}
+              style={canGenerate ? s.knowledgePrimaryBtn : s.knowledgePrimaryBtnDisabled}
+              disabled={!canGenerate}
+              title={plan.status === "finalized" ? undefined : t("plan.generateTodosAgain")}
               onClick={() => setShowGenerate(true)}
             >
               <FileText size={12} strokeWidth={2.2} />
-              {t("plan.generateTodos")}
+              {plan.status === "finalized"
+                ? t("plan.generateTodos")
+                : t("plan.generateTodosAgain")}
             </button>
             {canDelete && (
               <button
