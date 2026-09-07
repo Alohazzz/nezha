@@ -523,7 +523,13 @@ pub async fn generate_weekly_summary(week: Option<String>) -> Result<String, Str
     let facts = facts_markdown(&report);
     let prompt = summary_prompt(&facts);
     let home = home_dir().ok_or_else(|| "cannot resolve home dir".to_string())?;
-    let cwd = home.to_string_lossy().into_owned();
+    // Run the headless agent in a real project (git repo) dir, like other headless
+    // calls (generate_task_name), so codex's git-repo check passes.
+    let projects = load_projects(&home);
+    let cwd = projects
+        .first()
+        .map(|p| p.path.clone())
+        .unwrap_or_else(|| home.to_string_lossy().into_owned());
     let output = run_headless_agent_with_timeout(
         "codex",
         &cwd,

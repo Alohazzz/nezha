@@ -38,6 +38,7 @@ fn build_headless_agent_args(
                 "--sandbox",
                 "read-only",
                 "--ephemeral",
+                "--skip-git-repo-check",
                 "-c",
                 "approval_policy=\"never\"",
             ]
