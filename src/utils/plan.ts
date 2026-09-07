@@ -29,11 +29,13 @@ function categoryLabel(categoryId?: string): string {
   return "未知类型";
 }
 
-/** 方案讨论提示词：议题清单（含描述）+ 附件图片 + 后端注入的联合讨论指令。 */
+/** 方案讨论提示词：议题清单（含描述）+ 附件图片 + 发起人补充 + 后端注入的联合讨论指令。 */
 export function buildPlanDiscussionPrompt(input: {
   issues: YunxiaoWorkitem[];
   imagePathsByIssue: Record<string, string[]>;
   linksByIssue: Record<string, string>;
+  /** 发起人在对话框手动补充的内容（背景描述/参考资料/已有修改方案等），可空。 */
+  userNotes?: string;
   instructions: string;
 }): string {
   const pieces: string[] = [];
@@ -77,6 +79,13 @@ export function buildPlanDiscussionPrompt(input: {
       lines.push(group.paths.join("\n"));
     }
     pieces.push(lines.join("\n"));
+  }
+
+  const notes = input.userNotes?.trim();
+  if (notes) {
+    pieces.push(
+      `## 发起人补充（优先参考）\n以下是发起人手动补充的内容（背景描述、参考资料位置、已有修改方案等），优先于议题描述作为讨论基线：参考资料按位置自行读取；若包含已有修改方案，把它当作方案底稿在其上讨论完善，不要推倒重来；补充内容与你的分析结论冲突时，先向发起人确认再定稿。\n\n${notes}`,
+    );
   }
 
   if (input.instructions.trim()) {

@@ -85,6 +85,8 @@ export function PlanLaunchDialog({
   );
   const [starting, setStarting] = useState(false);
   const startedRef = useRef(false);
+  // 发起人手动补充（背景描述 / 参考资料 / 已有修改方案等），原样拼进讨论 prompt。
+  const [notes, setNotes] = useState("");
 
   const updateItem = useCallback((issueId: string, patch: Partial<LaunchItem>) => {
     setItems((prev) => {
@@ -241,6 +243,7 @@ export function PlanLaunchDialog({
               : "",
           ]),
         ),
+        userNotes: notes,
         instructions,
       });
       startedRef.current = true;
@@ -256,6 +259,7 @@ export function PlanLaunchDialog({
     projectPath,
     doneItems,
     settings.projectId,
+    notes,
     agent,
     permission,
     onStartDiscussion,
@@ -335,6 +339,17 @@ export function PlanLaunchDialog({
                 )}
               </div>
             ))}
+        </div>
+
+        <div style={s.planLaunchNotes}>
+          <label style={s.yunxiaoFieldLabel}>{t("plan.launch.notesLabel")}</label>
+          <textarea
+            style={s.planLaunchNotesInput}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder={t("plan.launch.notesPlaceholder")}
+            rows={3}
+          />
         </div>
 
         <div style={s.planLaunchSettings}>
