@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type Context,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export type AppLanguage = "en" | "zh";
@@ -1919,7 +1927,18 @@ const translations: Record<AppLanguage, Record<string, string>> = {
   },
 };
 
-const I18nContext = createContext<I18nContextValue | null>(null);
+// HMR 防断链：vite 热更新本模块（如新增翻译键）会重新执行 createContext，产生
+// 新的 context 对象；已挂载的 I18nProvider 仍持有旧 context，而同批热更新的组件
+// 引用新 context → useI18n 在组件树中找不到匹配的 Provider 而崩溃（Retry 无法
+// 自愈，只能整页刷新）。把 context 缓存在 window 上做单例，跨模块求值永远同一
+// 对象；生产环境仅首次创建后复用，无副作用。
+const globalScope = window as unknown as {
+  __nezhaI18nContext?: Context<I18nContextValue | null>;
+};
+const I18nContext =
+  globalScope.__nezhaI18nContext ??
+  (globalScope.__nezhaI18nContext =
+    createContext<I18nContextValue | null>(null));
 
 function interpolate(template: string, params?: TranslationParams): string {
   if (!params) return template;
