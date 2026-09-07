@@ -884,6 +884,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.launch.cancel": "Cancel (delete plan)",
     "plan.launch.start": "Start discussion",
     "plan.launch.starting": "Starting…",
+    "plan.launch.notesLabel": "Notes for the discussion (optional)",
+    "plan.launch.notesPlaceholder":
+      "Add background notes, reference material (file paths / links), or an existing draft solution — passed to the discussion as-is and used as the baseline; an existing solution will be refined, not rewritten.",
     "plan.launch.startFailed": "Failed to start discussion: {error}",
     "plan.generate.title": "Generate todos from plan",
     "plan.generate.hint":
@@ -1820,6 +1823,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.launch.cancel": "取消（删除方案）",
     "plan.launch.start": "发起讨论",
     "plan.launch.starting": "正在发起…",
+    "plan.launch.notesLabel": "讨论补充（可选）",
+    "plan.launch.notesPlaceholder":
+      "可填写：个人补充描述、参考资料位置（文件路径/链接）、已有修改方案等；内容原样提供给讨论会话并优先参考，已有方案将作为底稿完善而非推倒重来。",
     "plan.launch.startFailed": "发起讨论失败：{error}",
     "plan.generate.title": "从方案生成待办",
     "plan.generate.hint":
