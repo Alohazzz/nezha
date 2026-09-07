@@ -126,7 +126,7 @@ export function buildPlanExecutionPrompt(input: {
   const tag = input.issue.serialNumber ? `#${input.issue.serialNumber}` : "";
   if (tag) {
     pieces.push(
-      `## 协作约束\n所有 git commit message 必须包含议题编号 tag（${tag}，如 \`fix: 修复登录失效 ${tag}\`），云效按提交信息中的编号自动关联代码到议题。本议题与其他议题共享同一分支/工作区，只提交本议题相关的改动。`,
+      `## 协作约束\n所有 git commit message 必须包含议题编号 tag（${tag}，如 \`fix: 修复登录失效 ${tag}\`），云效按提交信息中的编号自动关联代码到议题。当前工作区可能还承载其他议题任务的改动，只提交本议题（${input.issue.serialNumber}）相关的改动，不要夹带其他议题的修改。`,
     );
   }
 

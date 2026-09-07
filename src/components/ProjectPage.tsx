@@ -207,9 +207,6 @@ export function ProjectPage({
   onGeneratePlanTodos: (input: {
     planId: string;
     issues: PlanIssue[];
-    batchName: string;
-    baseBranch: string;
-    targetBranch: string;
     agent: AgentType;
     permissionMode: PermissionMode;
   }) => Promise<boolean>;
@@ -1330,7 +1327,6 @@ export function ProjectPage({
               plan={plan}
               tasks={projectTasks}
               projectPath={project.path}
-              defaultBaseBranch={project.branch ?? "develop"}
               onCreateTodos={onGeneratePlanTodos}
               onDeletePlan={async (planId) => {
                 await onCancelPlan(planId);

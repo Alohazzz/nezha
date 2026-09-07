@@ -31,26 +31,19 @@ function agentLabel(agent: AgentType): string {
 
 /**
  * 「生成待办」确认页：调整执行顺序（上移/下移）、剔除议题（冲突议题自动排除）、
- * 配置批次（名称/基础分支/目标分支）与 Agent/权限；确认后建批 + 生成 N 个待办。
+ * 配置 Agent/权限；确认后直接生成 N 个普通待办（跑在当前工作区，不自动建批）。
  */
 export function GeneratePlanTodosDialog({
   plan,
   tasks,
-  defaultBaseBranch,
-  defaultBatchName,
   onCreateTodos,
   onClose,
 }: {
   plan: Plan;
   tasks: Task[];
-  defaultBaseBranch: string;
-  defaultBatchName: string;
   onCreateTodos: (input: {
     planId: string;
     issues: PlanIssue[];
-    batchName: string;
-    baseBranch: string;
-    targetBranch: string;
     agent: AgentType;
     permissionMode: PermissionMode;
   }) => Promise<boolean>;
@@ -66,9 +59,6 @@ export function GeneratePlanTodosDialog({
         : ("none" as const),
     })),
   );
-  const [batchName, setBatchName] = useState(defaultBatchName);
-  const [baseBranch, setBaseBranch] = useState(defaultBaseBranch);
-  const [targetBranch, setTargetBranch] = useState(defaultBaseBranch);
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(plan.projectId) ?? "codex",
@@ -91,12 +81,7 @@ export function GeneratePlanTodosDialog({
 
   const activeRows = rows.filter((row) => row.excluded === "none");
   const conflictCount = rows.filter((row) => row.excluded === "conflict").length;
-  const canCreate =
-    !creating &&
-    activeRows.length > 0 &&
-    batchName.trim().length > 0 &&
-    baseBranch.trim().length > 0 &&
-    targetBranch.trim().length > 0;
+  const canCreate = !creating && activeRows.length > 0;
 
   const move = useCallback((index: number, delta: -1 | 1) => {
     setRows((prev) => {
@@ -148,9 +133,6 @@ export function GeneratePlanTodosDialog({
       const ok = await onCreateTodos({
         planId: plan.id,
         issues: activeRows.map((row) => row.issue),
-        batchName: batchName.trim(),
-        baseBranch: baseBranch.trim(),
-        targetBranch: targetBranch.trim(),
         agent,
         permissionMode: permission,
       });
@@ -158,7 +140,7 @@ export function GeneratePlanTodosDialog({
     } catch {
       setCreating(false);
     }
-  }, [canCreate, onCreateTodos, plan.id, activeRows, batchName, baseBranch, targetBranch, agent, permission]);
+  }, [canCreate, onCreateTodos, plan.id, activeRows, agent, permission]);
 
   const permissionLabel =
     permission === "full_access"
@@ -239,21 +221,6 @@ export function GeneratePlanTodosDialog({
           {conflictCount > 0 && (
             <div style={s.planLaunchItemNote}>{t("plan.generate.conflictCount", { count: conflictCount })}</div>
           )}
-        </div>
-
-        <div style={s.planBatchFields}>
-          <label style={s.bbField}>
-            <span style={s.bbFieldLabel}>{t("plan.generate.batchName")}</span>
-            <input style={s.bbInput} value={batchName} onChange={(e) => setBatchName(e.target.value)} />
-          </label>
-          <label style={s.bbField}>
-            <span style={s.bbFieldLabel}>{t("plan.generate.baseBranch")}</span>
-            <input style={s.bbInput} value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)} spellCheck={false} />
-          </label>
-          <label style={s.bbField}>
-            <span style={s.bbFieldLabel}>{t("plan.generate.targetBranch")}</span>
-            <input style={s.bbInput} value={targetBranch} onChange={(e) => setTargetBranch(e.target.value)} spellCheck={false} />
-          </label>
         </div>
 
         <div style={s.planLaunchSettings}>
