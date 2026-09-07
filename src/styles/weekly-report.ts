@@ -118,6 +118,25 @@ export const weeklyReport = {
     color: "var(--text-hint)",
     marginTop: 8,
   },
+  summaryCard: {
+    background: "var(--bg-card)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 14,
+    padding: "18px 22px 20px",
+    marginBottom: 20,
+  },
+  summaryHead: {
+    display: "flex",
+    alignItems: "center" as const,
+    justifyContent: "space-between" as const,
+    gap: 16,
+    marginBottom: 12,
+  },
+  summaryTitle: {
+    fontSize: 13,
+    fontWeight: 650,
+    color: "var(--text-secondary)",
+  },
   sectionLabel: {
     display: "flex",
     alignItems: "center" as const,

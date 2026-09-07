@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use crate::agent_assist::run_headless_agent_with_timeout;
 
 #[derive(Serialize, Clone)]
 pub struct WeeklyReport {
@@ -22,6 +25,13 @@ pub struct ProjectReport {
     pub project: String,
     pub sessions: usize,
     pub days: Vec<DayRow>,
+    pub commits: Vec<CommitEntry>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CommitEntry {
+    pub date: String,
+    pub subject: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -112,11 +122,18 @@ fn build(arg: String) -> Result<WeeklyReport, String> {
         add_session(&mut project_days, &mut project_count, &project, &day, first_msg.as_deref());
     }
 
-    let by_project = build_projects(&project_days, &project_count);
-    let total_sessions: usize = project_count.values().sum();
-    let involved_projects = project_count.len();
+    let rows = git_rows(&projects, &start, &end_excl);
+    let git: Vec<GitCommit> = rows
+        .iter()
+        .filter(|(_, commits)| !commits.is_empty())
+        .map(|(name, commits)| GitCommit { project: name.clone(), count: commits.len() })
+        .collect();
+    let project_commits: BTreeMap<String, Vec<CommitEntry>> = rows.into_iter().collect();
 
-    let git = build_git(&projects, &start, &end_excl);
+    let by_project = build_projects(&project_days, &project_count, &project_commits);
+    let total_sessions: usize = project_count.values().sum();
+    let involved_projects = by_project.len();
+
     let total_git: usize = git.iter().map(|g| g.count).sum();
 
     let week_start = start.format("%Y-%m-%d").to_string();
@@ -312,6 +329,7 @@ fn add_session(
 fn build_projects(
     project_days: &BTreeMap<String, BTreeMap<String, (BTreeSet<String>, usize)>>,
     project_count: &BTreeMap<String, usize>,
+    project_commits: &BTreeMap<String, Vec<CommitEntry>>,
 ) -> Vec<ProjectReport> {
     let mut list: Vec<ProjectReport> = project_days
         .iter()
@@ -329,32 +347,65 @@ fn build_projects(
                 project: project.clone(),
                 sessions: *project_count.get(project).unwrap_or(&0),
                 days: days_vec,
+                commits: project_commits.get(project).cloned().unwrap_or_default(),
             }
         })
         .collect();
-    list.sort_by(|a, b| b.sessions.cmp(&a.sessions));
+    // include projects that only had commits (no recorded sessions)
+    for (project, commits) in project_commits {
+        if !list.iter().any(|p| &p.project == project) {
+            list.push(ProjectReport {
+                project: project.clone(),
+                sessions: *project_count.get(project).unwrap_or(&0),
+                days: vec![],
+                commits: commits.clone(),
+            });
+        }
+    }
+    list.sort_by(|a, b| (b.sessions + b.commits.len()).cmp(&(a.sessions + a.commits.len())));
     list
 }
 
-fn git_log_count(repo: &str, since: &NaiveDate, until_excl: &NaiveDate) -> usize {
+fn git_log_commits(repo: &str, since: &NaiveDate, until_excl: &NaiveDate) -> Vec<CommitEntry> {
     let since_str = since.format("%Y-%m-%d").to_string();
     let until_str = (*until_excl - ChronoDuration::days(1)).format("%Y-%m-%d").to_string();
     let out = Command::new("git")
-        .args(["-C", repo, "log", &format!("--since={since_str} 00:00:00"), &format!("--until={until_str} 23:59:59"), "--format=%h", "--no-merges"])
+        .args([
+            "-C",
+            repo,
+            "log",
+            &format!("--since={since_str} 00:00:00"),
+            &format!("--until={until_str} 23:59:59"),
+            "--date=format:%Y-%m-%d",
+            "--format=%ad%x09%s",
+            "--no-merges",
+        ])
         .output();
     match out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).lines().count(),
-        _ => 0,
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (date, subject) = line.split_once('\t')?;
+                let subject = subject.trim();
+                if subject.is_empty() {
+                    None
+                } else {
+                    Some(CommitEntry {
+                        date: date.to_string(),
+                        subject: subject.to_string(),
+                    })
+                }
+            })
+            .collect(),
+        _ => vec![],
     }
 }
 
-fn build_git(projects: &[Project], start: &NaiveDate, end_excl: &NaiveDate) -> Vec<GitCommit> {
-    let mut v: Vec<GitCommit> = projects
+fn git_rows(projects: &[Project], start: &NaiveDate, end_excl: &NaiveDate) -> Vec<(String, Vec<CommitEntry>)> {
+    projects
         .iter()
-        .map(|p| GitCommit { project: p.name.clone(), count: git_log_count(&p.path, start, end_excl) })
-        .collect();
-    v.retain(|g| g.count > 0);
-    v
+        .map(|p| (p.name.clone(), git_log_commits(&p.path, start, end_excl)))
+        .collect()
 }
 
 fn render_markdown(
@@ -380,10 +431,21 @@ fn render_markdown(
     }
     md.push_str("\n## 本周做了什么\n");
     for p in by_project {
-        md.push_str(&format!("\n### {}\n", p.project));
-        for d in &p.days {
-            let topic = if d.topics.is_empty() { "(无主题)".to_string() } else { d.topics.join(" · ") };
-            md.push_str(&format!("- **{}** {}（{} 条会话）\n", d.date, topic, d.count));
+        let commits_label = if p.commits.is_empty() {
+            String::new()
+        } else {
+            format!(" · {} 个提交", p.commits.len())
+        };
+        md.push_str(&format!("\n### {}（{} 条会话{}）\n", p.project, p.sessions, commits_label));
+        if p.commits.is_empty() {
+            for d in &p.days {
+                let topic = if d.topics.is_empty() { "(无主题)".to_string() } else { d.topics.join(" · ") };
+                md.push_str(&format!("- **{}** {}（{} 条会话）\n", d.date, topic, d.count));
+            }
+        } else {
+            for c in &p.commits {
+                md.push_str(&format!("- **{}** {}\n", c.date, c.subject));
+            }
         }
     }
     md.push_str("\n## Git 提交\n\n| 项目 | 提交数 |\n| --- | --- |\n");
@@ -391,4 +453,93 @@ fn render_markdown(
         md.push_str(&format!("| {} | {} |\n", g.project, g.count));
     }
     md
+}
+
+const SUMMARY_TIMEOUT_SECS: u64 = 240;
+
+fn facts_markdown(r: &WeeklyReport) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("统计周期：{} ~ {}\n", r.week_start, r.week_end));
+    s.push_str(&format!(
+        "总计：agent 会话 {} 次，涉及项目 {} 个，git 提交 {} 个。\n\n",
+        r.total_sessions, r.involved_projects, r.total_git
+    ));
+    for p in &r.by_project {
+        s.push_str(&format!("### {}（会话 {}，提交 {}）\n", p.project, p.sessions, p.commits.len()));
+        if !p.commits.is_empty() {
+            s.push_str("提交：\n");
+            for c in p.commits.iter().take(12) {
+                s.push_str(&format!("- [{}] {}\n", c.date, c.subject));
+            }
+        }
+        if !p.days.is_empty() {
+            s.push_str("会话主题（部分）：\n");
+            for d in p.days.iter().take(8) {
+                let topic = if d.topics.is_empty() { "(无主题)".to_string() } else { d.topics.join(" · ") };
+                s.push_str(&format!("- {} {}（{} 条）\n", d.date, topic, d.count));
+            }
+        }
+        s.push('\n');
+    }
+    s
+}
+
+fn summary_prompt(facts: &str) -> String {
+    format!(
+        "你是资深研发周报助手。请**仅依据**下面给出的本周事实证据（agent 会话 + git 提交）综合分析，回答「本周到底做了什么」。要求：\n\
+         - 按项目/主题归纳本周已完成的工作与关键成果，突出交付与影响，语言简洁；\n\
+         - 如有明显迹象，指出未完成事项或卡点（没有就跳过，不要编造）；\n\
+         - 不要罗列原始会话或提交流水账，不编造证据中不存在的内容；\n\
+         - 用 Markdown（可用小标题与列表），控制在 300-400 字；\n\
+         - 只输出以 <SUMMARY> 开头、</SUMMARY> 结尾的内容，中间为 Markdown 正文，不要任何其他文字。\n\n==== 本周事实证据 ====\n{facts}"
+    )
+}
+
+fn extract_summary(raw: &str) -> String {
+    if let Some(s) = raw.find("<SUMMARY>") {
+        let body_start = s + "<SUMMARY>".len();
+        if let Some(rel) = raw[body_start..].find("</SUMMARY>") {
+            let inner = raw[body_start..body_start + rel].trim().to_string();
+            if !inner.is_empty() {
+                return inner;
+            }
+        }
+    }
+    let mut lines: Vec<&str> = raw.trim().lines().collect();
+    while lines
+        .last()
+        .map(|l| l.trim().is_empty() || l.contains("tokens used") || l.trim().starts_with("──"))
+        .unwrap_or(false)
+    {
+        lines.pop();
+    }
+    lines.join("\n").trim().to_string()
+}
+
+#[tauri::command]
+pub async fn generate_weekly_summary(week: Option<String>) -> Result<String, String> {
+    let arg = week.unwrap_or_else(|| "last".to_string());
+    let report = build(arg)?;
+    let facts = facts_markdown(&report);
+    let prompt = summary_prompt(&facts);
+    let home = home_dir().ok_or_else(|| "cannot resolve home dir".to_string())?;
+    let cwd = home.to_string_lossy().into_owned();
+    let output = run_headless_agent_with_timeout(
+        "codex",
+        &cwd,
+        &prompt,
+        Duration::from_secs(SUMMARY_TIMEOUT_SECS),
+        false,
+        None,
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(format!("summary agent failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    let summary = extract_summary(&raw);
+    if summary.is_empty() {
+        return Err("summary agent returned empty response".to_string());
+    }
+    Ok(summary)
 }

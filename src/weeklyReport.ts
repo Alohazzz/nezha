@@ -13,12 +13,18 @@ export interface ProjectReport {
   project: string;
   sessions: number;
   days: DayRow[];
+  commits: CommitEntry[];
 }
 
 export interface DayRow {
   date: string;
   topics: string[];
   count: number;
+}
+
+export interface CommitEntry {
+  date: string;
+  subject: string;
 }
 
 export interface GitCommit {

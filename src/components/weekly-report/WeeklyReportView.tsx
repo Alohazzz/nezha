@@ -1,7 +1,8 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { renderMarkdownWithToc } from "../../utils/markdown";
 import type { WeeklyReport } from "../../weeklyReport";
 
 function mondayForOffset(offset: number): string {
@@ -35,19 +36,40 @@ export function WeeklyReportView() {
   const [offset, setOffset] = useState(1); // default = last week
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
+    const week = mondayForOffset(offset);
     setError(null);
     setReport(null);
-    invoke<WeeklyReport>("build_weekly_report", { week: mondayForOffset(offset) })
+    setSummary(null);
+    setSummaryError(null);
+    setSummaryLoading(true);
+    invoke<WeeklyReport>("build_weekly_report", { week })
       .then((r) => { if (alive) setReport(r); })
       .catch((e) => { if (alive) setError(String(e)); });
     return () => { alive = false; };
   }, [offset]);
 
+  const summaryHtml = useMemo(
+    () => (summary ? renderMarkdownWithToc(summary).html : ""),
+    [summary],
+  );
+
   const copyMd = () => {
     if (report?.markdown) navigator.clipboard.writeText(report.markdown);
+  };
+
+  const generateSummary = () => {
+    setSummary(null);
+    setSummaryError(null);
+    setSummaryLoading(true);
+    invoke<string>("generate_weekly_summary", { week: mondayForOffset(offset) })
+      .then((s) => { setSummary(s); setSummaryLoading(false); })
+      .catch((e) => { setSummaryError(String(e)); setSummaryLoading(false); });
   };
 
   return (
@@ -92,6 +114,24 @@ export function WeeklyReportView() {
           </div>
         </div>
 
+        <div style={s.summaryCard}>
+          <div style={s.summaryHead}>
+            <div style={s.summaryTitle}>{t("weekly.summaryTitle")}</div>
+            <button style={s.btn} onClick={generateSummary} disabled={summaryLoading || !report}>
+              {t("weekly.summaryGenerate")}
+            </button>
+          </div>
+          {summaryLoading ? (
+            <div style={s.hint}>{t("weekly.summaryLoading")}</div>
+          ) : summary ? (
+            <div className="md-preview" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
+          ) : summaryError ? (
+            <div style={s.hint}>{t("weekly.summaryError", { error: summaryError })}</div>
+          ) : (
+            <div style={s.hint}>{t("weekly.summaryEmpty")}</div>
+          )}
+        </div>
+
         {error ? (
           <div style={s.hint}>{t("weekly.error", { error })}</div>
         ) : !report ? (
@@ -111,30 +151,48 @@ export function WeeklyReportView() {
             {report.by_project.length === 0 ? (
               <div style={s.hint}>{t("weekly.noData")}</div>
             ) : (
-              report.by_project.map((p) => (
-                <div style={s.group} key={p.project}>
-                  <div style={s.groupHead}>
-                    <div style={s.avatar}>{p.project[0]?.toUpperCase() ?? "?"}</div>
-                    <div style={s.groupName}>{p.project}</div>
-                    <div style={s.groupSub}>{p.days.length} 天</div>
-                    <div style={s.badge}>{p.sessions}</div>
-                  </div>
-                  <div style={s.rows}>
-                    {p.days.map((d) => (
-                      <div style={s.row} key={d.date}>
-                        <span style={s.datePill}>{d.date}</span>
-                        <span style={s.dot} />
-                        <div style={s.rowTitle}>
-                          {d.topics.length > 0 ? d.topics.join(" · ") : t("weekly.noTopic")}
-                        </div>
-                        <span style={s.chip}>
-                          {t("weekly.sessionsCount", { count: d.count })}
-                        </span>
+              report.by_project.map((p) => {
+                const hasCommits = p.commits.length > 0;
+                const items = hasCommits
+                  ? p.commits.map((c) => ({
+                      key: `${c.date}-${c.subject}`,
+                      date: c.date,
+                      title: c.subject,
+                      chip: null as string | null,
+                    }))
+                  : p.days.map((d) => ({
+                      key: d.date,
+                      date: d.date,
+                      title: d.topics.length > 0 ? d.topics.join(" · ") : t("weekly.noTopic"),
+                      chip: t("weekly.sessionsCount", { count: d.count }),
+                    }));
+                return (
+                  <div style={s.group} key={p.project}>
+                    <div style={s.groupHead}>
+                      <div style={s.avatar}>{p.project[0]?.toUpperCase() ?? "?"}</div>
+                      <div style={s.groupName}>{p.project}</div>
+                      <div style={s.groupSub}>
+                        {hasCommits
+                          ? t("weekly.commitsCount", { count: p.commits.length })
+                          : t("weekly.daysCount", { count: p.days.length })}
                       </div>
-                    ))}
+                      <div style={s.badge}>
+                        {t("weekly.sessionsCount", { count: p.sessions })}
+                      </div>
+                    </div>
+                    <div style={s.rows}>
+                      {items.map((it) => (
+                        <div style={s.row} key={it.key}>
+                          <span style={s.datePill}>{it.date}</span>
+                          <span style={s.dot} />
+                          <div style={s.rowTitle}>{it.title}</div>
+                          {it.chip ? <span style={s.chip}>{it.chip}</span> : null}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
 
             <div style={s.sectionLabel}>

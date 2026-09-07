@@ -419,6 +419,7 @@ pub fn run() {
             git::worktree_diff_stats,
             analytics::read_session_metrics,
             weekly_report::build_weekly_report,
+            weekly_report::generate_weekly_summary,
             build::read_build_config,
             build::write_build_config,
             build::discover_build_repos,
