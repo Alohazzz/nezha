@@ -55,7 +55,6 @@ import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
 import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
-import { rpRootStyle } from "../styles/right-panel";
 import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -1088,7 +1087,6 @@ export function ProjectPage({
                   onBack={onBack}
                   onPreviewPlan={(planId) => {
                     setPlanPreviewId(planId);
-                    openRightPanel("plan-preview");
                   }}
                   onRebindPlan={onRebindTaskPlan}
                   onUpdateTodo={onUpdateTodo}
@@ -1145,7 +1143,6 @@ export function ProjectPage({
                     task.planId
                       ? () => {
                           setPlanPreviewId(task.planId ?? null);
-                          openRightPanel("plan-preview");
                         }
                       : undefined
                   }
@@ -1284,41 +1281,6 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
-          {rightPanel === "plan-preview" && (
-            <ErrorBoundary label="方案预览">
-              {(() => {
-                const plan =
-                  plans.find((p) => p.id === planPreviewId && p.projectId === project.id) ??
-                  plans.find(
-                    (p) =>
-                      p.id === (selectedTask?.planId ?? null) && p.projectId === project.id,
-                  ) ??
-                  null;
-                if (!plan) {
-                  return (
-                    <div className="rp-root" style={rpRootStyle(rightPanelWidth)}>
-                      <div className="rp-empty">{t("plan.preview.none")}</div>
-                    </div>
-                  );
-                }
-                return (
-                  <PlanPreviewPanel
-                    plan={plan}
-                    tasks={projectTasks}
-                    projectPath={project.path}
-                    defaultBaseBranch={project.branch ?? "develop"}
-                    onCreateTodos={onGeneratePlanTodos}
-                    onDeletePlan={(planId) => {
-                      void onCancelPlan(planId);
-                      handleTogglePanel("plan-preview");
-                    }}
-                    onClose={() => handleTogglePanel("plan-preview")}
-                    width={rightPanelWidth}
-                  />
-                );
-              })()}
-            </ErrorBoundary>
-          )}
         </div>
       </div>
       )}
@@ -1356,6 +1318,28 @@ export function ProjectPage({
           onSend={handleSendDialogSend}
         />
       )}
+
+      {planPreviewId &&
+        (() => {
+          const plan = plans.find(
+            (p) => p.id === planPreviewId && p.projectId === project.id,
+          );
+          if (!plan) return null;
+          return (
+            <PlanPreviewPanel
+              plan={plan}
+              tasks={projectTasks}
+              projectPath={project.path}
+              defaultBaseBranch={project.branch ?? "develop"}
+              onCreateTodos={onGeneratePlanTodos}
+              onDeletePlan={async (planId) => {
+                await onCancelPlan(planId);
+                setPlanPreviewId(null);
+              }}
+              onClose={() => setPlanPreviewId(null)}
+            />
+          );
+        })()}
 
       {writebackDialog &&
         (() => {

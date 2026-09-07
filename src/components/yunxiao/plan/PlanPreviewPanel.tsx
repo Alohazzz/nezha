@@ -5,7 +5,6 @@ import { FileText, Loader2, Trash2, X } from "lucide-react";
 import type { AgentType, PermissionMode, Plan, PlanIssue, Task } from "../../../types";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
-import { rpRootStyle } from "../../../styles/right-panel";
 import { useI18n } from "../../../i18n";
 import s from "../../../styles";
 
@@ -26,7 +25,7 @@ const PLAN_STATUS_LABEL_KEY: Record<Plan["status"], string> = {
   cancelled: "plan.status.cancelled",
 };
 
-/** 右侧面板「方案预览」：渲染 plan.md + 图片，定稿后提供「生成待办」入口。 */
+/** 「方案预览」弹窗：渲染 plan.md + 图片，定稿后提供「生成待办」入口。 */
 export function PlanPreviewPanel({
   plan,
   tasks,
@@ -35,7 +34,6 @@ export function PlanPreviewPanel({
   onCreateTodos,
   onDeletePlan,
   onClose,
-  width = 280,
 }: {
   plan: Plan;
   tasks: Task[];
@@ -52,7 +50,6 @@ export function PlanPreviewPanel({
   }) => Promise<boolean>;
   onDeletePlan: (planId: string) => void | Promise<void>;
   onClose: () => void;
-  width?: number;
 }) {
   const { t } = useI18n();
 
@@ -145,102 +142,110 @@ export function PlanPreviewPanel({
   }, [markdown]);
 
   return (
-    <div className="rp-root" style={rpRootStyle(width)}>
-      <div className="rp-header">
-        <div className="rp-titlebar">
-          <span className="rp-title">{t("plan.preview.title")}</span>
-          <button
-            type="button"
-            className="rp-icon-btn"
-            onClick={onClose}
-            title={t("yunxiao.clear")}
-          >
-            <X size={13} />
-          </button>
-        </div>
-        <div style={s.planPanelMeta}>
-          <span style={s.planPanelName}>
-            {plan.name || buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber))}
-          </span>
-          <span style={s.planPanelBadge}>{t(PLAN_STATUS_LABEL_KEY[plan.status])}</span>
-          {plan.batchId && <span style={s.planPanelBadge}>{t("plan.preview.batchLinked")}</span>}
-        </div>
-        <div style={s.planPanelIssues}>
-          {plan.issues.map((issue) => (
-            <span key={issue.workitemId} style={s.yunxiaoMetaBadge}>
-              {issue.serialNumber}
-            </span>
-          ))}
-        </div>
-        <div style={s.planPanelActions}>
-          <button
-            type="button"
-            style={
-              plan.status === "finalized" && markdown.trim()
-                ? s.knowledgePrimaryBtn
-                : s.knowledgePrimaryBtnDisabled
-            }
-            disabled={plan.status !== "finalized" || !markdown.trim()}
-            onClick={() => setShowGenerate(true)}
-          >
-            <FileText size={12} strokeWidth={2.2} />
-            {t("plan.generateTodos")}
-          </button>
-          {canDelete && (
-            <button type="button" style={s.knowledgeSecondaryBtn} onClick={() => void handleDelete()}>
-              <Trash2 size={12} strokeWidth={2.2} />
-              {t("plan.delete")}
+    <div style={s.bbDialogOverlay}>
+      <div style={s.planPreviewDialog}>
+        <div style={s.planLaunchHead}>
+          <div>
+            <div style={s.bbDialogTitle}>{t("plan.preview.title")}</div>
+            <div style={s.planPanelMeta}>
+              <span style={s.planPanelName}>
+                {plan.name || buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber))}
+              </span>
+              <span style={s.planPanelBadge}>{t(PLAN_STATUS_LABEL_KEY[plan.status])}</span>
+              {plan.batchId && (
+                <span style={s.planPanelBadge}>{t("plan.preview.batchLinked")}</span>
+              )}
+            </div>
+            <div style={s.planPanelIssues}>
+              {plan.issues.map((issue) => (
+                <span key={issue.workitemId} style={s.yunxiaoMetaBadge}>
+                  {issue.serialNumber}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div style={s.planPreviewHeadSide}>
+            <button
+              type="button"
+              style={
+                plan.status === "finalized" && markdown.trim()
+                  ? s.knowledgePrimaryBtn
+                  : s.knowledgePrimaryBtnDisabled
+              }
+              disabled={plan.status !== "finalized" || !markdown.trim()}
+              onClick={() => setShowGenerate(true)}
+            >
+              <FileText size={12} strokeWidth={2.2} />
+              {t("plan.generateTodos")}
             </button>
+            {canDelete && (
+              <button
+                type="button"
+                style={s.knowledgeSecondaryBtn}
+                onClick={() => void handleDelete()}
+              >
+                <Trash2 size={12} strokeWidth={2.2} />
+                {t("plan.delete")}
+              </button>
+            )}
+            <button
+              type="button"
+              style={s.yunxiaoIconBtn}
+              onClick={onClose}
+              title={t("plan.launch.close")}
+            >
+              <X size={14} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+
+        <div style={s.planPreviewBody}>
+          {loading ? (
+            <div style={s.yunxiaoEmpty}>
+              <Loader2 size={18} className="spin" />
+            </div>
+          ) : loadError && !markdown ? (
+            <div style={s.planPanelEmpty}>
+              {plan.status === "draft"
+                ? t("plan.preview.discussionRunning")
+                : t("plan.preview.mdMissing")}
+            </div>
+          ) : (
+            <>
+              <div
+                className="plan-md"
+                style={s.planPanelMarkdown}
+                dangerouslySetInnerHTML={{ __html: html }}
+              />
+              {images.length > 0 && (
+                <div style={s.planPanelGallery}>
+                  {images.map((image) => (
+                    <div key={image.key} style={s.planPanelGalleryItem}>
+                      <img src={image.dataUrl} alt={image.serial} style={s.planPanelImage} />
+                      <span style={s.planPanelGalleryLabel}>{image.serial}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
-      </div>
 
-      <div style={s.planPanelBody}>
-        {loading ? (
-          <div style={s.yunxiaoEmpty}>
-            <Loader2 size={18} className="spin" />
-          </div>
-        ) : loadError && !markdown ? (
-          <div style={s.planPanelEmpty}>
-            {plan.status === "draft"
-              ? t("plan.preview.discussionRunning")
-              : t("plan.preview.mdMissing")}
-          </div>
-        ) : (
-          <>
-            <div
-              className="plan-md"
-              style={s.planPanelMarkdown}
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
-            {images.length > 0 && (
-              <div style={s.planPanelGallery}>
-                {images.map((image) => (
-                  <div key={image.key} style={s.planPanelGalleryItem}>
-                    <img src={image.dataUrl} alt={image.serial} style={s.planPanelImage} />
-                    <span style={s.planPanelGalleryLabel}>{image.serial}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+        {showGenerate && (
+          <GeneratePlanTodosDialog
+            plan={plan}
+            tasks={tasks}
+            defaultBaseBranch={defaultBaseBranch}
+            defaultBatchName={plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber))}
+            onCreateTodos={async (input) => {
+              const ok = await onCreateTodos(input);
+              if (ok) setShowGenerate(false);
+              return ok;
+            }}
+            onClose={() => setShowGenerate(false)}
+          />
         )}
       </div>
-
-      {showGenerate && (
-        <GeneratePlanTodosDialog
-          plan={plan}
-          tasks={tasks}
-          defaultBaseBranch={defaultBaseBranch}
-          defaultBatchName={plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber))}
-          onCreateTodos={async (input) => {
-            const ok = await onCreateTodos(input);
-            if (ok) setShowGenerate(false);
-            return ok;
-          }}
-          onClose={() => setShowGenerate(false)}
-        />
-      )}
     </div>
   );
 }

@@ -7,7 +7,6 @@ type RightPanel =
   | "build"
   | "branch-batch"
   | "knowledge"
-  | "plan-preview"
   | null;
 type OpenFileTab = {
   path: string;
