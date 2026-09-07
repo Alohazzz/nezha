@@ -149,57 +149,6 @@ export function WeeklyReportView() {
 
             <div style={s.sectionLabel}>
               <span style={s.sectionDot} />
-              {t("weekly.didThisWeek")}
-            </div>
-            {report.by_project.length === 0 ? (
-              <div style={s.hint}>{t("weekly.noData")}</div>
-            ) : (
-              report.by_project.map((p) => {
-                const hasCommits = p.commits.length > 0;
-                const items = hasCommits
-                  ? p.commits.map((c) => ({
-                      key: `${c.date}-${c.subject}`,
-                      date: c.date,
-                      title: c.subject,
-                      chip: null as string | null,
-                    }))
-                  : p.days.map((d) => ({
-                      key: d.date,
-                      date: d.date,
-                      title: d.topics.length > 0 ? d.topics.join(" · ") : t("weekly.noTopic"),
-                      chip: t("weekly.sessionsCount", { count: d.count }),
-                    }));
-                return (
-                  <div style={s.group} key={p.project}>
-                    <div style={s.groupHead}>
-                      <div style={s.avatar}>{p.project[0]?.toUpperCase() ?? "?"}</div>
-                      <div style={s.groupName}>{p.project}</div>
-                      <div style={s.groupSub}>
-                        {hasCommits
-                          ? t("weekly.commitsCount", { count: p.commits.length })
-                          : t("weekly.daysCount", { count: p.days.length })}
-                      </div>
-                      <div style={s.badge}>
-                        {t("weekly.sessionsCount", { count: p.sessions })}
-                      </div>
-                    </div>
-                    <div style={s.rows}>
-                      {items.map((it) => (
-                        <div style={s.row} key={it.key}>
-                          <span style={s.datePill}>{it.date}</span>
-                          <span style={s.dot} />
-                          <div style={s.rowTitle}>{it.title}</div>
-                          {it.chip ? <span style={s.chip}>{it.chip}</span> : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-
-            <div style={s.sectionLabel}>
-              <span style={s.sectionDot} />
               {t("weekly.gitSection")}
             </div>
             <div style={s.gitGrid}>
