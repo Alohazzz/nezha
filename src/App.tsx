@@ -23,6 +23,10 @@ import type {
   AgentEnabledState,
   BackfillIssueRequest,
   BackfillDraftEntry,
+  Plan,
+  PlanIssue,
+  PlanStatus,
+  BranchBatch,
 } from "./types";
 import {
   isActiveTaskStatus,
@@ -54,6 +58,14 @@ import {
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
 import { buildYunxiaoFieldsText } from "./components/yunxiao/issueForms";
+import {
+  buildPlanExecutionPrompt,
+  buildPlanTaskName,
+  extractPlanIssueSection,
+  extractPlanOverview,
+  planIssueImagesDir,
+  planMdPath,
+} from "./utils/plan";
 import {
   EMPTY_YUNXIAO_SETTINGS,
   type KnowledgeSettings,
@@ -150,6 +162,13 @@ function persistProjectTasksQuietly(projectId: string, allTasks: Task[]) {
     projectId,
     tasks: allTasks.filter((t) => t.projectId === projectId),
   }).catch(console.error);
+}
+
+function persistProjectPlans(projectId: string, allPlans: Plan[]) {
+  invoke("save_project_plans", {
+    projectId,
+    plans: allPlans.filter((p) => p.projectId === projectId),
+  }).catch((e: unknown) => console.error("[plans] save failed:", e));
 }
 
 // 老用户首次升级到拖拽排序版本时,把 projects 数组按 id 升序排一次并落盘,
@@ -365,6 +384,8 @@ function App() {
   );
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // 多议题联合方案（全项目合并持有，按 projectId 过滤持久化，与 tasks 同构）。
+  const [plans, setPlans] = useState<Plan[]>([]);
   // 补录议题轮询：tasks 与 handler 的最新引用 + 处理中任务去重集合（防重叠/陈旧闭包）。
   const tasksRef = useRef<Task[]>([]);
   const backfillHandlerRef = useRef<(() => Promise<void>) | null>(null);
@@ -628,6 +649,20 @@ function App() {
       changedProjectIds.forEach((projectId) => {
         persistProjectTasksQuietly(projectId, loadedTasks);
       });
+
+      // 方案（Plan）与任务同批按项目加载；allSettled 隔离单项目失败（无方案不阻断）。
+      const planResults = await Promise.allSettled(
+        loadedProjects.map((p) => invoke<Plan[]>("load_project_plans", { projectId: p.id })),
+      );
+      const loadedPlans: Plan[] = [];
+      planResults.forEach((result, i) => {
+        if (result.status === "fulfilled") {
+          loadedPlans.push(...result.value);
+          return;
+        }
+        console.error(`[plans] load failed for ${loadedProjects[i].name}:`, result.reason);
+      });
+      setPlans(loadedPlans);
     }
 
     init().catch(console.error);
@@ -1552,6 +1587,362 @@ function App() {
     return true;
   }
 
+  // ── 多议题联合方案（Plan）──────────────────────────────────────────────────
+
+  /** 发起联合分析第一步：落一份 draft 方案（记录 + 议题快照），图片与讨论任务挂其下。 */
+  function handleCreateYunxiaoPlan(targetProjectId: string, issues: PlanIssue[]): Plan {
+    const now = Date.now();
+    const plan: Plan = {
+      id: `${now}`,
+      projectId: targetProjectId,
+      name: "",
+      issues,
+      status: "draft",
+      createdAt: now,
+    };
+    setPlans((prev) => {
+      const next = [plan, ...prev];
+      persistProjectPlans(plan.projectId, next);
+      return next;
+    });
+    return plan;
+  }
+
+  /** 拉取完成、用户确认后：创建方案讨论任务并立即启动（项目根只读分析，不建 worktree）。 */
+  function handleStartYunxiaoPlanDiscussion(
+    planId: string,
+    prompt: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
+    const project = projects.find((p) => p.id === plan.projectId);
+    if (!project) return;
+    const now = Date.now();
+    const task: Task = {
+      id: `${now}`,
+      projectId: project.id,
+      name: buildPlanTaskName(plan.issues.map((i) => i.serialNumber)),
+      prompt,
+      agent,
+      permissionMode,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      planId,
+      yunxiaoPlanDiscussion: true,
+    };
+    setTasks((prev) => {
+      const next = [task, ...prev];
+      persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    setPlans((prev) => {
+      const next = prev.map((p) => (p.id === planId ? { ...p, discussionTaskId: task.id } : p));
+      persistProjectPlans(plan.projectId, next);
+      return next;
+    });
+    setActiveProject(project);
+    mountProject(project.id);
+    updateProjectView(project.id, { selectedTaskId: task.id, isNewTask: false });
+    tm.resetTaskTerminal(task.id);
+    invokeRunTask(task, project.path, [], [], project.path);
+  }
+
+  /** 发起对话框取消：删除 draft 方案记录与 `.nezha/plans/<planId>/` 目录。 */
+  async function handleCancelYunxiaoPlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
+    const project = projects.find((p) => p.id === plan.projectId);
+    try {
+      await invoke("delete_yunxiao_plan", {
+        projectPath: project?.path ?? "",
+        projectId: plan.projectId,
+        planId,
+      });
+      setPlans((prev) => {
+        const next = prev.filter((p) => p.id !== planId);
+        persistProjectPlans(plan.projectId, next);
+        return next;
+      });
+    } catch (e) {
+      console.error("[plans] delete failed:", e);
+      showToast(t("plan.deleteFailed", { error: String(e) }), "error");
+    }
+  }
+
+  /**
+   * 方案定稿后的「生成待办」：按确认页顺序建批（一分支 + 一 worktree + 议题门禁），
+   * 再生成 N 个执行待办（一议题一任务，任务↔议题 1:1，批内共用工作区，整批一个 MR）。
+   */
+  async function handleGeneratePlanTodos(input: {
+    planId: string;
+    /** 确认页调整后的议题顺序（已剔除冲突项） */
+    issues: PlanIssue[];
+    batchName: string;
+    baseBranch: string;
+    targetBranch: string;
+    agent: AgentType;
+    permissionMode: PermissionMode;
+  }): Promise<boolean> {
+    const plan = plans.find((p) => p.id === input.planId);
+    if (!plan) return false;
+    const project = projects.find((p) => p.id === plan.projectId);
+    if (!project) return false;
+    if (input.issues.length === 0) return false;
+
+    // 1) 读方案文档，按议题切片（执行提示词内联统筹节与本议题节）。
+    let planMarkdown: string;
+    try {
+      planMarkdown = await invoke<string>("read_file_content", {
+        path: planMdPath(project.path, plan.id),
+        projectPath: project.path,
+      });
+    } catch (e) {
+      showToast(t("plan.mdMissing", { error: String(e) }), "error");
+      return false;
+    }
+    const overview = extractPlanOverview(planMarkdown);
+    if (!overview) {
+      showToast(t("plan.overviewMissing"), "error");
+      return false;
+    }
+
+    // 2) 云效链接（缺配置不阻断）+ 每议题已归档图片路径。
+    let issueLinkProjectId = "";
+    try {
+      const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+      issueLinkProjectId = appSettings.yunxiao?.projectId ?? "";
+    } catch {
+      // 链接缺失不阻断
+    }
+    const imagePathsByIssue: Record<string, string[]> = {};
+    await Promise.all(
+      input.issues.map(async (issue) => {
+        try {
+          const entries = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>(
+            "read_dir_entries",
+            {
+              path: planIssueImagesDir(project.path, plan.id, issue.workitemId),
+              projectPath: project.path,
+            },
+          );
+          imagePathsByIssue[issue.workitemId] = entries
+            .filter((entry) => !entry.is_dir)
+            .map((entry) => entry.path);
+        } catch {
+          imagePathsByIssue[issue.workitemId] = [];
+        }
+      }),
+    );
+
+    // 3) 预生成任务 id + 每任务的执行指令（drafts 目录按任务 id 区分）。
+    const now = Date.now();
+    const taskIds = input.issues.map((_, i) => `${now + i}`);
+    const instructionsByTaskId: Record<string, string> = {};
+    await Promise.all(
+      taskIds.map(async (taskId) => {
+        try {
+          instructionsByTaskId[taskId] = await invoke<string>(
+            "get_plan_execution_instructions",
+            { projectPath: project.path, taskId },
+          );
+        } catch (e) {
+          console.error("[plan] execution instructions failed:", e);
+          instructionsByTaskId[taskId] = "";
+        }
+      }),
+    );
+
+    const tasksToCreate: Task[] = [];
+    for (let i = 0; i < input.issues.length; i++) {
+      const issue = input.issues[i];
+      const section = extractPlanIssueSection(planMarkdown, issue.serialNumber);
+      if (!section) {
+        showToast(t("plan.sectionMissing", { serial: issue.serialNumber }), "error");
+        return false;
+      }
+      const prompt = buildPlanExecutionPrompt({
+        issue: {
+          serialNumber: issue.serialNumber,
+          subject: issue.subject,
+          categoryId: issue.category,
+        },
+        link: issueLinkProjectId
+          ? buildYunxiaoIssueLink(issueLinkProjectId, issue.workitemId)
+          : "",
+        planOverview: overview,
+        issueSection: section,
+        planMdAbsolutePath: planMdPath(project.path, plan.id),
+        imagePaths: imagePathsByIssue[issue.workitemId] ?? [],
+        instructions: instructionsByTaskId[taskIds[i]] ?? "",
+      });
+      const stamp = now + i;
+      tasksToCreate.push({
+        id: taskIds[i],
+        projectId: project.id,
+        name: `${issue.serialNumber} ${issue.subject}`.trim(),
+        prompt,
+        agent: input.agent,
+        permissionMode: input.permissionMode,
+        status: "todo",
+        createdAt: stamp,
+        updatedAt: stamp,
+        yunxiaoWorkitemId: issue.workitemId,
+        yunxiaoSerialNumber: issue.serialNumber,
+        planId: plan.id,
+      });
+    }
+
+    // 4) 建批（分支 + worktree + issueSerialNumbers 门禁）；worktree 目录缺省回落配置基路径。
+    let worktreeBase = "";
+    try {
+      worktreeBase = await invoke<string>("get_branch_batch_worktree_base", {
+        projectPath: project.path,
+      });
+    } catch {
+      // 回落项目内默认路径（后端处理）
+    }
+    let batch: BranchBatch;
+    try {
+      batch = await invoke<BranchBatch>("create_branch_batch", {
+        projectPath: project.path,
+        projectId: project.id,
+        id: crypto.randomUUID(),
+        name: input.batchName,
+        kind: "feature",
+        baseBranch: input.baseBranch,
+        targetBranch: input.targetBranch || input.baseBranch,
+        taskIds,
+        worktreeDir: worktreeBase || undefined,
+        issueSerialNumbers: input.issues.map((issue) => issue.serialNumber),
+      });
+    } catch (e) {
+      showToast(t("plan.batchCreateFailed", { error: String(e) }), "error");
+      return false;
+    }
+
+    // 5) 生成待办（挂批字段：共用 worktree/分支）+ 方案转执行中。
+    setTasks((prev) => {
+      const next = [
+        ...tasksToCreate.map((task) => ({
+          ...task,
+          batchId: batch.id,
+          worktreePath: batch.worktreePath,
+          worktreeBranch: batch.branch,
+          baseBranch: batch.baseBranch,
+          worktreeRepo: batch.worktreeRepo,
+          branchKind: batch.kind,
+        })),
+        ...prev,
+      ];
+      persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    setPlans((prev) => {
+      const next = prev.map((p) =>
+        p.id === plan.id
+          ? { ...p, status: "executing" as PlanStatus, batchId: batch.id, issues: input.issues }
+          : p,
+      );
+      persistProjectPlans(plan.projectId, next);
+      return next;
+    });
+    setActiveProject(project);
+    mountProject(project.id);
+    updateProjectView(project.id, { selectedTaskId: taskIds[0], isNewTask: false });
+    showToast(t("plan.todosCreated", { count: tasksToCreate.length }), "success");
+    return true;
+  }
+
+  /** 待办改关联方案：换绑（从新方案重建执行提示词）或解绑（保留现 prompt，回退单题路径）。 */
+  async function handleRebindTaskPlan(taskId: string, planId: string | null): Promise<void> {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task || task.status !== "todo" || !task.yunxiaoWorkitemId) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+
+    let prompt = task.prompt;
+    if (planId) {
+      const plan = plans.find((p) => p.id === planId);
+      if (!plan) return;
+      try {
+        const markdown = await invoke<string>("read_file_content", {
+          path: planMdPath(project.path, plan.id),
+          projectPath: project.path,
+        });
+        const section = extractPlanIssueSection(markdown, task.yunxiaoSerialNumber ?? "");
+        const overview = extractPlanOverview(markdown);
+        if (!section || !overview) {
+          showToast(t("plan.sectionMissing", { serial: task.yunxiaoSerialNumber ?? "" }), "error");
+          return;
+        }
+        const instructions = await invoke<string>("get_plan_execution_instructions", {
+          projectPath: project.path,
+          taskId,
+        });
+        let link = "";
+        try {
+          const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+          const linkProjectId = appSettings.yunxiao?.projectId ?? "";
+          if (linkProjectId && task.yunxiaoWorkitemId) {
+            link = buildYunxiaoIssueLink(linkProjectId, task.yunxiaoWorkitemId);
+          }
+        } catch {
+          // 链接缺失不阻断
+        }
+        const snapshot = plan.issues.find((issue) => issue.workitemId === task.yunxiaoWorkitemId);
+        prompt = buildPlanExecutionPrompt({
+          issue: {
+            serialNumber: task.yunxiaoSerialNumber ?? "",
+            subject: snapshot?.subject ?? task.name ?? "",
+            categoryId: snapshot?.category,
+          },
+          link,
+          planOverview: overview,
+          issueSection: section,
+          planMdAbsolutePath: planMdPath(project.path, plan.id),
+          imagePaths: [],
+          instructions,
+        });
+      } catch (e) {
+        showToast(t("plan.rebindFailed", { error: String(e) }), "error");
+        return;
+      }
+    }
+
+    setTasks((prev) => {
+      const next = prev.map((t) =>
+        t.id === taskId ? { ...t, planId: planId ?? undefined, prompt } : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    showToast(planId ? t("plan.rebound") : t("plan.unbound"), "success");
+  }
+
+  // 方案讨论任务结束为 done（标记完成或会话自然退出）→ 方案定稿（draft → finalized）。
+  useEffect(() => {
+    const donePlanIds = new Set(
+      tasks
+        .filter((t) => t.yunxiaoPlanDiscussion && t.planId && t.status === "done")
+        .map((t) => t.planId as string),
+    );
+    if (donePlanIds.size === 0) return;
+    setPlans((prev) => {
+      const projectIds = new Set<string>();
+      const next = prev.map((plan) => {
+        if (plan.status !== "draft" || !donePlanIds.has(plan.id)) return plan;
+        projectIds.add(plan.projectId);
+        return { ...plan, status: "finalized" as PlanStatus, finalizedAt: Date.now() };
+      });
+      if (projectIds.size === 0) return prev;
+      projectIds.forEach((pid) => persistProjectPlans(pid, next));
+      return next;
+    });
+  }, [tasks]);
+
   function handleRenameTask(taskId: string, name: string) {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
@@ -1718,6 +2109,23 @@ function App() {
         : task.agent === "claude"
           ? task.claudeSessionPath
           : undefined;
+    // 方案任务：从 plan.md 提取本议题节，后端与任务 drafts（评分/影响范围）确定性合并。
+    let planSection: string | undefined;
+    if (task.planId) {
+      const plan = plans.find((candidate) => candidate.id === task.planId);
+      if (plan) {
+        try {
+          const markdown = await invoke<string>("read_file_content", {
+            path: planMdPath(project.path, plan.id),
+            projectPath: project.path,
+          });
+          const section = extractPlanIssueSection(markdown, task.yunxiaoSerialNumber ?? "");
+          if (section) planSection = section;
+        } catch (e) {
+          console.error("[writeback] read plan.md failed:", e);
+        }
+      }
+    }
     return invoke<YunxiaoWritebackDraft>("generate_yunxiao_writeback_summary", {
       projectPath: project.path,
       taskId,
@@ -1730,6 +2138,7 @@ function App() {
       // DSH 任务回退用 claude headless 生成汇总（与议题预填一致）
       agent: task.agent === "codex" ? "codex" : "claude",
       force,
+      planSection,
     });
   }
 
@@ -2419,6 +2828,10 @@ function App() {
               onRetryWritebackScoreField={handleRetryWritebackScoreField}
               onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
               onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
+              plans={plans}
+              onGeneratePlanTodos={handleGeneratePlanTodos}
+              onRebindTaskPlan={handleRebindTaskPlan}
+              onCancelPlan={handleCancelYunxiaoPlan}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
               onResumeTaskAndSend={handleResumeTaskAndSend}
@@ -2486,6 +2899,9 @@ function App() {
             skillHubConfig={skillHubConfig}
             onEnterSkillHub={handleEnterSkillHub}
             onImportYunxiaoIssue={handleImportYunxiaoIssue}
+            onCreateYunxiaoPlan={handleCreateYunxiaoPlan}
+            onStartYunxiaoPlanDiscussion={handleStartYunxiaoPlanDiscussion}
+            onCancelYunxiaoPlan={handleCancelYunxiaoPlan}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}

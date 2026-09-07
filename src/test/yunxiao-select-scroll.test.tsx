@@ -62,7 +62,15 @@ describe("YunxiaoView 连接配置：项目下拉滚动", () => {
     render(
       <I18nProvider>
         <ToastProvider>
-          <YunxiaoView projects={[]} tasks={[]} onBack={vi.fn()} onImportIssue={vi.fn()} />
+          <YunxiaoView
+            projects={[]}
+            tasks={[]}
+            onBack={vi.fn()}
+            onImportIssue={vi.fn()}
+            onCreatePlan={vi.fn()}
+            onStartPlanDiscussion={vi.fn()}
+            onCancelPlan={vi.fn()}
+          />
         </ToastProvider>
       </I18nProvider>,
     );

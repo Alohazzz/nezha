@@ -1,0 +1,246 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { marked } from "marked";
+import { FileText, Loader2, Trash2, X } from "lucide-react";
+import type { AgentType, PermissionMode, Plan, PlanIssue, Task } from "../../../types";
+import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
+import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
+import { rpRootStyle } from "../../../styles/right-panel";
+import { useI18n } from "../../../i18n";
+import s from "../../../styles";
+
+const MAX_PREVIEW_IMAGES = 20;
+
+interface PlanImage {
+  key: string;
+  serial: string;
+  path: string;
+  dataUrl: string;
+}
+
+const PLAN_STATUS_LABEL_KEY: Record<Plan["status"], string> = {
+  draft: "plan.status.draft",
+  finalized: "plan.status.finalized",
+  executing: "plan.status.executing",
+  completed: "plan.status.completed",
+  cancelled: "plan.status.cancelled",
+};
+
+/** 右侧面板「方案预览」：渲染 plan.md + 图片，定稿后提供「生成待办」入口。 */
+export function PlanPreviewPanel({
+  plan,
+  tasks,
+  projectPath,
+  defaultBaseBranch,
+  onCreateTodos,
+  onDeletePlan,
+  onClose,
+  width = 280,
+}: {
+  plan: Plan;
+  tasks: Task[];
+  projectPath: string;
+  defaultBaseBranch: string;
+  onCreateTodos: (input: {
+    planId: string;
+    issues: PlanIssue[];
+    batchName: string;
+    baseBranch: string;
+    targetBranch: string;
+    agent: AgentType;
+    permissionMode: PermissionMode;
+  }) => Promise<boolean>;
+  onDeletePlan: (planId: string) => void | Promise<void>;
+  onClose: () => void;
+  width?: number;
+}) {
+  const { t } = useI18n();
+
+  const [markdown, setMarkdown] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [images, setImages] = useState<PlanImage[]>([]);
+  const [showGenerate, setShowGenerate] = useState(false);
+
+  const linkedTasks = useMemo(
+    () => tasks.filter((task) => task.planId === plan.id),
+    [tasks, plan.id],
+  );
+  const canDelete = linkedTasks.length === 0 && !plan.discussionTaskId;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const content = await invoke<string>("read_file_content", {
+        path: planMdPath(projectPath, plan.id),
+        projectPath,
+      });
+      setMarkdown(content);
+    } catch (e) {
+      setMarkdown("");
+      setLoadError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [projectPath, plan.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // 图片库：方案目录 images/<workitemId>/ 下的文件（read_image_preview → data URL）。
+  useEffect(() => {
+    let cancelled = false;
+    const serialByWorkitem = new Map(plan.issues.map((i) => [i.workitemId, i.serialNumber]));
+    (async () => {
+      try {
+        const root = `${planDirPath(projectPath, plan.id)}/images`;
+        const issueDirs = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>(
+          "read_dir_entries",
+          { path: root, projectPath },
+        );
+        const collected: PlanImage[] = [];
+        for (const dir of issueDirs.filter((entry) => entry.is_dir).slice(0, MAX_PREVIEW_IMAGES)) {
+          const files = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>(
+            "read_dir_entries",
+            { path: dir.path, projectPath },
+          );
+          for (const file of files.filter((entry) => !entry.is_dir)) {
+            if (cancelled || collected.length >= MAX_PREVIEW_IMAGES) break;
+            try {
+              const preview = await invoke<{ dataUrl: string }>("read_image_preview", {
+                path: file.path,
+                projectPath,
+              });
+              collected.push({
+                key: file.path,
+                serial: serialByWorkitem.get(dir.name) ?? dir.name,
+                path: file.path,
+                dataUrl: preview.dataUrl,
+              });
+            } catch {
+              // 单张失败跳过
+            }
+          }
+          if (cancelled) return;
+        }
+        if (!cancelled) setImages(collected);
+      } catch {
+        if (!cancelled) setImages([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, plan.id, plan.issues]);
+
+  const handleDelete = useCallback(async () => {
+    await onDeletePlan(plan.id);
+  }, [onDeletePlan, plan.id]);
+
+  const html = useMemo(() => {
+    if (!markdown.trim()) return "";
+    return marked.parse(markdown, { async: false }) as string;
+  }, [markdown]);
+
+  return (
+    <div className="rp-root" style={rpRootStyle(width)}>
+      <div className="rp-header">
+        <div className="rp-titlebar">
+          <span className="rp-title">{t("plan.preview.title")}</span>
+          <button
+            type="button"
+            className="rp-icon-btn"
+            onClick={onClose}
+            title={t("yunxiao.clear")}
+          >
+            <X size={13} />
+          </button>
+        </div>
+        <div style={s.planPanelMeta}>
+          <span style={s.planPanelName}>
+            {plan.name || buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber))}
+          </span>
+          <span style={s.planPanelBadge}>{t(PLAN_STATUS_LABEL_KEY[plan.status])}</span>
+          {plan.batchId && <span style={s.planPanelBadge}>{t("plan.preview.batchLinked")}</span>}
+        </div>
+        <div style={s.planPanelIssues}>
+          {plan.issues.map((issue) => (
+            <span key={issue.workitemId} style={s.yunxiaoMetaBadge}>
+              {issue.serialNumber}
+            </span>
+          ))}
+        </div>
+        <div style={s.planPanelActions}>
+          <button
+            type="button"
+            style={
+              plan.status === "finalized" && markdown.trim()
+                ? s.knowledgePrimaryBtn
+                : s.knowledgePrimaryBtnDisabled
+            }
+            disabled={plan.status !== "finalized" || !markdown.trim()}
+            onClick={() => setShowGenerate(true)}
+          >
+            <FileText size={12} strokeWidth={2.2} />
+            {t("plan.generateTodos")}
+          </button>
+          {canDelete && (
+            <button type="button" style={s.knowledgeSecondaryBtn} onClick={() => void handleDelete()}>
+              <Trash2 size={12} strokeWidth={2.2} />
+              {t("plan.delete")}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div style={s.planPanelBody}>
+        {loading ? (
+          <div style={s.yunxiaoEmpty}>
+            <Loader2 size={18} className="spin" />
+          </div>
+        ) : loadError && !markdown ? (
+          <div style={s.planPanelEmpty}>
+            {plan.status === "draft"
+              ? t("plan.preview.discussionRunning")
+              : t("plan.preview.mdMissing")}
+          </div>
+        ) : (
+          <>
+            <div
+              className="plan-md"
+              style={s.planPanelMarkdown}
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+            {images.length > 0 && (
+              <div style={s.planPanelGallery}>
+                {images.map((image) => (
+                  <div key={image.key} style={s.planPanelGalleryItem}>
+                    <img src={image.dataUrl} alt={image.serial} style={s.planPanelImage} />
+                    <span style={s.planPanelGalleryLabel}>{image.serial}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {showGenerate && (
+        <GeneratePlanTodosDialog
+          plan={plan}
+          tasks={tasks}
+          defaultBaseBranch={defaultBaseBranch}
+          defaultBatchName={plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber))}
+          onCreateTodos={async (input) => {
+            const ok = await onCreateTodos(input);
+            if (ok) setShowGenerate(false);
+            return ok;
+          }}
+          onClose={() => setShowGenerate(false)}
+        />
+      )}
+    </div>
+  );
+}

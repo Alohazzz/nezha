@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Search } from "lucide-react";
+import { Search, Sparkles, X } from "lucide-react";
 import type {
+  AgentType,
+  PermissionMode,
+  Plan,
+  PlanIssue,
   Project,
   Task,
   YunxiaoOrganization,
@@ -24,10 +28,13 @@ import { YunxiaoConnectForm } from "./YunxiaoConnectForm";
 import { YunxiaoIssueList } from "./YunxiaoIssueList";
 import { YunxiaoProjectSelect } from "./YunxiaoProjectSelect";
 import { useYunxiaoCloudProjects } from "./useYunxiaoCloudProjects";
+import { PlanLaunchDialog } from "./plan/PlanLaunchDialog";
 import s from "../../styles";
 
 const PAGE_SIZE = 100;
 const YUNXIAO_LAST_PROJECT_KEY = "nezha:yunxiaoLastProjectId";
+/** 多选软上限：讨论会话上下文与图片量的现实约束，超出仅提醒不阻断已选项。 */
+const PLAN_SELECT_SOFT_LIMIT = 10;
 
 type CategoryKey = "all" | "Req" | "Task" | "Bug";
 
@@ -43,11 +50,22 @@ export function YunxiaoView({
   tasks,
   onBack,
   onImportIssue,
+  onCreatePlan,
+  onStartPlanDiscussion,
+  onCancelPlan,
 }: {
   projects: Project[];
   tasks: Task[];
   onBack: () => void;
   onImportIssue: (issue: YunxiaoWorkitem, targetProjectId: string) => Promise<boolean>;
+  onCreatePlan: (targetProjectId: string, issues: PlanIssue[]) => Plan;
+  onStartPlanDiscussion: (
+    planId: string,
+    prompt: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) => void;
+  onCancelPlan: (planId: string) => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -180,6 +198,57 @@ export function YunxiaoView({
     });
     return set;
   }, [tasks]);
+
+  // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
+  const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
+  const [launchIssues, setLaunchIssues] = useState<YunxiaoWorkitem[] | null>(null);
+
+  const selectionMode = selectedIssueIds.size > 0;
+
+  const handleToggleSelect = useCallback(
+    (issue: YunxiaoWorkitem) => {
+      if (isYunxiaoWorkitemImported(tasks, issue.id)) {
+        showToast(t("yunxiao.importDuplicate"), "warning");
+        return;
+      }
+      setSelectedIssueIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(issue.id)) {
+          next.delete(issue.id);
+          return next;
+        }
+        if (next.size >= PLAN_SELECT_SOFT_LIMIT) {
+          showToast(
+            t("plan.selectLimit", { limit: PLAN_SELECT_SOFT_LIMIT }),
+            "warning",
+          );
+          return prev;
+        }
+        next.add(issue.id);
+        return next;
+      });
+    },
+    [tasks, showToast, t],
+  );
+
+  const selectedIssues = useMemo(
+    () => issues.filter((issue) => selectedIssueIds.has(issue.id)),
+    [issues, selectedIssueIds],
+  );
+
+  const targetProject = projects.find((p) => p.id === targetProjectId) ?? null;
+
+  const handleLaunchPlan = useCallback(() => {
+    if (selectedIssues.length === 0) return;
+    if (!targetProjectId) {
+      showToast(t("yunxiao.targetProjectRequired"), "warning");
+      return;
+    }
+    if (!targetProject) return;
+    setLaunchIssues(selectedIssues);
+    setSelectedIssueIds(new Set());
+    localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
+  }, [selectedIssues, targetProjectId, targetProject, showToast, t]);
 
   async function handleFetchOrganizations() {
     const token = tokenInput.trim();
@@ -374,10 +443,50 @@ export function YunxiaoView({
             loading={loading}
             loadingMore={loadingMore}
             importedIds={importedIds}
+            selectedIds={selectedIssueIds}
+            selectionMode={selectionMode}
+            onToggleSelect={handleToggleSelect}
             onImport={handleImport}
             onLoadMore={() => loadIssues(page + 1, true)}
           />
+          {selectionMode && (
+            <div style={s.yunxiaoSelectBar}>
+              <span style={s.yunxiaoSelectCount}>
+                {t("plan.selectedCount", { count: selectedIssueIds.size })}
+              </span>
+              <button
+                type="button"
+                style={s.yunxiaoSelectPrimaryBtn}
+                onClick={handleLaunchPlan}
+              >
+                <Sparkles size={12} strokeWidth={2.2} />
+                {t("plan.launchAction")}
+              </button>
+              <button
+                type="button"
+                style={s.yunxiaoSelectGhostBtn}
+                onClick={() => setSelectedIssueIds(new Set())}
+              >
+                <X size={12} strokeWidth={2.2} />
+                {t("yunxiao.clear")}
+              </button>
+            </div>
+          )}
         </>
+      )}
+      {launchIssues && targetProject && (
+        <PlanLaunchDialog
+          key={launchIssues.map((issue) => issue.id).join(",")}
+          issues={launchIssues}
+          targetProjectId={targetProject.id}
+          projectPath={targetProject.path}
+          projectName={targetProject.name}
+          settings={settings}
+          onCreatePlan={onCreatePlan}
+          onStartDiscussion={onStartPlanDiscussion}
+          onCancelPlan={onCancelPlan}
+          onClose={() => setLaunchIssues(null)}
+        />
       )}
     </div>
   );

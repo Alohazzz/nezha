@@ -611,6 +611,164 @@ pub async fn get_issue_discussion_instructions(
     )
 }
 
+// ── 多议题联合方案（Plan）指令：讨论定稿 / 按方案执行 ────────────────────────
+
+/// 联合讨论流程：grilling 的多云题版——逐议题走完决策树，再统筹跨议题依赖与顺序。
+const PLAN_DISCUSSION_FLOW: &str = "请用 grilling 流程联合走完所有议题的决策树：一次只问一个问题，等用户回答后再问下一个；每个问题先给出你的推荐答案；能用环境/代码/知识库查证的事实先去查证而不是问用户。先逐个议题把分析走清，再做跨议题统筹（公共改动归属、依赖与执行顺序、可合并的修改点），最后产出统一方案文档；先不要写代码。";
+
+/// 方案文档（plan.md）结构与落盘指令。结构由 Nezha 约定：执行任务的提示词按
+/// `## <议题编号>` 切片内联，回写简报同样按议题节提取，因此标题格式不可漂移。
+fn plan_doc_instructions(plan_md_path: &str) -> String {
+    format!(
+        r#"── 方案文档落盘（必须执行）────────────────────────────
+本次讨论的全部结论写入方案文档（绝对路径）：{plan_md_path}（目录不存在就先创建）。结构固定（标题行格式不可改，后续按议题编号切片执行与回写）：
+
+# 联合方案：<主题>
+
+## 统筹
+<跨议题依赖关系、建议执行顺序（按议题编号列出）、公共改动归属（说明公共改动由哪个议题承载提交）>
+
+## <议题编号> <议题标题>
+### 修改方案汇总（开发向）
+<议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、最终修改方案、验证方式>
+### 影响范围与测试（测试向）
+<面向测试的影响范围（模块/接口/文件路径）与可执行测试步骤（含回归点）>
+
+要求：
+- 每个议题一节，节标题必须以 `## <议题编号> ` 开头（编号与议题清单一致）；结论是「无需修改」也要有节。
+- 统筹节给出的执行顺序要与各节结论一致。
+- 讨论中结论更新时整体覆盖写，只保留最新版；结束对话前再检查并更新一次，确保为定稿状态。
+- 本阶段不写「价值评分」（评分由各议题的执行任务在修改完成后评定），也不写 discussion.md / knowledge.json。"#,
+        plan_md_path = plan_md_path,
+    )
+}
+
+/// 方案讨论任务的完整指令：流程 + 知识图谱 + 方案文档落盘 + 补录。
+pub fn plan_discussion_instructions(
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+    plan_md_path: &str,
+) -> String {
+    let knowledge_graph = knowledge_target
+        .map(knowledge_graph_instruction)
+        .unwrap_or_default();
+    format!(
+        "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{backfill}\n\n{plan_doc}",
+        flow = PLAN_DISCUSSION_FLOW,
+        knowledge_graph = if knowledge_graph.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{knowledge_graph}")
+        },
+        backfill = BACKFILL_SKILL_INSTRUCTION,
+        plan_doc = plan_doc_instructions(plan_md_path),
+    )
+}
+
+/// 前端拼「发起联合分析」讨论 prompt 时调用。
+#[tauri::command]
+pub async fn get_plan_discussion_instructions(
+    project_path: String,
+    plan_id: String,
+) -> Result<String, String> {
+    let plan_id = plan_id.trim().to_string();
+    if plan_id.is_empty() || plan_id.contains('/') || plan_id.contains('\\') || plan_id.contains("..")
+    {
+        return Err("非法的方案 ID".to_string());
+    }
+    let project_path_for_dir = project_path.clone();
+    let plan_md_path = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let canonical = std::path::Path::new(&project_path_for_dir)
+            .canonicalize()
+            .map_err(|e| format!("项目路径无效: {e}"))?;
+        Ok(crate::storage::plan_dir(&canonical, &plan_id)
+            .join("plan.md")
+            .to_string_lossy()
+            .into_owned()
+            .replace("\\\\?\\", ""))
+    })
+    .await
+    .map_err(|e| format!("方案目录解析线程错误: {e}"))??;
+    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
+        .await
+        .ok();
+    Ok(plan_discussion_instructions(
+        knowledge_target.as_ref(),
+        &plan_md_path,
+    ))
+}
+
+/// 方案执行流程：方案已定稿，直接执行；发现方案与代码现实冲突即停。
+const PLAN_EXECUTION_FLOW: &str = "方案优先：本议题的修改方案已在「本议题方案（已定稿）」中定稿（来自多云题联合讨论），按方案直接执行改动，不要再把用户盘问一轮。执行中发现方案与代码现实冲突（文件/函数不存在、方案假设错误、影响面比方案判断更大）时，停下来在会话中说明冲突点并给出建议，等用户决策后再继续；不要擅自偏离方案。";
+
+/// 方案执行任务的产物落盘：评分与影响范围进任务自己的 discussion.md；
+/// 「修改方案汇总」由方案文档提供（回写时自动合并），不在此重复维护。
+fn plan_execution_draft_instructions(
+    task_id: &str,
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+) -> String {
+    let knowledge_section = knowledge_target.map_or_else(String::new, |target| {
+        format!(
+            r#"
+2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
+   - {knowledge_rules}
+   - 每条候选必须携带 "knowledgeGraphId"，值必须是：{target_graph_id}
+   - 输出 JSON 数组写入该文件，无候选则写 `[]`；只输出 JSON，不要附加说明文字。"#,
+            task_id = task_id,
+            knowledge_rules = KNOWLEDGE_SEDIMENTATION_RULES,
+            target_graph_id = target.id,
+        )
+    });
+    format!(
+        r#"── 工作产物落盘（必须执行）────────────────────────────
+本任务的工作产物写入当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录（目录不存在就先创建）：
+
+1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的素材（只写本议题执行增量）：
+   - 结构固定两段（按顺序）：
+     a. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；回写云效时与方案文档的「修改方案汇总」合并为开发向评论，数值同时写入议题「价值评分」字段。
+     b. `## 影响范围与测试（测试向）`：基于方案文档对应节 + 实际执行结果整理；若执行与方案一致，可整理方案该节内容作为测试向简报。
+   - 「修改方案汇总」不在本文件维护（由方案文档 plan.md 提供，回写时自动合并），不要在此重复。
+   - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。{knowledge_section}"#,
+        task_id = task_id,
+    )
+}
+
+/// 方案执行任务的完整指令：流程 + 图谱 + 评分 + 补录 + 产物落盘。
+pub fn plan_execution_instructions(
+    task_id: &str,
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+) -> String {
+    let knowledge_graph = knowledge_target
+        .map(knowledge_graph_instruction)
+        .unwrap_or_default();
+    format!(
+        "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{value_score}\n\n{backfill}\n\n{draft}",
+        flow = PLAN_EXECUTION_FLOW,
+        knowledge_graph = if knowledge_graph.is_empty() {
+            String::new()
+        } else {
+            format!("\n\n{knowledge_graph}")
+        },
+        value_score = VALUE_SCORE_INSTRUCTION,
+        backfill = BACKFILL_SKILL_INSTRUCTION,
+        draft = plan_execution_draft_instructions(task_id, knowledge_target),
+    )
+}
+
+/// 前端在「立即运行」方案执行待办前调用（prompt 已在生成待办时定稿，此命令仅供预览/重建）。
+#[tauri::command]
+pub async fn get_plan_execution_instructions(
+    project_path: String,
+    task_id: String,
+) -> Result<String, String> {
+    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
+        .await
+        .ok();
+    Ok(plan_execution_instructions(
+        &task_id,
+        knowledge_target.as_ref(),
+    ))
+}
+
 /// 合并代码审查规则（作为可维护的 `merge-code-review` Skill 的默认文本；前端取用并拼进
 /// 审查任务的 prompt，供 Agent 逐项校验批次分支相对 base 的改动）。
 const MERGE_CODE_REVIEW_INSTRUCTIONS: &str = r#"你是合并代码审查助手。请对给定批次的改动（相对 base 分支 base...branch 的 diff）做代码审查校验。
@@ -1168,6 +1326,52 @@ fn build_fallback_draft(
     }
 }
 
+/// 方案文档（plan.md）单议题节内的测试小节标题前缀（h3，与 plan_doc_instructions 约定一致）。
+const PLAN_TEST_SECTION_HEADER: &str = "### 影响范围与测试";
+
+/// 把方案文档的单议题节拆成（开发向部分，测试向部分）：
+/// - 开发向 = 从节开头到 `### 影响范围与测试` 之前（即「修改方案汇总」）；
+/// - 测试向 = 从 `### 影响范围与测试` 到节末尾。
+fn split_plan_section(text: &str) -> (String, String) {
+    let trimmed = text.trim();
+    if let Some(pos) = trimmed.find(PLAN_TEST_SECTION_HEADER) {
+        (
+            trimmed[..pos].trim().to_string(),
+            trimmed[pos..].trim().to_string(),
+        )
+    } else {
+        (trimmed.to_string(), String::new())
+    }
+}
+
+/// 方案任务回写合并：开发向 = 方案节（修改方案汇总）+ 任务 drafts 的价值评分；
+/// 测试向 = 任务 drafts 的影响范围（执行修订版）优先，回落方案节的测试小节。
+fn merge_plan_writeback_draft(
+    plan_section: &str,
+    task_drafts: Option<&str>,
+) -> YunxiaoWritebackDraft {
+    let (plan_dev, plan_test) = split_plan_section(plan_section);
+    let (drafts_test, score_section) = task_drafts
+        .map(|drafts| {
+            let (drafts_dev, drafts_test) = split_discussion_into_comments(drafts);
+            let score = crate::value_score::extract_value_score_section(&drafts_dev)
+                .map(str::to_string);
+            (drafts_test, score)
+        })
+        .unwrap_or((String::new(), None));
+    let dev_comment =
+        crate::value_score::reappend_value_score_section(&plan_dev, score_section.as_deref());
+    let test_comment = if drafts_test.trim().is_empty() {
+        plan_test
+    } else {
+        drafts_test
+    };
+    YunxiaoWritebackDraft {
+        dev_comment,
+        test_comment,
+    }
+}
+
 /// 生成云效回写草稿（开发向 + 测试向两条评论）：
 /// - 草稿优先：会话中已落盘的 `discussion.md` 直接拆成两条（秒开）；
 /// - 无草稿或 force=true 时：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色生成两条。
@@ -1185,6 +1389,7 @@ pub async fn generate_yunxiao_writeback_summary(
     base_branch: Option<String>,
     agent: String,
     force: Option<bool>,
+    plan_section: Option<String>,
 ) -> Result<YunxiaoWritebackDraft, String> {
     if !matches!(agent.as_str(), "claude" | "codex") {
         return Err(format!("Unsupported agent: {}", agent));
@@ -1197,6 +1402,19 @@ pub async fn generate_yunxiao_writeback_summary(
     tokio::task::spawn_blocking(move || validate_project_path_for_naming(&project_for_validation))
         .await
         .map_err(|e| format!("project_path 校验线程错误: {e}"))??;
+
+    // 方案任务：方案节（plan.md 切片）+ 任务 drafts（评分/影响范围）确定性合并。
+    // 不受 force 影响（无 AI 参与，重新生成只是重读文件）。
+    if let Some(plan_section) = plan_section
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let task_drafts = crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
+            .map_err(|e| format!("读取讨论草稿失败: {e}"))?
+            .filter(|s| !s.trim().is_empty());
+        return Ok(merge_plan_writeback_draft(plan_section, task_drafts.as_deref()));
+    }
 
     // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
     if !force.unwrap_or(false) {

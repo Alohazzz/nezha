@@ -6,6 +6,8 @@ import type {
   BranchBatch,
   AgentType,
   PermissionMode,
+  Plan,
+  PlanIssue,
   TaskStatus,
   YunxiaoSupplement,
   ThemeMode,
@@ -51,6 +53,9 @@ import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
+import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
+import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
+import { rpRootStyle } from "../styles/right-panel";
 import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -97,6 +102,10 @@ export function ProjectPage({
   onRetryWritebackScoreField,
   onGenerateKnowledgeSedimentation,
   onCreateKnowledgeIssues,
+  plans,
+  onGeneratePlanTodos,
+  onRebindTaskPlan,
+  onCancelPlan,
   onCancelTask,
   onResumeTask,
   onResumeTaskAndSend,
@@ -195,6 +204,18 @@ export function ProjectPage({
     taskId: string,
     suggestions: KnowledgeSuggestion[],
   ) => Promise<string[]>;
+  plans: Plan[];
+  onGeneratePlanTodos: (input: {
+    planId: string;
+    issues: PlanIssue[];
+    batchName: string;
+    baseBranch: string;
+    targetBranch: string;
+    agent: AgentType;
+    permissionMode: PermissionMode;
+  }) => Promise<boolean>;
+  onRebindTaskPlan: (taskId: string, planId: string | null) => void | Promise<void>;
+  onCancelPlan: (planId: string) => void | Promise<void>;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
   /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
@@ -272,6 +293,18 @@ export function ProjectPage({
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
   const [batches, setBatches] = useState<BranchBatch[]>([]);
   const [worktreeScope, setWorktreeScope] = useState<string>("");
+  // 方案预览面板当前展示的方案 id（顶栏「方案」按钮 / PlanTaskView 预览入口写入）。
+  const [planPreviewId, setPlanPreviewId] = useState<string | null>(null);
+  // 云效云项目 id（PlanTaskView 议题链接用）。
+  const [yunxiaoProjectId, setYunxiaoProjectId] = useState("");
+
+  useEffect(() => {
+    invoke<{ yunxiao?: { projectId?: string } }>("load_app_settings")
+      .then((appSettings) => {
+        setYunxiaoProjectId(appSettings.yunxiao?.projectId ?? "");
+      })
+      .catch(() => undefined);
+  }, []);
 
   const loadBatches = useCallback(async () => {
     try {
@@ -1046,7 +1079,22 @@ export function ProjectPage({
                 onCacheDraft={handleCacheNewTaskDraft}
               />
             ) : selectedTask.status === ("todo" as TaskStatus) ? (
-              selectedTask.yunxiaoWorkitemId ? (
+              selectedTask.planId && selectedTask.yunxiaoWorkitemId ? (
+                <PlanTaskView
+                  task={selectedTask}
+                  plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
+                  plans={plans.filter((p) => p.projectId === project.id)}
+                  yunxiaoProjectId={yunxiaoProjectId}
+                  onBack={onBack}
+                  onPreviewPlan={(planId) => {
+                    setPlanPreviewId(planId);
+                    openRightPanel("plan-preview");
+                  }}
+                  onRebindPlan={onRebindTaskPlan}
+                  onUpdateTodo={onUpdateTodo}
+                  onRunTodo={onRunTodoTask}
+                />
+              ) : selectedTask.yunxiaoWorkitemId ? (
                 <YunxiaoIssueDetailView
                   task={selectedTask}
                   projectPath={project.path}
@@ -1093,6 +1141,14 @@ export function ProjectPage({
                   onDiscardWorktree={() => onDiscardWorktree(task.id)}
                   onOpenWriteback={() => openWriteback(task.id)}
                   onOpenKnowledgeSedimentation={() => openKnowledgeSedimentation(task.id)}
+                  onOpenPlanPreview={
+                    task.planId
+                      ? () => {
+                          setPlanPreviewId(task.planId ?? null);
+                          openRightPanel("plan-preview");
+                        }
+                      : undefined
+                  }
                   onOpenWorktreeTerminal={
                     worktreePath ? () => handleOpenWorktreeTerminal(worktreePath) : undefined
                   }
@@ -1226,6 +1282,41 @@ export function ProjectPage({
                 onOpenCard={openKnowledgeCard}
                 width={rightPanelWidth}
               />
+            </ErrorBoundary>
+          )}
+          {rightPanel === "plan-preview" && (
+            <ErrorBoundary label="方案预览">
+              {(() => {
+                const plan =
+                  plans.find((p) => p.id === planPreviewId && p.projectId === project.id) ??
+                  plans.find(
+                    (p) =>
+                      p.id === (selectedTask?.planId ?? null) && p.projectId === project.id,
+                  ) ??
+                  null;
+                if (!plan) {
+                  return (
+                    <div className="rp-root" style={rpRootStyle(rightPanelWidth)}>
+                      <div className="rp-empty">{t("plan.preview.none")}</div>
+                    </div>
+                  );
+                }
+                return (
+                  <PlanPreviewPanel
+                    plan={plan}
+                    tasks={projectTasks}
+                    projectPath={project.path}
+                    defaultBaseBranch={project.branch ?? "develop"}
+                    onCreateTodos={onGeneratePlanTodos}
+                    onDeletePlan={(planId) => {
+                      void onCancelPlan(planId);
+                      handleTogglePanel("plan-preview");
+                    }}
+                    onClose={() => handleTogglePanel("plan-preview")}
+                    width={rightPanelWidth}
+                  />
+                );
+              })()}
             </ErrorBoundary>
           )}
         </div>

@@ -150,6 +150,73 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub derived_from_workitem_id: Option<String>,
+    /// 多议题联合方案 id：执行任务与临时讨论任务通过它关联 Plan。
+    #[serde(
+        rename = "planId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_id: Option<String>,
+    /// 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree）。
+    #[serde(
+        rename = "yunxiaoPlanDiscussion",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub yunxiao_plan_discussion: Option<bool>,
+}
+
+/// 多议题联合方案（Plan）里的议题快照：发起时从云效列表抄录，预览/确认页离线可用。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PlanIssue {
+    #[serde(rename = "workitemId")]
+    pub workitem_id: String,
+    #[serde(rename = "serialNumber")]
+    pub serial_number: String,
+    #[serde(default)]
+    pub subject: String,
+    /// 云效类别（Req / Task / Bug）；未知为空。
+    #[serde(default)]
+    pub category: String,
+}
+
+/// 多议题联合方案：一份方案覆盖 N 个云效议题；正文在项目内
+/// `.nezha/plans/<planId>/plan.md`（含图片 images/），元数据持久化在 plans.json。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Plan {
+    pub id: String,
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    #[serde(default)]
+    pub name: String,
+    /// 议题快照（有序 = 建议执行顺序）。
+    #[serde(default)]
+    pub issues: Vec<PlanIssue>,
+    /// draft | finalized | executing | completed | cancelled
+    #[serde(default)]
+    pub status: String,
+    /// 承载方案讨论的临时任务 id。
+    #[serde(
+        rename = "discussionTaskId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub discussion_task_id: Option<String>,
+    /// 生成待办时创建的分支批 id。
+    #[serde(
+        rename = "batchId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub batch_id: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(
+        rename = "finalizedAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub finalized_at: Option<i64>,
 }
 
 /// 分支批 = 一个可独立验收的 PR（一个批对应一个分支 + 一个 worktree，批内任务顺序共用）。
@@ -251,6 +318,18 @@ fn batches_path(project_id: &str) -> Result<PathBuf, String> {
     Ok(project_dir(project_id)?.join("batches.json"))
 }
 
+fn plans_path(project_id: &str) -> Result<PathBuf, String> {
+    Ok(project_dir(project_id)?.join("plans.json"))
+}
+
+/// 项目内方案目录：`<project>/.nezha/plans/<planId>/`（plan.md + images/）。
+pub(crate) fn plan_dir(project_path: impl AsRef<Path>, plan_id: &str) -> PathBuf {
+    Path::new(project_path.as_ref())
+        .join(".nezha")
+        .join("plans")
+        .join(plan_id)
+}
+
 fn project_dir(project_id: &str) -> Result<PathBuf, String> {
     Ok(nezha_dir()?.join("projects").join(project_id))
 }
@@ -337,6 +416,25 @@ pub fn save_project_batches(project_id: String, batches: Vec<Batch>) -> Result<(
     atomic_write(&batches_path(&project_id)?, &raw)
 }
 
+/// 加载某项目的多议题联合方案列表（不存在则返回空列表）。
+#[tauri::command]
+pub fn load_project_plans(project_id: String) -> Result<Vec<Plan>, String> {
+    let path = plans_path(&project_id)?;
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+
+/// 保存某项目的多议题联合方案列表（原子写入，空列表也照常写 "[]"，不删文件）。
+#[tauri::command]
+pub fn save_project_plans(project_id: String, plans: Vec<Plan>) -> Result<(), String> {
+    ensure_project_dir(&project_id)?;
+    let raw = serde_json::to_string_pretty(&plans).map_err(|e| e.to_string())?;
+    atomic_write(&plans_path(&project_id)?, &raw)
+}
+
 // ── Atomic write (write to tmp then rename) ───────────────────────────────────
 
 /// 原子写入：先写入唯一临时文件，fsync 落盘后再 rename 到目标路径。
@@ -416,5 +514,42 @@ mod tests {
         let task: Task = serde_json::from_str(legacy).unwrap();
         assert_eq!(task.batch_id, None);
         assert_eq!(task.branch_kind, None);
+        assert_eq!(task.plan_id, None);
+        assert_eq!(task.yunxiao_plan_discussion, None);
+    }
+
+    #[test]
+    fn plan_serde_round_trip() {
+        let plan = Plan {
+            id: "plan1".into(),
+            project_id: "p1".into(),
+            name: "医保目录联合方案".into(),
+            issues: vec![PlanIssue {
+                workitem_id: "w1".into(),
+                serial_number: "QHDK-29728".into(),
+                subject: "主表回写不匹配".into(),
+                category: "Bug".into(),
+            }],
+            status: "draft".into(),
+            discussion_task_id: Some("t9".into()),
+            batch_id: None,
+            created_at: 1_700_000_000_000,
+            finalized_at: None,
+        };
+        let json = serde_json::to_string(&plan).unwrap();
+        let back: Plan = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, "plan1");
+        assert_eq!(back.issues.len(), 1);
+        assert_eq!(back.issues[0].serial_number, "QHDK-29728");
+        assert_eq!(back.discussion_task_id.as_deref(), Some("t9"));
+    }
+
+    #[test]
+    fn plan_legacy_json_defaults() {
+        let legacy = r#"{"id":"plan1","projectId":"p1","createdAt":1}"#;
+        let plan: Plan = serde_json::from_str(legacy).unwrap();
+        assert_eq!(plan.status, "");
+        assert!(plan.issues.is_empty());
+        assert_eq!(plan.batch_id, None);
     }
 }
