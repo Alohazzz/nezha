@@ -595,7 +595,7 @@ fn plan_execution_draft_instructions(
 1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的素材（只写本议题执行增量）：
    - 结构固定两段（按顺序）：
      a. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；回写云效时与方案文档的「修改方案汇总」合并为开发向评论，数值同时写入议题「价值评分」字段。
-     b. `## 影响范围与测试（测试向）`：基于方案文档对应节 + 实际执行结果整理；若执行与方案一致，可整理方案该节内容作为测试向简报。
+     b. `## 影响范围与测试（测试向）`：字段固定三行——`修改分支`（本任务改动所在分支，如 master）、`修改文件`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`测试步骤`（可执行的测试步骤与回归点）；若执行与方案一致，可基于方案文档对应节整理。
    - 「修改方案汇总」不在本文件维护（由方案文档 plan.md 提供，回写时自动合并），不要在此重复。
    - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。{knowledge_section}"#,
         task_id = task_id,
@@ -869,20 +869,18 @@ pub async fn run_conflict_resolution(
 
 const WRITEBACK_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_FACTS_CHARS: usize = 8000;
-const WRITEBACK_SESSION_BUDGET: usize = 8000;
 
-const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基于下面的会话过程与事实（议题信息、Git 提交与变更统计），为云效议题撰写两条评论：一条面向开发人员，一条面向测试人员。请按本仓库 PR 描述规范（AGENTS.md 提交与 PR 规范）组织内容。
+const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基于下面的事实（议题信息、修改分支、Git 提交与变更统计），为云效议题撰写两条评论：一条面向开发人员，一条面向测试人员。
 
 规则：
-1. 只依据给定事实与会话过程，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
+1. 只依据给定事实，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
 2. 输出两条评论（Markdown），分别用固定标签包裹，标签外不要输出任何内容：
-   - 开发向评论：<DEV_SUMMARY>...</DEV_SUMMARY>，面向开发解释改动，按 PR 规范三段结构组织：
-     - What（改动方案）：做了什么、关键改动点（可引用 commit 短号/文件）；
-     - Why（动机与取舍）：当前问题/痛点是什么、为什么这样改、相对其他方案的取舍（仅当会话/事实中有依据，不编造）；
-     - Scope（影响面）：涉及哪些模块/文件、是否触碰现有功能或风险点。
-     会话中若有验证/测试过程，最后追加「验证情况」小节。
-   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，固定为「影响范围与测试指引」：
-     - 影响范围：列出受影响模块名/接口/文件路径；
+   - 开发向评论：<DEV_SUMMARY>...</DEV_SUMMARY>，直接回写本次修改方案：
+     - 基于提交与变更统计忠实呈现方案本身：改了什么、怎么改（关键改动点与实现方式，可引用 commit 短号/文件）；
+     - 不要套用其他模板结构，不要在方案之外额外扩写，事实里没有的内容不要补。
+   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，固定为「影响范围与测试指引」，字段固定三行：
+     - 修改分支：直接使用下方给定的「修改分支」，不要改动、不要编造；
+     - 修改文件：受影响的项目/工程名（从变更统计的文件路径归纳，如 Nto.His.Register.UI），多个用顿号分隔；
      - 测试步骤：给出可执行的测试步骤与回归点。
 3. 每条评论语言与议题标题一致（中文议题输出中文），各 200-500 字，控制在 12 行以内。
 4. 某条若缺少事实支撑，就写「（无）」占位，不要编造。
@@ -891,8 +889,8 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
 编号：{serial_number}
 标题：{task_name}
 
-──── 会话过程 ────
-{session_text}
+──── 修改分支 ────
+{branch}
 
 ──── 关联提交 ────
 {commits}
@@ -901,8 +899,8 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
 {diff_stat}
 "#;
 
-/// 收集回写汇总的事实骨架（commit 列表 + 变更统计），git 数据保证不幻觉。
-fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, String) {
+/// 收集回写汇总的事实骨架（当前分支 + commit 列表 + 变更统计），git 数据保证不幻觉。
+fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, String, String) {
     let run = |args: &[&str]| -> Option<String> {
         let mut cmd = std::process::Command::new("git");
         cmd.args(args).current_dir(cwd);
@@ -914,6 +912,10 @@ fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, Stri
         Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
 
+    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .filter(|b| !b.is_empty())
+        .or_else(|| base_branch.map(str::to_string))
+        .unwrap_or_default();
     let commits = base_branch
         .and_then(|b| run(&["log", "--format=%h %s", &format!("{b}..HEAD")]))
         .or_else(|| run(&["log", "--format=%h %s", "-n", "20"]))
@@ -929,13 +931,13 @@ fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, Stri
             s
         }
     };
-    (truncate(commits), truncate(diff_stat))
+    (branch, truncate(commits), truncate(diff_stat))
 }
 
 fn build_writeback_prompt(
     serial_number: &str,
     task_name: &str,
-    session_text: &str,
+    branch: &str,
     commits: &str,
     diff_stat: &str,
 ) -> String {
@@ -943,11 +945,11 @@ fn build_writeback_prompt(
         .replace("{serial_number}", serial_number)
         .replace("{task_name}", task_name)
         .replace(
-            "{session_text}",
-            if session_text.trim().is_empty() {
+            "{branch}",
+            if branch.trim().is_empty() {
                 "（无）"
             } else {
-                session_text.trim()
+                branch.trim()
             },
         )
         .replace(
@@ -1016,6 +1018,7 @@ fn split_discussion_into_comments(text: &str) -> (String, String) {
 fn build_fallback_draft(
     serial_number: &str,
     task_name: &str,
+    branch: &str,
     commits: &str,
     diff_stat: &str,
 ) -> YunxiaoWritebackDraft {
@@ -1046,7 +1049,14 @@ fn build_fallback_draft(
     } else {
         dev.push(format!("```\n{diff_stat}\n```"));
     }
-    let test = format!("## 影响范围与测试指引\n\n- 影响范围：（无）\n- 测试步骤：请在预览中补充。");
+    let test = format!(
+        "## 影响范围与测试指引\n\n- 修改分支：{}\n- 修改文件：（无）\n- 测试步骤：请在预览中补充。",
+        if branch.trim().is_empty() {
+            "（无）"
+        } else {
+            branch.trim()
+        },
+    );
     YunxiaoWritebackDraft {
         dev_comment: dev.join("\n"),
         test_comment: test,
@@ -1101,9 +1111,9 @@ fn merge_plan_writeback_draft(
 
 /// 生成云效回写草稿（开发向 + 测试向两条评论）：
 /// - 草稿优先：会话中已落盘的 `discussion.md` 直接拆成两条（秒开）；
-/// - 无草稿或 force=true 时：会话摘要 + git 事实骨架 + headless Agent 按 PR 规范润色生成两条。
-/// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交；
-/// session_path 缺省或不可读时降级为仅事实模式。
+/// - 无草稿或 force=true 时：git 事实骨架（分支/提交/变更统计）+ headless Agent 生成两条
+///   （开发向直接回写修改方案，测试向为修改分支/修改文件/测试步骤）。
+/// repo_path 缺省时用 project_path；base_branch 缺省时取最近 20 条提交。
 #[tauri::command]
 pub async fn generate_yunxiao_writeback_summary(
     project_path: String,
@@ -1111,7 +1121,6 @@ pub async fn generate_yunxiao_writeback_summary(
     repo_path: Option<String>,
     serial_number: String,
     task_name: String,
-    session_path: Option<String>,
     base_branch: Option<String>,
     agent: String,
     force: Option<bool>,
@@ -1183,49 +1192,16 @@ pub async fn generate_yunxiao_writeback_summary(
         .filter(|b| !b.is_empty());
     let cwd_for_facts = cwd.clone();
     let base_for_facts = base_branch.clone();
-    let (commits, diff_stat) = tokio::task::spawn_blocking(move || {
+    let (branch, commits, diff_stat) = tokio::task::spawn_blocking(move || {
         gather_writeback_facts(&cwd_for_facts, base_for_facts.as_deref())
     })
     .await
     .map_err(|e| format!("收集 git 事实线程错误: {e}"))?;
 
-    // 会话摘要：供「基于会话」撰写汇总；校验失败/文件超限时降级为无会话模式。
-    let session_text = match session_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(raw) => {
-            let project_for_session = project_path.clone();
-            let is_codex = agent == "codex";
-            let raw_for_session = raw.to_string();
-            let summary = tokio::task::spawn_blocking(move || {
-                match crate::session::validate_session_path(
-                    &raw_for_session,
-                    &project_for_session,
-                    is_codex,
-                ) {
-                    Ok(canonical) => crate::session::extract_session_summary_text(
-                        &canonical.to_string_lossy(),
-                        WRITEBACK_SESSION_BUDGET,
-                    ),
-                    Err(e) => {
-                        eprintln!("[writeback] session_path 校验失败：{e}");
-                        None
-                    }
-                }
-            })
-            .await
-            .map_err(|e| format!("会话摘要线程错误: {e}"))?;
-            summary.unwrap_or_default()
-        }
-        None => String::new(),
-    };
-
     let prompt = build_writeback_prompt(
         &serial_number,
         task_name.trim(),
-        &session_text,
+        &branch,
         &commits,
         &diff_stat,
     );
@@ -1244,7 +1220,8 @@ pub async fn generate_yunxiao_writeback_summary(
         return Err(format!("Agent failed: {}{}", stderr, stdout));
     }
     let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    let fallback = build_fallback_draft(&serial_number, task_name.trim(), &commits, &diff_stat);
+    let fallback =
+        build_fallback_draft(&serial_number, task_name.trim(), &branch, &commits, &diff_stat);
     let dev = extract_tagged_block(&raw, "<DEV_SUMMARY>", "</DEV_SUMMARY>")
         .unwrap_or(fallback.dev_comment);
     let test = extract_tagged_block(&raw, "<TEST_SUMMARY>", "</TEST_SUMMARY>")
@@ -1562,23 +1539,28 @@ mod tests {
     }
 
     #[test]
-    fn writeback_prompt_includes_session_and_pr_sections() {
+    fn writeback_prompt_includes_facts_and_dev_plan_sections() {
         let prompt = build_writeback_prompt(
             "HJWE-65",
             "测试议题",
-            "会话摘要：复现了加载慢的问题，定位到资源未压缩",
+            "master",
             "abc123 压缩图片资源",
             "1 file changed, 10 insertions(+)",
         );
-        assert!(prompt.contains("会话过程"));
-        assert!(prompt.contains("会话摘要：复现了加载慢的问题"));
-        assert!(prompt.contains("Why（动机与取舍）"));
-        assert!(prompt.contains("Scope（影响面）"));
+        assert!(prompt.contains("修改方案"));
+        assert!(prompt.contains("修改分支"));
+        assert!(prompt.contains("master"));
+        assert!(prompt.contains("修改文件"));
         assert!(prompt.contains("abc123 压缩图片资源"));
+        // 开发向不再套 PR 三段结构，直接回写修改方案；不再注入会话过程。
+        assert!(!prompt.contains("What（改动方案）"));
+        assert!(!prompt.contains("Why（动机与取舍）"));
+        assert!(!prompt.contains("Scope（影响面）"));
+        assert!(!prompt.contains("会话过程"));
     }
 
     #[test]
-    fn writeback_prompt_falls_back_to_no_session_markers() {
+    fn writeback_prompt_falls_back_to_no_facts_markers() {
         let prompt = build_writeback_prompt("HJWE-65", "测试议题", "", "", "");
         assert!(prompt.contains("（无）"));
     }

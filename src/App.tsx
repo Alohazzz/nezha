@@ -2056,12 +2056,6 @@ function App() {
     const project = projects.find((candidate) => candidate.id === task.projectId);
     if (!project) throw new Error("Project not found");
     const worktreeAlive = !!task.worktreePath && !task.worktreeDiscarded;
-    const sessionPath =
-      task.agent === "codex"
-        ? task.codexSessionPath
-        : task.agent === "claude"
-          ? task.claudeSessionPath
-          : undefined;
     // 方案任务：从 plan.md 提取本议题节，后端与任务 drafts（评分/影响范围）确定性合并。
     let planSection: string | undefined;
     if (task.planId) {
@@ -2085,7 +2079,6 @@ function App() {
       repoPath: worktreeAlive ? task.worktreePath : (task.worktreeRepo ?? project.path),
       serialNumber: task.yunxiaoSerialNumber ?? "",
       taskName: task.name ?? task.prompt.slice(0, 80),
-      sessionPath,
       baseBranch: task.baseBranch,
       // DSH 任务回退用 claude headless 生成汇总
       agent: task.agent === "codex" ? "codex" : "claude",
