@@ -17,10 +17,9 @@ import type {
   TaskDisplayWindow,
   SkillHubConfig,
   YunxiaoWorkitem,
-  YunxiaoSupplement,
+  YunxiaoIssueImagesPrepared,
   YunxiaoWritebackDraft,
   YunxiaoWritebackResult,
-  AgentEnabledState,
   BackfillIssueRequest,
   BackfillDraftEntry,
   Plan,
@@ -35,8 +34,6 @@ import {
   clampTerminalScrollback,
   DEFAULT_TASK_DISPLAY_WINDOW,
   normalizeTaskDisplayWindow,
-  firstEnabledAgent,
-  isAgentEnabled,
 } from "./types";
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
 import type {
@@ -48,16 +45,11 @@ import type {
 import { quoteFontName } from "./utils/fonts";
 import {
   buildYunxiaoIssueLink,
-  buildYunxiaoPrompt,
-  buildYunxiaoTaskName,
-  getLastYunxiaoAgent,
-  getLastYunxiaoPermission,
   issueTag,
-  isYunxiaoWorkitemImported,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
-import { buildYunxiaoFieldsText } from "./components/yunxiao/issueForms";
 import {
+  buildPlanDiscussionPrompt,
   buildPlanExecutionPrompt,
   buildPlanTaskName,
   extractPlanIssueSection,
@@ -385,6 +377,9 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   // 多议题联合方案（全项目合并持有，按 projectId 过滤持久化，与 tasks 同构）。
   const [plans, setPlans] = useState<Plan[]>([]);
+  // 待办「发起讨论」进行中标记（拉详情/图片/建方案期间锁定入口按钮）。
+  const [todoDiscussionStarting, setTodoDiscussionStarting] = useState(false);
+  const todoDiscussionStartingRef = useRef(false);
   // 补录议题轮询：tasks 与 handler 的最新引用 + 处理中任务去重集合（防重叠/陈旧闭包）。
   const tasksRef = useRef<Task[]>([]);
   const backfillHandlerRef = useRef<(() => Promise<void>) | null>(null);
@@ -1514,78 +1509,6 @@ function App() {
     });
   }
 
-  /** 云效议题 → 待办任务：去重 + 写入任务 state 并落盘。 */
-  async function handleImportYunxiaoIssue(
-    issue: YunxiaoWorkitem,
-    targetProjectId: string,
-  ): Promise<boolean> {
-    const targetProject = projects.find((p) => p.id === targetProjectId);
-    if (!targetProject) return false;
-    if (isYunxiaoWorkitemImported(tasks, issue.id)) return false;
-
-    // Agent / 权限模式记忆：上次选择优先；无记忆时回退项目配置默认（再兜底 codex/ask）。
-    const rememberedAgent = getLastYunxiaoAgent(targetProject.id);
-    const rememberedPermission = getLastYunxiaoPermission(targetProject.id);
-    let agent: AgentType = rememberedAgent ?? "codex";
-    let permissionMode: PermissionMode = rememberedPermission ?? "ask";
-    if (!rememberedAgent || !rememberedPermission) {
-      try {
-        const cfg = await invoke<{
-          agent?: { default?: string; default_permission_mode?: string };
-        }>("read_project_config", {
-          projectPath: targetProject.path,
-        });
-        if (!rememberedAgent) {
-          const cfgAgent = cfg.agent?.default;
-          if (cfgAgent === "claude" || cfgAgent === "codex" || cfgAgent === "dsh") {
-            agent = cfgAgent;
-          }
-        }
-        if (!rememberedPermission) {
-          const cfgPerm = cfg.agent?.default_permission_mode;
-          if (cfgPerm === "ask" || cfgPerm === "auto_edit" || cfgPerm === "full_access") {
-            permissionMode = cfgPerm;
-          }
-        }
-      } catch {
-        // 读取失败保持兜底，不阻断导入
-      }
-    }
-
-    // 若最终选中的 Agent 已被禁用（应用级设置），回退到第一个启用的 Agent。
-    try {
-      const appSettings = await invoke<AgentEnabledState>("load_app_settings");
-      if (!isAgentEnabled(appSettings, agent)) {
-        agent = firstEnabledAgent(appSettings);
-      }
-    } catch {
-      // 读取失败保持兜底，不阻断导入
-    }
-
-    const now = Date.now();
-    const task: Task = {
-      id: `${now}`,
-      projectId: targetProject.id,
-      name: buildYunxiaoTaskName(issue),
-      prompt: buildYunxiaoPrompt(issue),
-      agent,
-      permissionMode,
-      status: "todo",
-      createdAt: now,
-      updatedAt: now,
-      yunxiaoWorkitemId: issue.id,
-      yunxiaoSerialNumber: issue.serialNumber,
-    };
-
-    setTasks((prev) => {
-      if (prev.some((t) => t.yunxiaoWorkitemId === issue.id)) return prev;
-      const next = [task, ...prev];
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-    return true;
-  }
-
   // ── 多议题联合方案（Plan）──────────────────────────────────────────────────
 
   /** 发起联合分析第一步：落一份 draft 方案（记录 + 议题快照），图片与讨论任务挂其下。 */
@@ -1668,6 +1591,150 @@ function App() {
     } catch (e) {
       console.error("[plans] delete failed:", e);
       showToast(t("plan.deleteFailed", { error: String(e) }), "error");
+    }
+  }
+
+  /**
+   * 云效绑定待办（补录议题 / 存量导入）的「发起讨论」：拉取议题详情与图片 →
+   * 建 draft 方案 → 待办**自身**转化为方案讨论任务（挂 planId + plan 讨论 prompt）
+   * 并立即启动，不新建任务。与联合分析讨论任务同一形态（plan.md / 方案按钮 /
+   * 生成待办全链路复用）。失败路径清理 draft 方案。
+   */
+  async function handleStartTodoYunxiaoDiscussion(
+    taskId: string,
+    notes: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task || task.status !== "todo" || !task.yunxiaoWorkitemId || task.planId) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    if (todoDiscussionStartingRef.current) return;
+    todoDiscussionStartingRef.current = true;
+    setTodoDiscussionStarting(true);
+    try {
+      let yunxiao: YunxiaoSettings;
+      try {
+        const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+        yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+      } catch {
+        yunxiao = EMPTY_YUNXIAO_SETTINGS;
+      }
+      if (!yunxiao.token || !yunxiao.organizationId) {
+        showToast(t("yunxiao.notConnected"), "error");
+        return;
+      }
+
+      // 1) 议题详情（类别进方案快照，决定 Bug 诊断方法论注入）。
+      const detail = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: task.yunxiaoWorkitemId,
+      });
+
+      // 2) 建 draft 方案（图片归档方案目录，方案预览图库可直接读）。
+      const plan = handleCreateYunxiaoPlan(project.id, [
+        {
+          workitemId: detail.id,
+          serialNumber: detail.serialNumber,
+          subject: detail.subject,
+          category: detail.categoryId ?? "",
+        },
+      ]);
+
+      // 3) 议题图片：全部失败阻断（与发起对话框一致），失败清理 draft 方案。
+      let imagePaths: string[] = [];
+      try {
+        const images = await invoke<YunxiaoIssueImagesPrepared>(
+          "yunxiao_prepare_issue_images",
+          {
+            token: yunxiao.token,
+            organizationId: yunxiao.organizationId,
+            workitemId: detail.id,
+            projectPath: project.path,
+            planId: plan.id,
+          },
+        );
+        if (images.total > 0 && images.failed === images.total) {
+          showToast(
+            t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }),
+            "error",
+          );
+          await handleCancelYunxiaoPlan(plan.id);
+          return;
+        }
+        if (images.failed > 0) {
+          showToast(
+            t("yunxiao.images.partial", {
+              failed: images.failed,
+              downloaded: images.downloaded,
+            }),
+            "warning",
+          );
+        } else if (images.downloaded > 0) {
+          showToast(t("yunxiao.images.prepared", { count: images.downloaded }), "success");
+        }
+        imagePaths = images.paths;
+      } catch (e) {
+        showToast(t("yunxiao.images.allFailed", { error: String(e) }), "error");
+        await handleCancelYunxiaoPlan(plan.id);
+        return;
+      }
+
+      // 4) 讨论指令 + prompt 组装（与联合分析同一套）。
+      const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
+      const instructions = await invoke<string>("get_plan_discussion_instructions", {
+        projectPath: project.path,
+        planId: plan.id,
+        hasBug,
+      });
+      const link = yunxiao.projectId
+        ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id)
+        : "";
+      const prompt = buildPlanDiscussionPrompt({
+        issues: [detail],
+        imagePathsByIssue: { [detail.id]: imagePaths },
+        linksByIssue: { [detail.id]: link },
+        userNotes: notes,
+        instructions,
+      });
+
+      // 5) 待办自身转为讨论任务并启动（项目根只读分析，不建 worktree）。
+      const updated: Task = {
+        ...task,
+        name: buildPlanTaskName([detail.serialNumber]),
+        prompt,
+        agent,
+        permissionMode,
+        model: agent === task.agent ? task.model : undefined,
+        reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
+        planId: plan.id,
+        yunxiaoPlanDiscussion: true,
+        status: "pending",
+        updatedAt: Date.now(),
+        attentionRequestedAt: undefined,
+      };
+      setTasks((prev) => {
+        const next = prev.map((t) => (t.id === task.id ? updated : t));
+        persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
+        return next;
+      });
+      setPlans((prev) => {
+        const next = prev.map((p) =>
+          p.id === plan.id ? { ...p, discussionTaskId: task.id } : p,
+        );
+        persistProjectPlans(plan.projectId, next);
+        return next;
+      });
+      updateProjectView(project.id, { selectedTaskId: task.id, isNewTask: false });
+      tm.resetTaskTerminal(task.id);
+      invokeRunTask(updated, project.path, [], [], project.path);
+    } catch (e) {
+      showToast(t("plan.launch.startFailed", { error: String(e) }), "error");
+    } finally {
+      todoDiscussionStartingRef.current = false;
+      setTodoDiscussionStarting(false);
     }
   }
 
@@ -1979,76 +2046,6 @@ function App() {
     });
   }
 
-  /** 云效详情页「定稿」：把补全后的议题内容写回待办 prompt。 */
-  function handleFinalizeYunxiaoTodo(
-    taskId: string,
-    prompt: string,
-    supplement: YunxiaoSupplement,
-  ) {
-    setTasks((prev) => {
-      const task = prev.find((t) => t.id === taskId);
-      if (!task || task.status !== "todo") return prev;
-      const next = prev.map((t) =>
-        t.id === taskId ? { ...t, prompt, yunxiaoSupplement: supplement } : t,
-      );
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-  }
-
-  /** 云效详情页「草稿」：AI 预填/编辑后防抖落盘，切走再回来（组件重挂载）时恢复；
-   *  finalized 保持 false，直到用户显式定稿。 */
-  function handleYunxiaoDraftChange(taskId: string, fields: Record<string, string>) {
-    setTasks((prev) => {
-      const task = prev.find((t) => t.id === taskId);
-      if (!task || task.status !== "todo") return prev;
-      const next = prev.map((t) =>
-        t.id === taskId
-          ? {
-              ...t,
-              yunxiaoSupplement: {
-                fields,
-                originalPrompt: t.yunxiaoSupplement?.originalPrompt ?? t.prompt,
-                finalized: false,
-              },
-            }
-          : t,
-      );
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-  }
-
-  /** 云效详情页「发起讨论」：先落定稿 prompt + 所选 Agent，再复用 run 链路启动会话。 */
-  function handleStartYunxiaoDiscussion(
-    taskId: string,
-    prompt: string,
-    agent: AgentType,
-    permissionMode: PermissionMode,
-  ) {
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task) return;
-    const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
-    setTasks((prev) => {
-      const next = prev.map((t) =>
-        t.id === taskId
-          ? {
-              ...t,
-              prompt,
-              agent,
-              permissionMode,
-              model: agent === t.agent ? t.model : undefined,
-              reasoningEffort: agent === t.agent ? t.reasoningEffort : undefined,
-            }
-          : t,
-      );
-      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-      return next;
-    });
-    handleRunTodoTask({ ...task, prompt, agent, permissionMode });
-  }
-
   /** 生成云效回写草稿（开发向 + 测试向）：优先读取会话中落盘的讨论草稿，无草稿时 headless 生成。 */
   async function handleGenerateYunxiaoWritebackSummary(
     taskId: string,
@@ -2058,7 +2055,6 @@ function App() {
     if (!task) throw new Error("Task not found");
     const project = projects.find((candidate) => candidate.id === task.projectId);
     if (!project) throw new Error("Project not found");
-    const fieldsText = buildYunxiaoFieldsText(task.yunxiaoSupplement?.fields);
     const worktreeAlive = !!task.worktreePath && !task.worktreeDiscarded;
     const sessionPath =
       task.agent === "codex"
@@ -2089,10 +2085,9 @@ function App() {
       repoPath: worktreeAlive ? task.worktreePath : (task.worktreeRepo ?? project.path),
       serialNumber: task.yunxiaoSerialNumber ?? "",
       taskName: task.name ?? task.prompt.slice(0, 80),
-      fieldsText,
       sessionPath,
       baseBranch: task.baseBranch,
-      // DSH 任务回退用 claude headless 生成汇总（与议题预填一致）
+      // DSH 任务回退用 claude headless 生成汇总
       agent: task.agent === "codex" ? "codex" : "claude",
       force,
       planSection,
@@ -2172,7 +2167,6 @@ function App() {
     if (!task) throw new Error("Task not found");
     const project = projects.find((candidate) => candidate.id === task.projectId);
     if (!project) throw new Error("Project not found");
-    const fieldsText = buildYunxiaoFieldsText(task.yunxiaoSupplement?.fields);
     const sessionPath =
       task.agent === "codex"
         ? task.codexSessionPath
@@ -2190,7 +2184,6 @@ function App() {
       taskId,
       serialNumber: task.yunxiaoSerialNumber ?? "",
       taskName: task.name ?? task.prompt.slice(0, 80),
-      fieldsText,
       link,
       sessionPath,
       agent: task.agent === "codex" ? "codex" : "claude",
@@ -2777,9 +2770,8 @@ function App() {
               onSubmitTask={(taskInput) => handleSubmitTask(project, taskInput)}
               onRunTodoTask={handleRunTodoTask}
               onUpdateTodo={handleUpdateTodo}
-              onFinalizeYunxiaoTodo={handleFinalizeYunxiaoTodo}
-              onYunxiaoDraftChange={handleYunxiaoDraftChange}
-              onStartYunxiaoDiscussion={handleStartYunxiaoDiscussion}
+              onStartTodoYunxiaoDiscussion={handleStartTodoYunxiaoDiscussion}
+              todoDiscussionStarting={todoDiscussionStarting}
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
               onRetryWritebackScoreField={handleRetryWritebackScoreField}
@@ -2855,10 +2847,10 @@ function App() {
             onRenameProject={handleRenameProject}
             skillHubConfig={skillHubConfig}
             onEnterSkillHub={handleEnterSkillHub}
-            onImportYunxiaoIssue={handleImportYunxiaoIssue}
             onCreateYunxiaoPlan={handleCreateYunxiaoPlan}
             onStartYunxiaoPlanDiscussion={handleStartYunxiaoPlanDiscussion}
             onCancelYunxiaoPlan={handleCancelYunxiaoPlan}
+            plans={plans}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}

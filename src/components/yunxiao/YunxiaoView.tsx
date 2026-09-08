@@ -17,7 +17,7 @@ import {
   type AppSettings,
   type YunxiaoSettings,
 } from "../app-settings/types";
-import { buildYunxiaoTaskName, isYunxiaoWorkitemImported } from "../../utils/yunxiao";
+import { isYunxiaoWorkitemImported } from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
 import { YunxiaoHeader } from "./YunxiaoHeader";
@@ -48,16 +48,17 @@ const CATEGORIES: Array<{ key: CategoryKey; labelKey: string }> = [
 export function YunxiaoView({
   projects,
   tasks,
+  plans,
   onBack,
-  onImportIssue,
   onCreatePlan,
   onStartPlanDiscussion,
   onCancelPlan,
 }: {
   projects: Project[];
   tasks: Task[];
+  /** 去重第二来源：非取消方案的议题也算占用（讨论中/待生成待办/执行中/已完成）。 */
+  plans: Plan[];
   onBack: () => void;
-  onImportIssue: (issue: YunxiaoWorkitem, targetProjectId: string) => Promise<boolean>;
   onCreatePlan: (targetProjectId: string, issues: PlanIssue[]) => Plan;
   onStartPlanDiscussion: (
     planId: string,
@@ -199,8 +200,14 @@ export function YunxiaoView({
     tasks.forEach((task) => {
       if (task.yunxiaoWorkitemId) set.add(task.yunxiaoWorkitemId);
     });
+    // 方案占用的议题同样去重：讨论中（draft）/ 待生成待办（finalized）/ 执行中 /
+    // 已完成的方案议题都不可重复发起，堵住「讨论中议题再次发起」的洞。
+    plans.forEach((plan) => {
+      if (plan.status === "cancelled") return;
+      plan.issues.forEach((issue) => set.add(issue.workitemId));
+    });
     return set;
-  }, [tasks]);
+  }, [tasks, plans]);
 
   // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
   const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
@@ -210,7 +217,7 @@ export function YunxiaoView({
 
   const handleToggleSelect = useCallback(
     (issue: YunxiaoWorkitem) => {
-      if (isYunxiaoWorkitemImported(tasks, issue.id)) {
+      if (isYunxiaoWorkitemImported(tasks, plans, issue.id)) {
         showToast(t("yunxiao.importDuplicate"), "warning");
         return;
       }
@@ -231,7 +238,7 @@ export function YunxiaoView({
         return next;
       });
     },
-    [tasks, showToast, t],
+    [tasks, plans, showToast, t],
   );
 
   const selectedIssues = useMemo(
@@ -252,6 +259,20 @@ export function YunxiaoView({
     setSelectedIssueIds(new Set());
     localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
   }, [selectedIssues, targetProjectId, targetProject, showToast, t]);
+
+  /** 行内「发起讨论」：单条快捷入口，与多选发起同一对话框同一链路（N=1）。 */
+  const handleDiscussIssue = useCallback(
+    (issue: YunxiaoWorkitem) => {
+      if (!targetProjectId) {
+        showToast(t("yunxiao.targetProjectRequired"), "warning");
+        return;
+      }
+      if (!targetProject) return;
+      setLaunchIssues([issue]);
+      localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
+    },
+    [targetProjectId, targetProject, showToast, t],
+  );
 
   async function handleFetchOrganizations() {
     const token = tokenInput.trim();
@@ -329,22 +350,6 @@ export function YunxiaoView({
       showToast(t("yunxiao.saveFailed", { error: String(e) }), "error");
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function handleImport(issue: YunxiaoWorkitem) {
-    if (isYunxiaoWorkitemImported(tasks, issue.id)) {
-      showToast(t("yunxiao.importDuplicate"), "warning");
-      return;
-    }
-    if (!targetProjectId) {
-      showToast(t("yunxiao.targetProjectRequired"), "warning");
-      return;
-    }
-    const ok = await onImportIssue(issue, targetProjectId);
-    if (ok) {
-      localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
-      showToast(t("yunxiao.importSuccess", { name: buildYunxiaoTaskName(issue) }));
     }
   }
 
@@ -449,7 +454,7 @@ export function YunxiaoView({
             selectedIds={selectedIssueIds}
             selectionMode={selectionMode}
             onToggleSelect={handleToggleSelect}
-            onImport={handleImport}
+            onDiscuss={handleDiscussIssue}
             onLoadMore={() => loadIssues(page + 1, true)}
           />
           {selectionMode && (

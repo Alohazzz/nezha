@@ -226,9 +226,14 @@ export function PlanLaunchDialog({
     if (!plan || starting || !canStart) return;
     setStarting(true);
     try {
+      // 方案含 Bug 议题时注入 diagnosing-bugs 根因诊断方法论（类别来自议题详情快照）。
+      const hasBug = doneItems.some((item) =>
+        (item.detail!.categoryId ?? "").trim().toLowerCase() === "bug",
+      );
       const instructions = await invoke<string>("get_plan_discussion_instructions", {
         projectPath,
         planId: plan.id,
+        hasBug,
       });
       const prompt = buildPlanDiscussionPrompt({
         issues: doneItems.map((item) => item.detail!),

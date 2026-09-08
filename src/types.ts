@@ -268,8 +268,6 @@ export interface Task {
   yunxiaoWorkitemId?: string;
   /** 导入自云效 Projex 的工作项编号，如 QHDK-29728 */
   yunxiaoSerialNumber?: string;
-  /** 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单 */
-  yunxiaoSupplement?: YunxiaoSupplement;
   /** 修改方案已回写云效评论的时间戳（幂等标记，非空即已回写） */
   yunxiaoWrittenBackAt?: number;
   /** 回写成功后云效返回的评论 ID（审计/追查用） */
@@ -350,17 +348,6 @@ export interface KnowledgeWritebackResult {
   allPassed: boolean;
   writtenCount: number;
   commit: string | null;
-}
-
-/** 云效议题补充表单数据：草稿即随编辑落盘（防抖），切走/重启后重挂载可恢复；
- *  `finalized` 区分「已定稿」与「仅草稿」，缺省视为有字段即已定稿（兼容旧数据）。 */
-export interface YunxiaoSupplement {
-  /** 补充表单字段（key 与 issueForms 字段 key 对齐） */
-  fields: Record<string, string>;
-  /** 定稿前的原始任务 prompt（重复定稿不叠加） */
-  originalPrompt: string;
-  /** 是否已定稿；false=草稿（重挂载可继续编辑，发起讨论仍锁定） */
-  finalized?: boolean;
 }
 
 // ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────

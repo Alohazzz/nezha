@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Task, YunxiaoWorkitem } from "../types";
+import type { Plan, Task } from "../types";
 import {
   buildYunxiaoConditions,
-  buildYunxiaoPrompt,
-  buildYunxiaoTaskName,
   ensureIssueTagInMessage,
   isYunxiaoWorkitemImported,
   issueTag,
@@ -24,60 +22,61 @@ function baseTask(extra: Partial<Task> = {}): Task {
   };
 }
 
-const issue: YunxiaoWorkitem = {
-  id: "741d91e70b392b65ef95604c1f",
-  serialNumber: "QHDK-29728",
-  subject: "【芒市医共体】试剂出库查询，过滤框输入字符就报错",
-  description: "在试剂出库查询页面输入过滤字符时直接报错。",
-  status: { name: "待处理", nameEn: "To Do", displayName: "待处理", id: "100005" },
-  assignedTo: { id: "642b88712ca4e1cd30de4718", name: "许宏民" },
-  creator: { id: "644f9087f8c4cdf0a4487992", name: "唐建祖" },
-  gmtCreate: 1787042498000,
-  customFieldValues: [
-    {
-      fieldId: "priority",
-      fieldName: "优先级",
-      values: [{ identifier: "918961294027fce36636f0eca8", displayValue: "高" }],
-    },
-  ],
-  categoryId: "Req",
-  logicalStatus: "NORMAL",
-};
-
-describe("buildYunxiaoTaskName", () => {
-  it("组合议题编号与标题作为任务名", () => {
-    expect(buildYunxiaoTaskName(issue)).toBe(
-      "QHDK-29728 【芒市医共体】试剂出库查询，过滤框输入字符就报错",
-    );
-  });
-});
-
-describe("buildYunxiaoPrompt", () => {
-  it("提示词包含标题、编号、优先级、负责人、状态、描述与云效链接", () => {
-    const prompt = buildYunxiaoPrompt(issue);
-    expect(prompt).toContain(issue.subject);
-    expect(prompt).toContain(issue.serialNumber);
-    expect(prompt).toContain("高");
-    expect(prompt).toContain("许宏民");
-    expect(prompt).toContain("待处理");
-    expect(prompt).toContain(issue.description ?? "");
-    expect(prompt).toContain(issue.id);
-  });
-});
+function basePlan(extra: Partial<Plan> = {}): Plan {
+  return {
+    id: "plan-1",
+    projectId: "p-1",
+    name: "",
+    issues: [
+      {
+        workitemId: "741d91e70b392b65ef95604c1f",
+        serialNumber: "QHDK-29728",
+        subject: "议题",
+        category: "Req",
+      },
+    ],
+    status: "draft",
+    createdAt: 1787000000000,
+    ...extra,
+  };
+}
 
 describe("isYunxiaoWorkitemImported", () => {
+  const WORKITEM_ID = "741d91e70b392b65ef95604c1f";
+
   it("存在相同 yunxiaoWorkitemId 的任务时返回 true", () => {
-    const tasks = [baseTask({ yunxiaoWorkitemId: "741d91e70b392b65ef95604c1f" })];
-    expect(isYunxiaoWorkitemImported(tasks, "741d91e70b392b65ef95604c1f")).toBe(true);
+    const tasks = [baseTask({ yunxiaoWorkitemId: WORKITEM_ID })];
+    expect(isYunxiaoWorkitemImported(tasks, [], WORKITEM_ID)).toBe(true);
   });
 
-  it("没有匹配任务时返回 false", () => {
-    expect(isYunxiaoWorkitemImported([], "741d91e70b392b65ef95604c1f")).toBe(false);
+  it("没有匹配任务与方案时返回 false", () => {
+    expect(isYunxiaoWorkitemImported([], [], WORKITEM_ID)).toBe(false);
   });
 
   it("空 id 不匹配任何任务", () => {
-    const tasks = [baseTask({ yunxiaoWorkitemId: "741d91e70b392b65ef95604c1f" })];
-    expect(isYunxiaoWorkitemImported(tasks, "")).toBe(false);
+    const tasks = [baseTask({ yunxiaoWorkitemId: WORKITEM_ID })];
+    expect(isYunxiaoWorkitemImported(tasks, [], "")).toBe(false);
+  });
+
+  it("非取消方案的议题占用（讨论中/待生成待办/执行中/已完成）", () => {
+    for (const status of ["draft", "finalized", "executing", "completed"] as const) {
+      expect(isYunxiaoWorkitemImported([], [basePlan({ status })], WORKITEM_ID)).toBe(true);
+    }
+  });
+
+  it("已取消方案的议题不占用（可重新发起讨论）", () => {
+    expect(isYunxiaoWorkitemImported([], [basePlan({ status: "cancelled" })], WORKITEM_ID)).toBe(
+      false,
+    );
+  });
+
+  it("方案不含该议题时不占用", () => {
+    const other = basePlan({
+      issues: [
+        { workitemId: "other", serialNumber: "QHDK-1", subject: "其他", category: "Req" },
+      ],
+    });
+    expect(isYunxiaoWorkitemImported([], [other], WORKITEM_ID)).toBe(false);
   });
 });
 

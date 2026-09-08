@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -108,13 +107,6 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub yunxiao_serial_number: Option<String>,
-    /// 云效议题定稿数据（补充表单字段 + 定稿前原始 prompt）；切回待办时恢复表单。
-    #[serde(
-        rename = "yunxiaoSupplement",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub yunxiao_supplement: Option<YunxiaoSupplement>,
     /// 修改方案回写云效评论的时间戳（幂等标记，非空即已回写）。
     #[serde(
         rename = "yunxiaoWrittenBackAt",
@@ -284,18 +276,6 @@ pub struct Batch {
         skip_serializing_if = "Option::is_none"
     )]
     pub mr_source_sha: Option<String>,
-}
-
-/// 云效议题补充表单数据：字段随草稿防抖落盘；finalized 区分「已定稿」与「仅草稿」。
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct YunxiaoSupplement {
-    #[serde(default)]
-    pub fields: HashMap<String, String>,
-    #[serde(rename = "originalPrompt", default)]
-    pub original_prompt: String,
-    /// 是否已定稿；旧数据缺省为 None，前端按「有字段即已定稿」兼容。
-    #[serde(rename = "finalized", default, skip_serializing_if = "Option::is_none")]
-    pub finalized: Option<bool>,
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
