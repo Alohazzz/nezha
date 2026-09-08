@@ -1,4 +1,4 @@
-import type { AgentType, PermissionMode, Task, YunxiaoWorkitem } from "../types";
+import type { AgentType, PermissionMode, Plan, Task, YunxiaoWorkitem } from "../types";
 
 const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
 const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
@@ -212,34 +212,20 @@ export function getYunxiaoPriority(issue: YunxiaoWorkitem): string | undefined {
   return field?.values[0]?.displayValue;
 }
 
-/** 议题 → 任务名：编号 + 标题。 */
-export function buildYunxiaoTaskName(issue: YunxiaoWorkitem): string {
-  return `${issue.serialNumber} ${issue.subject}`.trim();
-}
-
-/** 议题 → 任务提示词：标题、描述、状态、负责人、优先级与议题 id，作为 Agent 上下文。 */
-export function buildYunxiaoPrompt(issue: YunxiaoWorkitem): string {
-  const lines = [issue.subject];
-  if (issue.description) {
-    lines.push("", issue.description);
-  }
-  lines.push("", "---", `云效议题：${issue.serialNumber}`);
-  lines.push(`状态：${issue.status?.displayName ?? issue.status?.name ?? "未知"}`);
-  if (issue.assignedTo) {
-    lines.push(`负责人：${issue.assignedTo.name}`);
-  }
-  const priority = getYunxiaoPriority(issue);
-  if (priority) {
-    lines.push(`优先级：${priority}`);
-  }
-  lines.push(`议题 ID：${issue.id}`);
-  return lines.join("\n");
-}
-
-/** 去重判断：同议题只允许导入一次（以 yunxiaoWorkitemId 为键）。 */
-export function isYunxiaoWorkitemImported(tasks: Task[], workitemId: string): boolean {
+/** 去重判断：同议题只允许进入讨论链路一次——任务（补录/执行待办）或
+ *  非取消状态的方案（讨论中/待生成待办/执行中/已完成）任一占用即视为已导入。 */
+export function isYunxiaoWorkitemImported(
+  tasks: Task[],
+  plans: Plan[],
+  workitemId: string,
+): boolean {
   if (!workitemId) return false;
-  return tasks.some((task) => task.yunxiaoWorkitemId === workitemId);
+  if (tasks.some((task) => task.yunxiaoWorkitemId === workitemId)) return true;
+  return plans.some(
+    (plan) =>
+      plan.status !== "cancelled" &&
+      plan.issues.some((issue) => issue.workitemId === workitemId),
+  );
 }
 
 /** 议题编号 → Git 提交关联 tag（如 QHDK-29312 → "#QHDK-29312"）。 */

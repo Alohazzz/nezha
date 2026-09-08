@@ -11,7 +11,6 @@ import type {
   TaskDisplayWindow,
   FontFamily,
   SkillHubConfig,
-  YunxiaoWorkitem,
   AgentType,
   PermissionMode,
   Plan,
@@ -108,10 +107,10 @@ export function WelcomePage({
   onMonoFontFamilyChange,
   skillHubConfig,
   onEnterSkillHub,
-  onImportYunxiaoIssue,
   onCreateYunxiaoPlan,
   onStartYunxiaoPlanDiscussion,
   onCancelYunxiaoPlan,
+  plans,
 }: {
   projects: Project[];
   allProjects: Project[];
@@ -141,7 +140,6 @@ export function WelcomePage({
   onMonoFontFamilyChange: (family: FontFamily) => void;
   skillHubConfig: SkillHubConfig | null;
   onEnterSkillHub: () => void;
-  onImportYunxiaoIssue: (issue: YunxiaoWorkitem, targetProjectId: string) => Promise<boolean>;
   onCreateYunxiaoPlan: (targetProjectId: string, issues: PlanIssue[]) => Plan;
   onStartYunxiaoPlanDiscussion: (
     planId: string,
@@ -150,6 +148,7 @@ export function WelcomePage({
     permissionMode: PermissionMode,
   ) => void;
   onCancelYunxiaoPlan: (planId: string) => void | Promise<void>;
+  plans: Plan[];
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -253,8 +252,8 @@ export function WelcomePage({
           <YunxiaoView
             projects={allProjects}
             tasks={tasks}
+            plans={plans}
             onBack={() => setView("projects")}
-            onImportIssue={onImportYunxiaoIssue}
             onCreatePlan={onCreateYunxiaoPlan}
             onStartPlanDiscussion={onStartYunxiaoPlanDiscussion}
             onCancelPlan={onCancelYunxiaoPlan}

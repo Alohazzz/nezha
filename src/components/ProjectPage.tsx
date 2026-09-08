@@ -9,7 +9,6 @@ import type {
   Plan,
   PlanIssue,
   TaskStatus,
-  YunxiaoSupplement,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -50,7 +49,7 @@ import { BranchBatchView } from "./branch-batch/BranchBatchView";
 import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
 import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
 import { TodoTaskView } from "./TodoTaskView";
-import { YunxiaoIssueDetailView } from "./yunxiao/YunxiaoIssueDetailView";
+import { YunxiaoTodoDiscussionView } from "./yunxiao/YunxiaoTodoDiscussionView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
 import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
@@ -93,9 +92,8 @@ export function ProjectPage({
   onSubmitTask,
   onRunTodoTask,
   onUpdateTodo,
-  onFinalizeYunxiaoTodo,
-  onYunxiaoDraftChange,
-  onStartYunxiaoDiscussion,
+  onStartTodoYunxiaoDiscussion,
+  todoDiscussionStarting,
   onGenerateWritebackSummary,
   onWritebackYunxiao,
   onRetryWritebackScoreField,
@@ -177,14 +175,15 @@ export function ProjectPage({
     taskId: string,
     updates: { prompt: string; agent: AgentType; permissionMode: PermissionMode },
   ) => void;
-  onFinalizeYunxiaoTodo: (taskId: string, prompt: string, supplement: YunxiaoSupplement) => void;
-  onYunxiaoDraftChange: (taskId: string, fields: Record<string, string>) => void;
-  onStartYunxiaoDiscussion: (
+  /** 云效绑定待办（补录/存量导入）「发起讨论」：待办自身转化为方案讨论任务。 */
+  onStartTodoYunxiaoDiscussion: (
     taskId: string,
-    prompt: string,
+    notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
+  /** 待办「发起讨论」进行中标记（锁定入口按钮）。 */
+  todoDiscussionStarting: boolean;
   onGenerateWritebackSummary: (
     taskId: string,
     force?: boolean,
@@ -1090,13 +1089,11 @@ export function ProjectPage({
                   onRunTodo={onRunTodoTask}
                 />
               ) : selectedTask.yunxiaoWorkitemId ? (
-                <YunxiaoIssueDetailView
+                <YunxiaoTodoDiscussionView
                   task={selectedTask}
-                  projectPath={project.path}
+                  starting={todoDiscussionStarting}
                   onBack={onBack}
-                  onFinalize={onFinalizeYunxiaoTodo}
-                  onDraftChange={onYunxiaoDraftChange}
-                  onStartDiscussion={onStartYunxiaoDiscussion}
+                  onStartDiscussion={onStartTodoYunxiaoDiscussion}
                 />
               ) : (
                 <TodoTaskView

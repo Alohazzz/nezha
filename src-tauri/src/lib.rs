@@ -384,8 +384,6 @@ pub fn run() {
             git::generate_commit_message,
             git::discover_git_roots,
             agent_assist::generate_task_name,
-            agent_assist::generate_issue_supplement,
-            agent_assist::get_issue_discussion_instructions,
             agent_assist::get_plan_discussion_instructions,
             agent_assist::get_plan_execution_instructions,
             agent_assist::get_merge_code_review_instructions,

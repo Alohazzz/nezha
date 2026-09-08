@@ -23,7 +23,7 @@ export function YunxiaoIssueList({
   selectedIds,
   selectionMode,
   onToggleSelect,
-  onImport,
+  onDiscuss,
   onLoadMore,
 }: {
   issues: YunxiaoWorkitem[];
@@ -33,11 +33,12 @@ export function YunxiaoIssueList({
   importedIds: ReadonlySet<string>;
   /** 多选模式下的已选议题 id。 */
   selectedIds: ReadonlySet<string>;
-  /** 是否处于多选模式（已选 ≥1 时为 true，隐藏单条导入按钮）。 */
+  /** 是否处于多选模式（已选 ≥1 时为 true，隐藏单条发起讨论按钮）。 */
   selectionMode: boolean;
   /** 勾选/取消勾选（imported 议题由父级拦截置灰）。 */
   onToggleSelect: (issue: YunxiaoWorkitem) => void;
-  onImport: (issue: YunxiaoWorkitem) => void;
+  /** 行内单条「发起讨论」快捷入口（与多选发起同一链路）。 */
+  onDiscuss: (issue: YunxiaoWorkitem) => void;
   onLoadMore: () => void;
 }) {
   const { t } = useI18n();
@@ -109,9 +110,9 @@ export function YunxiaoIssueList({
                 <button
                   type="button"
                   style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
-                  onClick={() => onImport(issue)}
+                  onClick={() => onDiscuss(issue)}
                 >
-                  {t("yunxiao.import")}
+                  {t("yunxiao.discussion.start")}
                 </button>
               ) : null}
             </div>

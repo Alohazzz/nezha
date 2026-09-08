@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Output, Stdio};
@@ -489,11 +488,7 @@ pub async fn generate_task_name(
     Ok(sanitized)
 }
 
-// ── 议题讨论 Skill 指令（云效 v2 详情页「发起讨论」用）────────────────────────
-
-const GRILLING_INSTRUCTIONS: &str = "请用 grilling 流程走完决策树：一次只问一个问题，等用户回答后再问下一个；每个问题先给出你的推荐答案；能用环境/代码查证的事实先去查证而不是问用户；把每条决策分支走完，依赖关系逐条解决；达成共享理解后产出符合 What/Why/Scope 的 issue 提案；先不要写代码。";
-
-const DIAGNOSING_BUGS_INSTRUCTIONS: &str = "请用 diagnosing-bugs 流程走：先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；每个结论都要有可复现的证据，不凭感觉猜。";
+// ── 讨论指令公共片段（联合分析讨论 / 方案执行共用）──────────────────────────
 
 fn knowledge_graph_instruction(target: &crate::knowledge::KnowledgeTarget) -> String {
     format!(
@@ -526,100 +521,19 @@ const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
 - confidence：confirmed（已确认）/ pending（待验证）
 - JSON 示例：[{ "module": "<目标知识库中的模块名>", "section": "业务规则与已知坑", "content": "…", "evidence": "…", "confidence": "confirmed", "suggestedTitle": "…" }]"#;
 
-/// 讨论/修改过程的工作产物落盘指令：方案汇总 + 知识沉淀候选。
-/// 让 Agent 在会话过程中把产物写到 `.nezha/drafts/<taskId>/`（相对 cwd），
-/// 「回写云效 / 知识沉淀」按钮直接读取，避免点击时重新 headless 生成。
-fn draft_instructions(
-    task_id: &str,
-    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
-) -> String {
-    let knowledge_section = knowledge_target.map_or_else(String::new, |target| {
-        format!(
-            r#"
-
-2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
-   - {knowledge_rules}
-   - 每条候选必须携带 "knowledgeGraphId"，值必须是：{target_graph_id}
-   - 输出 JSON 数组写入该文件，无候选则写 `[]`；只输出 JSON，不要附加说明文字。"#,
-            task_id = task_id,
-            knowledge_rules = KNOWLEDGE_SEDIMENTATION_RULES,
-            target_graph_id = target.id,
-        )
-    });
-    format!(
-        r#"── 工作产物落盘（必须执行）────────────────────────────
-本任务的工作产物需要写入本地临时文件，供任务完成后的「回写云效」{knowledge_purpose}直接读取。请在你当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录维护文件（目录不存在就先创建）：
-
-1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的两条评论素材：
-   - 讨论/分析得出结论后立即创建并写入；后续结论更新时整体覆盖写，只保留最新版。
-   - 结构固定为三段（按顺序）：
-     a. `## 修改方案汇总（开发向）`：议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、分析结论、最终修改方案、验证方式与结果、关联 commit（如已提交）。
-     b. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；回写云效时该小节随「开发向评论」发布，数值同时写入议题「价值评分」字段。
-     c. `## 影响范围与测试（测试向）`：面向测试人员的影响范围（涉及模块名/接口/文件路径）与可执行的测试步骤（含回归点）。
-   - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。
-{knowledge_section}"#,
-        task_id = task_id,
-        knowledge_purpose = if knowledge_section.is_empty() {
-            ""
-        } else {
-            "与「知识沉淀」"
-        },
-    )
-}
-
-/// 云效类别 → Skill 指令：Req → grilling，Bug → diagnosing-bugs，其余无；
-/// 配置了项目知识库时追加对应图谱指令与知识候选落盘指令。
-pub fn issue_discussion_instructions(
-    category: &str,
-    task_id: &str,
-    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
-) -> Option<String> {
-    let flow = match category.trim().to_lowercase().as_str() {
-        "req" => GRILLING_INSTRUCTIONS,
-        "bug" => DIAGNOSING_BUGS_INSTRUCTIONS,
-        _ => return None,
-    };
-    let knowledge_graph = knowledge_target
-        .map(knowledge_graph_instruction)
-        .unwrap_or_default();
-    Some(format!(
-        "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{value_score}\n\n{backfill}\n\n{draft}",
-        flow = flow,
-        knowledge_graph = if knowledge_graph.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n{knowledge_graph}")
-        },
-        value_score = VALUE_SCORE_INSTRUCTION,
-        backfill = BACKFILL_SKILL_INSTRUCTION,
-        draft = draft_instructions(task_id, knowledge_target)
-    ))
-}
-
-/// 前端在拼「发起讨论」prompt 时调用，取对应 Skill 的流程指令文本（无则为空串）。
-#[tauri::command]
-pub async fn get_issue_discussion_instructions(
-    project_path: String,
-    category: String,
-    task_id: String,
-) -> Result<String, String> {
-    // 讨论本身不因未配置知识库而阻断；只是不注入图谱指令和知识候选落盘要求。
-    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
-        .await
-        .ok();
-    Ok(
-        issue_discussion_instructions(&category, &task_id, knowledge_target.as_ref())
-            .unwrap_or_default(),
-    )
-}
-
 // ── 多议题联合方案（Plan）指令：讨论定稿 / 按方案执行 ────────────────────────
 
 /// 联合讨论流程：grilling 的多云题版——逐议题走完决策树，再统筹跨议题依赖与顺序。
-const PLAN_DISCUSSION_FLOW: &str = "请用 grilling 流程联合走完所有议题的决策树：一次只问一个问题，等用户回答后再问下一个；每个问题先给出你的推荐答案；能用环境/代码/知识库查证的事实先去查证而不是问用户。先逐个议题把分析走清，再做跨议题统筹（公共改动归属、依赖与执行顺序、可合并的修改点），最后产出统一方案文档；先不要写代码。";
+/// 性能影响分析是每议题的强制决策分支（可忽略也须写明理由，不允许静默跳过）。
+const PLAN_DISCUSSION_FLOW: &str = "请用 grilling 流程联合走完所有议题的决策树：一次只问一个问题，等用户回答后再问下一个；每个问题先给出你的推荐答案；能用环境/代码/知识库查证的事实先去查证而不是问用户；把每条决策分支走完，依赖关系逐条解决；先逐个议题把分析走清，再做跨议题统筹（公共改动归属、依赖与执行顺序、可合并的修改点），最后产出统一方案文档；先不要写代码。\n\n每个议题的修改方案必须包含性能影响分析：按改动面选取相关维度（主线程/渲染、IO、网络、内存、启动、算法与数据量复杂度）逐一评估；声称命中热路径/高频路径时必须给出代码或配置依据（文件位置、调用链）；判定「影响可忽略」也必须写明理由，不允许静默跳过。跨议题公共改动的性能分析放在承载该改动的归属议题节里，不在统筹节重复。";
+
+/// Bug 类议题的根因诊断方法论（方案含 Bug 议题时拼进讨论流程，grilling 仍是主轴）。
+const PLAN_BUG_DIAGNOSING_INSTRUCTION: &str = "\n\n方案中含有 Bug 缺陷类议题：这些议题先用 diagnosing-bugs 方法论定位根因——先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；根因结论都要有可复现的证据，不凭感觉猜；根因确认后再进入方案产出。";
 
 /// 方案文档（plan.md）结构与落盘指令。结构由 Nezha 约定：执行任务的提示词按
 /// `## <议题编号>` 切片内联，回写简报同样按议题节提取，因此标题格式不可漂移。
+/// 「性能影响分析」小节必须位于「修改方案汇总」之后、「影响范围与测试」之前——
+/// 回写切片按第一个测试小节标题二分，位置漂移会把性能分析漏进测试向评论。
 fn plan_doc_instructions(plan_md_path: &str) -> String {
     format!(
         r#"── 方案文档落盘（必须执行）────────────────────────────
@@ -633,11 +547,14 @@ fn plan_doc_instructions(plan_md_path: &str) -> String {
 ## <议题编号> <议题标题>
 ### 修改方案汇总（开发向）
 <议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、最终修改方案、验证方式>
+### 性能影响分析
+<按改动面评估的性能影响（主线程/渲染、IO、网络、内存、启动、算法与数据量复杂度）；命中热路径须附代码依据；判定可忽略须写明理由>
 ### 影响范围与测试（测试向）
-<面向测试的影响范围（模块/接口/文件路径）与可执行测试步骤（含回归点）>
+<面向测试的影响范围（模块/接口/文件路径）与可执行测试步骤（含回归点）；性能影响分析判定有风险时，必须包含对应的性能回归验证点>
 
 要求：
 - 每个议题一节，节标题必须以 `## <议题编号> ` 开头（编号与议题清单一致）；结论是「无需修改」也要有节。
+- 「性能影响分析」小节位置固定（修改方案汇总之后、影响范围与测试之前），每议题必有，哪怕只有一句「无性能影响，理由：…」。
 - 统筹节给出的执行顺序要与各节结论一致。
 - 讨论中结论更新时整体覆盖写，只保留最新版；结束对话前再检查并更新一次，确保为定稿状态。
 - 本阶段不写「价值评分」（评分由各议题的执行任务在修改完成后评定），也不写 discussion.md / knowledge.json。"#,
@@ -646,16 +563,23 @@ fn plan_doc_instructions(plan_md_path: &str) -> String {
 }
 
 /// 方案讨论任务的完整指令：流程 + 知识图谱 + 方案文档落盘 + 补录。
+/// has_bug：方案内是否含 Bug 类议题（议题类别快照由前端传入），决定是否注入根因诊断方法论。
 pub fn plan_discussion_instructions(
     knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
     plan_md_path: &str,
+    has_bug: bool,
 ) -> String {
     let knowledge_graph = knowledge_target
         .map(knowledge_graph_instruction)
         .unwrap_or_default();
+    let flow = if has_bug {
+        format!("{PLAN_DISCUSSION_FLOW}{PLAN_BUG_DIAGNOSING_INSTRUCTION}")
+    } else {
+        PLAN_DISCUSSION_FLOW.to_string()
+    };
     format!(
         "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{backfill}\n\n{plan_doc}",
-        flow = PLAN_DISCUSSION_FLOW,
+        flow = flow,
         knowledge_graph = if knowledge_graph.is_empty() {
             String::new()
         } else {
@@ -666,11 +590,12 @@ pub fn plan_discussion_instructions(
     )
 }
 
-/// 前端拼「发起联合分析」讨论 prompt 时调用。
+/// 前端拼「发起讨论」prompt 时调用。has_bug 由方案议题快照的类别推导（categoryId == bug）。
 #[tauri::command]
 pub async fn get_plan_discussion_instructions(
     project_path: String,
     plan_id: String,
+    has_bug: bool,
 ) -> Result<String, String> {
     let plan_id = plan_id.trim().to_string();
     if plan_id.is_empty() || plan_id.contains('/') || plan_id.contains('\\') || plan_id.contains("..")
@@ -696,6 +621,7 @@ pub async fn get_plan_discussion_instructions(
     Ok(plan_discussion_instructions(
         knowledge_target.as_ref(),
         &plan_md_path,
+        has_bug,
     ))
 }
 
@@ -1002,141 +928,13 @@ pub async fn run_conflict_resolution(
     ))
 }
 
-// ── 议题补充表单预填（轻量 headless 调用）────────────────────────────────────
-
-const SUPPLEMENT_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_SUPPLEMENT_INPUT_CHARS: usize = 8000;
-
-const SUPPLEMENT_TEMPLATE: &str = r#"你是议题澄清助手。根据下面的原始议题内容，按固定格式把字段补全。
-
-规则：
-1. 只输出一个 JSON 对象，键严格如下（缺失的信息留空字符串 ""，不要编造）：
-   {fields}
-2. JSON 用 <SUPPLEMENT> 与 </SUPPLEMENT> 标签包裹，标签外不要输出任何内容。
-3. 保留原始议题中的事实，不要添加原文没有的信息。
-
-──── 原始议题内容 ────
-{issue_text}
-
-──── 云效链接 ────
-{link}
-"#;
-
-/// 补充表单预填结果：字段 key → 文本值（与前端 issueForms 字段 key 对齐）。
-#[derive(Serialize, Clone, Debug, Default)]
-pub struct IssueSupplement {
-    pub fields: HashMap<String, String>,
-}
-
-fn build_supplement_prompt(kind: &str, issue_text: &str, link: &str) -> String {
-    let fields = if kind == "缺陷类" {
-        "\"subject\": 标题, \"problem\": 问题描述, \"expectation\": 期望行为, \"repro\": 复现步骤, \"regression\": 回归信息, \"solution\": 解决方案, \"notes\": 补充说明"
-    } else {
-        "\"subject\": 标题, \"pain\": 当前痛点, \"expectation\": 期望行为, \"alternative\": 备选方案, \"solution\": 解决方案, \"notes\": 补充说明"
-    };
-    SUPPLEMENT_TEMPLATE
-        .replace("{fields}", fields)
-        .replace("{issue_text}", issue_text)
-        .replace("{link}", link)
-}
-
-fn truncate_supplement_input(text: String) -> String {
-    if text.chars().count() <= MAX_SUPPLEMENT_INPUT_CHARS {
-        text
-    } else {
-        text.chars()
-            .take(MAX_SUPPLEMENT_INPUT_CHARS)
-            .collect::<String>()
-            + "…"
-    }
-}
-
-/// 提取 `<SUPPLEMENT>...</SUPPLEMENT>` 内 JSON（取最后一对标签，避开 prompt 回显）；
-/// 无标签时回退到整个 stdout 当作 JSON 文本。
-fn extract_supplement_json(stdout: &str) -> String {
-    const OPEN: &str = "<SUPPLEMENT>";
-    const CLOSE: &str = "</SUPPLEMENT>";
-    if let Some(close_pos) = stdout.rfind(CLOSE) {
-        let prefix = &stdout[..close_pos];
-        if let Some(open_start) = prefix.rfind(OPEN) {
-            let inner = &prefix[open_start + OPEN.len()..];
-            let trimmed = inner.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
-        }
-    }
-    stdout.trim().to_string()
-}
-
-/// 解析补充结果：仅收集字符串值，跳过 null / 数字 / 嵌套对象（防御模型输出漂移）。
-fn parse_issue_supplement(stdout: &str) -> Result<IssueSupplement, String> {
-    let json_text = extract_supplement_json(stdout);
-    let value: serde_json::Value =
-        serde_json::from_str(&json_text).map_err(|e| format!("解析议题补充结果失败: {e}"))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| "解析议题补充结果失败：响应不是 JSON 对象".to_string())?;
-    let mut fields = HashMap::new();
-    for (key, value) in object {
-        if let Some(text) = value.as_str() {
-            fields.insert(key.clone(), text.to_string());
-        }
-    }
-    Ok(IssueSupplement { fields })
-}
-
-/// 轻量 AI 预填议题补充表单：按类型模板生成结构化字段草稿。
-/// project_path 仅作为 headless 进程 cwd，校验规则与 generate_task_name 同级。
-#[tauri::command]
-pub async fn generate_issue_supplement(
-    project_path: String,
-    agent: String,
-    category: String,
-    issue_text: String,
-    link: String,
-) -> Result<IssueSupplement, String> {
-    if !matches!(agent.as_str(), "claude" | "codex") {
-        return Err(format!("Unsupported agent: {}", agent));
-    }
-    let project_for_validation = project_path.clone();
-    tokio::task::spawn_blocking(move || validate_project_path_for_naming(&project_for_validation))
-        .await
-        .map_err(|e| format!("project_path 校验线程错误: {}", e))??;
-
-    let kind = if category.trim().eq_ignore_ascii_case("bug") {
-        "缺陷类"
-    } else {
-        "需求类"
-    };
-    let truncated = truncate_supplement_input(issue_text);
-    let prompt = build_supplement_prompt(kind, &truncated, link.trim());
-
-    let output = run_headless_agent_with_timeout(
-        &agent,
-        &project_path,
-        &prompt,
-        SUPPLEMENT_TIMEOUT,
-        false,
-        None,
-    )
-    .await?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("Agent failed: {}{}", stderr, stdout));
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    parse_issue_supplement(&raw)
-}
-
 // ── 云效回写汇总生成（写回闭环）──────────────────────────────────────────────
 
 const WRITEBACK_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_FACTS_CHARS: usize = 8000;
 const WRITEBACK_SESSION_BUDGET: usize = 8000;
 
-const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基于下面的会话过程与事实（议题信息、补充信息、Git 提交与变更统计），为云效议题撰写两条评论：一条面向开发人员，一条面向测试人员。请按本仓库 PR 描述规范（AGENTS.md 提交与 PR 规范）组织内容。
+const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基于下面的会话过程与事实（议题信息、Git 提交与变更统计），为云效议题撰写两条评论：一条面向开发人员，一条面向测试人员。请按本仓库 PR 描述规范（AGENTS.md 提交与 PR 规范）组织内容。
 
 规则：
 1. 只依据给定事实与会话过程，不编造事实里没有的信息（commit、文件、结论都不许虚构）。
@@ -1155,9 +953,6 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
 ──── 议题 ────
 编号：{serial_number}
 标题：{task_name}
-
-──── 补充信息 ────
-{fields_text}
 
 ──── 会话过程 ────
 {session_text}
@@ -1203,7 +998,6 @@ fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, Stri
 fn build_writeback_prompt(
     serial_number: &str,
     task_name: &str,
-    fields_text: &str,
     session_text: &str,
     commits: &str,
     diff_stat: &str,
@@ -1211,14 +1005,6 @@ fn build_writeback_prompt(
     WRITEBACK_PROMPT_TEMPLATE
         .replace("{serial_number}", serial_number)
         .replace("{task_name}", task_name)
-        .replace(
-            "{fields_text}",
-            if fields_text.trim().is_empty() {
-                "（无）"
-            } else {
-                fields_text.trim()
-            },
-        )
         .replace(
             "{session_text}",
             if session_text.trim().is_empty() {
@@ -1388,7 +1174,6 @@ pub async fn generate_yunxiao_writeback_summary(
     repo_path: Option<String>,
     serial_number: String,
     task_name: String,
-    fields_text: String,
     session_path: Option<String>,
     base_branch: Option<String>,
     agent: String,
@@ -1503,7 +1288,6 @@ pub async fn generate_yunxiao_writeback_summary(
     let prompt = build_writeback_prompt(
         &serial_number,
         task_name.trim(),
-        &fields_text,
         &session_text,
         &commits,
         &diff_stat,
@@ -1571,8 +1355,6 @@ const SEDIMENTATION_PROMPT_TEMPLATE: &str = r#"你是知识沉淀助手。基于
 编号：{serial_number}
 标题：{task_name}
 链接：{link}
-补充信息：
-{fields_text}
 
 ──── 会话过程 ────
 {session_text}
@@ -1594,7 +1376,6 @@ fn build_sedimentation_prompt(
     serial_number: &str,
     task_name: &str,
     link: &str,
-    fields_text: &str,
     session_text: &str,
     graph_skill_dir: &str,
     graph_data_dir: &str,
@@ -1613,7 +1394,6 @@ fn build_sedimentation_prompt(
         .replace("{serial_number}", serial_number.trim())
         .replace("{task_name}", &placeholder(task_name))
         .replace("{link}", &placeholder(link))
-        .replace("{fields_text}", &placeholder(fields_text))
         .replace("{session_text}", &placeholder(session_text))
         .replace("{graph_skill_dir}", graph_skill_dir.trim())
         .replace("{graph_data_dir}", graph_data_dir.trim())
@@ -1725,7 +1505,6 @@ pub async fn generate_knowledge_sedimentation(
     task_id: String,
     serial_number: String,
     task_name: String,
-    fields_text: String,
     link: String,
     session_path: Option<String>,
     agent: String,
@@ -1805,7 +1584,6 @@ pub async fn generate_knowledge_sedimentation(
         &serial_number,
         task_name.trim(),
         &link,
-        &fields_text,
         &session_text,
         &knowledge_target.skill_dir,
         &graph_data_dir,
@@ -1852,7 +1630,6 @@ mod tests {
         let prompt = build_writeback_prompt(
             "HJWE-65",
             "测试议题",
-            "痛点：图片加载慢",
             "会话摘要：复现了加载慢的问题，定位到资源未压缩",
             "abc123 压缩图片资源",
             "1 file changed, 10 insertions(+)",
@@ -1866,7 +1643,7 @@ mod tests {
 
     #[test]
     fn writeback_prompt_falls_back_to_no_session_markers() {
-        let prompt = build_writeback_prompt("HJWE-65", "测试议题", "", "", "", "");
+        let prompt = build_writeback_prompt("HJWE-65", "测试议题", "", "", "");
         assert!(prompt.contains("（无）"));
     }
 
@@ -2006,54 +1783,36 @@ mod tests {
     }
 
     #[test]
-    fn issue_instructions_map_req_to_grilling() {
-        let target = sample_knowledge_target();
-        let text = issue_discussion_instructions("Req", "task-123", Some(&target))
-            .expect("Req has instructions");
+    fn plan_instructions_include_perf_and_doc_rules() {
+        let text = plan_discussion_instructions(None, "C:/p/.nezha/plans/1/plan.md", false);
         assert!(text.contains("grilling"));
-        assert!(text.contains("What/Why/Scope"));
-        assert!(text.contains("ICUCIS"));
-        assert!(text.contains("issue-value-scoring"));
-        assert!(text.contains("## 价值评分"));
-        assert!(text.contains(".nezha/drafts/task-123/discussion.md"));
-        assert!(text.contains(".nezha/drafts/task-123/knowledge.json"));
-        assert!(text.contains("知识沉淀规则"));
-        // 补录议题落盘必须使用真实任务 id（环境变量），不允许自造 task_id。
+        // 性能影响分析是强制分支：流程指令 + plan.md 固定小节都要有。
+        assert!(text.contains("性能影响分析"));
+        assert!(text.contains("主线程/渲染"));
+        assert!(text.contains("不允许静默跳过"));
+        assert!(text.contains("### 性能影响分析"));
+        assert!(text.contains("性能回归验证点"));
+        assert!(text.contains("C:/p/.nezha/plans/1/plan.md"));
         assert!(text.contains("NEZHA_TASK_ID"));
-        assert!(text.contains(".nezha/drafts/{NEZHA_TASK_ID}/backfill-issue.json"));
-        assert!(text.contains("禁止自造"));
+        assert!(!text.contains("diagnosing-bugs"));
     }
 
     #[test]
-    fn issue_instructions_map_bug_to_diagnosing_bugs() {
-        let target = sample_knowledge_target();
-        let text = issue_discussion_instructions("Bug", "task-123", Some(&target))
-            .expect("Bug has instructions");
-        assert!(text.contains("diagnosing-bugs"));
-        assert!(text.contains("变红"));
+    fn plan_instructions_inject_bug_diagnosing_only_with_bug() {
+        let with_bug = plan_discussion_instructions(None, "C:/p/.nezha/plans/1/plan.md", true);
+        assert!(with_bug.contains("diagnosing-bugs"));
+        assert!(with_bug.contains("变红"));
+        assert!(with_bug.contains("可复现的证据"));
+
+        let knowledge_target = sample_knowledge_target();
+        let text = plan_discussion_instructions(
+            Some(&knowledge_target),
+            "C:/p/.nezha/plans/1/plan.md",
+            true,
+        );
         assert!(text.contains("ICUCIS"));
-        assert!(text.contains("issue-value-scoring"));
-        assert!(text.contains("优先指数"));
-        assert!(text.contains("discussion.md"));
-    }
-
-    #[test]
-    fn issue_instructions_none_for_task_and_unknown() {
-        let target = sample_knowledge_target();
-        assert!(issue_discussion_instructions("Task", "task-123", Some(&target)).is_none());
-        assert!(issue_discussion_instructions("", "task-123", Some(&target)).is_none());
-        assert!(issue_discussion_instructions("  ", "task-123", Some(&target)).is_none());
-    }
-
-    #[test]
-    fn issue_instructions_omit_knowledge_without_target() {
-        let text =
-            issue_discussion_instructions("Req", "task-123", None).expect("Req has instructions");
-        assert!(text.contains("grilling"));
-        assert!(!text.contains("knowledge-graph"));
-        assert!(!text.contains("knowledgeGraphId"));
-        assert!(!text.contains("知识沉淀规则"));
-        assert!(text.contains("discussion.md"));
+        assert!(text.contains("data/index.md"));
+        assert!(text.contains("diagnosing-bugs"));
     }
 
     #[test]
@@ -2071,38 +1830,6 @@ mod tests {
         let suggestions = parse_knowledge_suggestions(raw).expect("parses");
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].module, "M");
-    }
-
-    #[test]
-    fn parses_supplement_from_tagged_json() {
-        let stdout = "<SUPPLEMENT>\n{\"subject\": \"x\", \"pain\": \"y\"}\n</SUPPLEMENT>";
-        let fields = parse_issue_supplement(stdout).expect("parses").fields;
-        assert_eq!(fields.get("subject").map(String::as_str), Some("x"));
-        assert_eq!(fields.get("pain").map(String::as_str), Some("y"));
-    }
-
-    #[test]
-    fn parses_supplement_from_noisy_stdout_using_last_tag() {
-        let stdout = "user\n...echo...\ncodex\n<SUPPLEMENT>{\"subject\":\"a\",\"expectation\":\"b\"}</SUPPLEMENT>\ntokens used\n12,345\n";
-        let fields = parse_issue_supplement(stdout).expect("parses").fields;
-        assert_eq!(fields.get("subject").map(String::as_str), Some("a"));
-        assert_eq!(fields.get("expectation").map(String::as_str), Some("b"));
-    }
-
-    #[test]
-    fn parses_supplement_raw_json_fallback() {
-        let stdout = "{\"subject\": \"raw\"}";
-        let fields = parse_issue_supplement(stdout).expect("parses").fields;
-        assert_eq!(fields.get("subject").map(String::as_str), Some("raw"));
-    }
-
-    #[test]
-    fn supplement_skips_non_string_values() {
-        let stdout = "<SUPPLEMENT>{\"subject\":\"s\", \"pain\": 123, \"notes\": null}</SUPPLEMENT>";
-        let fields = parse_issue_supplement(stdout).expect("parses").fields;
-        assert_eq!(fields.get("subject").map(String::as_str), Some("s"));
-        assert!(!fields.contains_key("pain"));
-        assert!(!fields.contains_key("notes"));
     }
 
     #[test]
@@ -2136,7 +1863,6 @@ mod tests {
             "QHDK-1",
             "议题",
             "链接",
-            "字段",
             "会话",
             "C:/skills/ICUCIS",
             "C:/data",
