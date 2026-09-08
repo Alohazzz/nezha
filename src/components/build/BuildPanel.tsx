@@ -11,6 +11,8 @@ interface BuildRepo {
   remote: string;
   branch: string;
   branches: string[];
+  /** 远端跟踪分支（origin/xxx 形态），后端已剔除存在同名本地分支的项 */
+  remote_branches?: string[];
   is_submodule: boolean;
   dirty: boolean;
   missing: boolean;
@@ -393,14 +395,29 @@ export function BuildPanel({
       setError("");
       setStatusText(`切换 ${repo.name} → ${branch}…`);
       try {
-        await invoke("build_checkout_branch", { projectPath, repoPath: repo.path, branch });
+        // 后端返回切换后的实际本地分支名（远端分支会 --track 建同名本地分支）
+        const finalBranch = await invoke<string>("build_checkout_branch", { projectPath, repoPath: repo.path, branch });
         // 只原地更新被切换的仓库，不重跑全量仓库发现：
         // discover_build_repos 会把所有仓库的所有分支重新加载一遍，且未走 load 的 visible 过滤，
         // 会让隐藏的子模块（如 DrugInOut/Term 之外的那些）也跟着重新冒出来。
         setRepos((prev) =>
-          prev.map((r) => (r.path === repo.path ? { ...r, branch } : r)),
+          prev.map((r) => {
+            if (r.path !== repo.path) return r;
+            const switchedRemote = branch !== finalBranch;
+            return {
+              ...r,
+              branch: finalBranch,
+              // 远端分支落地为本地分支后：本地列表补上、远端列表移除，菜单状态保持一致
+              branches: switchedRemote && !r.branches.includes(finalBranch)
+                ? [...r.branches, finalBranch].sort()
+                : r.branches,
+              remote_branches: switchedRemote
+                ? (r.remote_branches ?? []).filter((b) => b !== branch)
+                : r.remote_branches,
+            };
+          }),
         );
-        setStatusText(`已切换到 ${repo.name}@${branch}`);
+        setStatusText(`已切换到 ${repo.name}@${finalBranch}`);
       } catch (e) {
         setError(String(e));
         setStatusText("");
@@ -1155,6 +1172,8 @@ export function BuildPanel({
   return sidePanel;
 }
 
+const BRANCH_MENU_WIDTH = 240;
+
 function BranchSelect({
   repo,
   onChange,
@@ -1163,6 +1182,7 @@ function BranchSelect({
   onChange: (branch: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
 
@@ -1170,8 +1190,9 @@ function BranchSelect({
     const rect = btnRef.current?.getBoundingClientRect();
     if (rect) {
       // 右侧面板内，菜单右对齐到按钮，向左展开避免裁切
-      setPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - 200) });
+      setPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - BRANCH_MENU_WIDTH) });
     }
+    setQuery("");
     setOpen(true);
   };
 
@@ -1191,7 +1212,32 @@ function BranchSelect({
     };
   }, [open]);
 
-  const disabled = repo.missing || repo.branches.length === 0;
+  const remoteBranches = repo.remote_branches ?? [];
+  const disabled = repo.missing || (repo.branches.length === 0 && remoteBranches.length === 0);
+
+  // 分支数量可能上百，先过滤再渲染，避免长列表 DOM 卡顿
+  const q = query.trim().toLowerCase();
+  const filter = (list: string[]) =>
+    q ? list.filter((b) => b.toLowerCase().includes(q)) : list;
+  const localMatches = filter(repo.branches);
+  const remoteMatches = filter(remoteBranches);
+
+  const renderItems = (items: string[]) =>
+    items.map((b) => (
+      <button
+        key={b}
+        type="button"
+        className="build-branch-item"
+        data-active={b === repo.branch}
+        onClick={() => {
+          onChange(b);
+          setOpen(false);
+        }}
+      >
+        <span>{b}</span>
+        {b === repo.branch && <Check size={13} />}
+      </button>
+    ));
 
   return (
     <>
@@ -1214,24 +1260,31 @@ function BranchSelect({
         createPortal(
           <div
             className="build-branch-menu"
-            style={{ top: pos.top, left: pos.left }}
+            style={{ top: pos.top, left: pos.left, width: BRANCH_MENU_WIDTH }}
             onClick={(e) => e.stopPropagation()}
           >
-            {repo.branches.map((b) => (
-              <button
-                key={b}
-                type="button"
-                className="build-branch-item"
-                data-active={b === repo.branch}
-                onClick={() => {
-                  onChange(b);
-                  setOpen(false);
-                }}
-              >
-                <span>{b}</span>
-                {b === repo.branch && <Check size={13} />}
-              </button>
-            ))}
+            <input
+              className="build-branch-filter"
+              value={query}
+              placeholder="过滤分支…"
+              autoFocus
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {localMatches.length > 0 && (
+              <div className="build-branch-group">
+                <div className="build-branch-group-label">本地</div>
+                {renderItems(localMatches)}
+              </div>
+            )}
+            {remoteMatches.length > 0 && (
+              <div className="build-branch-group">
+                <div className="build-branch-group-label">远端</div>
+                {renderItems(remoteMatches)}
+              </div>
+            )}
+            {localMatches.length === 0 && remoteMatches.length === 0 && (
+              <div className="build-branch-empty">无匹配分支</div>
+            )}
           </div>,
           document.body,
         )}

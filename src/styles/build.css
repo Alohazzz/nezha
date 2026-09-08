@@ -455,13 +455,55 @@
   position: fixed;
   z-index: 2147483000;
   min-width: 200px;
-  max-height: 260px;
+  max-height: 300px;
   overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border-dim);
   border-radius: 8px;
   box-shadow: var(--shadow-popover);
   padding: 4px;
+}
+
+.build-branch-filter {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin-bottom: 4px;
+  outline: none;
+}
+
+.build-branch-filter:focus {
+  border-color: var(--accent);
+}
+
+.build-branch-filter::placeholder {
+  color: var(--text-hint);
+}
+
+.build-branch-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.build-branch-group-label {
+  font-size: 10.5px;
+  color: var(--text-hint);
+  padding: 6px 8px 3px;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+
+.build-branch-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 12px 8px;
+  text-align: center;
 }
 
 .build-branch-item {

@@ -78,6 +78,9 @@ pub struct BuildRepo {
     pub remote: String,
     pub branch: String,
     pub branches: Vec<String>,
+    /// 远端跟踪分支（`origin/xxx` 形态）。已存在同名本地分支的远端项不列出。
+    #[serde(default)]
+    pub remote_branches: Vec<String>,
     pub is_submodule: bool,
     pub dirty: bool,
     pub missing: bool,
@@ -191,6 +194,36 @@ fn git_branches(dir: &str) -> Vec<String> {
     }
 }
 
+/// 远端跟踪分支列表（`origin/xxx` 短名）。剔除 `*/HEAD` 符号引用，
+/// 以及已存在同名本地分支的远端项（切到它直接选本地分支即可，重复展示徒增噪音）。
+fn git_remote_branches(dir: &str, local: &[String]) -> Vec<String> {
+    let out = match run_git_in(
+        dir,
+        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+    ) {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| {
+            if s.is_empty() {
+                return false;
+            }
+            // origin/HEAD、upstream/HEAD 等符号引用
+            if s.ends_with("/HEAD") {
+                return false;
+            }
+            // 远端短名去掉首个路径段（remote 名）即本地分支名
+            match s.split_once('/') {
+                Some((_, local_name)) => !local.iter().any(|l| l == local_name),
+                None => false,
+            }
+        })
+        .collect()
+}
+
 fn git_dirty(dir: &str) -> bool {
     // 忽略子模块改动：子仓库常因本地改动/commit 指针不同导致主仓库误报脏。
     // 叶仓库（无子模块）此开关为 no-op，仍能反映自身真实改动。
@@ -298,12 +331,14 @@ fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String>
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "root".to_string());
+        let branches = git_branches(project_path);
         repos.push(BuildRepo {
             name,
             path: project_path.to_string(),
             remote: git_remote(project_path),
             branch: git_branch(project_path),
-            branches: git_branches(project_path),
+            remote_branches: git_remote_branches(project_path, &branches),
+            branches,
             is_submodule: false,
             dirty: git_dirty(project_path),
             missing: false,
@@ -317,6 +352,11 @@ fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String>
             let full = root.join(&rel);
             let full_str = full.to_string_lossy().into_owned();
             let missing = !full.exists();
+            let branches = if !missing {
+                git_branches(&full_str)
+            } else {
+                Vec::new()
+            };
             repos.push(BuildRepo {
                 name,
                 path: full_str.clone(),
@@ -326,11 +366,12 @@ fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String>
                 } else {
                     String::new()
                 },
-                branches: if !missing {
-                    git_branches(&full_str)
+                remote_branches: if !missing {
+                    git_remote_branches(&full_str, &branches)
                 } else {
                     Vec::new()
                 },
+                branches,
                 is_submodule: true,
                 dirty: if !missing {
                     git_dirty(&full_str)
@@ -345,21 +386,49 @@ fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String>
 }
 
 /// 切到指定仓库的指定分支（用于在 Build 面板选择子模块/主仓库分支）。
-/// 仅做 `git checkout <branch>`，不自动 pull。
+/// 传本地分支名做 `git checkout <branch>`；传远端短名（`origin/xxx`）时
+/// 自动建立同名本地跟踪分支（`git checkout -b xxx --track origin/xxx`），
+/// 本地已存在同名分支则直接切本地。不自动 pull。
+/// 返回切换后的实际本地分支名（前端据此更新状态）。
 #[tauri::command]
 pub async fn build_checkout_branch(
     project_path: String,
     repo_path: String,
     branch: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     validate_project_path(&project_path)?;
     tauri::async_runtime::spawn_blocking(move || {
         validate_project_path(&repo_path)?;
-        let out = run_git_in(&repo_path, &["checkout", &branch])?;
+
+        let local_exists = git_ok(&repo_path, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]);
+        let remote_exists = git_ok(
+            &repo_path,
+            &["show-ref", "--verify", "--quiet", &format!("refs/remotes/{branch}")],
+        );
+
+        let final_branch = if local_exists || !remote_exists {
+            // 本地分支，或不在任何一侧（让 git 自己报错）
+            branch.clone()
+        } else {
+            // 远端跟踪分支：切过去要落到同名本地分支上，不能 detached HEAD。
+            // 若本地同名分支已存在，`-b` 会失败，由下方回退直接切本地分支。
+            branch.split_once('/').map(|(_, rest)| rest).unwrap_or(&branch).to_string()
+        };
+
+        let checkout_args: Vec<&str> = if local_exists || !remote_exists {
+            vec!["checkout", &branch]
+        } else {
+            vec!["checkout", "-b", &final_branch, "--track", &branch]
+        };
+        let out = run_git_in(&repo_path, &checkout_args)?;
         if !out.status.success() {
-            return Err(git_error_text(&out));
+            // 本地同名分支已存在等场景导致 -b 失败：回退为直接切本地分支
+            let fallback = run_git_in(&repo_path, &["checkout", &final_branch])?;
+            if !fallback.status.success() {
+                return Err(git_error_text(&out));
+            }
         }
-        Ok(())
+        Ok(final_branch)
     })
     .await
     .map_err(|e| format!("build_checkout_branch panicked: {e}"))?
