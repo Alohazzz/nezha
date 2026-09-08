@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Check, Cloud, Loader2 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Check, Cloud, ExternalLink, Loader2 } from "lucide-react";
 import type { YunxiaoWorkitem } from "../../types";
-import { getYunxiaoPriority } from "../../utils/yunxiao";
+import { buildYunxiaoIssueLink, getYunxiaoPriority } from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
@@ -25,6 +26,7 @@ export function YunxiaoIssueList({
   onToggleSelect,
   onDiscuss,
   onLoadMore,
+  yunxiaoProjectId,
 }: {
   issues: YunxiaoWorkitem[];
   total: number;
@@ -40,6 +42,8 @@ export function YunxiaoIssueList({
   /** 行内单条「发起讨论」快捷入口（与多选发起同一链路）。 */
   onDiscuss: (issue: YunxiaoWorkitem) => void;
   onLoadMore: () => void;
+  /** 云效云项目 ID（构建源议题链接；空则不显示链接按钮）。 */
+  yunxiaoProjectId: string;
 }) {
   const { t } = useI18n();
   const [hoverIssueId, setHoverIssueId] = useState<string | null>(null);
@@ -101,6 +105,18 @@ export function YunxiaoIssueList({
                   ))}
                 </div>
               </div>
+              {yunxiaoProjectId && (
+                <button
+                  type="button"
+                  style={hover ? s.yunxiaoIssueLinkBtnHover : s.yunxiaoIssueLinkBtn}
+                  title={t("yunxiao.openInYunxiao")}
+                  onClick={() =>
+                    openUrl(buildYunxiaoIssueLink(yunxiaoProjectId, issue.id)).catch(() => {})
+                  }
+                >
+                  <ExternalLink size={12} strokeWidth={2} />
+                </button>
+              )}
               {imported ? (
                 <span style={s.yunxiaoImportedBadge}>
                   <Check size={12} strokeWidth={2.5} />
