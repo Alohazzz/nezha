@@ -455,6 +455,7 @@ export function YunxiaoView({
             selectionMode={selectionMode}
             onToggleSelect={handleToggleSelect}
             onDiscuss={handleDiscussIssue}
+            yunxiaoProjectId={settings.projectId}
             onLoadMore={() => loadIssues(page + 1, true)}
           />
           {selectionMode && (
