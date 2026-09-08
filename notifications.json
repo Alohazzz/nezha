@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.13.0",
+      "level": "info",
+      "title": "Nezha v0.13.0 released",
+      "body": "1. 云效合并请求审查报告支持一键回写为评论，发布前自动关联最新 patch-set 版本；\n2. 云效议题回写评论重构：开发向直接回写修改方案，测试向影响范围改为「修改分支 + 修改文件」固定字段；\n3. 合并任务防护加固：独立临时分支强制对齐源分支，空合并与旧引用误合并直接中止；\n4. 技能更新：merge-code-review 手册条款编号化 + 省轮次审查流，hsp-build-order 增量构建清理范围收敛。",
+      "body_zh": "1. 云效合并请求审查报告支持一键回写为评论，发布前自动关联最新 patch-set 版本；\n2. 云效议题回写评论重构：开发向直接回写修改方案，测试向影响范围改为「修改分支 + 修改文件」固定字段；\n3. 合并任务防护加固：独立临时分支强制对齐源分支，空合并与旧引用误合并直接中止；\n4. 技能更新：merge-code-review 手册条款编号化 + 省轮次审查流，hsp-build-order 增量构建清理范围收敛。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.13.0",
+      "created_at": "2026-09-08",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.12.1",
       "level": "info",
       "title": "Nezha v0.12.1 released",
