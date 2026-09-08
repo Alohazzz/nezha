@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-react";
+import { Send, Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-react";
 import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -43,6 +43,13 @@ export function MergeHubView({
     loading: boolean;
     error: string;
   } | null>(null);
+  // 审查报告回写编辑态：非 null 时弹窗切到可编辑 textarea，发布前可修改内容。
+  const [writeback, setWriteback] = useState<{
+    draft: string;
+    publishing: boolean;
+    error: string;
+  } | null>(null);
+  const [writebackDone, setWritebackDone] = useState(false);
 
   const loadRepos = useCallback(async () => {
     try {
@@ -184,6 +191,8 @@ export function MergeHubView({
 
   const openReview = useCallback(async (mr: CodeupMr) => {
     setReviewModal({ mr, content: "", loading: true, error: "" });
+    setWriteback(null);
+    setWritebackDone(false);
     setNotice("");
     try {
       const report = await invoke<string | null>("codeup_read_review_report", {
@@ -215,6 +224,40 @@ export function MergeHubView({
         : "",
     [reviewModal?.content],
   );
+
+  const closeReview = useCallback(() => {
+    if (writeback?.publishing) return; // 发布中不允许误关弹窗
+    setReviewModal(null);
+    setWriteback(null);
+    setWritebackDone(false);
+  }, [writeback?.publishing]);
+
+  const startWriteback = useCallback(() => {
+    if (!reviewModal?.content) return;
+    setWritebackDone(false);
+    setWriteback({ draft: reviewModal.content, publishing: false, error: "" });
+  }, [reviewModal?.content]);
+
+  const publishWriteback = useCallback(async () => {
+    if (!reviewModal || !writeback) return;
+    const content = writeback.draft.trim();
+    if (!content) return;
+    setWriteback({ ...writeback, publishing: true, error: "" });
+    try {
+      await invoke("codeup_create_mr_comment", {
+        repositoryId: reviewModal.mr.repositoryId,
+        mrId: String(reviewModal.mr.localId),
+        content,
+      });
+      setWriteback(null);
+      setWritebackDone(true);
+      setNotice("审查报告已回写到云效合并请求评论。");
+    } catch (e) {
+      setWriteback((prev) =>
+        prev ? { ...prev, publishing: false, error: String(e) } : prev,
+      );
+    }
+  }, [reviewModal, writeback]);
 
   return (
     <div style={s.welcomePane}>
@@ -291,14 +334,14 @@ export function MergeHubView({
               <button
                 type="button"
                 style={s.bbBtnPrimary}
-                disabled={mr.pulled || busyId === mr.id}
+                disabled={busyId === mr.id}
                 onClick={() => void pullCode(mr)}
               >
                 <Download size={13} />
                 {busyAction === "pull" && busyId === mr.id
                   ? "拉取中…"
                   : mr.pulled
-                    ? "已拉取"
+                    ? "重新拉取"
                     : "拉取代码"}
               </button>
               <button
@@ -334,7 +377,7 @@ export function MergeHubView({
       </div>
 
       {reviewModal && (
-        <div style={s.bbDialogOverlay} onMouseDown={() => setReviewModal(null)}>
+        <div style={s.bbDialogOverlay} onMouseDown={closeReview}>
           <div
             style={s.bbReviewDialog}
             onMouseDown={(event) => event.stopPropagation()}
@@ -342,6 +385,15 @@ export function MergeHubView({
             <div style={s.bbReviewDialogHead}>
               <span style={s.bbReviewDialogTitle}>{reviewModal.mr.title}</span>
               <div style={s.bbReviewActions}>
+                <button
+                  type="button"
+                  style={s.bbBtnPrimary}
+                  disabled={!reviewModal.content || (writeback?.publishing ?? false)}
+                  onClick={startWriteback}
+                >
+                  <Send size={13} />
+                  回写到评论
+                </button>
                 <button
                   type="button"
                   style={s.bbBtnGhost}
@@ -364,24 +416,74 @@ export function MergeHubView({
                 type="button"
                 title="关闭"
                 aria-label="关闭"
-                onClick={() => setReviewModal(null)}
+                onClick={closeReview}
                 style={s.bbReviewCloseBtn}
               >
                 <X size={14} />
               </button>
             </div>
             <div style={s.bbReviewDialogBody}>
-              {reviewModal.loading ? (
-                <div style={s.bbEmpty}>加载中…</div>
-              ) : reviewModal.error ? (
-                <div style={s.bbGateHint}>{reviewModal.error}</div>
-              ) : reviewModal.content ? (
-                <div
-                  className="md-preview"
-                  dangerouslySetInnerHTML={{ __html: reviewReportHtml }}
-                />
+              {writeback ? (
+                <div style={s.bbReviewEditWrap}>
+                  <div style={s.bbReviewEditHint}>
+                    回写前可编辑下方 Markdown 内容，确认后将以整体评论发布到云效合并请求
+                    （{reviewModal.mr.sourceBranch} → {reviewModal.mr.targetBranch}）。
+                  </div>
+                  <textarea
+                    style={s.bbReviewEditArea}
+                    value={writeback.draft}
+                    disabled={writeback.publishing}
+                    onChange={(e) =>
+                      setWriteback((prev) =>
+                        prev ? { ...prev, draft: e.target.value } : prev,
+                      )
+                    }
+                  />
+                  <div style={s.bbReviewEditFoot}>
+                    {writeback.error && (
+                      <span style={s.bbReviewEditError}>{writeback.error}</span>
+                    )}
+                    <span style={s.bbReviewEditCount}>{writeback.draft.length} 字</span>
+                    <button
+                      type="button"
+                      style={s.bbBtnGhost}
+                      disabled={writeback.publishing}
+                      onClick={() => setWriteback(null)}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      style={s.bbBtnPrimary}
+                      disabled={!writeback.draft.trim() || writeback.publishing}
+                      onClick={() => void publishWriteback()}
+                    >
+                      <Send size={13} />
+                      {writeback.publishing ? "发布中…" : "发布评论"}
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <div style={s.bbGateHint}>该 MR 暂无审查报告，请先执行「代码审查」。</div>
+                <>
+                  {writebackDone && (
+                    <div style={s.bbReviewWritebackDone}>
+                      <Send size={13} />
+                      审查报告已作为整体评论回写到云效合并请求。
+                    </div>
+                  )}
+                  {reviewModal.loading ? (
+                    <div style={s.bbEmpty}>加载中…</div>
+                  ) : reviewModal.error ? (
+                    <div style={s.bbGateHint}>{reviewModal.error}</div>
+                  ) : reviewModal.content ? (
+                    <div
+                      className="md-preview"
+                      dangerouslySetInnerHTML={{ __html: reviewReportHtml }}
+                    />
+                  ) : (
+                    <div style={s.bbGateHint}>该 MR 暂无审查报告，请先执行「代码审查」。</div>
+                  )}
+                </>
               )}
             </div>
           </div>

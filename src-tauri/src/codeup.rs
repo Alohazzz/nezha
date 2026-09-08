@@ -70,7 +70,7 @@ pub struct CodeupMr {
     /// 更新时间戳（若可解析）。
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
-    /// 本地是否已拉取该 MR 代码（用于「拉取代码」门禁）。
+    /// 本地是否已拉取过该 MR 代码（用于合并前门禁；拉取按钮不因此禁用，可随时重新拉取刷新）。
     pub pulled: bool,
     /// 已拉取后的本地 worktree 路径。
     #[serde(rename = "worktreePath")]
@@ -1267,6 +1267,96 @@ pub async fn codeup_export_review_report(
     })
     .await
     .map_err(|e| format!("导出线程错误: {e}"))?
+}
+
+/// MR 评论内容上限（Codeup CreateChangeRequestComment 文档为 1-65535 字，留余量）。
+const MAX_MR_COMMENT_CHARS: usize = 60000;
+
+/// MR 评论地址（CreateChangeRequestComment / ListMergeRequestComments 共用前缀）。
+fn change_comments_url(org: &str, repository_id: &str, mr_id: &str) -> String {
+    format!(
+        "{}/comments",
+        change_item_url(org, repository_id, mr_id)
+    )
+}
+
+/// 拉取该 MR 最新 patch set 的 biz id（评论要求关联版本；取 versionNo 最大的版本）。
+async fn fetch_latest_patchset_biz_id(
+    client: &reqwest::Client,
+    token: &str,
+    org: &str,
+    repository_id: &str,
+    mr_id: &str,
+) -> Result<String, String> {
+    let url = format!("{}/diffs/patches", change_item_url(org, repository_id, mr_id));
+    let bytes = crate::yunxiao::get_yunxiao_json(client, token, url).await?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析 MR 版本列表失败: {e}"))?;
+    let arr = json.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let mut best: Option<(i64, String)> = None;
+    for item in arr {
+        let version = item.get("versionNo").and_then(|v| v.as_i64()).unwrap_or(0);
+        let biz = item
+            .get("patchSetBizId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if biz.is_empty() {
+            continue;
+        }
+        if best.as_ref().map_or(true, |(v, _)| version >= *v) {
+            best = Some((version, biz));
+        }
+    }
+    Ok(best.map(|(_, b)| b).unwrap_or_default())
+}
+
+/// 在该 MR 下发表一条全局（整体）评论，`content` 为 Markdown 文本。
+/// 供审查报告「回写到评论」用：评论要求关联 patch set，取不到最新版本时传空串由服务端兜底。
+#[tauri::command]
+pub async fn codeup_create_mr_comment(
+    repository_id: String,
+    mr_id: String,
+    content: String,
+) -> Result<String, String> {
+    let content = content.trim().to_string();
+    if content.is_empty() {
+        return Err("评论内容不能为空".to_string());
+    }
+    if content.chars().count() > MAX_MR_COMMENT_CHARS {
+        return Err(format!("评论内容超过 {MAX_MR_COMMENT_CHARS} 字上限"));
+    }
+    let (token, org_id) = load_creds().await?;
+    let client = build_client()?;
+    let patchset_biz_id =
+        fetch_latest_patchset_biz_id(&client, &token, &org_id, &repository_id, &mr_id)
+            .await
+            .unwrap_or_default();
+    let url = change_comments_url(&org_id, &repository_id, &mr_id);
+    let resp = client
+        .post(url)
+        .header("x-yunxiao-token", &token)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "content": content,
+            "comment_type": "GLOBAL_COMMENT",
+            "draft": false,
+            "resolved": false,
+            "patchset_biz_id": patchset_biz_id,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("发送合并请求评论失败: {e}"))?;
+    let bytes = read_json_body(resp).await?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析合并请求评论响应失败: {e}"))?;
+    let comment_id = json
+        .get("comment_biz_id")
+        .or_else(|| json.get("result").and_then(|r| r.get("comment_biz_id")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(if comment_id.is_empty() { mr_id } else { comment_id })
 }
 
 /// 清理某 MR 在固定文件夹下的拉取标记与审查结果（Agent 审查/冲突任务结束后由前端调用；

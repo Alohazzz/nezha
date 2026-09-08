@@ -475,6 +475,7 @@ pub fn run() {
             codeup::codeup_read_review,
             codeup::codeup_read_review_report,
             codeup::codeup_export_review_report,
+            codeup::codeup_create_mr_comment,
             codeup::codeup_cleanup_mr,
             codeup::codeup_resolve_conflicts,
             git::git_branch_diff_stats,
