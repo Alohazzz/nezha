@@ -1005,11 +1005,12 @@ function App() {
     } else if (kind === "merge") {
       prompt =
         `你是 MR 合并助手。请仅用 git 命令在当前工作区完成把 ${mr.sourceBranch} 合并进 ${mr.targetBranch}，不要调用任何接口/平台合并功能：\n` +
-        `1. 运行 \`git fetch origin ${mr.sourceBranch} origin/${mr.targetBranch}\`\n` +
-        `2. 运行 \`git checkout ${mr.sourceBranch}\`（已在该分支则跳过）\n` +
-        `3. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`；若有冲突，修改代码解决；没有冲突也保留合并结果，不要执行 \`git merge --abort\`\n` +
-        `4. 运行 \`git add -A\` 与 \`git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`\n` +
-        `5. 运行 \`git push origin HEAD:${mr.targetBranch}\`，把合并结果直接推送到目标分支从而完成合并\n` +
+        `1. 分别运行 \`git fetch origin ${mr.sourceBranch}\` 与 \`git fetch origin ${mr.targetBranch}\`，确保两个分支引用都是最新\n` +
+        `2. 运行 \`git checkout -f -B codeup-mr-${mr.localId} origin/${mr.sourceBranch}\`，强制对齐源分支最新提交\n` +
+        `3. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`；若提示 Already up to date，说明「源分支没有新内容需要合并」并停止，不要提交、不要推送；若有冲突，修改代码解决，不要执行 \`git merge --abort\`\n` +
+        `4. 运行 \`git add -A\`，再运行 \`git diff --cached origin/${mr.targetBranch} --stat\`；若没有任何输出（合并结果与目标分支内容完全一致），运行 \`git merge --abort\` 清理后停止，说明「无新增内容，无需合并」，不要提交、不要推送\n` +
+        `5. 运行 \`git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`\n` +
+        `6. 运行 \`git push origin HEAD:${mr.targetBranch}\`，把合并结果直接推送到目标分支从而完成合并\n` +
         `完成后简要说明结果。`;
     } else {
       prompt =
