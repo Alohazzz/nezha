@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { RefreshCw } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { renderMarkdownWithToc } from "../../utils/markdown";
@@ -125,7 +126,11 @@ export function WeeklyReportView() {
             </button>
           </div>
           {summaryLoading ? (
-            <div style={s.hint}>{t("weekly.summaryLoading")}</div>
+            <div style={s.summaryLoading}>
+              <RefreshCw size={24} className="spin" />
+              <div style={s.summaryLoadingText}>{t("weekly.summaryLoading")}</div>
+              <div style={s.summaryLoadingHint}>{t("weekly.summaryLoadingHint")}</div>
+            </div>
           ) : summary ? (
             <div className="md-preview" dangerouslySetInnerHTML={{ __html: summaryHtml }} />
           ) : summaryError ? (
@@ -138,7 +143,10 @@ export function WeeklyReportView() {
         {error ? (
           <div style={s.hint}>{t("weekly.error", { error })}</div>
         ) : !report ? (
-          <div style={s.hint}>{t("weekly.loading")}</div>
+          <div style={s.loadingBox}>
+            <RefreshCw size={22} className="spin" />
+            <div style={s.loadingBoxText}>{t("weekly.loading")}</div>
+          </div>
         ) : (
           <>
             <div style={s.stats}>

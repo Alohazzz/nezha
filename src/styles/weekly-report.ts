@@ -277,4 +277,34 @@ export const weeklyReport = {
     fontSize: 13,
     padding: "28px 0",
   },
+  summaryLoading: {
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 12,
+    padding: "38px 0 40px",
+    color: "var(--accent)",
+  },
+  summaryLoadingText: {
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: "var(--text-secondary)",
+  },
+  summaryLoadingHint: {
+    fontSize: 12,
+    color: "var(--text-hint)",
+  },
+  loadingBox: {
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center" as const,
+    gap: 10,
+    padding: "56px 0",
+    color: "var(--accent)",
+  },
+  loadingBoxText: {
+    fontSize: 13,
+    color: "var(--text-secondary)",
+  },
 } satisfies Record<string, React.CSSProperties>;
