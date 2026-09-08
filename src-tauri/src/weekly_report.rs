@@ -369,8 +369,8 @@ fn build_projects(
 fn git_log_commits(repo: &str, since: &NaiveDate, until_excl: &NaiveDate) -> Vec<CommitEntry> {
     let since_str = since.format("%Y-%m-%d").to_string();
     let until_str = (*until_excl - ChronoDuration::days(1)).format("%Y-%m-%d").to_string();
-    let out = Command::new("git")
-        .args([
+    let mut cmd = Command::new("git");
+    cmd.args([
             "-C",
             repo,
             "log",
@@ -379,8 +379,9 @@ fn git_log_commits(repo: &str, since: &NaiveDate, until_excl: &NaiveDate) -> Vec
             "--date=format:%Y-%m-%d",
             "--format=%ad%x09%s",
             "--no-merges",
-        ])
-        .output();
+        ]);
+    crate::subprocess::configure_background_command(&mut cmd);
+    let out = cmd.output();
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .lines()

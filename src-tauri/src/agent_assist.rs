@@ -9,9 +9,10 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 fn kill_process_tree(pid: u32) {
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status();
+        let mut taskkill = std::process::Command::new("taskkill");
+        taskkill.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        crate::subprocess::configure_background_command(&mut taskkill);
+        let _ = taskkill.status();
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1171,11 +1172,10 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
 /// 收集回写汇总的事实骨架（commit 列表 + 变更统计），git 数据保证不幻觉。
 fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, String) {
     let run = |args: &[&str]| -> Option<String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .ok()?;
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args).current_dir(cwd);
+        crate::subprocess::configure_background_command(&mut cmd);
+        let out = cmd.output().ok()?;
         if !out.status.success() {
             return None;
         }
@@ -2214,6 +2214,7 @@ mod tests {
                 "--sandbox",
                 "read-only",
                 "--ephemeral",
+                "--skip-git-repo-check",
                 "-c",
                 "approval_policy=\"never\"",
                 "prompt text",
