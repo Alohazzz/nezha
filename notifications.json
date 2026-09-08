@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.12.1",
+      "level": "info",
+      "title": "Nezha v0.12.1 released",
+      "body": "1. 修复方案讨论提示词把知识图谱 ID（如 HIS）误当技能名注入的问题，统一引用 knowledge-graph 技能；\n2. 讨论流程、性能影响分析与方案文档契约迁移至 SkillHub 技能维护，调整讨论提示词无需重装 Nezha；\n3. 单议题讨论提示词框架自适应，方案文档格式与多议题讨论统一。",
+      "body_zh": "1. 修复方案讨论提示词把知识图谱 ID（如 HIS）误当技能名注入的问题，统一引用 knowledge-graph 技能；\n2. 讨论流程、性能影响分析与方案文档契约迁移至 SkillHub 技能维护，调整讨论提示词无需重装 Nezha；\n3. 单议题讨论提示词框架自适应，方案文档格式与多议题讨论统一。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.12.1",
+      "created_at": "2026-09-08",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.6.7",
       "level": "info",
       "title": "Nezha v0.6.7 released",
