@@ -1,7 +1,7 @@
 /**
  * 多议题联合方案（Plan）纯函数：路径推导、方案文档节提取、讨论/执行提示词组装。
  * 与后端约定保持一致：plan.md 节标题格式 `## <议题编号> <标题>`、测试小节
- * `### 影响范围与测试`（agent_assist.rs plan_doc_instructions）。
+ * `### 影响范围与测试`（契约由 SkillHub `yunxiao-plan-discussion` 技能维护）。
  */
 import type { YunxiaoWorkitem } from "../types";
 import { normalizeIssueDescription, getYunxiaoPriority } from "./yunxiao";
@@ -39,8 +39,11 @@ export function buildPlanDiscussionPrompt(input: {
   instructions: string;
 }): string {
   const pieces: string[] = [];
+  // 单议题与多议题共用 plan 链路，但框架口吻按议题数自适应，避免单议题被「跨议题统筹」带偏。
   pieces.push(
-    "你是「多云题联合方案讨论助手」。请先完整读懂下方全部议题，再按指定流程联合分析。目标：产出一份覆盖全部议题的统一方案文档（含跨议题统筹与每议题方案），写入指令中指定的位置，供后续逐议题生成待办执行与回写云效。",
+    input.issues.length === 1
+      ? "你是「议题方案讨论助手」。请完整读懂下方议题，再按指定流程完成方案讨论。目标：产出该议题的方案文档（含修改方案与测试向内容），写入指令中指定的位置，供后续生成待办执行与回写云效。"
+      : "你是「多云题联合方案讨论助手」。请先完整读懂下方全部议题，再按指定流程联合分析。目标：产出一份覆盖全部议题的统一方案文档（含跨议题统筹与每议题方案），写入指令中指定的位置，供后续逐议题生成待办执行与回写云效。",
   );
 
   const listLines: string[] = [`## 议题清单（共 ${input.issues.length} 项）`];

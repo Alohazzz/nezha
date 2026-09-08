@@ -490,13 +490,6 @@ pub async fn generate_task_name(
 
 // ── 讨论指令公共片段（联合分析讨论 / 方案执行共用）──────────────────────────
 
-fn knowledge_graph_instruction(target: &crate::knowledge::KnowledgeTarget) -> String {
-    format!(
-        "另外，开始前先使用 `{}` 技能：按技能说明打开数据目录（data/index.md 与 modules/），建立对相关模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。",
-        target.id
-    )
-}
-
 /// 价值评分技能指令：讨论/分析得出结论后，用 issue-value-scoring 技能产出「价值评分」
 /// 小节写入 discussion.md（放在「修改方案汇总」之后、「影响范围与测试」之前），
 /// 随开发向评论一起回写，数值同时写入议题「价值评分」字段（Req 核心指数 / Bug 优先指数）。
@@ -523,70 +516,21 @@ const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
 
 // ── 多议题联合方案（Plan）指令：讨论定稿 / 按方案执行 ────────────────────────
 
-/// 联合讨论流程：grilling 的多云题版——逐议题走完决策树，再统筹跨议题依赖与顺序。
-/// 性能影响分析是每议题的强制决策分支（可忽略也须写明理由，不允许静默跳过）。
-const PLAN_DISCUSSION_FLOW: &str = "请用 grilling 流程联合走完所有议题的决策树：一次只问一个问题，等用户回答后再问下一个；每个问题先给出你的推荐答案；能用环境/代码/知识库查证的事实先去查证而不是问用户；把每条决策分支走完，依赖关系逐条解决；先逐个议题把分析走清，再做跨议题统筹（公共改动归属、依赖与执行顺序、可合并的修改点），最后产出统一方案文档；先不要写代码。\n\n每个议题的修改方案必须包含性能影响分析：按改动面选取相关维度（主线程/渲染、IO、网络、内存、启动、算法与数据量复杂度）逐一评估；声称命中热路径/高频路径时必须给出代码或配置依据（文件位置、调用链）；判定「影响可忽略」也必须写明理由，不允许静默跳过。跨议题公共改动的性能分析放在承载该改动的归属议题节里，不在统筹节重复。";
+/// 方案讨论的流程与方案文档契约由 `yunxiao-plan-discussion` 技能维护（SkillHub 统一管理，
+/// 改技能免重编）；此处只注入技能引用与动态参数（plan.md 路径、Bug 议题提示）。
+const PLAN_DISCUSSION_SKILL: &str = "yunxiao-plan-discussion";
 
-/// Bug 类议题的根因诊断方法论（方案含 Bug 议题时拼进讨论流程，grilling 仍是主轴）。
-const PLAN_BUG_DIAGNOSING_INSTRUCTION: &str = "\n\n方案中含有 Bug 缺陷类议题：这些议题先用 diagnosing-bugs 方法论定位根因——先搭一条能变红的命令，再复现、最小化、提假设，别急着猜原因；根因结论都要有可复现的证据，不凭感觉猜；根因确认后再进入方案产出。";
-
-/// 方案文档（plan.md）结构与落盘指令。结构由 Nezha 约定：执行任务的提示词按
-/// `## <议题编号>` 切片内联，回写简报同样按议题节提取，因此标题格式不可漂移。
-/// 「性能影响分析」小节必须位于「修改方案汇总」之后、「影响范围与测试」之前——
-/// 回写切片按第一个测试小节标题二分，位置漂移会把性能分析漏进测试向评论。
-fn plan_doc_instructions(plan_md_path: &str) -> String {
-    format!(
-        r#"── 方案文档落盘（必须执行）────────────────────────────
-本次讨论的全部结论写入方案文档（绝对路径）：{plan_md_path}（目录不存在就先创建）。结构固定（标题行格式不可改，后续按议题编号切片执行与回写）：
-
-# 联合方案：<主题>
-
-## 统筹
-<跨议题依赖关系、建议执行顺序（按议题编号列出）、公共改动归属（说明公共改动由哪个议题承载提交）>
-
-## <议题编号> <议题标题>
-### 修改方案汇总（开发向）
-<议题背景与目标（Req 含 What/Why/Scope；Bug 含根因与修复方案）、最终修改方案、验证方式>
-### 性能影响分析
-<按改动面评估的性能影响（主线程/渲染、IO、网络、内存、启动、算法与数据量复杂度）；命中热路径须附代码依据；判定可忽略须写明理由>
-### 影响范围与测试（测试向）
-<面向测试的影响范围（模块/接口/文件路径）与可执行测试步骤（含回归点）；性能影响分析判定有风险时，必须包含对应的性能回归验证点>
-
-要求：
-- 每个议题一节，节标题必须以 `## <议题编号> ` 开头（编号与议题清单一致）；结论是「无需修改」也要有节。
-- 「性能影响分析」小节位置固定（修改方案汇总之后、影响范围与测试之前），每议题必有，哪怕只有一句「无性能影响，理由：…」。
-- 统筹节给出的执行顺序要与各节结论一致。
-- 讨论中结论更新时整体覆盖写，只保留最新版；结束对话前再检查并更新一次，确保为定稿状态。
-- 本阶段不写「价值评分」（评分由各议题的执行任务在修改完成后评定），也不写 discussion.md / knowledge.json。"#,
-        plan_md_path = plan_md_path,
-    )
-}
-
-/// 方案讨论任务的完整指令：流程 + 知识图谱 + 方案文档落盘 + 补录。
-/// has_bug：方案内是否含 Bug 类议题（议题类别快照由前端传入），决定是否注入根因诊断方法论。
-pub fn plan_discussion_instructions(
-    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
-    plan_md_path: &str,
-    has_bug: bool,
-) -> String {
-    let knowledge_graph = knowledge_target
-        .map(knowledge_graph_instruction)
-        .unwrap_or_default();
-    let flow = if has_bug {
-        format!("{PLAN_DISCUSSION_FLOW}{PLAN_BUG_DIAGNOSING_INSTRUCTION}")
+/// 方案讨论任务的完整指令：技能引用 + Bug 议题提示 + 方案文档落盘路径。
+/// has_bug：方案内是否含 Bug 类议题（议题类别快照由前端传入），决定是否提示执行技能中的根因诊断。
+pub fn plan_discussion_instructions(plan_md_path: &str, has_bug: bool) -> String {
+    let bug_hint = if has_bug {
+        "本方案含 Bug 缺陷类议题：先按技能「Bug 根因诊断」的要求，用 diagnosing-bugs 方法论定位根因（结论要有可复现的证据）后再进入方案产出。"
     } else {
-        PLAN_DISCUSSION_FLOW.to_string()
+        "本方案不含 Bug 类议题，可跳过技能中的「Bug 根因诊断」。"
     };
     format!(
-        "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{backfill}\n\n{plan_doc}",
-        flow = flow,
-        knowledge_graph = if knowledge_graph.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n{knowledge_graph}")
-        },
-        backfill = BACKFILL_SKILL_INSTRUCTION,
-        plan_doc = plan_doc_instructions(plan_md_path),
+        "## 工作流程\n请先读取并遵循 `{PLAN_DISCUSSION_SKILL}` 技能：严格按技能定义的讨论流程（含性能影响分析强制分支与前置知识认知）走完决策树并产出方案文档；先不要写代码。单议题与多议题联合的格式约定见技能对应小节。\n{bug_hint}\n\n## 输出与产物\n方案文档（绝对路径，技能中的落盘指令以此路径为准）：{plan_md_path}（目录不存在就先创建）。",
+        plan_md_path = plan_md_path,
     )
 }
 
@@ -602,7 +546,7 @@ pub async fn get_plan_discussion_instructions(
     {
         return Err("非法的方案 ID".to_string());
     }
-    let project_path_for_dir = project_path.clone();
+    let project_path_for_dir = project_path;
     let plan_md_path = tokio::task::spawn_blocking(move || -> Result<String, String> {
         let canonical = std::path::Path::new(&project_path_for_dir)
             .canonicalize()
@@ -615,21 +559,14 @@ pub async fn get_plan_discussion_instructions(
     })
     .await
     .map_err(|e| format!("方案目录解析线程错误: {e}"))??;
-    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
-        .await
-        .ok();
-    Ok(plan_discussion_instructions(
-        knowledge_target.as_ref(),
-        &plan_md_path,
-        has_bug,
-    ))
+    Ok(plan_discussion_instructions(&plan_md_path, has_bug))
 }
 
 /// 方案执行流程：方案已定稿，直接执行；发现方案与代码现实冲突即停。
 /// 执行动作统一走 implement 技能（把「本议题方案」当作 spec/工单落地）。
 const PLAN_EXECUTION_FLOW: &str = "方案优先：本议题的修改方案已在「本议题方案（已定稿）」中定稿（来自多云题联合讨论），按方案直接执行改动，不要再把用户盘问一轮。请使用 implement 技能执行本次改动：把「本议题方案」当作 spec/工单，按该技能的流程落地实现并自验。执行中发现方案与代码现实冲突（文件/函数不存在、方案假设错误、影响面比方案判断更大）时，停下来在会话中说明冲突点并给出建议，等用户决策后再继续；不要擅自偏离方案。";
 
-/// 方案执行的知识认知指令：直接让 Agent 调用 knowledge-graph 技能建立模块认知
+/// 方案讨论/执行共用的知识认知指令：直接让 Agent 调用 knowledge-graph 技能建立模块认知
 ///（图谱选择由技能按项目 graph.toml 自行解析，不在此注入具体图谱 id）。
 const PLAN_KNOWLEDGE_INSTRUCTION: &str = "另外，开始前先使用 knowledge-graph 技能：按技能说明查询本项目绑定的知识图谱，建立对相关模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
 
@@ -1116,7 +1053,7 @@ fn build_fallback_draft(
     }
 }
 
-/// 方案文档（plan.md）单议题节内的测试小节标题前缀（h3，与 plan_doc_instructions 约定一致）。
+/// 方案文档（plan.md）单议题节内的测试小节标题前缀（h3，与 `yunxiao-plan-discussion` 技能约定一致）。
 const PLAN_TEST_SECTION_HEADER: &str = "### 影响范围与测试";
 
 /// 把方案文档的单议题节拆成（开发向部分，测试向部分）：
@@ -1612,17 +1549,16 @@ pub async fn generate_knowledge_sedimentation(
 mod tests {
     use super::*;
 
-    fn sample_knowledge_target() -> crate::knowledge::KnowledgeTarget {
-        crate::knowledge::KnowledgeTarget {
-            id: "ICUCIS".to_string(),
-            name: "ICUCIS 重症系统知识图谱".to_string(),
-            adapter: "icucis".to_string(),
-            graph_dir: "C:/skills/knowledge-graphs/ICUCIS".to_string(),
-            skill_dir: "C:/skills/knowledge-graph".to_string(),
-            data_dir: "C:/skills/knowledge-graphs/ICUCIS/data".to_string(),
-            ready: true,
-            scan_available: true,
-        }
+    #[test]
+    fn plan_discussion_references_skill_and_dynamic_params() {
+        let prompt = plan_discussion_instructions("H:/proj/.nezha/plans/p1/plan.md", false);
+        // 技能引用 + plan.md 动态路径必须齐备；流程与文档契约文本由技能承载，不再内联。
+        assert!(prompt.contains("yunxiao-plan-discussion"));
+        assert!(prompt.contains("H:/proj/.nezha/plans/p1/plan.md"));
+        // 图谱 id 不能被当成技能名；知识认知与补录细节由技能/执行路径承载，讨论提示词不内联。
+        assert!(!prompt.contains("使用 `ICUCIS` 技能"));
+        assert!(!prompt.contains("knowledge-graph"));
+        assert!(!prompt.contains("NEZHA_TASK_ID"));
     }
 
     #[test]
@@ -1783,36 +1719,14 @@ mod tests {
     }
 
     #[test]
-    fn plan_instructions_include_perf_and_doc_rules() {
-        let text = plan_discussion_instructions(None, "C:/p/.nezha/plans/1/plan.md", false);
-        assert!(text.contains("grilling"));
-        // 性能影响分析是强制分支：流程指令 + plan.md 固定小节都要有。
-        assert!(text.contains("性能影响分析"));
-        assert!(text.contains("主线程/渲染"));
-        assert!(text.contains("不允许静默跳过"));
-        assert!(text.contains("### 性能影响分析"));
-        assert!(text.contains("性能回归验证点"));
-        assert!(text.contains("C:/p/.nezha/plans/1/plan.md"));
-        assert!(text.contains("NEZHA_TASK_ID"));
-        assert!(!text.contains("diagnosing-bugs"));
-    }
-
-    #[test]
     fn plan_instructions_inject_bug_diagnosing_only_with_bug() {
-        let with_bug = plan_discussion_instructions(None, "C:/p/.nezha/plans/1/plan.md", true);
+        let with_bug = plan_discussion_instructions("C:/p/.nezha/plans/1/plan.md", true);
         assert!(with_bug.contains("diagnosing-bugs"));
-        assert!(with_bug.contains("变红"));
-        assert!(with_bug.contains("可复现的证据"));
+        assert!(with_bug.contains("Bug 根因诊断"));
 
-        let knowledge_target = sample_knowledge_target();
-        let text = plan_discussion_instructions(
-            Some(&knowledge_target),
-            "C:/p/.nezha/plans/1/plan.md",
-            true,
-        );
-        assert!(text.contains("ICUCIS"));
-        assert!(text.contains("data/index.md"));
-        assert!(text.contains("diagnosing-bugs"));
+        let without_bug = plan_discussion_instructions("C:/p/.nezha/plans/1/plan.md", false);
+        assert!(!without_bug.contains("diagnosing-bugs"));
+        assert!(without_bug.contains("Bug 根因诊断"));
     }
 
     #[test]
