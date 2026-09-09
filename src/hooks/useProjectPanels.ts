@@ -36,6 +36,12 @@ export function useProjectPanels() {
   const [openDiff, setOpenDiff] = useState<OpenDiff | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(280);
   const [terminalHeight, setTerminalHeight] = useState(240);
+  /** 右侧边栏是否「固定」为常驻列（true=从右缘向左占宽；false=悬浮，不挤占内容区）。 */
+  const [rightPanelDocked, setRightPanelDocked] = useState(false);
+  /** 中央舞台左右比例（左=PTY 占比，0.5 表示左右各半）。 */
+  const [mainStageRatio, setMainStageRatio] = useState(0.5);
+  const mainStageRatioRef = useRef(mainStageRatio);
+  mainStageRatioRef.current = mainStageRatio;
   const rightPanelWidthRef = useRef(rightPanelWidth);
   rightPanelWidthRef.current = rightPanelWidth;
   const terminalHeightRef = useRef(terminalHeight);
@@ -43,6 +49,10 @@ export function useProjectPanels() {
 
   const handleTogglePanel = useCallback((panel: Exclude<RightPanel, null>) => {
     setRightPanel((prev) => (prev === panel ? null : panel));
+  }, []);
+
+  const handleTogglePanelDocked = useCallback(() => {
+    setRightPanelDocked((prev) => !prev);
   }, []);
 
   const openRightPanel = useCallback((panel: Exclude<RightPanel, null>) => {
@@ -204,16 +214,43 @@ export function useProjectPanels() {
     document.addEventListener("mouseup", onMouseUp);
   }, []);
 
+  /** 中央舞台左右分割：左=PTY 占比（0.2~0.8），右=文件内容。 */
+  const handleMainStageResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startRatio = mainStageRatioRef.current;
+    const onMouseMove = (ev: MouseEvent) => {
+      const stage = document.getElementById("nezha-main-stage");
+      if (!stage) return;
+      const rect = stage.getBoundingClientRect();
+      const ratio = Math.max(0.2, Math.min(0.8, startRatio + (ev.clientX - startX) / rect.width));
+      setMainStageRatio(ratio);
+    };
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
+
   return {
     rightPanel,
+    rightPanelDocked,
     openFiles: openFilesState.tabs,
     activeFilePath: openFilesState.activePath,
     openDiff,
     rightPanelWidth,
     terminalHeight,
+    mainStageRatio,
     setOpenDiff,
     openRightPanel,
     handleTogglePanel,
+    handleTogglePanelDocked,
     handleFileSelect,
     openKnowledgeCard,
     handleFileTabSelect,
@@ -228,6 +265,7 @@ export function useProjectPanels() {
     clearFileAndDiff,
     handleRightResizeStart,
     handleTerminalResizeStart,
+    handleMainStageResizeStart,
   };
 }
 

@@ -225,10 +225,39 @@ export const layout = {
   projectMainStage: {
     flex: 1,
     display: "flex",
-    flexDirection: "column" as const,
+    flexDirection: "row" as const,
     overflow: "hidden",
+    minWidth: 0,
     minHeight: 0,
     position: "relative" as const,
+  },
+  // 中央舞台左右并排：左=任务 PTY 终端，右=已打开文件/diff/新建任务
+  // （flexGrow 由 ProjectPage 按 mainStageRatio 动态传入；此处仅保证可收缩）
+  mainStageLeft: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
+  },
+  mainStageRight: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
+  },
+  mainStageDivider: {
+    width: 5,
+    flexShrink: 0,
+    cursor: "col-resize",
+    background: "var(--border-dim)",
+  },
+  mainStagePtyEmpty: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "var(--text-muted)",
+    fontSize: 12,
   },
   rightPanelWrap: { position: "relative" as const, display: "flex", flexShrink: 0 },
   rightPanelWrapCol: {
@@ -239,6 +268,38 @@ export const layout = {
   },
   // 构建面板保持挂载但非激活时隐藏（替代卸载，保住构建会话状态）
   rpHiddenCol: { display: "none" as const },
+  // 右侧边栏：悬浮态（absolute，脱离内容流，不挤占中央舞台宽度）
+  // right: 44 避开最右的 RightToolbar 竖条；zIndex 盖在内容上方
+  rightPanelFloat: {
+    position: "absolute" as const,
+    top: 0,
+    right: 44,
+    bottom: 0,
+    zIndex: 20,
+    display: "flex",
+    flexDirection: "column" as const,
+    boxShadow: "var(--shadow-md)",
+    borderLeft: "1px solid var(--border-dim)",
+    background: "var(--bg-panel)",
+  },
+  // 右侧边栏：固定态（flex 常驻列，从右缘向左占宽，挤窄中央舞台）
+  rightPanelDock: {
+    position: "relative" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+    flexShrink: 0,
+  },
+  // 右侧边栏整体包裹：横向 flex 兄弟。悬浮时零宽（面板 absolute 盖内容上），
+  // 固定时占 rightPanelWidth（挤窄中央舞台）。
+  rightSideWrap: {
+    display: "flex",
+    minWidth: 0,
+    overflow: "hidden",
+    position: "relative" as const,
+    flexShrink: 0,
+  },
+  rightSideWrapFloat: { width: 0, flexShrink: 0 },
+  rightSideWrapDock: { flexShrink: 0 },
   rightPanelResizeHandle: {
     position: "absolute" as const,
     left: 0,

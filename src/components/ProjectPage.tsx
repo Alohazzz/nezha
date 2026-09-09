@@ -264,14 +264,17 @@ export function ProjectPage({
   const { showToast } = useToast();
   const {
     rightPanel,
+    rightPanelDocked,
     openFiles,
     activeFilePath,
     openDiff,
     rightPanelWidth,
     terminalHeight,
+    mainStageRatio,
     setOpenDiff,
     openRightPanel,
     handleTogglePanel,
+    handleTogglePanelDocked,
     handleFileSelect,
     openKnowledgeCard,
     handleFileTabSelect,
@@ -286,6 +289,7 @@ export function ProjectPage({
     clearFileAndDiff,
     handleRightResizeStart,
     handleTerminalResizeStart,
+    handleMainStageResizeStart,
   } = useProjectPanels();
 
   const [showShellTerminal, setShowShellTerminal] = useState(false);
@@ -982,8 +986,71 @@ export function ProjectPage({
         onToggleCollapsed={() => setTaskPanelCollapsed((v) => !v)}
       />
       <div style={s.mainContent}>
-        <div style={s.projectMainStage}>
-          {/* Foreground: file viewer, diff, or new-task composer */}
+        <div id="nezha-main-stage" style={s.projectMainStage}>
+          {/* 左：任务 PTY 终端 —— 始终可见，不再被文件前景层覆盖 */}
+          <div style={{ ...s.mainStageLeft, flexGrow: mainStageRatio, flexBasis: 0 }}>
+            {projectTasks
+              .filter((t) => mountedTaskIds.has(t.id))
+              .filter((t) => t.id === selectedTaskId && t.status !== "todo")
+              .map((task) => {
+                const worktreePath =
+                  task.worktreePath && !task.worktreeDiscarded ? task.worktreePath : null;
+                return (
+                  <RunningView
+                    key={task.id}
+                    task={task}
+                    projectPath={project.path}
+                    runCount={taskRunCounts[task.id] ?? 0}
+                    visible={visible}
+                    projectActive={visible}
+                    onCancel={() => onCancelTask(task.id)}
+                    onResume={() => onResumeTask(task.id)}
+                    onFork={(name) => onForkTask(task.id, name)}
+                    onMergeWorktree={() => onMergeWorktree(task.id)}
+                    onDiscardWorktree={() => onDiscardWorktree(task.id)}
+                    onOpenWriteback={() => openWriteback(task.id)}
+                    onOpenKnowledgeSedimentation={() => openKnowledgeSedimentation(task.id)}
+                    onOpenPlanPreview={
+                      task.planId
+                        ? () => {
+                            setPlanPreviewId(task.planId ?? null);
+                          }
+                        : undefined
+                    }
+                    onOpenWorktreeTerminal={
+                      worktreePath ? () => handleOpenWorktreeTerminal(worktreePath) : undefined
+                    }
+                    onReconnect={() => onReconnectTask(task.id)}
+                    onMarkDone={() => onMarkTaskDone(task.id)}
+                    onInput={(data) => onInput(task.id, data)}
+                    onResize={(cols, rows) => onResize(task.id, cols, rows)}
+                    onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
+                    onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
+                    onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
+                    getRestoreState={() => getTaskRestoreState(task.id)}
+                    onRename={(name) => onRenameTask(task.id, name)}
+                    onGenerateName={() => onGenerateTaskName(task.id)}
+                    themeVariant={themeVariant}
+                    terminalFontSize={terminalFontSize}
+                    terminalScrollback={terminalScrollback}
+                    monoFontFamily={monoFontFamily}
+                  />
+                );
+              })}
+            {!projectTasks.some(
+              (t) => t.id === selectedTaskId && t.status !== "todo" && mountedTaskIds.has(t.id),
+            ) && (
+              <div style={s.mainStagePtyEmpty}>
+                选择左侧任务以查看终端输出，或新建任务
+              </div>
+            )}
+          </div>
+
+          {/* 中：可拖拽分割条 */}
+          <div onMouseDown={handleMainStageResizeStart} style={s.mainStageDivider} />
+
+          {/* 右：已打开文件 / diff / 新建任务（原前景层） */}
+          <div style={{ ...s.mainStageRight, flexGrow: 1 - mainStageRatio, flexBasis: 0 }}>
           <ErrorBoundary
             label="主内容区"
             fallback={(error, reset) => (
@@ -1120,62 +1187,7 @@ export function ProjectPage({
               )
             ) : null}
           </ErrorBoundary>
-
-          {/* Background terminals */}
-          {projectTasks
-            .filter((t) => mountedTaskIds.has(t.id))
-            .map((task) => {
-              const isVisible =
-                openFiles.length === 0 &&
-                !openDiff &&
-                !isNewTask &&
-                !!selectedTask &&
-                task.id === selectedTaskId &&
-                task.status !== "todo";
-              const worktreePath =
-                task.worktreePath && !task.worktreeDiscarded ? task.worktreePath : null;
-              return (
-                <RunningView
-                  key={task.id}
-                  task={task}
-                  projectPath={project.path}
-                  runCount={taskRunCounts[task.id] ?? 0}
-                  visible={visible && isVisible}
-                  projectActive={visible}
-                  onCancel={() => onCancelTask(task.id)}
-                  onResume={() => onResumeTask(task.id)}
-                  onFork={(name) => onForkTask(task.id, name)}
-                  onMergeWorktree={() => onMergeWorktree(task.id)}
-                  onDiscardWorktree={() => onDiscardWorktree(task.id)}
-                  onOpenWriteback={() => openWriteback(task.id)}
-                  onOpenKnowledgeSedimentation={() => openKnowledgeSedimentation(task.id)}
-                  onOpenPlanPreview={
-                    task.planId
-                      ? () => {
-                          setPlanPreviewId(task.planId ?? null);
-                        }
-                      : undefined
-                  }
-                  onOpenWorktreeTerminal={
-                    worktreePath ? () => handleOpenWorktreeTerminal(worktreePath) : undefined
-                  }
-                  onReconnect={() => onReconnectTask(task.id)}
-                  onMarkDone={() => onMarkTaskDone(task.id)}
-                  onInput={(data) => onInput(task.id, data)}
-                  onResize={(cols, rows) => onResize(task.id, cols, rows)}
-                  onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
-                  onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
-                  onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
-                  getRestoreState={() => getTaskRestoreState(task.id)}
-                  onRename={(name) => onRenameTask(task.id, name)}
-                  onGenerateName={() => onGenerateTaskName(task.id)}
-                  themeVariant={themeVariant}
-                  terminalFontSize={terminalFontSize}
-                  terminalScrollback={terminalScrollback}
-                  monoFontFamily={monoFontFamily}
-                />
-              );
-            })}
+          </div>
         </div>
         {showShellTerminal && (
           <ShellTerminalPanel
@@ -1194,8 +1206,15 @@ export function ProjectPage({
         )}
       </div>
 
+      {/* 右侧面板：悬浮或固定（由 rightPanelDocked 决定） */}
       {rightPanel && rightPanel !== "build" && (
-        <div style={s.rightPanelWrapCol}>
+        <div
+          style={
+            rightPanelDocked
+              ? { ...s.rightPanelDock, width: rightPanelWidth }
+              : s.rightPanelFloat
+          }
+        >
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
             <WorktreeScopeSelect
@@ -1274,7 +1293,15 @@ export function ProjectPage({
       {/* 构建面板独立成列：首次打开后保持挂载（隐藏而非卸载），
           切换/关闭其它右侧面板不丢构建日志、逐项目状态与运行句柄。 */}
       {buildPanelMounted && (
-        <div style={rightPanel === "build" ? s.rightPanelWrapCol : s.rpHiddenCol}>
+        <div
+          style={
+            rightPanel === "build"
+              ? rightPanelDocked
+                ? { ...s.rightPanelDock, width: rightPanelWidth }
+                : s.rightPanelFloat
+              : s.rpHiddenCol
+          }
+        >
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
             <WorktreeScopeSelect
@@ -1317,6 +1344,8 @@ export function ProjectPage({
         onToggleTerminal={handleToggleShellTerminal}
         onOpenSearch={() => setShowFileSearch(true)}
         onOpenSettings={() => setShowSettings(true)}
+        panelDocked={rightPanelDocked}
+        onTogglePanelDocked={handleTogglePanelDocked}
       />
 
       {showFileSearch && (
