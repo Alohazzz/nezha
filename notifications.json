@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.15.0",
+      "level": "info",
+      "title": "Nezha v0.15.0 released",
+      "body": "1. 中央舞台改为左右分屏并可拖拽调整：任务 PTY 始终可见，打开的代码/差异/新任务内容并排显示，运行任务的同时可以浏览代码，不再互相覆盖；\n2. 右侧面板支持「浮动 / 停靠」双模式与固定(Pin)按钮：浮动不挤压舞台，点击面板外区域自动收起，停靠后面板常驻可见；\n3. 新增「全屏 / 分屏」布局模式切换：全屏模式下仅当打开内容时才渲染内容层，否则 PTY 占满整个舞台；\n4. 终端稳定性：agent 启动前等待终端就绪握手，避免 Codex 因探测超时回退到暗色调色板；升级 vendored ConPTY 至 1.25。",
+      "body_zh": "1. 中央舞台改为左右分屏并可拖拽调整：任务 PTY 始终可见，打开的代码/差异/新任务内容并排显示，运行任务的同时可以浏览代码，不再互相覆盖；\n2. 右侧面板支持「浮动 / 停靠」双模式与固定(Pin)按钮：浮动不挤压舞台，点击面板外区域自动收起，停靠后面板常驻可见；\n3. 新增「全屏 / 分屏」布局模式切换：全屏模式下仅当打开内容时才渲染内容层，否则 PTY 占满整个舞台；\n4. 终端稳定性：agent 启动前等待终端就绪握手，避免 Codex 因探测超时回退到暗色调色板；升级 vendored ConPTY 至 1.25。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.15.0",
+      "created_at": "2026-09-09",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.14.0",
       "level": "info",
       "title": "Nezha v0.14.0 released",
