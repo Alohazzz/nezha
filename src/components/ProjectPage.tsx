@@ -1092,7 +1092,7 @@ export function ProjectPage({
           </div>
 
           {/* 中：可拖拽分割条 */}
-          <div onMouseDown={handleMainStageResizeStart} style={s.mainStageDivider} />
+          <div onPointerDown={handleMainStageResizeStart} style={s.mainStageDivider} />
 
           {/* 右：已打开文件 / diff / 新建任务（原前景层） */}
           <div style={{ ...s.mainStageRight, flex: 1 }}>

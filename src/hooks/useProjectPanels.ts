@@ -214,28 +214,37 @@ export function useProjectPanels() {
     document.addEventListener("mouseup", onMouseUp);
   }, []);
 
-  /** 中央舞台左右分割：左=PTY 占比（0.2~0.8），右=文件内容。 */
-  const handleMainStageResizeStart = useCallback((e: React.MouseEvent) => {
+  /** 中央舞台左右分割：左=PTY 占比（0.2~0.8），右=文件内容。用 pointer 事件 + setPointerCapture，
+      避免被 xterm 等全局鼠标监听拦截。 */
+  const handleMainStageResizeStart = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget as HTMLElement;
     const startX = e.clientX;
     const startRatio = mainStageRatioRef.current;
-    const onMouseMove = (ev: MouseEvent) => {
+    const onPointerMove = (ev: PointerEvent) => {
       const stage = document.getElementById("nezha-main-stage");
       if (!stage) return;
       const rect = stage.getBoundingClientRect();
       const ratio = Math.max(0.2, Math.min(0.8, startRatio + (ev.clientX - startX) / rect.width));
       setMainStageRatio(ratio);
     };
-    const onMouseUp = () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
+    const onPointerUp = () => {
+      el.releasePointerCapture(e.pointerId);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* 个别环境不支持时忽略，pointer 监听仍在 document 冒泡 */
+    }
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
   }, []);
 
   return {
