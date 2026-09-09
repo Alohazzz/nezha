@@ -8,6 +8,10 @@ type RightPanel =
   | "branch-batch"
   | "knowledge"
   | null;
+
+/** 中央舞台布局模式：fullscreen=Nezha 原始覆盖式（PTY 背景 + 前景覆盖）；
+    partition=左右分栏（左 PTY ‖ 右文件内容）。 */
+type LayoutMode = "fullscreen" | "partition";
 type OpenFileTab = {
   path: string;
   name: string;
@@ -40,6 +44,8 @@ export function useProjectPanels() {
   const [rightPanelDocked, setRightPanelDocked] = useState(false);
   /** 中央舞台左右比例（左=PTY 占比，0.5 表示左右各半）。 */
   const [mainStageRatio, setMainStageRatio] = useState(0.5);
+  /** 中央舞台布局模式，默认全屏（Nezha 原始覆盖式）。 */
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("fullscreen");
   const mainStageRatioRef = useRef(mainStageRatio);
   mainStageRatioRef.current = mainStageRatio;
   const rightPanelWidthRef = useRef(rightPanelWidth);
@@ -53,6 +59,10 @@ export function useProjectPanels() {
 
   const handleTogglePanelDocked = useCallback(() => {
     setRightPanelDocked((prev) => !prev);
+  }, []);
+
+  const toggleLayoutMode = useCallback(() => {
+    setLayoutMode((prev) => (prev === "fullscreen" ? "partition" : "fullscreen"));
   }, []);
 
   const openRightPanel = useCallback((panel: Exclude<RightPanel, null>) => {
@@ -256,6 +266,8 @@ export function useProjectPanels() {
     rightPanelWidth,
     terminalHeight,
     mainStageRatio,
+    layoutMode,
+    toggleLayoutMode,
     setOpenDiff,
     openRightPanel,
     handleTogglePanel,

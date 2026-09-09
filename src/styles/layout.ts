@@ -222,6 +222,29 @@ export const layout = {
     overflow: "hidden",
     background: "var(--bg-panel)",
   },
+  // 主舞台顶部的布局模式切换工具条
+  mainStageModeBar: {
+    height: 32,
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    padding: "0 8px",
+    borderBottom: "1px solid var(--border-dim)",
+    background: "var(--bg-sidebar)",
+  },
+  mainStageModeBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "4px 10px",
+    borderRadius: 6,
+    border: "1px solid var(--border-dim)",
+    background: "var(--bg-card)",
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    cursor: "pointer",
+  },
   projectMainStage: {
     flex: 1,
     display: "flex",
@@ -230,6 +253,31 @@ export const layout = {
     minWidth: 0,
     minHeight: 0,
     position: "relative" as const,
+  },
+  // fullscreen 模式：Nezha 原始覆盖式 —— 内容前景覆盖 PTY 背景
+  mainStageFullscreen: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    position: "relative" as const,
+    overflow: "hidden",
+  },
+  // PTY 背景层：absolute 铺满，打开文件时被内容前景覆盖
+  mainStageFullscreenPty: {
+    position: "absolute" as const,
+    inset: 0,
+    zIndex: 0,
+    overflow: "hidden",
+  },
+  // 内容前景层：占满主舞台，盖在 PTY 之上
+  mainStageFullscreenContent: {
+    position: "relative" as const,
+    zIndex: 1,
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
   },
   // 中央舞台左右并排：左=任务 PTY 终端，右=已打开文件/diff/新建任务
   // （flexGrow 由 ProjectPage 按 mainStageRatio 动态传入；此处仅保证可收缩）
