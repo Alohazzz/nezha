@@ -93,6 +93,7 @@ export function ProjectPage({
   onRunTodoTask,
   onUpdateTodo,
   onStartTodoYunxiaoDiscussion,
+  onStartTodoYunxiaoDirect,
   todoDiscussionStarting,
   onGenerateWritebackSummary,
   onWritebackYunxiao,
@@ -177,6 +178,13 @@ export function ProjectPage({
   ) => void;
   /** 云效绑定待办（补录/存量导入）「发起讨论」：待办自身转化为方案讨论任务。 */
   onStartTodoYunxiaoDiscussion: (
+    taskId: string,
+    notes: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) => void;
+  /** 云效绑定待办「直接开始」：待办原地转为直接执行任务（无方案、无讨论）。 */
+  onStartTodoYunxiaoDirect: (
     taskId: string,
     notes: string,
     agent: AgentType,
@@ -1101,6 +1109,7 @@ export function ProjectPage({
                   starting={todoDiscussionStarting}
                   onBack={onBack}
                   onStartDiscussion={onStartTodoYunxiaoDiscussion}
+                  onStartDirect={onStartTodoYunxiaoDirect}
                 />
               ) : (
                 <TodoTaskView

@@ -15,6 +15,7 @@ import type {
   PermissionMode,
   Plan,
   PlanIssue,
+  YunxiaoWorkitem,
 } from "../types";
 import type { ProjectRenameResult } from "../projectName";
 import { SidebarFooterActions } from "./SidebarFooterActions";
@@ -109,6 +110,7 @@ export function WelcomePage({
   onEnterSkillHub,
   onCreateYunxiaoPlan,
   onStartYunxiaoPlanDiscussion,
+  onStartYunxiaoDirectExecution,
   onCancelYunxiaoPlan,
   plans,
 }: {
@@ -147,6 +149,11 @@ export function WelcomePage({
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
+  /** 议题列表「直接开始」：跳过讨论链路，直接创建绑定议题的执行任务并启动。 */
+  onStartYunxiaoDirectExecution: (
+    issue: YunxiaoWorkitem,
+    targetProjectId: string,
+  ) => void | Promise<void>;
   onCancelYunxiaoPlan: (planId: string) => void | Promise<void>;
   plans: Plan[];
 }) {
@@ -256,6 +263,7 @@ export function WelcomePage({
             onBack={() => setView("projects")}
             onCreatePlan={onCreateYunxiaoPlan}
             onStartPlanDiscussion={onStartYunxiaoPlanDiscussion}
+            onStartDirectExecution={onStartYunxiaoDirectExecution}
             onCancelPlan={onCancelYunxiaoPlan}
           />
         ) : view === "timeline" ? (

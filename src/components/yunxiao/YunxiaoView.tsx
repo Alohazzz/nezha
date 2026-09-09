@@ -17,7 +17,10 @@ import {
   type AppSettings,
   type YunxiaoSettings,
 } from "../app-settings/types";
-import { isYunxiaoWorkitemImported } from "../../utils/yunxiao";
+import {
+  collectOccupiedYunxiaoWorkitemIds,
+  isYunxiaoWorkitemImported,
+} from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
 import { YunxiaoHeader } from "./YunxiaoHeader";
@@ -52,6 +55,7 @@ export function YunxiaoView({
   onBack,
   onCreatePlan,
   onStartPlanDiscussion,
+  onStartDirectExecution,
   onCancelPlan,
 }: {
   projects: Project[];
@@ -66,6 +70,11 @@ export function YunxiaoView({
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
+  /** 行内「直接开始」：跳过讨论链路，直接创建绑定议题的执行任务并启动。 */
+  onStartDirectExecution: (
+    issue: YunxiaoWorkitem,
+    targetProjectId: string,
+  ) => void | Promise<void>;
   onCancelPlan: (planId: string) => void | Promise<void>;
 }) {
   const { t } = useI18n();
@@ -195,19 +204,12 @@ export function YunxiaoView({
     loadIssues(1, false);
   }, [configured, connectMode, settingsLoaded, filtersReady, category, conditions, loadIssues]);
 
-  const importedIds = useMemo(() => {
-    const set = new Set<string>();
-    tasks.forEach((task) => {
-      if (task.yunxiaoWorkitemId) set.add(task.yunxiaoWorkitemId);
-    });
-    // 方案占用的议题同样去重：讨论中（draft）/ 待生成待办（finalized）/ 执行中 /
-    // 已完成的方案议题都不可重复发起，堵住「讨论中议题再次发起」的洞。
-    plans.forEach((plan) => {
-      if (plan.status === "cancelled") return;
-      plan.issues.forEach((issue) => set.add(issue.workitemId));
-    });
-    return set;
-  }, [tasks, plans]);
+  // 议题占用集合：任务直接绑定 + 仍被存活任务引用的方案（孤儿方案不占用，
+  // 见 collectOccupiedYunxiaoWorkitemIds 注释）。
+  const importedIds = useMemo(
+    () => collectOccupiedYunxiaoWorkitemIds(tasks, plans),
+    [tasks, plans],
+  );
 
   // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
   const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
@@ -272,6 +274,25 @@ export function YunxiaoView({
       localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
     },
     [targetProjectId, targetProject, showToast, t],
+  );
+
+  /** 行内「直接开始」：零对话框，直接创建绑定议题的执行任务（App 层拉详情后启动）。 */
+  const handleDirectStartIssue = useCallback(
+    (issue: YunxiaoWorkitem) => {
+      if (!targetProjectId) {
+        showToast(t("yunxiao.targetProjectRequired"), "warning");
+        return;
+      }
+      if (!targetProject) return;
+      // 已导入守卫与讨论入口同源（App 层 handler 还有一道，双保险）。
+      if (isYunxiaoWorkitemImported(tasks, plans, issue.id)) {
+        showToast(t("yunxiao.importDuplicate"), "warning");
+        return;
+      }
+      localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
+      void onStartDirectExecution(issue, targetProjectId);
+    },
+    [targetProjectId, targetProject, tasks, plans, onStartDirectExecution, showToast, t],
   );
 
   async function handleFetchOrganizations() {
@@ -455,6 +476,7 @@ export function YunxiaoView({
             selectionMode={selectionMode}
             onToggleSelect={handleToggleSelect}
             onDiscuss={handleDiscussIssue}
+            onDirectStart={handleDirectStartIssue}
             yunxiaoProjectId={settings.projectId}
             onLoadMore={() => loadIssues(page + 1, true)}
           />

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Cloud, ExternalLink, Loader2 } from "lucide-react";
+import { Check, Cloud, ExternalLink, Loader2, Zap } from "lucide-react";
 import type { YunxiaoWorkitem } from "../../types";
 import { buildYunxiaoIssueLink, getYunxiaoPriority } from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
@@ -25,6 +25,7 @@ export function YunxiaoIssueList({
   selectionMode,
   onToggleSelect,
   onDiscuss,
+  onDirectStart,
   onLoadMore,
   yunxiaoProjectId,
 }: {
@@ -41,6 +42,8 @@ export function YunxiaoIssueList({
   onToggleSelect: (issue: YunxiaoWorkitem) => void;
   /** 行内单条「发起讨论」快捷入口（与多选发起同一链路）。 */
   onDiscuss: (issue: YunxiaoWorkitem) => void;
+  /** 行内单条「直接开始」快捷入口（跳过讨论，直接创建执行任务）。 */
+  onDirectStart: (issue: YunxiaoWorkitem) => void;
   onLoadMore: () => void;
   /** 云效云项目 ID（构建源议题链接；空则不显示链接按钮）。 */
   yunxiaoProjectId: string;
@@ -123,13 +126,24 @@ export function YunxiaoIssueList({
                   {t("yunxiao.imported")}
                 </span>
               ) : !selectionMode ? (
-                <button
-                  type="button"
-                  style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
-                  onClick={() => onDiscuss(issue)}
-                >
-                  {t("yunxiao.discussion.start")}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    style={hover ? s.yunxiaoDirectBtnHover : s.yunxiaoDirectBtn}
+                    title={t("yunxiao.direct.rowHint")}
+                    onClick={() => onDirectStart(issue)}
+                  >
+                    <Zap size={12} strokeWidth={2.2} fill="currentColor" />
+                    {t("yunxiao.direct.start")}
+                  </button>
+                  <button
+                    type="button"
+                    style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
+                    onClick={() => onDiscuss(issue)}
+                  >
+                    {t("yunxiao.discussion.start")}
+                  </button>
+                </>
               ) : null}
             </div>
           );

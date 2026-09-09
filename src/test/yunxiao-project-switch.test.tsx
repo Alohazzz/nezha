@@ -99,6 +99,7 @@ describe("YunxiaoView 议题区项目切换", () => {
             plans={[]}
             onCreatePlan={vi.fn()}
             onStartPlanDiscussion={vi.fn()}
+            onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
           />
         </ToastProvider>

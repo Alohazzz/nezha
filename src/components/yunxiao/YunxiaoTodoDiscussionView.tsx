@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ChevronLeft, ExternalLink, Play } from "lucide-react";
+import { ChevronLeft, ExternalLink, Play, Zap } from "lucide-react";
 import type {
   AgentType,
   PermissionMode,
@@ -45,12 +45,20 @@ export function YunxiaoTodoDiscussionView({
   starting,
   onBack,
   onStartDiscussion,
+  onStartDirect,
 }: {
   task: Task;
-  /** App 层发起中标记（拉详情/图片/建方案期间按钮锁定）。 */
+  /** App 层发起中标记（拉详情/图片期间按钮锁定，讨论与直接开始共用）。 */
   starting: boolean;
   onBack: () => void;
   onStartDiscussion: (
+    taskId: string,
+    notes: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) => void;
+  /** 「直接开始」：待办原地转为直接执行任务（无方案、无讨论）。 */
+  onStartDirect: (
     taskId: string,
     notes: string,
     agent: AgentType,
@@ -152,6 +160,11 @@ export function YunxiaoTodoDiscussionView({
     onStartDiscussion(task.id, notes, agent, permission);
   }, [starting, notes, agent, permission, onStartDiscussion, task.id]);
 
+  const handleStartDirect = useCallback(() => {
+    if (starting) return;
+    onStartDirect(task.id, notes, agent, permission);
+  }, [starting, notes, agent, permission, onStartDirect, task.id]);
+
   return (
     <div style={s.yunxiaoDetailPane}>
       <div style={s.yunxiaoHeader}>
@@ -224,6 +237,16 @@ export function YunxiaoTodoDiscussionView({
             >
               <Play size={11} strokeWidth={2} fill="currentColor" />
               {t("yunxiao.discussion.start")}
+            </button>
+            <button
+              type="button"
+              style={starting ? s.yunxiaoGhostBtnDisabled : s.yunxiaoGhostBtn}
+              disabled={starting}
+              onClick={handleStartDirect}
+              title={t("yunxiao.direct.rowHint")}
+            >
+              <Zap size={11} strokeWidth={2.2} fill="currentColor" />
+              {t("yunxiao.direct.start")}
             </button>
           </div>
         </section>

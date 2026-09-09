@@ -34,6 +34,9 @@ import {
   clampTerminalScrollback,
   DEFAULT_TASK_DISPLAY_WINDOW,
   normalizeTaskDisplayWindow,
+  isAgentEnabled,
+  firstEnabledAgent,
+  type AgentEnabledState,
 } from "./types";
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
 import type {
@@ -46,12 +49,16 @@ import { quoteFontName } from "./utils/fonts";
 import {
   buildYunxiaoIssueLink,
   issueTag,
+  getLastYunxiaoAgent,
+  getLastYunxiaoPermission,
+  isYunxiaoWorkitemImported,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
 import {
   buildPlanDiscussionPrompt,
   buildPlanExecutionPrompt,
   buildPlanTaskName,
+  buildDirectExecutionPrompt,
   extractPlanIssueSection,
   extractPlanOverviewForIssues,
   planIssueImagesDir,
@@ -380,6 +387,9 @@ function App() {
   // 待办「发起讨论」进行中标记（拉详情/图片/建方案期间锁定入口按钮）。
   const [todoDiscussionStarting, setTodoDiscussionStarting] = useState(false);
   const todoDiscussionStartingRef = useRef(false);
+  // 议题列表「直接开始」进行中的议题 id：任务落地前堵双击重复建任务，
+  // 落地后由 importedIds（task.yunxiaoWorkitemId）去重接管。
+  const directStartingIssueIdsRef = useRef<Set<string>>(new Set());
   // 补录议题轮询：tasks 与 handler 的最新引用 + 处理中任务去重集合（防重叠/陈旧闭包）。
   const tasksRef = useRef<Task[]>([]);
   const backfillHandlerRef = useRef<(() => Promise<void>) | null>(null);
@@ -1740,6 +1750,232 @@ function App() {
   }
 
   /**
+   * 议题列表「直接开始」：零对话框——立即创建 pending 执行任务并切到项目视图，
+   * 后台拉取议题详情 + 图片（归档任务附件目录）后自动启动（当前工作区，不建 worktree）。
+   * 失败镜像发起对话框的阻断规则：详情失败 / 图片全败 → 任务置 failed 带原因、
+   * 不启动 PTY；图片部分失败 → 警告放行。重试 = 删任务重点。
+   */
+  async function handleStartYunxiaoDirectExecution(
+    issue: YunxiaoWorkitem,
+    targetProjectId: string,
+  ) {
+    const project = projects.find((p) => p.id === targetProjectId);
+    if (!project) return;
+    if (isYunxiaoWorkitemImported(tasks, plans, issue.id)) {
+      showToast(t("yunxiao.importDuplicate"), "warning");
+      return;
+    }
+    if (directStartingIssueIdsRef.current.has(issue.id)) return;
+    directStartingIssueIdsRef.current.add(issue.id);
+
+    // 任务落地后回填 id，供 catch 里把 pending 任务置 failed（闭包里的 tasks 是陈旧快照）。
+    let createdTaskId = "";
+    try {
+      // Agent/权限走项目级记忆；记忆指向已禁用 Agent 时回退第一个启用项。
+      const appSettings = await invoke<AgentEnabledState & { yunxiao?: YunxiaoSettings }>(
+        "load_app_settings",
+      );
+      const rememberedAgent = getLastYunxiaoAgent(project.id) ?? "codex";
+      const agent = isAgentEnabled(appSettings, rememberedAgent)
+        ? rememberedAgent
+        : firstEnabledAgent(appSettings);
+      const permissionMode = getLastYunxiaoPermission(project.id) ?? "ask";
+
+      const now = Date.now();
+      const taskId = `${now}`;
+      createdTaskId = taskId;
+      const baseTask: Task = {
+        id: taskId,
+        projectId: project.id,
+        name: `${issue.serialNumber} ${issue.subject}`.trim() || undefined,
+        prompt: "",
+        agent,
+        permissionMode,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+        yunxiaoWorkitemId: issue.id,
+        yunxiaoSerialNumber: issue.serialNumber,
+      };
+      setTasks((prev) => {
+        const next = [baseTask, ...prev];
+        persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
+        return next;
+      });
+      setActiveProject(project);
+      mountProject(project.id);
+      updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
+      tm.resetTaskTerminal(taskId);
+
+      const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+      const detail = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: issue.id,
+      });
+      // 图片走 prepare 的 task_id 分支归档 `.nezha/attachments/<taskId>/`（任务结束自动清理）。
+      const images = await invoke<YunxiaoIssueImagesPrepared>(
+        "yunxiao_prepare_issue_images",
+        {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          workitemId: issue.id,
+          projectPath: project.path,
+          taskId,
+        },
+      );
+      if (images.total > 0 && images.failed === images.total) {
+        throw new Error(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }));
+      }
+      if (images.failed > 0) {
+        showToast(
+          t("yunxiao.images.partial", {
+            failed: images.failed,
+            downloaded: images.downloaded,
+          }),
+          "warning",
+        );
+      }
+      const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
+      const instructions = await invoke<string>("get_direct_execution_instructions", {
+        projectPath: project.path,
+        taskId,
+        hasBug,
+      });
+      const prompt = buildDirectExecutionPrompt({
+        issue: detail,
+        link: yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "",
+        imagePaths: images.paths,
+        instructions,
+      });
+      const updated: Task = { ...baseTask, prompt };
+      setTasks((prev) => {
+        const next = prev.map((tk) => (tk.id === taskId ? updated : tk));
+        persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
+        return next;
+      });
+      invokeRunTask(updated, project.path, [], [], project.path);
+    } catch (e) {
+      const reason = String(e);
+      showToast(t("yunxiao.direct.startFailed", { error: reason }), "error");
+      // 任务可能已落地（pending）也可能尚未创建（load_app_settings 阶段失败）；
+      // updateTaskStatus 对不存在的 id 是 no-op，两种情况都安全。
+      if (createdTaskId) updateTaskStatus(createdTaskId, "failed", undefined, reason);
+    } finally {
+      directStartingIssueIdsRef.current.delete(issue.id);
+    }
+  }
+
+  /**
+   * 云效绑定待办（补录议题 / 存量导入）的「直接开始」：拉取议题详情与图片 →
+   * 待办**自身**原地转为直接执行任务（无方案、无讨论，prompt 由议题内容 +
+   * 发起人补充组装）并立即启动。拉取失败待办保持 todo 不动（与「发起讨论」
+   * 的失败路径一致），可直接重试。
+   */
+  async function handleStartTodoYunxiaoDirectExecution(
+    taskId: string,
+    notes: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task || task.status !== "todo" || !task.yunxiaoWorkitemId || task.planId) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    if (todoDiscussionStartingRef.current) return;
+    todoDiscussionStartingRef.current = true;
+    setTodoDiscussionStarting(true);
+    try {
+      let yunxiao: YunxiaoSettings;
+      try {
+        const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+        yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+      } catch {
+        yunxiao = EMPTY_YUNXIAO_SETTINGS;
+      }
+      if (!yunxiao.token || !yunxiao.organizationId) {
+        showToast(t("yunxiao.notConnected"), "error");
+        return;
+      }
+
+      // 1) 议题详情（类别决定 Bug 根因取证注入）。
+      const detail = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: task.yunxiaoWorkitemId,
+      });
+
+      // 2) 议题图片归档任务附件目录（任务结束自动清理）；全部失败阻断，部分失败放行。
+      const images = await invoke<YunxiaoIssueImagesPrepared>(
+        "yunxiao_prepare_issue_images",
+        {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          workitemId: detail.id,
+          projectPath: project.path,
+          taskId: task.id,
+        },
+      );
+      if (images.total > 0 && images.failed === images.total) {
+        showToast(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }), "error");
+        return;
+      }
+      if (images.failed > 0) {
+        showToast(
+          t("yunxiao.images.partial", {
+            failed: images.failed,
+            downloaded: images.downloaded,
+          }),
+          "warning",
+        );
+      }
+
+      // 3) 直接执行指令 + prompt 组装（议题即 spec，补充说明优先于议题描述）。
+      const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
+      const instructions = await invoke<string>("get_direct_execution_instructions", {
+        projectPath: project.path,
+        taskId: task.id,
+        hasBug,
+      });
+      const prompt = buildDirectExecutionPrompt({
+        issue: detail,
+        link: yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "",
+        imagePaths: images.paths,
+        userNotes: notes,
+        instructions,
+      });
+
+      // 4) 待办原地转为直接执行任务并启动（当前工作区，不建 worktree）。
+      const updated: Task = {
+        ...task,
+        name: `${detail.serialNumber} ${detail.subject}`.trim() || task.name,
+        prompt,
+        agent,
+        permissionMode,
+        model: agent === task.agent ? task.model : undefined,
+        reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
+        yunxiaoSerialNumber: detail.serialNumber,
+        status: "pending",
+        updatedAt: Date.now(),
+        attentionRequestedAt: undefined,
+      };
+      setTasks((prev) => {
+        const next = prev.map((t) => (t.id === task.id ? updated : t));
+        persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
+        return next;
+      });
+      updateProjectView(project.id, { selectedTaskId: task.id, isNewTask: false });
+      tm.resetTaskTerminal(task.id);
+      invokeRunTask(updated, project.path, [], [], project.path);
+    } catch (e) {
+      showToast(t("yunxiao.direct.startFailed", { error: String(e) }), "error");
+    } finally {
+      todoDiscussionStartingRef.current = false;
+      setTodoDiscussionStarting(false);
+    }
+  }
+
+  /**
    * 方案定稿后的「生成待办」：按确认页顺序直接生成 N 个执行待办（一议题一任务，
    * 任务↔议题 1:1），不自动建批——任务跑在当前工作区，是否归批由用户后续手动决定。
    */
@@ -2769,6 +3005,7 @@ function App() {
               onRunTodoTask={handleRunTodoTask}
               onUpdateTodo={handleUpdateTodo}
               onStartTodoYunxiaoDiscussion={handleStartTodoYunxiaoDiscussion}
+              onStartTodoYunxiaoDirect={handleStartTodoYunxiaoDirectExecution}
               todoDiscussionStarting={todoDiscussionStarting}
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
@@ -2847,6 +3084,7 @@ function App() {
             onEnterSkillHub={handleEnterSkillHub}
             onCreateYunxiaoPlan={handleCreateYunxiaoPlan}
             onStartYunxiaoPlanDiscussion={handleStartYunxiaoPlanDiscussion}
+            onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleCancelYunxiaoPlan}
             plans={plans}
             themeVariant={themeVariant}

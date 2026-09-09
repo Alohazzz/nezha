@@ -637,6 +637,88 @@ pub async fn get_plan_execution_instructions(
     ))
 }
 
+// ── 直接执行链路（跳过讨论，议题即 spec）──────────────────────────────────────
+
+/// 直接执行流程：无预生成方案文档，议题内容即 spec；执行动作同样走 implement 技能。
+const DIRECT_EXECUTION_FLOW: &str = "议题即工单：本议题没有预先生成的方案文档，下方议题内容（含描述与发起人补充）就是本次改动的 spec。请使用 implement 技能执行本次改动：把议题内容当作 spec/工单，按该技能的流程落地实现并自验。执行中发现议题描述与代码现实冲突（文件/函数不存在、议题假设错误、影响面比议题判断更大）时，停下来在会话中说明冲突点并给出建议，等用户决策后再继续；不要擅自偏离议题意图。";
+
+/// Bug 类议题直接执行时的根因取证（镜像方案讨论链路的 has_bug 提示：
+/// 明确的 Bug 也不跳过取证，防止照症状修）。
+const DIRECT_BUG_DIAGNOSIS_HINT: &str = "本议题是 Bug 缺陷：动手改代码前，先按 diagnosing-bugs 方法论定位根因——结论要有可复现的证据（复现步骤 / 日志 / 代码位置）；若根因与议题描述不符，停下来在会话中说明差异，等用户确认后再继续。";
+
+/// 直接执行任务的产物落盘：discussion.md 比方案执行任务多写「修改方案汇总」段
+/// （直接链路没有 plan.md，discussion.md 是回写云效的唯一素材源；
+/// 回写按 `## 影响范围与测试` 前后切分开发向 / 测试向评论）。
+fn direct_execution_draft_instructions(
+    task_id: &str,
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+) -> String {
+    let knowledge_section = knowledge_target.map_or_else(String::new, |target| {
+        format!(
+            r#"
+2. `.nezha/drafts/{task_id}/knowledge.json` —— 知识沉淀候选（任务收尾前写入）：
+   - {knowledge_rules}
+   - 每条候选必须携带 "knowledgeGraphId"，值必须是：{target_graph_id}
+   - 输出 JSON 数组写入该文件，无候选则写 `[]`；只输出 JSON，不要附加说明文字。"#,
+            task_id = task_id,
+            knowledge_rules = KNOWLEDGE_SEDIMENTATION_RULES,
+            target_graph_id = target.id,
+        )
+    });
+    format!(
+        r#"── 工作产物落盘（必须执行）────────────────────────────
+本任务的工作产物写入当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录（目录不存在就先创建）：
+
+1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的素材（直接执行没有方案文档，本文件是唯一素材源，三段按顺序齐全）：
+   - 结构固定三段（按顺序）：
+     a. `## 修改方案汇总`：本议题实际做了什么改动、为什么这样改（回写时作为开发向评论的主体，承担方案文档的角色）；
+     b. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；数值同时写入议题「价值评分」字段。
+     c. `## 影响范围与测试（测试向）`：字段固定三行——`修改分支`（本任务改动所在分支，如 master）、`修改文件`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`测试步骤`（可执行的测试步骤与回归点）。
+   - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。{knowledge_section}"#,
+        task_id = task_id,
+    )
+}
+
+/// 直接执行任务的完整指令：流程（议题即 spec + Bug 根因取证 + knowledge-graph 认知）+
+/// 评分 + 补录 + 产物落盘。has_bug 由议题类别推导（categoryId == bug）。
+pub fn direct_execution_instructions(
+    task_id: &str,
+    has_bug: bool,
+    knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
+) -> String {
+    let mut pieces: Vec<String> = vec![format!("## 工作流程\n{}", DIRECT_EXECUTION_FLOW)];
+    if has_bug {
+        pieces.push(DIRECT_BUG_DIAGNOSIS_HINT.to_string());
+    }
+    pieces.push(PLAN_KNOWLEDGE_INSTRUCTION.to_string());
+    pieces.push(format!("## 输出与产物\n{}", VALUE_SCORE_INSTRUCTION));
+    pieces.push(BACKFILL_SKILL_INSTRUCTION.to_string());
+    pieces.push(direct_execution_draft_instructions(task_id, knowledge_target));
+    pieces.join("\n\n")
+}
+
+/// 直接执行链路：议题列表 / 绑定待办「直接开始」时由前端调用组装 prompt。
+#[tauri::command]
+pub async fn get_direct_execution_instructions(
+    project_path: String,
+    task_id: String,
+    has_bug: Option<bool>,
+) -> Result<String, String> {
+    let task_id = task_id.trim().to_string();
+    if task_id.is_empty() || task_id.contains('/') || task_id.contains('\\') || task_id.contains("..")
+    {
+        return Err("非法的任务 ID".to_string());
+    }
+    let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
+        .await
+        .ok();
+    Ok(direct_execution_instructions(
+        &task_id,
+        has_bug.unwrap_or(false),
+        knowledge_target.as_ref(),
+    ))
+}
+
 /// 合并代码审查规则（作为可维护的 `merge-code-review` Skill 的默认文本；前端取用并拼进
 /// 审查任务的 prompt，供 Agent 逐项校验批次分支相对 base 的改动）。
 const MERGE_CODE_REVIEW_INSTRUCTIONS: &str = r#"你是合并代码审查助手。请对给定批次的改动（相对 base 分支 base...branch 的 diff）做代码审查校验。
@@ -1536,6 +1618,31 @@ mod tests {
         assert!(!prompt.contains("使用 `ICUCIS` 技能"));
         assert!(!prompt.contains("knowledge-graph"));
         assert!(!prompt.contains("NEZHA_TASK_ID"));
+    }
+
+    #[test]
+    fn direct_execution_instructions_compose_flow_and_drafts() {
+        let prompt = direct_execution_instructions("9001", true, None);
+        // 议题即 spec 流程 + Bug 根因取证 + 知识认知全注入。
+        assert!(prompt.contains("议题即工单"));
+        assert!(prompt.contains("diagnosing-bugs"));
+        assert!(prompt.contains("knowledge-graph"));
+        // discussion.md 三段结构（直接链路无方案文档，本文件是回写唯一素材源）。
+        assert!(prompt.contains(".nezha/drafts/9001/discussion.md"));
+        assert!(prompt.contains("## 修改方案汇总"));
+        assert!(prompt.contains("## 价值评分"));
+        assert!(prompt.contains("## 影响范围与测试"));
+        assert!(prompt.contains("backfill-issue.json"));
+        // 无图谱目标时不出现 knowledge.json 落盘段（补录指令文本里会提及该文件名，
+        // 故断言用具体落盘路径）。
+        assert!(!prompt.contains(".nezha/drafts/9001/knowledge.json"));
+    }
+
+    #[test]
+    fn direct_execution_instructions_bug_hint_conditional() {
+        let no_bug = direct_execution_instructions("9002", false, None);
+        assert!(!no_bug.contains("diagnosing-bugs"));
+        assert!(no_bug.contains("knowledge-graph"));
     }
 
     #[test]

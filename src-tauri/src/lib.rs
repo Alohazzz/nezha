@@ -386,6 +386,7 @@ pub fn run() {
             agent_assist::generate_task_name,
             agent_assist::get_plan_discussion_instructions,
             agent_assist::get_plan_execution_instructions,
+            agent_assist::get_direct_execution_instructions,
             agent_assist::get_merge_code_review_instructions,
             agent_assist::run_merge_code_review,
             agent_assist::run_conflict_resolution,

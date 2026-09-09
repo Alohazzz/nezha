@@ -152,6 +152,64 @@ export function buildPlanExecutionPrompt(input: {
   return pieces.filter((p) => p && p.trim()).join("\n\n");
 }
 
+/**
+ * 直接执行提示词（跳过讨论链路）：无方案文档，议题内容即 spec。
+ * 议题信息 + 描述 + 附件图片 + 发起人补充 + 协作约束 + 后端直接执行指令。
+ */
+export function buildDirectExecutionPrompt(input: {
+  issue: YunxiaoWorkitem;
+  link: string;
+  imagePaths: string[];
+  /** 发起人手动补充（待办视图入口可填），原样拼进执行 prompt。 */
+  userNotes?: string;
+  instructions: string;
+}): string {
+  const pieces: string[] = [];
+  pieces.push(
+    "你是「议题执行助手」。本议题没有预先生成的方案文档，下方议题内容就是本次改动的 spec：按议题要求直接完成改动，并产出价值评分与测试简报（落盘位置见指令），供「回写云效」直接生成两条评论（开发向 + 测试向）。",
+  );
+
+  const info = [
+    `- 编号：${input.issue.serialNumber}`,
+    `- 类型：${categoryLabel(input.issue.categoryId)}`,
+    `- 标题：${input.issue.subject}`,
+  ];
+  pieces.push(`## 议题信息\n${info.join("\n")}`);
+
+  const description = normalizeIssueDescription(input.issue.description);
+  if (description) {
+    pieces.push(`## 议题描述\n${description}`);
+  }
+
+  const link = input.link.trim();
+  if (link) {
+    pieces.push(`## 云效链接\n${link}`);
+  }
+
+  const tag = input.issue.serialNumber ? `#${input.issue.serialNumber}` : "";
+  if (tag) {
+    pieces.push(
+      `## 协作约束\n所有 git commit message 必须包含议题编号 tag（${tag}，如 \`fix: 修复登录失效 ${tag}\`），云效按提交信息中的编号自动关联代码到议题。当前工作区可能还承载其他议题任务的改动，只提交本议题（${input.issue.serialNumber}）相关的改动，不要夹带其他议题的修改。`,
+    );
+  }
+
+  if (input.imagePaths.length > 0) {
+    pieces.push(`## 附件图片（用文件工具读取原图）\n${input.imagePaths.join("\n")}`);
+  }
+
+  const notes = input.userNotes?.trim();
+  if (notes) {
+    pieces.push(
+      `## 发起人补充（优先参考）\n以下是发起人手动补充的内容（背景描述、参考资料位置、已有修改方案等），优先于议题描述作为执行基线：参考资料按位置自行读取；若包含已有修改方案，把它当作底稿在其上完善，不要推倒重来；补充内容与议题描述冲突时，先向发起人确认再动手。\n\n${notes}`,
+    );
+  }
+
+  if (input.instructions.trim()) {
+    pieces.push(input.instructions.trim());
+  }
+  return pieces.filter((p) => p && p.trim()).join("\n\n");
+}
+
 /** 在方案文档中定位某议题的节：`## <编号> ` 起，到下一个 `## ` 标题或文末止。 */
 export function extractPlanIssueSection(markdown: string, serialNumber: string): string | null {
   const serial = serialNumber.trim();
