@@ -49,16 +49,16 @@ VS Code / wezterm 均采用同一方案：随应用侧载新版 `conpty.dll` + `
 `tauri.windows.conf.json` 的 `bundle.resources` 打入 Windows 安装包；
 macOS / Linux 包不含这些资源。
 
-当前版本：**1.24.260512001**（microsoft/terminal release `v1.24.11321.0`）
+当前版本：**1.25.260303002-preview**（microsoft/terminal release `v1.25.622.0`）
 
 ```
-来源: https://github.com/microsoft/terminal/releases/download/v1.24.11321.0/Microsoft.Windows.Console.ConPTY.1.24.260512001.nupkg
-nupkg SHA256: 3c66a99d38b5c2ac4c7552b7632cbbef23a1911aca5e20370109eb555a15d077
+来源: https://github.com/microsoft/terminal/releases/download/v1.25.622.0/Microsoft.Windows.Console.ConPTY.1.25.260303002-preview.nupkg
+nupkg SHA256: 3ae991dd31652bfe90521332c3e3f075ff6a906f706d8fd4f692d8bc67b6969d
 
-c46dcd04f52b97f6a8cf53e8f547c85a821660bed18de2b3344afcd4a8389ad6  x64/conpty.dll
-47828c3fe080212f69dfdb39ab3673170fcc7445924c76fe003cefd18247dd5d  x64/OpenConsole.exe
-8261dd05f09ea8d54317eeacb8ee62790f5b9e2e40b1e2d5728425c0c42fbdf8  arm64/conpty.dll
-29cb3a9471c5b13bfb3ac812043e496199ba776ced1c5e14d30cb1234433a437  arm64/OpenConsole.exe
+3319b484b80bb53d1f4d0a9eb0ea60fd0f61da69db7280ca43b84215f19245ff  x64/conpty.dll
+7f68c840226505004215c0b82d4e502c24b5bc3f4b93c4baaaa19bd679c0def8  x64/OpenConsole.exe
+b3a9f975c51d5b9b96d290bf784e990e3f85203b063c21614457353f566266ff  arm64/conpty.dll
+7fa560be0c9b6c81db5d1b855a4a6e0f3ee5a2ea75d36eebb3ae44443b8d4866  arm64/OpenConsole.exe
 ```
 
 ## 升级二进制（手工步骤）
