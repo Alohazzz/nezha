@@ -1242,7 +1242,9 @@ export function ProjectPage({
                   !!selectedTask,
               )}
             </div>
-            <div style={s.mainStageFullscreenContent}>{renderContent()}</div>
+            {(openFiles.length > 0 || openDiff || isNewTask) && (
+              <div style={s.mainStageFullscreenContent}>{renderContent()}</div>
+            )}
           </div>
           </>
         )}
