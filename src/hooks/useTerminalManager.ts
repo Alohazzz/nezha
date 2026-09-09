@@ -234,6 +234,10 @@ export function useTerminalManager() {
       }
       state.pending = [];
     }
+    // 终端就绪握手（issue #74）：xterm 已挂载且 onData → send_input 已接通，
+    // 通知后端放行等待中的 run_task / fork_task spawn，让 agent 开场的 OSC
+    // 10/11 主题探测能即时应答。后端无等待点时为 no-op；失败不影响本地写入。
+    invoke("terminal_ready", { taskId }).catch(() => {});
   }, []);
 
   const handleSnapshot = useCallback((taskId: string, snapshot: string) => {

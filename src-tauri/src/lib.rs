@@ -54,6 +54,10 @@ pub struct TaskManager {
     /// 任务对应的真实项目根路径（run_task / resume_task 时由前端传入，
     /// 用于任务收尾时把 worktree 内的草稿收拢到项目根）。
     pub(crate) task_real_paths: Mutex<HashMap<String, String>>,
+    /// 终端就绪握手等待点（issue #74）：run_task / fork_task spawn 前等待，
+    /// 前端 xterm 挂载完成后经 terminal_ready 命令放行，保证 agent 开场的
+    /// OSC 10/11 主题探测能被应答。任务取消/完成时条目被取走放行。
+    pub(crate) terminal_ready: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
 }
@@ -328,6 +332,7 @@ pub fn run() {
             claimed_session_paths: Mutex::new(HashSet::new()),
             task_names: Mutex::new(HashMap::new()),
             task_real_paths: Mutex::new(HashMap::new()),
+            terminal_ready: Mutex::new(HashMap::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
         })
         .on_window_event(|window, event| {
@@ -359,6 +364,8 @@ pub fn run() {
             pty::run_task,
             pty::resume_task,
             pty::fork_task,
+            pty::arm_terminal_ready,
+            pty::terminal_ready,
             pty::cancel_task,
             pty::complete_task,
             pty::get_active_task_ids,
