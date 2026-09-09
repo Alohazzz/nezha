@@ -21,6 +21,11 @@ const MAX_REASONING_EFFORT_BYTES: usize = 128;
 /// 最终使写入进程（Claude/Codex）的 write() 系统调用阻塞，从源头限流。
 const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
 
+/// 终端就绪握手最长等待：超过即回退「不等待直接启动」的旧行为。前端正常在
+/// 首帧内完成 xterm 挂载并触发 terminal_ready，3s 已含慢机裕量；上限的意义
+/// 是终端始终未挂载（异常路径）时不无限推迟任务启动。
+const TERMINAL_READY_WAIT_MAX: Duration = Duration::from_secs(3);
+
 /// 统一的 PTY system 入口:Windows 上先等待侧载 ConPTY 预加载完成再创建
 /// (portable-pty 的 CONPTY 是 lazy_static,首次 openpty 前必须完成预加载,
 /// 见 platform/windows.rs;其余平台该屏障为 no-op)。openpty 一律经此获取,
@@ -28,6 +33,66 @@ const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
 fn pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     crate::platform::wait_conpty_preload();
     native_pty_system()
+}
+
+// ── 终端就绪握手 ─────────────────────────────────────────────────────────────
+//
+// 目的：让 agent 进程启动时 xterm 已就位，其开场的 OSC 10/11 背景色查询能在
+// Codex TUI 写死的 ~100ms 预算内被应答（xterm 按当前主题回复 → Codex/Claude
+// 正确选择浅色/深色主题）。若在 xterm 挂载前 spawn，查询只会落进前端 pending
+// 缓冲、超时后 Codex 退回读 ConPTY 恒为黑底的色表 → 浅色主题下自绘 UI 仍是
+// 深色（issue #74）。
+//
+// 时序：前端在发起 run_task / fork_task 前先 await arm_terminal_ready（登记
+// 等待点，消除 terminal_ready 与启动命令两条 IPC 通道的竞态），TerminalView
+// 完成 xterm 挂载与 onData 接线后调 terminal_ready 放行；run_task / fork_task
+// 在 spawn 子进程前 wait_terminal_ready。resume_task 不等待——它本来就由前端
+// 的终端就绪回调触发（pendingResumeStarts），天然满足先后顺序。
+
+fn insert_terminal_waitpoint(task_manager: &TaskManager, task_id: &str) {
+    task_manager
+        .terminal_ready
+        .lock()
+        .insert(task_id.to_string(), Arc::new(tokio::sync::Notify::new()));
+}
+
+/// 前端在发起 run_task / fork_task 前调用：先登记等待点，消除 terminal_ready
+/// 与启动命令两条 IPC 通道的到达顺序竞态（terminal_ready 先到时才有东西可放行）。
+#[tauri::command]
+pub async fn arm_terminal_ready(
+    task_manager: State<'_, TaskManager>,
+    task_id: String,
+) -> Result<(), String> {
+    insert_terminal_waitpoint(&task_manager, &task_id);
+    Ok(())
+}
+
+async fn wait_terminal_ready(task_manager: &TaskManager, task_id: &str) {
+    let notify = task_manager.terminal_ready.lock().remove(task_id);
+    if let Some(notify) = notify {
+        // timeout 防御：终端永远未挂载（如异常 UI 状态）时不无限推迟任务启动。
+        let _ = tokio::time::timeout(TERMINAL_READY_WAIT_MAX, notify.notified()).await;
+    }
+}
+
+#[tauri::command]
+pub async fn terminal_ready(
+    task_manager: State<'_, TaskManager>,
+    task_id: String,
+) -> Result<(), String> {
+    if let Some(notify) = task_manager.terminal_ready.lock().remove(&task_id) {
+        notify.notify_waiters();
+    }
+    Ok(())
+}
+
+/// 终端就绪等待被取消/完成打断时放行等待者；spawn 侧复查取消标记后自行放弃。
+/// Notify 悬挂无泄漏风险（Arc 随 map 条目释放），这里主动放行只为让 run_task
+/// 尽快走到「复查标记 → 不 spawn」的出口。
+fn release_terminal_ready(task_manager: &TaskManager, task_id: &str) {
+    if let Some(notify) = task_manager.terminal_ready.lock().remove(task_id) {
+        notify.notify_waiters();
+    }
 }
 
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
@@ -1062,6 +1127,19 @@ pub async fn run_task(
         cmd.env(key, value);
     }
 
+    // 终端就绪握手：等待前端 xterm 挂载完成再 spawn，保证 agent 开场的 OSC
+    // 10/11 主题探测在 Codex 写死的 ~100ms 预算内被应答（issue #74）。
+    // 取消/完成先到时标记已插入、Notify 已放行，下面复查后直接放弃启动。
+    wait_terminal_ready(&task_manager, &task_id).await;
+    if task_manager.cancelled_tasks.lock().contains(&task_id)
+        || task_manager
+            .manually_completed_tasks
+            .lock()
+            .contains(&task_id)
+    {
+        return Ok(());
+    }
+
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
     let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -1126,6 +1204,7 @@ pub async fn cancel_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    release_terminal_ready(&task_manager, &task_id);
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
     if let Some(arc) = child_arc {
@@ -1163,6 +1242,7 @@ pub async fn complete_task(
         .lock()
         .insert(task_id.clone());
     task_manager.cancelled_tasks.lock().remove(&task_id);
+    release_terminal_ready(&task_manager, &task_id);
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
     if let Some(arc) = child_arc {
@@ -1430,6 +1510,17 @@ pub async fn fork_task(
     let launch_project_path = project_path.clone();
     let launch_task_id = task_id.clone();
     let launch_agent = agent.clone();
+    // 终端就绪握手：与 run_task 同理，spawn 前等前端 xterm 挂载（issue #74）。
+    // fork 由前端在终端就绪回调前发起，必须在此等待；取消复查同 run_task。
+    wait_terminal_ready(&task_manager, &task_id).await;
+    if task_manager.cancelled_tasks.lock().contains(&task_id)
+        || task_manager
+            .manually_completed_tasks
+            .lock()
+            .contains(&task_id)
+    {
+        return Ok(());
+    }
     let spawned = tokio::task::spawn_blocking(move || {
         spawn_fork_task_process(
             &launch_project_path,

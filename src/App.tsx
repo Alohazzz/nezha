@@ -817,13 +817,25 @@ function App() {
     setHubMode(false);
   }
 
-  function invokeRunTask(
+  // 终端就绪握手（issue #74）：先在后端登记等待点，再发起 run_task / fork_task。
+  // 后续 TerminalView 挂载完成会触发 terminal_ready 放行 spawn，保证 agent 开场的
+  // OSC 10/11 主题探测能被 xterm 即时应答。arm 失败不阻塞启动（后端 3s 超时兜底）。
+  async function armTerminalReady(taskId: string) {
+    try {
+      await invoke("arm_terminal_ready", { taskId });
+    } catch {
+      /* 后端不可达时直接按旧行为启动 */
+    }
+  }
+
+  async function invokeRunTask(
     task: Task,
     projectPath: string,
     images: string[],
     texts: string[] = [],
     realProjectPath: string,
   ) {
+    await armTerminalReady(task.id);
     invoke("run_task", {
       taskId: task.id,
       taskName: task.name ?? "",
@@ -1295,7 +1307,8 @@ function App() {
     });
   }
 
-  function invokeForkTask(task: Task, project: Project, sourceSessionId: string) {
+  async function invokeForkTask(task: Task, project: Project, sourceSessionId: string) {
+    await armTerminalReady(task.id);
     invoke("fork_task", {
       taskId: task.id,
       projectPath: project.path,
