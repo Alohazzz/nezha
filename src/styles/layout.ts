@@ -238,6 +238,7 @@ export const layout = {
   mainStageLeft: {
     position: "relative" as const,
     minWidth: 0,
+    flexShrink: 0,
     display: "flex",
     flexDirection: "column" as const,
     overflow: "hidden",
@@ -249,10 +250,12 @@ export const layout = {
     overflow: "hidden",
   },
   mainStageDivider: {
-    width: 5,
+    width: 6,
     flexShrink: 0,
     cursor: "col-resize",
     background: "var(--border-dim)",
+    position: "relative" as const,
+    zIndex: 5,
   },
   mainStagePtyEmpty: {
     flex: 1,

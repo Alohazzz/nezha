@@ -988,7 +988,7 @@ export function ProjectPage({
       <div style={s.mainContent}>
         <div id="nezha-main-stage" style={s.projectMainStage}>
           {/* 左：任务 PTY 终端 —— 始终可见，不再被文件前景层覆盖 */}
-          <div style={{ ...s.mainStageLeft, flexGrow: mainStageRatio, flexBasis: 0 }}>
+          <div style={{ ...s.mainStageLeft, width: `${mainStageRatio * 100}%` }}>
             {projectTasks
               .filter((t) => mountedTaskIds.has(t.id))
               .filter((t) => t.id === selectedTaskId && t.status !== "todo")
@@ -1095,7 +1095,7 @@ export function ProjectPage({
           <div onMouseDown={handleMainStageResizeStart} style={s.mainStageDivider} />
 
           {/* 右：已打开文件 / diff / 新建任务（原前景层） */}
-          <div style={{ ...s.mainStageRight, flexGrow: 1 - mainStageRatio, flexBasis: 0 }}>
+          <div style={{ ...s.mainStageRight, flex: 1 }}>
           <ErrorBoundary
             label="主内容区"
             fallback={(error, reset) => (
