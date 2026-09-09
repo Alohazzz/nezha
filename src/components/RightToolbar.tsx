@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { IconButton } from "./IconButton";
-import { Folder, Search, GitBranch, GitPullRequest, History, Settings, Terminal, Hammer, BookOpen } from "lucide-react";
+import { Folder, Search, GitBranch, GitPullRequest, History, Settings, Terminal, Hammer, BookOpen, Pin } from "lucide-react";
 import { useI18n } from "../i18n";
 import type { RightPanel } from "../hooks/useProjectPanels";
 
@@ -11,6 +11,8 @@ export function RightToolbar({
   onToggleTerminal,
   onOpenSearch,
   onOpenSettings,
+  panelDocked,
+  onTogglePanelDocked,
 }: {
   activePanel: RightPanel;
   onToggle: (panel: Exclude<RightPanel, null>) => void;
@@ -18,6 +20,8 @@ export function RightToolbar({
   onToggleTerminal: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
+  panelDocked: boolean;
+  onTogglePanelDocked: () => void;
 }) {
   const { t } = useI18n();
   const buttons: Array<{
@@ -69,6 +73,15 @@ export function RightToolbar({
         active={terminalActive}
         onClick={onToggleTerminal}
       />
+
+      {activePanel && (
+        <IconButton
+          icon={<Pin size={17} />}
+          title={panelDocked ? "取消固定（悬浮）" : "固定为侧边栏"}
+          active={panelDocked}
+          onClick={onTogglePanelDocked}
+        />
+      )}
 
       <div style={{ width: 20, height: 1, background: "var(--border-dim)", margin: "4px 0" }} />
 

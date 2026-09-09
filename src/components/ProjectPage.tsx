@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Columns2, Maximize2 } from "lucide-react";
 import type {
   Project,
   Task,
@@ -264,14 +265,20 @@ export function ProjectPage({
   const { showToast } = useToast();
   const {
     rightPanel,
+    rightPanelDocked,
     openFiles,
     activeFilePath,
     openDiff,
     rightPanelWidth,
     terminalHeight,
+    mainStageRatio,
+    layoutMode,
+    toggleLayoutMode,
     setOpenDiff,
     openRightPanel,
+    closeRightPanel,
     handleTogglePanel,
+    handleTogglePanelDocked,
     handleFileSelect,
     openKnowledgeCard,
     handleFileTabSelect,
@@ -286,6 +293,7 @@ export function ProjectPage({
     clearFileAndDiff,
     handleRightResizeStart,
     handleTerminalResizeStart,
+    handleMainStageResizeStart,
   } = useProjectPanels();
 
   const [showShellTerminal, setShowShellTerminal] = useState(false);
@@ -343,6 +351,30 @@ export function ProjectPage({
   const pendingCmdRef = useRef<string | null>(null);
   const prevHadDiffRef = useRef(false);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
+  // 右侧面板区域（面板 + 竖条按钮栏）的 ref，用于“焦点离开自动收起”的外部点击检测。
+  const rightPanelRegionRef = useRef<HTMLDivElement | null>(null);
+  const rightToolbarRef = useRef<HTMLDivElement | null>(null);
+
+  // 非固定（未 📌）的右侧面板：点击面板/竖条区域之外时自动收起。
+  useEffect(() => {
+    if (!rightPanel || rightPanelDocked) return; // 无面板或已固定则不监听
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node | null;
+      const inPanel = rightPanelRegionRef.current?.contains(target);
+      const inToolbar = rightToolbarRef.current?.contains(target);
+      if (!inPanel && !inToolbar) {
+        closeRightPanel();
+      }
+    };
+    // 延迟到下一帧再挂载，避免“刚点击按钮展开面板”这一次点击也把它收起。
+    const timer = window.setTimeout(() => {
+      document.addEventListener("pointerdown", handlePointerDown);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [rightPanel, rightPanelDocked, closeRightPanel]);
   const handleCacheNewTaskDraft = useCallback((draft: NewTaskDraft | null) => {
     newTaskDraftRef.current = draft;
   }, []);
@@ -352,6 +384,220 @@ export function ProjectPage({
     [tasks, project.id],
   );
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
+
+  // 渲染任务 PTY 层（在 partition 左列与 fullscreen 背景共用）。
+  // ptyVisible 由调用方决定：partition 常显；fullscreen 仅在未被文件/diff 覆盖时显示。
+  const renderPty = (ptyVisible: boolean) => {
+    return (
+      <>
+        {projectTasks
+          .filter((t) => mountedTaskIds.has(t.id))
+          .filter((t) => t.id === selectedTaskId && t.status !== "todo")
+          .map((task) => {
+            const worktreePath =
+              task.worktreePath && !task.worktreeDiscarded ? task.worktreePath : null;
+            return (
+              <RunningView
+                key={task.id}
+                task={task}
+                projectPath={project.path}
+                runCount={taskRunCounts[task.id] ?? 0}
+                visible={ptyVisible}
+                projectActive={visible}
+                onCancel={() => onCancelTask(task.id)}
+                onResume={() => onResumeTask(task.id)}
+                onFork={(name) => onForkTask(task.id, name)}
+                onMergeWorktree={() => onMergeWorktree(task.id)}
+                onDiscardWorktree={() => onDiscardWorktree(task.id)}
+                onOpenWriteback={() => openWriteback(task.id)}
+                onOpenKnowledgeSedimentation={() => openKnowledgeSedimentation(task.id)}
+                onOpenPlanPreview={
+                  task.planId
+                    ? () => {
+                        setPlanPreviewId(task.planId ?? null);
+                      }
+                    : undefined
+                }
+                onOpenWorktreeTerminal={
+                  worktreePath ? () => handleOpenWorktreeTerminal(worktreePath) : undefined
+                }
+                onReconnect={() => onReconnectTask(task.id)}
+                onMarkDone={() => onMarkTaskDone(task.id)}
+                onInput={(data) => onInput(task.id, data)}
+                onResize={(cols, rows) => onResize(task.id, cols, rows)}
+                onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
+                onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
+                onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
+                getRestoreState={() => getTaskRestoreState(task.id)}
+                onRename={(name) => onRenameTask(task.id, name)}
+                onGenerateName={() => onGenerateTaskName(task.id)}
+                themeVariant={themeVariant}
+                terminalFontSize={terminalFontSize}
+                terminalScrollback={terminalScrollback}
+                monoFontFamily={monoFontFamily}
+              />
+            );
+          })}
+        {!projectTasks.some(
+          (t) => t.id === selectedTaskId && t.status !== "todo" && mountedTaskIds.has(t.id),
+        ) && (
+          isNewTask || !selectedTask ? (
+            <NewTaskView
+              project={project}
+              repoPath={subRepoPath}
+              roots={gitRoots}
+              onSetRepoPath={setSelectedRoot}
+              otherProjects={otherProjects}
+              onSubmit={(t) => onSubmitTask({ ...t, repoPath: subRepoPath })}
+              initialDraft={newTaskDraftRef.current}
+              onCacheDraft={handleCacheNewTaskDraft}
+            />
+          ) : selectedTask.status === ("todo" as TaskStatus) ? (
+            selectedTask.planId && selectedTask.yunxiaoWorkitemId ? (
+              <PlanTaskView
+                task={selectedTask}
+                plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
+                plans={plans.filter((p) => p.projectId === project.id)}
+                yunxiaoProjectId={yunxiaoProjectId}
+                onBack={onBack}
+                onPreviewPlan={(planId) => {
+                  setPlanPreviewId(planId);
+                }}
+                onRebindPlan={onRebindTaskPlan}
+                onUpdateTodo={onUpdateTodo}
+                onRunTodo={onRunTodoTask}
+              />
+            ) : selectedTask.yunxiaoWorkitemId ? (
+              <YunxiaoTodoDiscussionView
+                task={selectedTask}
+                starting={todoDiscussionStarting}
+                onBack={onBack}
+                onStartDiscussion={onStartTodoYunxiaoDiscussion}
+                onStartDirect={onStartTodoYunxiaoDirect}
+              />
+            ) : (
+              <TodoTaskView
+                task={selectedTask}
+                onRunTodo={onRunTodoTask}
+                onUpdateTodo={onUpdateTodo}
+              />
+            )
+          ) : (
+            <div style={s.mainStagePtyEmpty}>选择左侧任务以查看终端输出，或新建任务</div>
+          )
+        )}
+      </>
+    );
+  };
+
+  // 渲染前景内容层（文件 / diff / 新建任务），在 partition 右列与 fullscreen 前景共用。
+  const renderContent = () => {
+    return (
+      <ErrorBoundary
+        label="主内容区"
+        fallback={(error, reset) => (
+          <div style={s.errorBoundaryWrap}>
+            <div style={s.errorBoundaryIcon}>⚠</div>
+            <div style={s.errorBoundaryTitle}>内容区渲染出错</div>
+            <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
+            <div style={s.errorBoundaryActions}>
+              <button onClick={reset} style={s.errorBoundaryBtn}>
+                重试
+              </button>
+              <button
+                onClick={() => {
+                  clearFileAndDiff();
+                  reset();
+                }}
+                style={s.errorBoundaryBtn}
+              >
+                返回任务视图
+              </button>
+            </div>
+          </div>
+        )}
+      >
+        {openDiff ? (
+          openDiff.kind === "file" ? (
+            <GitDiffViewer
+              projectRoot={project.path}
+              repoPath={gitContextPath}
+              mode="file"
+              filePath={openDiff.filePath}
+              staged={openDiff.staged}
+              title={openDiff.label}
+              onClose={() => setOpenDiff(null)}
+              comments={diffComments}
+              onCreateComment={handleCreateDiffComment}
+              onUpdateCommentText={handleUpdateDiffCommentText}
+              onDeleteComment={handleDeleteDiffComment}
+              onToggleCommentStatus={handleToggleDiffCommentStatus}
+              onSendComments={handleSendDiffComments}
+            />
+          ) : openDiff.kind === "commit-file" ? (
+            <GitDiffViewer
+              projectRoot={project.path}
+              repoPath={gitContextPath}
+              mode="commit-file"
+              commitHash={openDiff.hash}
+              filePath={openDiff.filePath}
+              title={openDiff.label}
+              onClose={() => setOpenDiff(null)}
+              comments={diffComments}
+              onCreateComment={handleCreateDiffComment}
+              onUpdateCommentText={handleUpdateDiffCommentText}
+              onDeleteComment={handleDeleteDiffComment}
+              onToggleCommentStatus={handleToggleDiffCommentStatus}
+              onSendComments={handleSendDiffComments}
+            />
+          ) : (
+            <GitDiffViewer
+              projectRoot={project.path}
+              repoPath={gitContextPath}
+              mode="commit"
+              commitHash={openDiff.hash}
+              title={openDiff.message}
+              onClose={() => setOpenDiff(null)}
+              comments={diffComments}
+              onCreateComment={handleCreateDiffComment}
+              onUpdateCommentText={handleUpdateDiffCommentText}
+              onDeleteComment={handleDeleteDiffComment}
+              onToggleCommentStatus={handleToggleDiffCommentStatus}
+              onSendComments={handleSendDiffComments}
+            />
+          )
+        ) : openFiles.length > 0 ? (
+          <FileViewer
+            tabs={openFiles}
+            activeFilePath={activeFilePath}
+            projectPath={project.path}
+            onSelectTab={handleFileTabSelect}
+            onCloseTab={handleFileTabClose}
+            onCloseOtherTabs={handleCloseOtherFileTabs}
+            onCloseTabsToRight={handleCloseTabsToRight}
+            onCloseTabsToLeft={handleCloseTabsToLeft}
+            onCloseAllTabs={handleCloseAllFileTabs}
+            themeVariant={themeVariant}
+            onRunMakeTarget={handleRunMakeTarget}
+            comments={reviewComments}
+            onCreateComment={handleCreateComment}
+            onUpdateCommentText={handleUpdateCommentText}
+            onDeleteComment={handleDeleteComment}
+            onToggleCommentStatus={handleToggleCommentStatus}
+            onSendComments={handleSendComments}
+          />
+        ) : (
+          <div style={s.mainStageContentEmpty}>
+            <div style={{ fontSize: 26 }}>📄</div>
+            <div>还没有打开文件</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", opacity: 0.8 }}>
+              在右侧文件树选择一个文件，或从变更/历史里打开 diff
+            </div>
+          </div>
+        )}
+      </ErrorBoundary>
+    );
+  };
 
   // 选中带 worktreePath 的任务（含合并审核发起的审查/冲突任务）时，把项目作用域
   // 默认切到该 worktree，让文件树 / git 面板 / 分支栏直接展示 worktree 内容。
@@ -982,200 +1228,51 @@ export function ProjectPage({
         onToggleCollapsed={() => setTaskPanelCollapsed((v) => !v)}
       />
       <div style={s.mainContent}>
-        <div style={s.projectMainStage}>
-          {/* Foreground: file viewer, diff, or new-task composer */}
-          <ErrorBoundary
-            label="主内容区"
-            fallback={(error, reset) => (
-              <div style={s.errorBoundaryWrap}>
-                <div style={s.errorBoundaryIcon}>⚠</div>
-                <div style={s.errorBoundaryTitle}>内容区渲染出错</div>
-                <div style={s.errorBoundaryMessage}>{error.message || "未知错误"}</div>
-                <div style={s.errorBoundaryActions}>
-                  <button onClick={reset} style={s.errorBoundaryBtn}>
-                    重试
-                  </button>
-                  <button
-                    onClick={() => {
-                      clearFileAndDiff();
-                      reset();
-                    }}
-                    style={s.errorBoundaryBtn}
-                  >
-                    返回任务视图
-                  </button>
-                </div>
-              </div>
-            )}
+        <div style={s.mainStageModeBar}>
+          <button
+            style={s.mainStageModeBtn}
+            title={layoutMode === "partition" ? "切换到全屏模式" : "切换到左右分栏模式"}
+            onClick={toggleLayoutMode}
           >
-            {openDiff ? (
-              openDiff.kind === "file" ? (
-                <GitDiffViewer
-                  projectRoot={project.path}
-                  repoPath={gitContextPath}
-                  mode="file"
-                  filePath={openDiff.filePath}
-                  staged={openDiff.staged}
-                  title={openDiff.label}
-                  onClose={() => setOpenDiff(null)}
-                  comments={diffComments}
-                  onCreateComment={handleCreateDiffComment}
-                  onUpdateCommentText={handleUpdateDiffCommentText}
-                  onDeleteComment={handleDeleteDiffComment}
-                  onToggleCommentStatus={handleToggleDiffCommentStatus}
-                  onSendComments={handleSendDiffComments}
-                />
-              ) : openDiff.kind === "commit-file" ? (
-                <GitDiffViewer
-                  projectRoot={project.path}
-                  repoPath={gitContextPath}
-                  mode="commit-file"
-                  commitHash={openDiff.hash}
-                  filePath={openDiff.filePath}
-                  title={openDiff.label}
-                  onClose={() => setOpenDiff(null)}
-                  comments={diffComments}
-                  onCreateComment={handleCreateDiffComment}
-                  onUpdateCommentText={handleUpdateDiffCommentText}
-                  onDeleteComment={handleDeleteDiffComment}
-                  onToggleCommentStatus={handleToggleDiffCommentStatus}
-                  onSendComments={handleSendDiffComments}
-                />
-              ) : (
-                <GitDiffViewer
-                  projectRoot={project.path}
-                  repoPath={gitContextPath}
-                  mode="commit"
-                  commitHash={openDiff.hash}
-                  title={openDiff.message}
-                  onClose={() => setOpenDiff(null)}
-                  comments={diffComments}
-                  onCreateComment={handleCreateDiffComment}
-                  onUpdateCommentText={handleUpdateDiffCommentText}
-                  onDeleteComment={handleDeleteDiffComment}
-                  onToggleCommentStatus={handleToggleDiffCommentStatus}
-                  onSendComments={handleSendDiffComments}
-                />
-              )
-            ) : openFiles.length > 0 ? (
-              <FileViewer
-                tabs={openFiles}
-                activeFilePath={activeFilePath}
-                projectPath={project.path}
-                onSelectTab={handleFileTabSelect}
-                onCloseTab={handleFileTabClose}
-                onCloseOtherTabs={handleCloseOtherFileTabs}
-                onCloseTabsToRight={handleCloseTabsToRight}
-                onCloseTabsToLeft={handleCloseTabsToLeft}
-                onCloseAllTabs={handleCloseAllFileTabs}
-                themeVariant={themeVariant}
-                onRunMakeTarget={handleRunMakeTarget}
-                comments={reviewComments}
-                onCreateComment={handleCreateComment}
-                onUpdateCommentText={handleUpdateCommentText}
-                onDeleteComment={handleDeleteComment}
-                onToggleCommentStatus={handleToggleCommentStatus}
-                onSendComments={handleSendComments}
-              />
-            ) : isNewTask || !selectedTask ? (
-              <NewTaskView
-                project={project}
-                repoPath={subRepoPath}
-                roots={gitRoots}
-                onSetRepoPath={setSelectedRoot}
-                otherProjects={otherProjects}
-                onSubmit={(t) => onSubmitTask({ ...t, repoPath: subRepoPath })}
-                initialDraft={newTaskDraftRef.current}
-                onCacheDraft={handleCacheNewTaskDraft}
-              />
-            ) : selectedTask.status === ("todo" as TaskStatus) ? (
-              selectedTask.planId && selectedTask.yunxiaoWorkitemId ? (
-                <PlanTaskView
-                  task={selectedTask}
-                  plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
-                  plans={plans.filter((p) => p.projectId === project.id)}
-                  yunxiaoProjectId={yunxiaoProjectId}
-                  onBack={onBack}
-                  onPreviewPlan={(planId) => {
-                    setPlanPreviewId(planId);
-                  }}
-                  onRebindPlan={onRebindTaskPlan}
-                  onUpdateTodo={onUpdateTodo}
-                  onRunTodo={onRunTodoTask}
-                />
-              ) : selectedTask.yunxiaoWorkitemId ? (
-                <YunxiaoTodoDiscussionView
-                  task={selectedTask}
-                  starting={todoDiscussionStarting}
-                  onBack={onBack}
-                  onStartDiscussion={onStartTodoYunxiaoDiscussion}
-                  onStartDirect={onStartTodoYunxiaoDirect}
-                />
-              ) : (
-                <TodoTaskView
-                  task={selectedTask}
-                  onRunTodo={onRunTodoTask}
-                  onUpdateTodo={onUpdateTodo}
-                />
-              )
-            ) : null}
-          </ErrorBoundary>
+            {layoutMode === "partition" ? <Maximize2 size={15} /> : <Columns2 size={15} />}
+            <span>{layoutMode === "partition" ? "全屏" : "分栏"}</span>
+          </button>
+        </div>
+        <div id="nezha-main-stage" style={s.projectMainStage}>
+        {layoutMode === "partition" ? (
+          <>
+          {/* 左：任务 PTY 终端 —— 始终可见，不再被文件前景层覆盖 */}
+          <div style={{ ...s.mainStageLeft, width: `${mainStageRatio * 100}%` }}>
+            {renderPty(visible)}
+          </div>
 
-          {/* Background terminals */}
-          {projectTasks
-            .filter((t) => mountedTaskIds.has(t.id))
-            .map((task) => {
-              const isVisible =
-                openFiles.length === 0 &&
-                !openDiff &&
-                !isNewTask &&
-                !!selectedTask &&
-                task.id === selectedTaskId &&
-                task.status !== "todo";
-              const worktreePath =
-                task.worktreePath && !task.worktreeDiscarded ? task.worktreePath : null;
-              return (
-                <RunningView
-                  key={task.id}
-                  task={task}
-                  projectPath={project.path}
-                  runCount={taskRunCounts[task.id] ?? 0}
-                  visible={visible && isVisible}
-                  projectActive={visible}
-                  onCancel={() => onCancelTask(task.id)}
-                  onResume={() => onResumeTask(task.id)}
-                  onFork={(name) => onForkTask(task.id, name)}
-                  onMergeWorktree={() => onMergeWorktree(task.id)}
-                  onDiscardWorktree={() => onDiscardWorktree(task.id)}
-                  onOpenWriteback={() => openWriteback(task.id)}
-                  onOpenKnowledgeSedimentation={() => openKnowledgeSedimentation(task.id)}
-                  onOpenPlanPreview={
-                    task.planId
-                      ? () => {
-                          setPlanPreviewId(task.planId ?? null);
-                        }
-                      : undefined
-                  }
-                  onOpenWorktreeTerminal={
-                    worktreePath ? () => handleOpenWorktreeTerminal(worktreePath) : undefined
-                  }
-                  onReconnect={() => onReconnectTask(task.id)}
-                  onMarkDone={() => onMarkTaskDone(task.id)}
-                  onInput={(data) => onInput(task.id, data)}
-                  onResize={(cols, rows) => onResize(task.id, cols, rows)}
-                  onRegisterTerminal={(fn) => onRegisterTerminal(task.id, fn)}
-                  onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
-                  onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
-                  getRestoreState={() => getTaskRestoreState(task.id)}
-                  onRename={(name) => onRenameTask(task.id, name)}
-                  onGenerateName={() => onGenerateTaskName(task.id)}
-                  themeVariant={themeVariant}
-                  terminalFontSize={terminalFontSize}
-                  terminalScrollback={terminalScrollback}
-                  monoFontFamily={monoFontFamily}
-                />
-              );
-            })}
+          {/* 中：可拖拽分割条 */}
+          <div onPointerDown={handleMainStageResizeStart} style={s.mainStageDivider} />
+
+          {/* 右：已打开文件 / diff / 新建任务（原前景层） */}
+          <div style={{ ...s.mainStageRight, flex: 1 }}>
+            {renderContent()}
+          </div>
+          </>
+        ) : (
+          <>
+          {/* fullscreen：Nezha 原始覆盖式 —— 文件/diff/新建任务前景覆盖 PTY 背景 */}
+          <div style={s.mainStageFullscreen}>
+            <div style={s.mainStageFullscreenPty}>
+              {renderPty(
+                visible &&
+                  openFiles.length === 0 &&
+                  !openDiff &&
+                  !isNewTask &&
+                  !!selectedTask,
+              )}
+            </div>
+            {(openFiles.length > 0 || openDiff || isNewTask) && (
+              <div style={s.mainStageFullscreenContent}>{renderContent()}</div>
+            )}
+          </div>
+          </>
+        )}
         </div>
         {showShellTerminal && (
           <ShellTerminalPanel
@@ -1194,8 +1291,16 @@ export function ProjectPage({
         )}
       </div>
 
+      {/* 右侧面板：悬浮或固定（由 rightPanelDocked 决定） */}
       {rightPanel && rightPanel !== "build" && (
-        <div style={s.rightPanelWrapCol}>
+        <div
+          ref={rightPanelRegionRef}
+          style={
+            rightPanelDocked
+              ? { ...s.rightPanelDock, width: rightPanelWidth }
+              : s.rightPanelFloat
+          }
+        >
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
             <WorktreeScopeSelect
@@ -1274,7 +1379,15 @@ export function ProjectPage({
       {/* 构建面板独立成列：首次打开后保持挂载（隐藏而非卸载），
           切换/关闭其它右侧面板不丢构建日志、逐项目状态与运行句柄。 */}
       {buildPanelMounted && (
-        <div style={rightPanel === "build" ? s.rightPanelWrapCol : s.rpHiddenCol}>
+        <div
+          style={
+            rightPanel === "build"
+              ? rightPanelDocked
+                ? { ...s.rightPanelDock, width: rightPanelWidth }
+                : s.rightPanelFloat
+              : s.rpHiddenCol
+          }
+        >
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
             <WorktreeScopeSelect
@@ -1310,6 +1423,7 @@ export function ProjectPage({
         </div>
       )}
 
+      <div ref={rightToolbarRef} style={{ display: "flex" }}>
       <RightToolbar
         activePanel={rightPanel}
         onToggle={handleTogglePanel}
@@ -1317,7 +1431,10 @@ export function ProjectPage({
         onToggleTerminal={handleToggleShellTerminal}
         onOpenSearch={() => setShowFileSearch(true)}
         onOpenSettings={() => setShowSettings(true)}
+        panelDocked={rightPanelDocked}
+        onTogglePanelDocked={handleTogglePanelDocked}
       />
+      </div>
 
       {showFileSearch && (
         <FileSearchDialog

@@ -217,18 +217,113 @@ export const layout = {
   },
   mainContent: {
     flex: 1,
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
     background: "var(--bg-panel)",
   },
+  // 主舞台顶部的布局模式切换工具条
+  mainStageModeBar: {
+    height: 32,
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    padding: "0 8px",
+    borderBottom: "1px solid var(--border-dim)",
+    background: "var(--bg-sidebar)",
+  },
+  mainStageModeBtn: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "4px 10px",
+    borderRadius: 6,
+    border: "1px solid var(--border-dim)",
+    background: "var(--bg-card)",
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    cursor: "pointer",
+  },
   projectMainStage: {
     flex: 1,
     display: "flex",
-    flexDirection: "column" as const,
+    flexDirection: "row" as const,
     overflow: "hidden",
+    minWidth: 0,
     minHeight: 0,
     position: "relative" as const,
+  },
+  // fullscreen 模式：Nezha 原始覆盖式 —— 内容前景覆盖 PTY 背景
+  mainStageFullscreen: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    position: "relative" as const,
+    overflow: "hidden",
+  },
+  // PTY 背景层：absolute 铺满，打开文件时被内容前景覆盖
+  mainStageFullscreenPty: {
+    position: "absolute" as const,
+    inset: 0,
+    zIndex: 0,
+    overflow: "hidden",
+  },
+  // 内容前景层：占满主舞台，盖在 PTY 之上
+  mainStageFullscreenContent: {
+    position: "relative" as const,
+    zIndex: 1,
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
+  },
+  // 中央舞台左右并排：左=任务 PTY 终端，右=已打开文件/diff/新建任务
+  // （flexGrow 由 ProjectPage 按 mainStageRatio 动态传入；此处仅保证可收缩）
+  // 左列加 position:relative，使 RunningView 的 absolute inset:0 只铺满左列，
+  // 不会覆盖并排的右列。
+  mainStageLeft: {
+    position: "relative" as const,
+    minWidth: 0,
+    flexShrink: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
+  },
+  mainStageRight: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column" as const,
+    overflow: "hidden",
+  },
+  mainStageDivider: {
+    width: 6,
+    flexShrink: 0,
+    cursor: "col-resize",
+    background: "var(--border-dim)",
+    position: "relative" as const,
+    zIndex: 5,
+  },
+  mainStagePtyEmpty: {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "var(--text-muted)",
+    fontSize: 12,
+  },
+  // 右列「已打开文件内容」空态：常驻容器，无文件时提示
+  mainStageContentEmpty: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    color: "var(--text-muted)",
+    fontSize: 13,
   },
   rightPanelWrap: { position: "relative" as const, display: "flex", flexShrink: 0 },
   rightPanelWrapCol: {
@@ -239,6 +334,38 @@ export const layout = {
   },
   // 构建面板保持挂载但非激活时隐藏（替代卸载，保住构建会话状态）
   rpHiddenCol: { display: "none" as const },
+  // 右侧边栏：悬浮态（absolute，脱离内容流，不挤占中央舞台宽度）
+  // right: 44 避开最右的 RightToolbar 竖条；zIndex 盖在内容上方
+  rightPanelFloat: {
+    position: "absolute" as const,
+    top: 0,
+    right: 44,
+    bottom: 0,
+    zIndex: 20,
+    display: "flex",
+    flexDirection: "column" as const,
+    boxShadow: "var(--shadow-md)",
+    borderLeft: "1px solid var(--border-dim)",
+    background: "var(--bg-panel)",
+  },
+  // 右侧边栏：固定态（flex 常驻列，从右缘向左占宽，挤窄中央舞台）
+  rightPanelDock: {
+    position: "relative" as const,
+    display: "flex",
+    flexDirection: "column" as const,
+    flexShrink: 0,
+  },
+  // 右侧边栏整体包裹：横向 flex 兄弟。悬浮时零宽（面板 absolute 盖内容上），
+  // 固定时占 rightPanelWidth（挤窄中央舞台）。
+  rightSideWrap: {
+    display: "flex",
+    minWidth: 0,
+    overflow: "hidden",
+    position: "relative" as const,
+    flexShrink: 0,
+  },
+  rightSideWrapFloat: { width: 0, flexShrink: 0 },
+  rightSideWrapDock: { flexShrink: 0 },
   rightPanelResizeHandle: {
     position: "absolute" as const,
     left: 0,

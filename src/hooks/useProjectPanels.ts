@@ -8,6 +8,10 @@ type RightPanel =
   | "branch-batch"
   | "knowledge"
   | null;
+
+/** 中央舞台布局模式：fullscreen=Nezha 原始覆盖式（PTY 背景 + 前景覆盖）；
+    partition=左右分栏（左 PTY ‖ 右文件内容）。 */
+type LayoutMode = "fullscreen" | "partition";
 type OpenFileTab = {
   path: string;
   name: string;
@@ -36,6 +40,14 @@ export function useProjectPanels() {
   const [openDiff, setOpenDiff] = useState<OpenDiff | null>(null);
   const [rightPanelWidth, setRightPanelWidth] = useState(280);
   const [terminalHeight, setTerminalHeight] = useState(240);
+  /** 右侧边栏是否「固定」为常驻列（true=从右缘向左占宽；false=悬浮，不挤占内容区）。 */
+  const [rightPanelDocked, setRightPanelDocked] = useState(false);
+  /** 中央舞台左右比例（左=PTY 占比，0.5 表示左右各半）。 */
+  const [mainStageRatio, setMainStageRatio] = useState(0.5);
+  /** 中央舞台布局模式，默认全屏（Nezha 原始覆盖式）。 */
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("fullscreen");
+  const mainStageRatioRef = useRef(mainStageRatio);
+  mainStageRatioRef.current = mainStageRatio;
   const rightPanelWidthRef = useRef(rightPanelWidth);
   rightPanelWidthRef.current = rightPanelWidth;
   const terminalHeightRef = useRef(terminalHeight);
@@ -45,8 +57,20 @@ export function useProjectPanels() {
     setRightPanel((prev) => (prev === panel ? null : panel));
   }, []);
 
+  const handleTogglePanelDocked = useCallback(() => {
+    setRightPanelDocked((prev) => !prev);
+  }, []);
+
+  const toggleLayoutMode = useCallback(() => {
+    setLayoutMode((prev) => (prev === "fullscreen" ? "partition" : "fullscreen"));
+  }, []);
+
   const openRightPanel = useCallback((panel: Exclude<RightPanel, null>) => {
     setRightPanel(panel);
+  }, []);
+
+  const closeRightPanel = useCallback(() => {
+    setRightPanel(null);
   }, []);
 
   const handleFileSelect = useCallback((path: string, name: string) => {
@@ -204,16 +228,55 @@ export function useProjectPanels() {
     document.addEventListener("mouseup", onMouseUp);
   }, []);
 
+  /** 中央舞台左右分割：左=PTY 占比（0.2~0.8），右=文件内容。用 pointer 事件 + setPointerCapture，
+      避免被 xterm 等全局鼠标监听拦截。 */
+  const handleMainStageResizeStart = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = e.currentTarget as HTMLElement;
+    const startX = e.clientX;
+    const startRatio = mainStageRatioRef.current;
+    const onPointerMove = (ev: PointerEvent) => {
+      const stage = document.getElementById("nezha-main-stage");
+      if (!stage) return;
+      const rect = stage.getBoundingClientRect();
+      const ratio = Math.max(0.2, Math.min(0.8, startRatio + (ev.clientX - startX) / rect.width));
+      setMainStageRatio(ratio);
+    };
+    const onPointerUp = () => {
+      el.releasePointerCapture(e.pointerId);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* 个别环境不支持时忽略，pointer 监听仍在 document 冒泡 */
+    }
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+  }, []);
+
   return {
     rightPanel,
+    rightPanelDocked,
     openFiles: openFilesState.tabs,
     activeFilePath: openFilesState.activePath,
     openDiff,
     rightPanelWidth,
     terminalHeight,
+    mainStageRatio,
+    layoutMode,
+    toggleLayoutMode,
     setOpenDiff,
     openRightPanel,
+    closeRightPanel,
     handleTogglePanel,
+    handleTogglePanelDocked,
     handleFileSelect,
     openKnowledgeCard,
     handleFileTabSelect,
@@ -228,6 +291,7 @@ export function useProjectPanels() {
     clearFileAndDiff,
     handleRightResizeStart,
     handleTerminalResizeStart,
+    handleMainStageResizeStart,
   };
 }
 
