@@ -233,7 +233,10 @@ export const layout = {
   },
   // 中央舞台左右并排：左=任务 PTY 终端，右=已打开文件/diff/新建任务
   // （flexGrow 由 ProjectPage 按 mainStageRatio 动态传入；此处仅保证可收缩）
+  // 左列加 position:relative，使 RunningView 的 absolute inset:0 只铺满左列，
+  // 不会覆盖并排的右列。
   mainStageLeft: {
+    position: "relative" as const,
     minWidth: 0,
     display: "flex",
     flexDirection: "column" as const,
