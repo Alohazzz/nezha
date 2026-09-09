@@ -1185,7 +1185,15 @@ export function ProjectPage({
                   onUpdateTodo={onUpdateTodo}
                 />
               )
-            ) : null}
+            ) : (
+              <div style={s.mainStageContentEmpty}>
+                <div style={{ fontSize: 26 }}>📄</div>
+                <div>还没有打开文件</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", opacity: 0.8 }}>
+                  在右侧文件树选择一个文件，或从变更/历史里打开 diff
+                </div>
+              </div>
+            )}
           </ErrorBoundary>
           </div>
         </div>

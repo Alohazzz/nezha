@@ -259,6 +259,17 @@ export const layout = {
     color: "var(--text-muted)",
     fontSize: 12,
   },
+  // 右列「已打开文件内容」空态：常驻容器，无文件时提示
+  mainStageContentEmpty: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    color: "var(--text-muted)",
+    fontSize: 13,
+  },
   rightPanelWrap: { position: "relative" as const, display: "flex", flexShrink: 0 },
   rightPanelWrapCol: {
     position: "relative" as const,
