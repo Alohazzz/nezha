@@ -915,8 +915,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.delete": "Delete plan",
     "plan.deleteFailed": "Failed to delete plan: {error}",
     "plan.mdMissing": "Cannot read plan.md (discussion not finalized?): {error}",
-    "plan.overviewMissing": "plan.md is missing the overview section (## 统筹).",
-    "plan.sectionMissing": "plan.md has no section for issue {serial}.",
+    "plan.overviewMissing":
+      "plan.md is missing the overview section (## 统筹), required for multi-issue plans. The discussion agent likely skipped the yunxiao-plan-discussion skill (not installed or not followed) — check the skill, fix plan.md, then retry.",
+    "plan.sectionMissing":
+      "plan.md has no section for issue {serial} (expected heading `## {serial} <title>`). The discussion agent likely skipped the yunxiao-plan-discussion skill — check the skill and fix plan.md.",
     "plan.todosCreated": "Generated {count} todo(s).",
     "plan.rebound": "Plan association updated.",
     "plan.unbound": "Plan association removed.",
@@ -1860,8 +1862,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.delete": "删除方案",
     "plan.deleteFailed": "删除方案失败：{error}",
     "plan.mdMissing": "读取方案文档失败（讨论未定稿？）：{error}",
-    "plan.overviewMissing": "方案文档缺少统筹节（## 统筹）。",
-    "plan.sectionMissing": "方案文档中没有议题 {serial} 的章节。",
+    "plan.overviewMissing":
+      "方案文档缺少统筹节（## 统筹），多议题方案必须有该节。讨论智能体大概率没有遵循 yunxiao-plan-discussion 技能（未安装或未按契约产出）——请检查技能安装情况、修正 plan.md 后重试。",
+    "plan.sectionMissing":
+      "方案文档中没有议题 {serial} 的章节（应为 `## {serial} <标题>`）。讨论智能体可能没有遵循 yunxiao-plan-discussion 技能，请检查技能安装情况并修正 plan.md。",
     "plan.todosCreated": "已生成 {count} 个待办。",
     "plan.rebound": "方案关联已更新。",
     "plan.unbound": "已解除方案关联。",

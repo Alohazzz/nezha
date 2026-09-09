@@ -53,7 +53,7 @@ import {
   buildPlanExecutionPrompt,
   buildPlanTaskName,
   extractPlanIssueSection,
-  extractPlanOverview,
+  extractPlanOverviewForIssues,
   planIssueImagesDir,
   planMdPath,
 } from "./utils/plan";
@@ -1757,6 +1757,7 @@ function App() {
     if (input.issues.length === 0) return false;
 
     // 1) 读方案文档，按议题切片（执行提示词内联统筹节与本议题节）。
+    // 统筹节仅多议题硬性要求（跨议题顺序与公共改动归属）；单议题缺失不阻断。
     let planMarkdown: string;
     try {
       planMarkdown = await invoke<string>("read_file_content", {
@@ -1767,8 +1768,11 @@ function App() {
       showToast(t("plan.mdMissing", { error: String(e) }), "error");
       return false;
     }
-    const overview = extractPlanOverview(planMarkdown);
-    if (!overview) {
+    const { overview, missing } = extractPlanOverviewForIssues(
+      planMarkdown,
+      input.issues.length,
+    );
+    if (missing) {
       showToast(t("plan.overviewMissing"), "error");
       return false;
     }
@@ -1898,8 +1902,8 @@ function App() {
           projectPath: project.path,
         });
         const section = extractPlanIssueSection(markdown, task.yunxiaoSerialNumber ?? "");
-        const overview = extractPlanOverview(markdown);
-        if (!section || !overview) {
+        const { overview, missing } = extractPlanOverviewForIssues(markdown, plan.issues.length);
+        if (!section || missing) {
           showToast(t("plan.sectionMissing", { serial: task.yunxiaoSerialNumber ?? "" }), "error");
           return;
         }

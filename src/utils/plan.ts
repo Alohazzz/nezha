@@ -187,6 +187,20 @@ export function extractPlanOverview(markdown: string): string {
   return lines.slice(start, end).join("\n").trim();
 }
 
+/**
+ * 生成待办 / 改绑时的统筹节校验：多议题方案的统筹节承载跨议题执行顺序与公共改动
+ * 归属，缺失即阻断（missing = true）；单议题该节是仪式性内容（技能允许一句话带过，
+ * 讨论模型常省略），缺失不阻断——overview 为空串时 buildPlanExecutionPrompt 会自然
+ * 省略「方案统筹」节。
+ */
+export function extractPlanOverviewForIssues(
+  markdown: string,
+  issueCount: number,
+): { overview: string; missing: boolean } {
+  const overview = extractPlanOverview(markdown);
+  return { overview, missing: !overview && issueCount > 1 };
+}
+
 /** 议题编号列表 → 方案任务名（如 "QHDK-123 等 3 项联合方案"）。 */
 export function buildPlanTaskName(serialNumbers: string[]): string {
   const serials = serialNumbers.map((s) => s.trim()).filter(Boolean);
