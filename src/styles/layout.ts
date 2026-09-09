@@ -217,6 +217,7 @@ export const layout = {
   },
   mainContent: {
     flex: 1,
+    minWidth: 0,
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",

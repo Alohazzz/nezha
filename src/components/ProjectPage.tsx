@@ -353,13 +353,16 @@ export function ProjectPage({
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   // 右侧面板区域（面板 + 竖条按钮栏）的 ref，用于“焦点离开自动收起”的外部点击检测。
   const rightPanelRegionRef = useRef<HTMLDivElement | null>(null);
+  const rightToolbarRef = useRef<HTMLDivElement | null>(null);
 
   // 非固定（未 📌）的右侧面板：点击面板/竖条区域之外时自动收起。
   useEffect(() => {
     if (!rightPanel || rightPanelDocked) return; // 无面板或已固定则不监听
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
-      if (rightPanelRegionRef.current && !rightPanelRegionRef.current.contains(target)) {
+      const inPanel = rightPanelRegionRef.current?.contains(target);
+      const inToolbar = rightToolbarRef.current?.contains(target);
+      if (!inPanel && !inToolbar) {
         closeRightPanel();
       }
     };
@@ -1288,10 +1291,10 @@ export function ProjectPage({
         )}
       </div>
 
-      <div ref={rightPanelRegionRef} style={{ display: "flex" }}>
       {/* 右侧面板：悬浮或固定（由 rightPanelDocked 决定） */}
       {rightPanel && rightPanel !== "build" && (
         <div
+          ref={rightPanelRegionRef}
           style={
             rightPanelDocked
               ? { ...s.rightPanelDock, width: rightPanelWidth }
@@ -1420,6 +1423,7 @@ export function ProjectPage({
         </div>
       )}
 
+      <div ref={rightToolbarRef} style={{ display: "flex" }}>
       <RightToolbar
         activePanel={rightPanel}
         onToggle={handleTogglePanel}
