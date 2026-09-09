@@ -58,7 +58,10 @@ export function PlanPreviewPanel({
     () => tasks.filter((task) => task.planId === plan.id),
     [tasks, plan.id],
   );
-  const canDelete = linkedTasks.length === 0 && !plan.discussionTaskId;
+  // 删除条件只看「是否还有任务引用本方案」：讨论任务自带 planId，存活即在
+  // linkedTasks 里；任务被删后 discussionTaskId 悬空，方案成为孤儿——正是
+  // 此时最该允许删除（旧判据 !plan.discussionTaskId 会让孤儿方案永远不可删）。
+  const canDelete = linkedTasks.length === 0;
   // 「生成待办」在讨论定稿后的任何状态都可用（执行中/已完成的方案可重新生成待办，
   // 例如旧待办被取消删除后想重跑）；仅「讨论中」锁定——plan.md 仍在被会话覆盖更新。
   const canGenerate = plan.status !== "draft" && markdown.trim().length > 0;

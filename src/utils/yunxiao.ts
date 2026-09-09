@@ -212,20 +212,39 @@ export function getYunxiaoPriority(issue: YunxiaoWorkitem): string | undefined {
   return field?.values[0]?.displayValue;
 }
 
-/** 去重判断：同议题只允许进入讨论链路一次——任务（补录/执行待办）或
- *  非取消状态的方案（讨论中/待生成待办/执行中/已完成）任一占用即视为已导入。 */
+/** 计算当前被占用的议题 id 集合：
+ *  - 任务直接绑定（补录待办 / 执行待办 / 直接执行任务）；
+ *  - 方案占用——但以「仍存在 task.planId 指向该方案」为准（讨论任务 / 生成的待办存活期间）。
+ *    讨论任务被删除后方案成为孤儿，不再占用议题：否则议题永远无法重新导入，
+ *    且该方案在预览里也因 discussionTaskId 悬空而永远不可删。
+ *  已取消方案一律不占用。 */
+export function collectOccupiedYunxiaoWorkitemIds(
+  tasks: Task[],
+  plans: Plan[],
+): Set<string> {
+  const occupied = new Set<string>();
+  const livePlanIds = new Set<string>();
+  tasks.forEach((task) => {
+    if (task.yunxiaoWorkitemId) occupied.add(task.yunxiaoWorkitemId);
+    if (task.planId) livePlanIds.add(task.planId);
+  });
+  plans.forEach((plan) => {
+    if (plan.status === "cancelled") return;
+    if (!livePlanIds.has(plan.id)) return;
+    plan.issues.forEach((issue) => occupied.add(issue.workitemId));
+  });
+  return occupied;
+}
+
+/** 去重判断：同议题只允许进入讨论/直接执行链路一次——任务直接绑定，
+ *  或仍被存活任务引用的方案（讨论中/待生成待办/执行中/已完成）占用即视为已导入。 */
 export function isYunxiaoWorkitemImported(
   tasks: Task[],
   plans: Plan[],
   workitemId: string,
 ): boolean {
   if (!workitemId) return false;
-  if (tasks.some((task) => task.yunxiaoWorkitemId === workitemId)) return true;
-  return plans.some(
-    (plan) =>
-      plan.status !== "cancelled" &&
-      plan.issues.some((issue) => issue.workitemId === workitemId),
-  );
+  return collectOccupiedYunxiaoWorkitemIds(tasks, plans).has(workitemId);
 }
 
 /** 议题编号 → Git 提交关联 tag（如 QHDK-29312 → "#QHDK-29312"）。 */

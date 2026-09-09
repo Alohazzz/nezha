@@ -58,25 +58,43 @@ describe("isYunxiaoWorkitemImported", () => {
     expect(isYunxiaoWorkitemImported(tasks, [], "")).toBe(false);
   });
 
-  it("非取消方案的议题占用（讨论中/待生成待办/执行中/已完成）", () => {
+  it("仍被存活任务引用的方案占用议题（讨论中/待生成待办/执行中/已完成）", () => {
+    const discussion = baseTask({ id: "t-disc", planId: "plan-1" });
     for (const status of ["draft", "finalized", "executing", "completed"] as const) {
-      expect(isYunxiaoWorkitemImported([], [basePlan({ status })], WORKITEM_ID)).toBe(true);
+      expect(
+        isYunxiaoWorkitemImported([discussion], [basePlan({ status })], WORKITEM_ID),
+      ).toBe(true);
     }
   });
 
-  it("已取消方案的议题不占用（可重新发起讨论）", () => {
-    expect(isYunxiaoWorkitemImported([], [basePlan({ status: "cancelled" })], WORKITEM_ID)).toBe(
+  it("孤儿方案（引用它的任务已删除）不占用议题——修复删任务后无法重新导入", () => {
+    expect(isYunxiaoWorkitemImported([], [basePlan({ status: "finalized" })], WORKITEM_ID)).toBe(
       false,
     );
   });
 
+  it("方案被其他议题的任务引用时仍占用其全部议题", () => {
+    const todo = baseTask({ id: "t-todo", planId: "plan-1", yunxiaoWorkitemId: "other" });
+    expect(isYunxiaoWorkitemImported([todo], [basePlan({ status: "executing" })], WORKITEM_ID)).toBe(
+      true,
+    );
+  });
+
+  it("已取消方案的议题不占用（可重新发起讨论）", () => {
+    const discussion = baseTask({ id: "t-disc", planId: "plan-1" });
+    expect(
+      isYunxiaoWorkitemImported([discussion], [basePlan({ status: "cancelled" })], WORKITEM_ID),
+    ).toBe(false);
+  });
+
   it("方案不含该议题时不占用", () => {
+    const discussion = baseTask({ id: "t-disc", planId: "plan-1" });
     const other = basePlan({
       issues: [
         { workitemId: "other", serialNumber: "QHDK-1", subject: "其他", category: "Req" },
       ],
     });
-    expect(isYunxiaoWorkitemImported([], [other], WORKITEM_ID)).toBe(false);
+    expect(isYunxiaoWorkitemImported([discussion], [other], WORKITEM_ID)).toBe(false);
   });
 });
 
