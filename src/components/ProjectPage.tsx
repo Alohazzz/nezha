@@ -1040,9 +1040,54 @@ export function ProjectPage({
             {!projectTasks.some(
               (t) => t.id === selectedTaskId && t.status !== "todo" && mountedTaskIds.has(t.id),
             ) && (
-              <div style={s.mainStagePtyEmpty}>
-                选择左侧任务以查看终端输出，或新建任务
-              </div>
+              // 左列无运行中任务时：任务创建 / 编辑视图（新建任务、Todo 任务编辑等），
+              // 没有可编辑任务时则显示基础占位。
+              isNewTask || !selectedTask ? (
+                <NewTaskView
+                  project={project}
+                  repoPath={subRepoPath}
+                  roots={gitRoots}
+                  onSetRepoPath={setSelectedRoot}
+                  otherProjects={otherProjects}
+                  onSubmit={(t) => onSubmitTask({ ...t, repoPath: subRepoPath })}
+                  initialDraft={newTaskDraftRef.current}
+                  onCacheDraft={handleCacheNewTaskDraft}
+                />
+              ) : selectedTask.status === ("todo" as TaskStatus) ? (
+                selectedTask.planId && selectedTask.yunxiaoWorkitemId ? (
+                  <PlanTaskView
+                    task={selectedTask}
+                    plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
+                    plans={plans.filter((p) => p.projectId === project.id)}
+                    yunxiaoProjectId={yunxiaoProjectId}
+                    onBack={onBack}
+                    onPreviewPlan={(planId) => {
+                      setPlanPreviewId(planId);
+                    }}
+                    onRebindPlan={onRebindTaskPlan}
+                    onUpdateTodo={onUpdateTodo}
+                    onRunTodo={onRunTodoTask}
+                  />
+                ) : selectedTask.yunxiaoWorkitemId ? (
+                  <YunxiaoTodoDiscussionView
+                    task={selectedTask}
+                    starting={todoDiscussionStarting}
+                    onBack={onBack}
+                    onStartDiscussion={onStartTodoYunxiaoDiscussion}
+                    onStartDirect={onStartTodoYunxiaoDirect}
+                  />
+                ) : (
+                  <TodoTaskView
+                    task={selectedTask}
+                    onRunTodo={onRunTodoTask}
+                    onUpdateTodo={onUpdateTodo}
+                  />
+                )
+              ) : (
+                <div style={s.mainStagePtyEmpty}>
+                  选择左侧任务以查看终端输出，或新建任务
+                </div>
+              )
             )}
           </div>
 
@@ -1144,48 +1189,8 @@ export function ProjectPage({
                 onToggleCommentStatus={handleToggleCommentStatus}
                 onSendComments={handleSendComments}
               />
-            ) : isNewTask || !selectedTask ? (
-              <NewTaskView
-                project={project}
-                repoPath={subRepoPath}
-                roots={gitRoots}
-                onSetRepoPath={setSelectedRoot}
-                otherProjects={otherProjects}
-                onSubmit={(t) => onSubmitTask({ ...t, repoPath: subRepoPath })}
-                initialDraft={newTaskDraftRef.current}
-                onCacheDraft={handleCacheNewTaskDraft}
-              />
-            ) : selectedTask.status === ("todo" as TaskStatus) ? (
-              selectedTask.planId && selectedTask.yunxiaoWorkitemId ? (
-                <PlanTaskView
-                  task={selectedTask}
-                  plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
-                  plans={plans.filter((p) => p.projectId === project.id)}
-                  yunxiaoProjectId={yunxiaoProjectId}
-                  onBack={onBack}
-                  onPreviewPlan={(planId) => {
-                    setPlanPreviewId(planId);
-                  }}
-                  onRebindPlan={onRebindTaskPlan}
-                  onUpdateTodo={onUpdateTodo}
-                  onRunTodo={onRunTodoTask}
-                />
-              ) : selectedTask.yunxiaoWorkitemId ? (
-                <YunxiaoTodoDiscussionView
-                  task={selectedTask}
-                  starting={todoDiscussionStarting}
-                  onBack={onBack}
-                  onStartDiscussion={onStartTodoYunxiaoDiscussion}
-                  onStartDirect={onStartTodoYunxiaoDirect}
-                />
-              ) : (
-                <TodoTaskView
-                  task={selectedTask}
-                  onRunTodo={onRunTodoTask}
-                  onUpdateTodo={onUpdateTodo}
-                />
-              )
             ) : (
+              // 右列 = 已打开文件内容：无文件时显示空态占位，保证左右分栏始终可见
               <div style={s.mainStageContentEmpty}>
                 <div style={{ fontSize: 26 }}>📄</div>
                 <div>还没有打开文件</div>
