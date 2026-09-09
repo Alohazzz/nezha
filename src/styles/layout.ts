@@ -237,6 +237,8 @@ export const layout = {
     flexDirection: "column" as const,
     flexShrink: 0,
   },
+  // 构建面板保持挂载但非激活时隐藏（替代卸载，保住构建会话状态）
+  rpHiddenCol: { display: "none" as const },
   rightPanelResizeHandle: {
     position: "absolute" as const,
     left: 0,

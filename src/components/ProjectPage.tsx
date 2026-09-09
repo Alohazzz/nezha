@@ -293,6 +293,13 @@ export function ProjectPage({
   // 云效云项目 id（PlanTaskView 议题链接用）。
   const [yunxiaoProjectId, setYunxiaoProjectId] = useState("");
 
+  // 构建面板首次打开后保持挂载：切走/关闭右侧面板时用 display:none 隐藏而非卸载，
+  // 保住构建日志、逐项目状态、计时与运行句柄（构建中的收起条也因此常驻）。
+  const [buildPanelMounted, setBuildPanelMounted] = useState(false);
+  useEffect(() => {
+    if (rightPanel === "build") setBuildPanelMounted(true);
+  }, [rightPanel]);
+
   useEffect(() => {
     invoke<{ yunxiao?: { projectId?: string } }>("load_app_settings")
       .then((appSettings) => {
@@ -1178,7 +1185,7 @@ export function ProjectPage({
         )}
       </div>
 
-      {rightPanel && (
+      {rightPanel && rightPanel !== "build" && (
         <div style={s.rightPanelWrapCol}>
           <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
           <div style={s.bbScopeBar}>
@@ -1242,7 +1249,32 @@ export function ProjectPage({
               />
             </ErrorBoundary>
           )}
-          {rightPanel === "build" && (
+          {rightPanel === "knowledge" && (
+            <ErrorBoundary label="知识库">
+              <KnowledgePanel
+                projectPath={project.path}
+                onOpenCard={openKnowledgeCard}
+                width={rightPanelWidth}
+              />
+            </ErrorBoundary>
+          )}
+        </div>
+      </div>
+      )}
+
+      {/* 构建面板独立成列：首次打开后保持挂载（隐藏而非卸载），
+          切换/关闭其它右侧面板不丢构建日志、逐项目状态与运行句柄。 */}
+      {buildPanelMounted && (
+        <div style={rightPanel === "build" ? s.rightPanelWrapCol : s.rpHiddenCol}>
+          <div onMouseDown={handleRightResizeStart} style={s.rightPanelResizeHandle} />
+          <div style={s.bbScopeBar}>
+            <WorktreeScopeSelect
+              options={worktreeOptions}
+              value={worktreeScope}
+              onChange={handleScopeChange}
+            />
+          </div>
+          <div style={s.rpContent}>
             <ErrorBoundary label="构建">
               <BuildPanel
                 projectPath={worktreeScope || project.path}
@@ -1265,18 +1297,8 @@ export function ProjectPage({
                 }
               />
             </ErrorBoundary>
-          )}
-          {rightPanel === "knowledge" && (
-            <ErrorBoundary label="知识库">
-              <KnowledgePanel
-                projectPath={project.path}
-                onOpenCard={openKnowledgeCard}
-                width={rightPanelWidth}
-              />
-            </ErrorBoundary>
-          )}
+          </div>
         </div>
-      </div>
       )}
 
       <RightToolbar
