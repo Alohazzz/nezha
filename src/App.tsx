@@ -1026,13 +1026,15 @@ function App() {
         `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。`;
     } else if (kind === "merge") {
       prompt =
-        `你是 MR 合并助手。请仅用 git 命令在当前工作区完成把 ${mr.sourceBranch} 合并进 ${mr.targetBranch}，不要调用任何接口/平台合并功能：\n` +
-        `1. 分别运行 \`git fetch origin ${mr.sourceBranch}\` 与 \`git fetch origin ${mr.targetBranch}\`，确保两个分支引用都是最新\n` +
-        `2. 运行 \`git checkout -f -B codeup-mr-${mr.localId} origin/${mr.sourceBranch}\`，强制对齐源分支最新提交\n` +
-        `3. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`；若提示 Already up to date，说明「源分支没有新内容需要合并」并停止，不要提交、不要推送；若有冲突，修改代码解决，不要执行 \`git merge --abort\`\n` +
-        `4. 运行 \`git add -A\`，再运行 \`git diff --cached origin/${mr.targetBranch} --stat\`；若没有任何输出（合并结果与目标分支内容完全一致），运行 \`git merge --abort\` 清理后停止，说明「无新增内容，无需合并」，不要提交、不要推送\n` +
-        `5. 运行 \`git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`\n` +
-        `6. 运行 \`git push origin HEAD:${mr.targetBranch}\`，把合并结果直接推送到目标分支从而完成合并\n` +
+        `你是 MR 合并助手。只使用 git 命令，不得调用平台/接口合并。\n` +
+        `把 S = origin/${mr.sourceBranch} 落地到 T = origin/${mr.targetBranch}，工作分支 codeup-mr-${mr.localId}，落地形式：允许 fast-forward。\n` +
+        `1. 分别运行 \`git fetch origin ${mr.sourceBranch}\` 与 \`git fetch origin ${mr.targetBranch}\`，记录并报告两个 SHA。\n` +
+        `2. 运行 \`git checkout -f -B codeup-mr-${mr.localId} origin/${mr.sourceBranch}\`。\n` +
+        `3. 若 T 不是 S 的祖先（\`git merge-base --is-ancestor origin/${mr.targetBranch} origin/${mr.sourceBranch}\` 返回非 0）：运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`，有冲突就改代码解决，禁止 \`git merge --abort\`，然后运行 \`git add -A && git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`。若 T 已是 S 的祖先，跳过本步。\n` +
+        `4. 判定 MR 有无净贡献，方向是 S→T，不得拿 merge 的输出当依据（Already up to date 也算有内容）：运行 \`git diff --stat origin/${mr.targetBranch} HEAD\`，为空才报告「无新增内容，无需合并」并停止；不为空则继续。\n` +
+        `5. 运行 \`git ls-remote origin refs/heads/${mr.targetBranch}\` 确认远端未变，再运行 \`git push origin HEAD:${mr.targetBranch}\`。默认走 fast-forward；仅当任务明确要求保留合并提交时才改用 \`git checkout -B tmp origin/${mr.targetBranch} && git merge --no-ff codeup-mr-${mr.localId}\` 后 \`git push origin HEAD:${mr.targetBranch}\`。\n` +
+        `6. 报告落地形式、前后 SHA、解决冲突的文件。\n` +
+        `禁止平台合并、force push、merge --abort；任何一步失败即停下报告。\n` +
         `完成后简要说明结果。`;
     } else {
       prompt =
