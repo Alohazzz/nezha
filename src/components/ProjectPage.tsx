@@ -1272,7 +1272,9 @@ export function ProjectPage({
                   !!selectedTask,
               )}
             </div>
-            {(openFiles.length > 0 || openDiff || isNewTask) && (
+            {/* NewTaskView 在背景层（renderPty）渲染，前景只承载文件/diff；
+                否则空态占位会以 zIndex:1 盖住背景层的新建任务视图，截掉其点击 */}
+            {(openFiles.length > 0 || openDiff) && (
               <div style={s.mainStageFullscreenContent}>{renderContent()}</div>
             )}
           </div>

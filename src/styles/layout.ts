@@ -263,11 +263,14 @@ export const layout = {
     position: "relative" as const,
     overflow: "hidden",
   },
-  // PTY 背景层：absolute 铺满，打开文件时被内容前景覆盖
+  // PTY 背景层：absolute 铺满，打开文件时被内容前景覆盖。
+  // flex 列布局让 NewTaskView（flex:1 + center）在层内垂直居中，与 partition 左列一致。
   mainStageFullscreenPty: {
     position: "absolute" as const,
     inset: 0,
     zIndex: 0,
+    display: "flex",
+    flexDirection: "column" as const,
     overflow: "hidden",
   },
   // 内容前景层：占满主舞台，盖在 PTY 之上
