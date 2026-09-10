@@ -22,6 +22,7 @@ import {
   unregisterActiveTerminal,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
+import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import { Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import "@xterm/xterm/css/xterm.css";
@@ -144,7 +145,13 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
       const disposeScrollbarAutoHide = attachTerminalScrollbarAutoHide(term, container);
       const disposeInputFix = attachMacWebKitShiftInputFix(term);
       const webglHandle = loadWebglAddon(term);
-      const writer = createSmartWriter(term);
+      // 同 TerminalView：丢弃迟到/回放的 xterm 自动应答，避免漏进 shell 输入
+      // （issue #81）。交互 shell 本身也会发 OSC 10/11 探测，放行窗口同样生效。
+      const replyGuard = createTerminalReplyGuard();
+      const writer = createSmartWriter(term, replyGuard);
+      const forwardXtermData = createGuardedForwarder(replyGuard, (data) => {
+        invoke("send_input", { taskId: shellId, data }).catch(() => {});
+      });
       const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
 
       const fit = () => {
@@ -190,9 +197,7 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
       // 必须挂在 attachMacWebKitTerminalGuard 之后:guard 的 pointerup(恢复
       // textarea + refocus)先按注册顺序执行,复制动作发生在防线状态复原之后。
       const disposeCopyOnSelect = attachCopyOnSelect(term, container);
-      const linuxIME = attachLinuxIMEFix(term, (data) => {
-        invoke("send_input", { taskId: shellId, data }).catch(() => {});
-      });
+      const linuxIME = attachLinuxIMEFix(term, forwardXtermData);
       const disposeOnData = { dispose: () => linuxIME.dispose() };
 
       const resizeObserver = new ResizeObserver(() => {

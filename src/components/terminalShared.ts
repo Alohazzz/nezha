@@ -4,6 +4,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { IS_MAC_WEBKIT } from "../platform";
 import type { ThemeVariant } from "../types";
+import type { TerminalReplyGuard } from "./terminalReplyGuard";
 // xterm 私有字段访问的显式契约——见 xterm-private.d.ts 头部说明。
 import type { XTermWithPrivates } from "./xterm-private";
 
@@ -289,8 +290,10 @@ export function attachMacWebKitTerminalGuard({
  * - 当 xterm write queue 积累超过 HIGH_WATER 时暂停写入
  * - 低于 LOW_WATER 时恢复
  * - selectionPaused 在鼠标选择期间暂停写入（可选使用）
+ * - 传入 replyGuard 时记录输出里的终端查询，让紧随其后的 xterm 应答得以放行
+ *   （见 terminalReplyGuard 与 issue #81）
  */
-export function createSmartWriter(term: Terminal): SmartWriter {
+export function createSmartWriter(term: Terminal, replyGuard?: TerminalReplyGuard): SmartWriter {
   const state = {
     pendingChunks: [] as Array<{ data: string; callback?: () => void }>,
     watermark: 0,
@@ -300,6 +303,8 @@ export function createSmartWriter(term: Terminal): SmartWriter {
 
   function flushOne(data: string, callback?: () => void) {
     state.watermark += data.length;
+    // 必须在 term.write 之前记录：xterm 可能在解析过程中就生成应答。
+    replyGuard?.noteTerminalInput(data);
     term.write(data, () => {
       state.watermark -= data.length;
       callback?.();

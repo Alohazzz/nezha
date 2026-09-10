@@ -27,6 +27,7 @@ import {
   unregisterActiveTerminal,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
+import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
@@ -144,7 +145,15 @@ export function TerminalView({
       });
     };
 
-    const writer = createSmartWriter(term);
+    // xterm 的自动应答（DA1 / OSC 10/11）与用户键入共用 onData 回流通道，
+    // 迟到应答会变成 agent 输入框里的乱码（issue #81）。guard 记录输出流里的
+    // 真实终端查询，只放行紧随其后的应答；还原快照/回放走 term.write，不记录，
+    // 因此回放触发的旧应答会被丢弃。
+    const replyGuard = createTerminalReplyGuard();
+    const writer = createSmartWriter(term, replyGuard);
+    const forwardXtermData = createGuardedForwarder(replyGuard, (data) =>
+      onInputRef.current(data),
+    );
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
 
     const terminalGeneration = onRegisterRef.current(writer.write);
@@ -176,13 +185,13 @@ export function TerminalView({
 
     const disposeSmartCopy = attachSmartCopy(term, {
       matchesNewline: (e) => matchesTerminalNewline(e, shiftEnterNewlineRef.current),
-      onNewline: () => onInputRef.current(TERMINAL_NEWLINE_SEQUENCE),
+      onNewline: () => forwardXtermData(TERMINAL_NEWLINE_SEQUENCE),
       onPasteImage: onSavePastedImageRef.current,
     });
     // 必须挂在 attachMacWebKitTerminalGuard 之后:guard 的 pointerup(恢复
     // textarea + refocus)先按注册顺序执行,复制动作发生在防线状态复原之后。
     const disposeCopyOnSelect = attachCopyOnSelect(term, container);
-    const linuxIME = attachLinuxIMEFix(term, (data) => onInputRef.current(data));
+    const linuxIME = attachLinuxIMEFix(term, forwardXtermData);
     const disposeOnData = { dispose: () => linuxIME.dispose() };
 
     const handlePointerDown = (e: PointerEvent) => {
