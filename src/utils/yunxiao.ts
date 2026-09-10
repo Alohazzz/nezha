@@ -134,6 +134,8 @@ export interface YunxiaoConditionsInput {
   currentUserId?: string;
   /** 选中的状态 ID 列表（空数组不生成条件）。 */
   selectedStatusIds?: string[];
+  /** 选中的版本 ID 列表（空数组不生成条件）。 */
+  selectedVersionIds?: string[];
 }
 
 /** 议题编号 token（如 QHDK-30074 / ABC-12：字母前缀-数字）。 */
@@ -199,6 +201,22 @@ export function buildYunxiaoConditions(input: YunxiaoConditionsInput): string | 
       operator: "CONTAINS",
       toValue: null,
       value: statusIds,
+    });
+  }
+
+  // 版本过滤：fieldIdentifier 是单数 version（复数 versions 实测返回 0 条）；
+  // 多值为 OR 语义（实测有效），与其他条件 AND。
+  const versionIds = (input.selectedVersionIds ?? [])
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  if (versionIds.length > 0) {
+    conditions.push({
+      className: "version",
+      fieldIdentifier: "version",
+      format: "list",
+      operator: "CONTAINS",
+      toValue: null,
+      value: versionIds,
     });
   }
 

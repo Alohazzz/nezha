@@ -449,6 +449,12 @@ export function YunxiaoView({
               statusesLoading={filters.statusesLoading}
               statusError={filters.statusError}
               onRetryStatuses={filters.retryStatuses}
+              versionOptions={filters.versionOptions}
+              selectedVersionIds={filters.selectedVersionIds}
+              onVersionChange={filters.setSelectedVersionIds}
+              versionsLoading={filters.versionsLoading}
+              versionError={filters.versionError}
+              onRetryVersions={filters.retryVersions}
             />
             <div style={s.yunxiaoSearchBox}>
               <Search size={13} strokeWidth={2} color="var(--text-muted)" />

@@ -214,6 +214,56 @@ describe("buildYunxiaoConditions", () => {
       },
     ]);
   });
+
+  it("版本多选生成 version CONTAINS 条件（fieldIdentifier 为单数，实测复数无效）", () => {
+    const conditions = JSON.parse(
+      buildYunxiaoConditions({
+        selectedVersionIds: ["18730c43160bec0fb589b10946", "0ee4a20490dbf8bf7acebd9a43"],
+      })!,
+    );
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "version",
+        fieldIdentifier: "version",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["18730c43160bec0fb589b10946", "0ee4a20490dbf8bf7acebd9a43"],
+      },
+    ]);
+  });
+
+  it("空版本选择不生成条件", () => {
+    expect(buildYunxiaoConditions({ selectedVersionIds: [] })).toBeUndefined();
+    expect(buildYunxiaoConditions({ selectedVersionIds: ["  "] })).toBeUndefined();
+  });
+
+  it("版本与状态同时选中时放在同一条件组（AND 语义）", () => {
+    const conditions = JSON.parse(
+      buildYunxiaoConditions({
+        selectedStatusIds: ["100005"],
+        selectedVersionIds: ["v-1"],
+      })!,
+    );
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "status",
+        fieldIdentifier: "status",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["100005"],
+      },
+      {
+        className: "version",
+        fieldIdentifier: "version",
+        format: "list",
+        operator: "CONTAINS",
+        toValue: null,
+        value: ["v-1"],
+      },
+    ]);
+  });
 });
 
 describe("issueTag", () => {
