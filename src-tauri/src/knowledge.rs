@@ -935,7 +935,7 @@ pub async fn knowledge_auto_writeback(
             add_args.push(rel);
         }
         let add = crate::git::run_git_with_timeout(
-            hub_str.clone(),
+            target.graph_dir.clone(),
             add_args,
             std::time::Duration::from_secs(30),
         )
@@ -948,7 +948,7 @@ pub async fn knowledge_auto_writeback(
         }
         let message = format!("docs(knowledge): auto sediment {written_count} entries via Nezha");
         let commit_out = crate::git::run_git_with_timeout(
-            hub_str.clone(),
+            target.graph_dir.clone(),
             vec!["commit".into(), "-m".into(), message.clone()],
             std::time::Duration::from_secs(30),
         )
@@ -960,7 +960,7 @@ pub async fn knowledge_auto_writeback(
             ));
         }
         let push = crate::git::run_git_with_timeout(
-            hub_str.clone(),
+            target.graph_dir.clone(),
             vec!["push".into()],
             std::time::Duration::from_secs(120),
         )

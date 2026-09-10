@@ -170,7 +170,8 @@ pub struct CodeupSettings {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeSettings {
     /// 提交知识沉淀后经质量门校验自动写入技能库知识图谱，并 git 提交推送。
-    #[serde(default)]
+    /// 前端读的是 camelCase `autoWriteback`；alias 兼容早期版本写入的 `auto_writeback` 键。
+    #[serde(rename = "autoWriteback", alias = "auto_writeback", default)]
     pub auto_writeback: bool,
 }
 
@@ -1838,5 +1839,23 @@ mod model_catalog_tests {
         let ids: Vec<&str> = merged.iter().map(|m| m.model.as_str()).collect();
         assert_eq!(ids, vec!["Kimi-K3", "new-model", "manual-model"]);
         assert!(!ids.contains(&"removed-model"));
+    }
+
+    // 前端读 settings.knowledge.autoWriteback；这里锁定 JSON 键名契约 + 旧键 alias。
+    #[test]
+    fn knowledge_auto_writeback_serializes_camel_case_and_reads_legacy_key() {
+        let mut settings = AppSettings::default();
+        settings.knowledge.auto_writeback = true;
+        let raw = serde_json::to_string(&settings).unwrap();
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["knowledge"]["autoWriteback"], Value::Bool(true));
+        assert!(value["knowledge"].get("auto_writeback").is_none());
+
+        let legacy: AppSettings =
+            serde_json::from_str(r#"{"knowledge":{"auto_writeback":true}}"#).unwrap();
+        assert!(legacy.knowledge.auto_writeback);
+
+        let absent: AppSettings = serde_json::from_str(r#"{"knowledge":{}}"#).unwrap();
+        assert!(!absent.knowledge.auto_writeback);
     }
 }
