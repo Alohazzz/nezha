@@ -234,10 +234,12 @@ export function useProjectPanels() {
     e.preventDefault();
     e.stopPropagation();
     const el = e.currentTarget as HTMLElement;
+    // 从分割条向上找所属 stage：多项目驻留挂载时 DOM 里有多个 id="nezha-main-stage"，
+    // 全局 getElementById 会命中隐藏项目（display:none → 宽 0），除以 0 后 clamp 到极值。
+    const stage = el.closest<HTMLElement>("#nezha-main-stage");
     const startX = e.clientX;
     const startRatio = mainStageRatioRef.current;
     const onPointerMove = (ev: PointerEvent) => {
-      const stage = document.getElementById("nezha-main-stage");
       if (!stage) return;
       const rect = stage.getBoundingClientRect();
       const ratio = Math.max(0.2, Math.min(0.8, startRatio + (ev.clientX - startX) / rect.width));
