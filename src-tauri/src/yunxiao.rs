@@ -126,6 +126,17 @@ pub struct YunxiaoStatus {
     pub id: String,
 }
 
+/// 云效项目版本（GET .../projects/{projectId}/versions 数组元素）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct YunxiaoVersion {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct YunxiaoCustomFieldEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -610,6 +621,28 @@ pub async fn yunxiao_list_workitem_statuses(
         }
     }
     Ok(merge_status_lists(lists))
+}
+
+/// 获取项目下的全部版本（供议题列表「版本」过滤使用）。
+/// 版本数有限（实测 Hsp 2.0 仅 18 个、单页返回），一次取全量。
+#[tauri::command]
+pub async fn yunxiao_list_versions(
+    token: String,
+    organization_id: String,
+    project_id: String,
+) -> Result<Vec<YunxiaoVersion>, String> {
+    let token = token.trim();
+    let organization_id = organization_id.trim();
+    let project_id = project_id.trim();
+    if token.is_empty() || organization_id.is_empty() || project_id.is_empty() {
+        return Err("缺少云效令牌、组织 ID 或项目 ID".to_string());
+    }
+    let client = build_client()?;
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/versions"
+    );
+    let bytes = get_yunxiao_json(&client, token, url).await?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("解析云效版本列表失败: {e}"))
 }
 
 /// 按工作项 ID 获取议题详情（GetWorkitem）。

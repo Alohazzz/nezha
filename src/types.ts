@@ -379,6 +379,13 @@ export interface YunxiaoStatus {
   id: string;
 }
 
+/** 云效项目版本（GET .../projects/{projectId}/versions 数组元素）。 */
+export interface YunxiaoVersion {
+  id: string;
+  name: string;
+  status?: string;
+}
+
 export interface YunxiaoCustomFieldEntry {
   identifier?: string;
   displayValue?: string;

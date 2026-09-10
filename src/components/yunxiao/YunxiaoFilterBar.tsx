@@ -1,6 +1,7 @@
-import type { YunxiaoStatus } from "../../types";
+import { useMemo } from "react";
+import type { YunxiaoStatus, YunxiaoVersion } from "../../types";
 import { useI18n } from "../../i18n";
-import { StatusMultiSelect } from "./StatusMultiSelect";
+import { FilterMultiSelect, type FilterOption } from "./FilterMultiSelect";
 import s from "../../styles";
 
 export function YunxiaoFilterBar({
@@ -14,6 +15,12 @@ export function YunxiaoFilterBar({
   statusesLoading,
   statusError,
   onRetryStatuses,
+  versionOptions,
+  selectedVersionIds,
+  onVersionChange,
+  versionsLoading,
+  versionError,
+  onRetryVersions,
 }: {
   assignedToMe: boolean;
   onToggleAssignedToMe: () => void;
@@ -25,8 +32,28 @@ export function YunxiaoFilterBar({
   statusesLoading: boolean;
   statusError?: string | null;
   onRetryStatuses?: () => void;
+  versionOptions: YunxiaoVersion[];
+  selectedVersionIds: string[];
+  onVersionChange: (ids: string[]) => void;
+  versionsLoading: boolean;
+  versionError?: string | null;
+  onRetryVersions?: () => void;
 }) {
   const { t } = useI18n();
+
+  const statusItems: FilterOption[] = useMemo(
+    () =>
+      statusOptions.map((status) => ({
+        id: status.id,
+        label: status.displayName ?? status.name,
+      })),
+    [statusOptions],
+  );
+
+  const versionItems: FilterOption[] = useMemo(
+    () => versionOptions.map((version) => ({ id: version.id, label: version.name })),
+    [versionOptions],
+  );
 
   return (
     <>
@@ -46,15 +73,27 @@ export function YunxiaoFilterBar({
       >
         {t("yunxiao.myIssues")}
       </button>
-      <StatusMultiSelect
-        options={statusOptions}
+      <FilterMultiSelect
+        options={statusItems}
         selectedIds={selectedStatusIds}
         onChange={onStatusChange}
         loading={statusesLoading}
         label={t("yunxiao.statusFilter")}
-        emptyHint={statusError ?? undefined}
+        selectedLabel={t("yunxiao.statusCount", { count: selectedStatusIds.length })}
+        emptyLabel={t("yunxiao.noStatusOptions")}
         error={statusError}
         onRetry={onRetryStatuses}
+      />
+      <FilterMultiSelect
+        options={versionItems}
+        selectedIds={selectedVersionIds}
+        onChange={onVersionChange}
+        loading={versionsLoading}
+        label={t("yunxiao.versionFilter")}
+        selectedLabel={t("yunxiao.versionCount", { count: selectedVersionIds.length })}
+        emptyLabel={t("yunxiao.noVersionOptions")}
+        error={versionError}
+        onRetry={onRetryVersions}
       />
     </>
   );

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { YunxiaoStatus, YunxiaoUserRef } from "../../types";
+import type { YunxiaoStatus, YunxiaoUserRef, YunxiaoVersion } from "../../types";
 import {
   EMPTY_YUNXIAO_SETTINGS,
   type AppSettings,
@@ -13,7 +13,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 const FILTER_DEBOUNCE_MS = 300;
 
 /**
- * 云效议题页的过滤状态：搜索防抖、我负责的、状态多选、状态选项缓存、
+ * 云效议题页的过滤状态：搜索防抖、我负责的、状态多选、版本多选、状态/版本选项缓存、
  * 当前用户识别（自动 + 手动兜底）与按项目的 localStorage 持久化。
  * conditions 为拼好的服务端查询 JSON 字符串（无过滤时为 undefined）。
  */
@@ -33,6 +33,12 @@ export function useYunxiaoFilters(
   const [statusesLoading, setStatusesLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [statusReloadKey, setStatusReloadKey] = useState(0);
+  const [selectedVersionIds, setSelectedVersionIds] = useState<string[]>([]);
+  const [debouncedVersionIds, setDebouncedVersionIds] = useState<string[]>([]);
+  const [versionOptions, setVersionOptions] = useState<YunxiaoVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionError, setVersionError] = useState<string | null>(null);
+  const [versionReloadKey, setVersionReloadKey] = useState(0);
   const [currentUser, setCurrentUser] = useState<YunxiaoUserRef | null>(null);
   const [currentUserError, setCurrentUserError] = useState(false);
   const [currentUserIdInput, setCurrentUserIdInput] = useState("");
@@ -47,14 +53,15 @@ export function useYunxiaoFilters(
     return () => window.clearTimeout(id);
   }, [query]);
 
-  // 过滤条件（我负责的 / 状态多选）防抖 300ms：合并快速连点产生的重复服务端重查。
+  // 过滤条件（我负责的 / 状态多选 / 版本多选）防抖 300ms：合并快速连点产生的重复服务端重查。
   useEffect(() => {
     const id = window.setTimeout(() => {
       setDebouncedAssignedToMe(assignedToMe);
       setDebouncedStatusIds(selectedStatusIds);
+      setDebouncedVersionIds(selectedVersionIds);
     }, FILTER_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
-  }, [assignedToMe, selectedStatusIds]);
+  }, [assignedToMe, selectedStatusIds, selectedVersionIds]);
 
   // 手动兜底输入框与设置缓存同步（仅设置变化时覆盖，输入中不受影响）。
   useEffect(() => {
@@ -70,21 +77,32 @@ export function useYunxiaoFilters(
     const raw = localStorage.getItem(`${YUNXIAO_FILTERS_PREFIX}${projectId}`);
     try {
       const saved = raw
-        ? (JSON.parse(raw) as { assignedToMe?: unknown; statusIds?: unknown })
+        ? (JSON.parse(raw) as {
+            assignedToMe?: unknown;
+            statusIds?: unknown;
+            versionIds?: unknown;
+          })
         : null;
       const assigned = saved?.assignedToMe === true;
       const statusIds = Array.isArray(saved?.statusIds)
         ? saved.statusIds.filter((x): x is string => typeof x === "string")
         : [];
+      const versionIds = Array.isArray(saved?.versionIds)
+        ? saved.versionIds.filter((x): x is string => typeof x === "string")
+        : [];
       setAssignedToMe(assigned);
       setSelectedStatusIds(statusIds);
+      setSelectedVersionIds(versionIds);
       setDebouncedAssignedToMe(assigned);
       setDebouncedStatusIds(statusIds);
+      setDebouncedVersionIds(versionIds);
     } catch {
       setAssignedToMe(false);
       setSelectedStatusIds([]);
+      setSelectedVersionIds([]);
       setDebouncedAssignedToMe(false);
       setDebouncedStatusIds([]);
+      setDebouncedVersionIds([]);
     }
     setLoadedFiltersProjectId(projectId);
   }, [enabled, projectId]);
@@ -95,9 +113,20 @@ export function useYunxiaoFilters(
     if (loadedFiltersProjectId !== projectId) return;
     localStorage.setItem(
       `${YUNXIAO_FILTERS_PREFIX}${projectId}`,
-      JSON.stringify({ assignedToMe, statusIds: selectedStatusIds }),
+      JSON.stringify({
+        assignedToMe,
+        statusIds: selectedStatusIds,
+        versionIds: selectedVersionIds,
+      }),
     );
-  }, [enabled, projectId, loadedFiltersProjectId, assignedToMe, selectedStatusIds]);
+  }, [
+    enabled,
+    projectId,
+    loadedFiltersProjectId,
+    assignedToMe,
+    selectedStatusIds,
+    selectedVersionIds,
+  ]);
 
   // 当前用户：优先用设置缓存，否则调 /platform/user 自动识别并持久化。
   useEffect(() => {
@@ -215,6 +244,60 @@ export function useYunxiaoFilters(
     setStatusReloadKey((k) => k + 1);
   }, []);
 
+  // 版本选项：按项目缓存（版本无分类维度，与分类 Tab 无关）。
+  const versionCacheRef = useRef<Map<string, YunxiaoVersion[]>>(new Map());
+  useEffect(() => {
+    if (!enabled || !projectId) return;
+    const cached = versionCacheRef.current.get(projectId);
+    if (cached) {
+      setVersionOptions(cached);
+      setVersionsLoading(false);
+      setVersionError(null);
+      return;
+    }
+    let cancelled = false;
+    setVersionsLoading(true);
+    setVersionError(null);
+    (async () => {
+      try {
+        const response = await invoke<YunxiaoVersion[]>("yunxiao_list_versions", {
+          token: settings.token,
+          organizationId: settings.organizationId,
+          projectId,
+        });
+        if (cancelled) return;
+        const list = Array.isArray(response) ? response : [];
+        setVersionError(null);
+        versionCacheRef.current.set(projectId, list);
+        setVersionOptions(list);
+      } catch (e) {
+        console.error("[yunxiao] load versions failed:", e);
+        if (!cancelled) {
+          setVersionOptions([]);
+          setVersionError(String(e));
+        }
+      } finally {
+        if (!cancelled) setVersionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    enabled,
+    settings.token,
+    settings.organizationId,
+    projectId,
+    versionReloadKey,
+  ]);
+
+  /** 版本列表加载失败后手动重试（重新触发 effect，绕过失败的空缓存）。 */
+  const retryVersions = useCallback(() => {
+    setVersionError(null);
+    setVersionsLoading(true);
+    setVersionReloadKey((k) => k + 1);
+  }, []);
+
   const conditions = useMemo(
     () =>
       buildYunxiaoConditions({
@@ -222,8 +305,15 @@ export function useYunxiaoFilters(
         assignedToMe: debouncedAssignedToMe,
         currentUserId: currentUser?.id,
         selectedStatusIds: debouncedStatusIds,
+        selectedVersionIds: debouncedVersionIds,
       }),
-    [debouncedQuery, debouncedAssignedToMe, currentUser?.id, debouncedStatusIds],
+    [
+      debouncedQuery,
+      debouncedAssignedToMe,
+      currentUser?.id,
+      debouncedStatusIds,
+      debouncedVersionIds,
+    ],
   );
 
   /** 本项目的过滤偏好已恢复（首查应等待此标志，避免无条件请求先发出）。 */
@@ -240,6 +330,12 @@ export function useYunxiaoFilters(
     statusesLoading,
     statusError,
     retryStatuses,
+    selectedVersionIds,
+    setSelectedVersionIds,
+    versionOptions,
+    versionsLoading,
+    versionError,
+    retryVersions,
     currentUser,
     currentUserError,
     currentUserIdInput,
