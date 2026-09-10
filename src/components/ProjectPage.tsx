@@ -352,7 +352,9 @@ export function ProjectPage({
   const prevHadDiffRef = useRef(false);
   const newTaskDraftRef = useRef<NewTaskDraft | null>(null);
   // 右侧面板区域（面板 + 竖条按钮栏）的 ref，用于“焦点离开自动收起”的外部点击检测。
+  // 构建面板常驻挂载（隐藏时 display:none），单独持 ref 一并纳入区域。
   const rightPanelRegionRef = useRef<HTMLDivElement | null>(null);
+  const buildPanelRegionRef = useRef<HTMLDivElement | null>(null);
   const rightToolbarRef = useRef<HTMLDivElement | null>(null);
 
   // 非固定（未 📌）的右侧面板：点击面板/竖条区域之外时自动收起。
@@ -360,7 +362,10 @@ export function ProjectPage({
     if (!rightPanel || rightPanelDocked) return; // 无面板或已固定则不监听
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
-      const inPanel = rightPanelRegionRef.current?.contains(target);
+      const inPanel =
+        rightPanelRegionRef.current?.contains(target) ??
+        buildPanelRegionRef.current?.contains(target) ??
+        false;
       const inToolbar = rightToolbarRef.current?.contains(target);
       if (!inPanel && !inToolbar) {
         closeRightPanel();
@@ -1380,6 +1385,7 @@ export function ProjectPage({
           切换/关闭其它右侧面板不丢构建日志、逐项目状态与运行句柄。 */}
       {buildPanelMounted && (
         <div
+          ref={buildPanelRegionRef}
           style={
             rightPanel === "build"
               ? rightPanelDocked
