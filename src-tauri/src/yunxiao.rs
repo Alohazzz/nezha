@@ -1257,10 +1257,15 @@ fn md_to_safe_jsonml(markdown: &str) -> serde_json::Value {
             if !t.is_empty() { blocks.push(flush_para(vec![text_span(&format!("- {}", t), false)])); }
             continue;
         }
-        // 有序列表：数字.
-        if let Some(digits) = strip_ordered_prefix(trimmed) {
-            let t = strip_markdown_line(digits);
-            if !t.is_empty() { blocks.push(flush_para(vec![text_span(&t, false)])); }
+        // 有序列表：云效富文本不支持 ol（jsonML 里压平为 p），序号必须作为字面文本保留，
+        // 否则渲染出来只有一串没有编号的步骤文本。
+        if let Some(rest) = strip_ordered_prefix(trimmed) {
+            let prefix_len = trimmed.len() - rest.len();
+            let t = strip_markdown_line(rest);
+            if !t.is_empty() {
+                let numbered = format!("{}{}", &trimmed[..prefix_len], t);
+                blocks.push(flush_para(vec![text_span(&numbered, false)]));
+            }
             continue;
         }
         // 引用
@@ -2616,6 +2621,17 @@ mod tests {
     fn markdown_to_rich_text_empty_returns_empty() {
         assert_eq!(markdown_to_yunxiao_rich_text("   "), "");
         assert_eq!(markdown_to_yunxiao_rich_text(""), "");
+    }
+
+    #[test]
+    fn markdown_to_rich_text_keeps_ordered_list_numbers_as_text() {
+        // 云效 jsonML 不支持 ol，序号必须以字面文本留在 p 段落里，否则渲染丢失编号。
+        let value = assert_valid_rich_text("1. 第一步\n2. 第二步\n10. 第十步");
+        let jsonml = value.get("jsonMLValue").unwrap().to_string();
+        assert!(!jsonml.contains("\"ol\"") && !jsonml.contains("\"li\""), "不得输出 ol/li 节点: {jsonml}");
+        assert!(jsonml.contains("1. 第一步"), "序号须保留: {jsonml}");
+        assert!(jsonml.contains("2. 第二步"), "序号须保留: {jsonml}");
+        assert!(jsonml.contains("10. 第十步"), "多位序号须保留: {jsonml}");
     }
 
     #[test]
