@@ -8,6 +8,7 @@
 @import "./styles/layout.css";
 @import "./styles/app-settings.css";
 @import "./styles/file-explorer.css";
+@import "./styles/help.css";
 
 /* ── Reset ─────────────────────────────────────────────────────── */
 *,

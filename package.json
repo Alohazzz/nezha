@@ -14,8 +14,9 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "node scripts/sync-help-docs.mjs && vite",
+    "help:sync": "node scripts/sync-help-docs.mjs",
+    "build": "node scripts/sync-help-docs.mjs && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint src --max-warnings 0",

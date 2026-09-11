@@ -237,7 +237,7 @@ export function GeneratePlanTodosDialog({
 
         <div style={s.bbDialogActions}>
           <button type="button" style={s.bbBtnGhost} onClick={onClose} disabled={creating}>
-            {t("plan.launch.cancel")}
+            {t("plan.generate.cancel")}
           </button>
           <button
             type="button"

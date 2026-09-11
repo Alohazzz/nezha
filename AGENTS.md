@@ -11,8 +11,9 @@ Nezha 是一款面向 AI 编程智能体（Claude Code、Codex）的桌面任务
 ## 开发命令
 
 ```bash
-pnpm dev            # 启动 Vite 开发服务器（端口 1420）
-pnpm build          # tsc 类型检查 + Vite 打包
+pnpm dev            # 先同步帮助文档，再启动 Vite 开发服务器（端口 1420）
+pnpm build          # 同步帮助文档 + tsc 类型检查 + Vite 打包
+pnpm help:sync      # 仅把 docs/ 下的操作手册同步到 public/help/
 pnpm lint           # 运行 ESLint
 pnpm test           # 运行 Vitest
 pnpm tauri dev      # 启动完整桌面应用（自动启动开发服务器）
@@ -20,6 +21,12 @@ pnpm tauri build    # 构建生产环境桌面二进制包
 ```
 
 Rust 后端位于 `src-tauri/`，修改后需重启 `tauri dev`。
+
+> **首页帮助文档**：`scripts/sync-help-docs.mjs` 把 `docs/operation-manual.html`
+> 与 `docs/yunxiao-launch-modes.html` 及其引用截图拷进 `public/help/`（已 gitignore，
+> 源头始终是 `docs/`），由首页「帮助中心」（`src/components/help/HelpView.tsx`）
+> 以 iframe 内嵌。两份 HTML 支持 `?embed=1`（隐藏自身页头）与 `?theme=`，主题切换
+> 走 postMessage。改文档内容后跑 `pnpm help:sync` 或重启 dev 即可生效。
 
 > **编译 + 启动桌面应用（已验证流程）**：使用项目技能 `nezha-build-launch`
 > （`.codex/skills/nezha-build-launch/`），一键运行

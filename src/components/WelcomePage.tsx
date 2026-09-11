@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, BarChart3 } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, BarChart3, BookOpen } from "lucide-react";
 import type {
   Project,
   Task,
@@ -26,6 +26,7 @@ import { YunxiaoView } from "./yunxiao/YunxiaoView";
 import type { DirectLaunchOptions } from "./yunxiao/DirectLaunchDialog";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { MergeHubView } from "./codeup/MergeHubView";
+import { HelpView } from "./help/HelpView";
 import { ProjectListItem } from "./welcome/ProjectListItem";
 import { useI18n, pluralKey } from "../i18n";
 import s from "../styles";
@@ -161,7 +162,7 @@ export function WelcomePage({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup" | "weekly">(
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup" | "weekly" | "help">(
     "projects",
   );
 
@@ -227,6 +228,16 @@ export function WelcomePage({
             />
           </nav>
 
+          <nav style={s.sidebarNavSecondary}>
+            <div style={s.sidebarSectionTitle}>{t("welcome.help")}</div>
+            <SidebarItem
+              icon={<BookOpen size={15} />}
+              label={t("help.title")}
+              active={view === "help"}
+              onClick={() => setView("help")}
+            />
+          </nav>
+
           <div style={s.sidebarFooter}>
             <SidebarFooterActions
               themeVariant={themeVariant}
@@ -250,7 +261,9 @@ export function WelcomePage({
           </div>
         </div>
 
-        {view === "weekly" ? (
+        {view === "help" ? (
+          <HelpView themeVariant={themeVariant} />
+        ) : view === "weekly" ? (
           <WeeklyReportView />
         ) : view === "codeup" ? (
           <MergeHubView
