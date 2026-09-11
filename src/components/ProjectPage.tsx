@@ -190,6 +190,7 @@ export function ProjectPage({
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
+    clarifyFirst: boolean,
   ) => void;
   /** 待办「发起讨论」进行中标记（锁定入口按钮）。 */
   todoDiscussionStarting: boolean;

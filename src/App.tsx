@@ -49,11 +49,10 @@ import { quoteFontName } from "./utils/fonts";
 import {
   buildYunxiaoIssueLink,
   issueTag,
-  getLastYunxiaoAgent,
-  getLastYunxiaoPermission,
   isYunxiaoWorkitemImported,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
+import type { DirectLaunchOptions } from "./components/yunxiao/DirectLaunchDialog";
 import {
   buildPlanDiscussionPrompt,
   buildPlanExecutionPrompt,
@@ -1765,7 +1764,7 @@ function App() {
   }
 
   /**
-   * 议题列表「直接开始」：零对话框——立即创建 pending 执行任务并切到项目视图，
+   * 议题列表「直接开始」：确认对话框回调——创建 pending 执行任务并切到项目视图，
    * 后台拉取议题详情 + 图片（归档任务附件目录）后自动启动（当前工作区，不建 worktree）。
    * 失败镜像发起对话框的阻断规则：详情失败 / 图片全败 → 任务置 failed 带原因、
    * 不启动 PTY；图片部分失败 → 警告放行。重试 = 删任务重点。
@@ -1773,6 +1772,7 @@ function App() {
   async function handleStartYunxiaoDirectExecution(
     issue: YunxiaoWorkitem,
     targetProjectId: string,
+    options: DirectLaunchOptions,
   ) {
     const project = projects.find((p) => p.id === targetProjectId);
     if (!project) return;
@@ -1786,15 +1786,14 @@ function App() {
     // 任务落地后回填 id，供 catch 里把 pending 任务置 failed（闭包里的 tasks 是陈旧快照）。
     let createdTaskId = "";
     try {
-      // Agent/权限走项目级记忆；记忆指向已禁用 Agent 时回退第一个启用项。
+      // Agent/权限由对话框选择（对话框已写入项目级记忆）；记忆指向已禁用 Agent 时兜底回退。
       const appSettings = await invoke<AgentEnabledState & { yunxiao?: YunxiaoSettings }>(
         "load_app_settings",
       );
-      const rememberedAgent = getLastYunxiaoAgent(project.id) ?? "codex";
-      const agent = isAgentEnabled(appSettings, rememberedAgent)
-        ? rememberedAgent
+      const agent = isAgentEnabled(appSettings, options.agent)
+        ? options.agent
         : firstEnabledAgent(appSettings);
-      const permissionMode = getLastYunxiaoPermission(project.id) ?? "ask";
+      const permissionMode = options.permissionMode;
 
       const now = Date.now();
       const taskId = `${now}`;
@@ -1856,11 +1855,13 @@ function App() {
         projectPath: project.path,
         taskId,
         hasBug,
+        clarifyFirst: hasBug ? false : options.clarifyFirst,
       });
       const prompt = buildDirectExecutionPrompt({
         issue: detail,
         link: yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "",
         imagePaths: images.paths,
+        userNotes: options.notes,
         instructions,
       });
       const updated: Task = { ...baseTask, prompt };
@@ -1892,6 +1893,7 @@ function App() {
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
+    clarifyFirst: boolean,
   ) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task || task.status !== "todo" || !task.yunxiaoWorkitemId || task.planId) return;
@@ -1951,6 +1953,7 @@ function App() {
         projectPath: project.path,
         taskId: task.id,
         hasBug,
+        clarifyFirst: hasBug ? false : clarifyFirst,
       });
       const prompt = buildDirectExecutionPrompt({
         issue: detail,

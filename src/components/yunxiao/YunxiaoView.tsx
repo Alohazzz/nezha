@@ -32,6 +32,7 @@ import { YunxiaoIssueList } from "./YunxiaoIssueList";
 import { YunxiaoProjectSelect } from "./YunxiaoProjectSelect";
 import { useYunxiaoCloudProjects } from "./useYunxiaoCloudProjects";
 import { PlanLaunchDialog } from "./plan/PlanLaunchDialog";
+import { DirectLaunchDialog, type DirectLaunchOptions } from "./DirectLaunchDialog";
 import s from "../../styles";
 
 const PAGE_SIZE = 100;
@@ -74,6 +75,7 @@ export function YunxiaoView({
   onStartDirectExecution: (
     issue: YunxiaoWorkitem,
     targetProjectId: string,
+    options: DirectLaunchOptions,
   ) => void | Promise<void>;
   onCancelPlan: (planId: string) => void | Promise<void>;
 }) {
@@ -214,6 +216,8 @@ export function YunxiaoView({
   // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
   const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
   const [launchIssues, setLaunchIssues] = useState<YunxiaoWorkitem[] | null>(null);
+  // 「直接开始」弹窗的待确认议题（null = 未打开）。
+  const [directIssue, setDirectIssue] = useState<YunxiaoWorkitem | null>(null);
 
   const selectionMode = selectedIssueIds.size > 0;
 
@@ -276,7 +280,7 @@ export function YunxiaoView({
     [targetProjectId, targetProject, showToast, t],
   );
 
-  /** 行内「直接开始」：零对话框，直接创建绑定议题的执行任务（App 层拉详情后启动）。 */
+  /** 行内「直接开始」：先弹确认对话框（拉详情预览 + 补充 + 工作流选择），确认后启动。 */
   const handleDirectStartIssue = useCallback(
     (issue: YunxiaoWorkitem) => {
       if (!targetProjectId) {
@@ -290,9 +294,9 @@ export function YunxiaoView({
         return;
       }
       localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
-      void onStartDirectExecution(issue, targetProjectId);
+      setDirectIssue(issue);
     },
-    [targetProjectId, targetProject, tasks, plans, onStartDirectExecution, showToast, t],
+    [targetProjectId, targetProject, tasks, plans, showToast, t],
   );
 
   async function handleFetchOrganizations() {
@@ -523,6 +527,24 @@ export function YunxiaoView({
           onStartDiscussion={onStartPlanDiscussion}
           onCancelPlan={onCancelPlan}
           onClose={() => setLaunchIssues(null)}
+        />
+      )}
+      {directIssue && targetProject && (
+        <DirectLaunchDialog
+          key={directIssue.id}
+          issue={directIssue}
+          targetProjectId={targetProject.id}
+          projectName={targetProject.name}
+          settings={settings}
+          onStart={(options) => {
+            // 确认后立即关闭弹窗，任务创建/下图/启动在 App 层后台进行
+            // （失败会 toast 并把任务置 failed，重试 = 删任务重点）。
+            void Promise.resolve(onStartDirectExecution(directIssue, targetProject.id, options)).catch(
+              () => undefined,
+            );
+            setDirectIssue(null);
+          }}
+          onClose={() => setDirectIssue(null)}
         />
       )}
     </div>

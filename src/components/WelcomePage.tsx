@@ -23,6 +23,7 @@ import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
 import { WeeklyReportView } from "./weekly-report/WeeklyReportView";
 import { YunxiaoView } from "./yunxiao/YunxiaoView";
+import type { DirectLaunchOptions } from "./yunxiao/DirectLaunchDialog";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { MergeHubView } from "./codeup/MergeHubView";
 import { ProjectListItem } from "./welcome/ProjectListItem";
@@ -149,10 +150,11 @@ export function WelcomePage({
     agent: AgentType,
     permissionMode: PermissionMode,
   ) => void;
-  /** 议题列表「直接开始」：跳过讨论链路，直接创建绑定议题的执行任务并启动。 */
+  /** 议题列表「直接开始」：确认对话框回调——跳过讨论链路，直接创建绑定议题的执行任务并启动。 */
   onStartYunxiaoDirectExecution: (
     issue: YunxiaoWorkitem,
     targetProjectId: string,
+    options: DirectLaunchOptions,
   ) => void | Promise<void>;
   onCancelYunxiaoPlan: (planId: string) => void | Promise<void>;
   plans: Plan[];
