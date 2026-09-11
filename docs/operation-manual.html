@@ -3,409 +3,478 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Nezha 操作手册 · 云效议题闭环 / 知识沉淀闭环 / 技能管理</title>
+<title>Nezha 操作手册 · 云效议题 / 构建 / 知识图谱 / 创建 PR / 技能管理</title>
+<script>
+  // 嵌入式帮助文档引导：在样式生效前决定主题，避免首帧闪白/闪黑。
+  (function () {
+    var params = new URLSearchParams(location.search);
+    if (params.get('embed') === '1') document.documentElement.dataset.embed = '1';
+    var theme = params.get('theme');
+    if (theme !== 'dark' && theme !== 'light') {
+      try { theme = localStorage.getItem('nezha-doc-theme'); } catch (e) { theme = null; }
+    }
+    if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
+  })();
+</script>
 <style>
-  :root {
-    --bg: #f7f6f3;
-    --surface: #ffffff;
-    --ink: #1f2329;
-    --muted: #6a7280;
-    --faint: #93a0ae;
-    --border: #e5e2da;
-    --accent: #3d5a80;
-    --accent-soft: #eef2f7;
-    --code-bg: #f1efe9;
-    --code-ink: #37424d;
-    --warn-bg: #fbf3e8;
-    --warn-border: #e8cfa8;
-    --radius: 8px;
-    --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas, "Roboto Mono", monospace;
-    --shadow: 0 1px 2px rgba(0,0,0,0.03);
+  :root{
+    --bg:#f7f7f5; --surface:#ffffff; --ink:#1b1b19; --muted:#6b7280;
+    --faint:#9aa1ab; --line:#e8e6e0; --line-soft:#f0eee9;
+    --accent:#3d5a99; --accent-soft:#eef1f8; --accent-line:#d6deee;
+    --code-bg:#f2f1ec; --code-ink:#3a4149;
+    --note-bg:#eff4fb; --note-line:#d3e0f2;
+    --warn-bg:#fdf6ea; --warn-line:#ecd9b4;
+    --radius:12px; --radius-sm:8px;
+    --measure:760px;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
   }
-  html[data-theme="dark"] {
-    --bg: #17181c;
-    --surface: #202127;
-    --ink: #e7e9ee;
-    --muted: #9aa1ac;
-    --faint: #707783;
-    --border: #33343b;
-    --accent: #8fb0d6;
-    --accent-soft: #232b36;
-    --code-bg: #23252b;
-    --code-ink: #c7d2e0;
-    --warn-bg: #2a2118;
-    --warn-border: #5d4a2e;
-    --shadow: 0 1px 2px rgba(0,0,0,0.25);
+  [data-theme="dark"]{
+    --bg:#131417; --surface:#1a1c20; --ink:#e9eaec; --muted:#9aa3ae;
+    --faint:#6c7681; --line:#2a2e35; --line-soft:#22262c;
+    --accent:#8fa9e8; --accent-soft:#1e2433; --accent-line:#2e394f;
+    --code-bg:#1f2228; --code-ink:#cfd6de;
+    --note-bg:#1b212c; --note-line:#2b3648;
+    --warn-bg:#262017; --warn-line:#48391f;
   }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--ink);
-    font-family: -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
-    line-height: 1.8;
-    font-size: 16px;
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--font); font-size:17px; line-height:1.95; letter-spacing:.01em;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .topbar{position:sticky; top:0; z-index:20; display:flex; align-items:center; justify-content:space-between;
+    gap:16px; padding:12px 28px; background:color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter:saturate(160%) blur(8px); border-bottom:1px solid var(--line);}
+  .topbar .brand{font-weight:650; letter-spacing:.2px}
+  .topbar .brand small{color:var(--muted); font-weight:400; margin-left:10px; font-size:13px}
+  .topbar .actions{display:flex; gap:8px; flex-wrap:wrap}
+  .btn{border:1px solid var(--line); background:var(--surface); color:var(--ink);
+    border-radius:999px; padding:6px 14px; font-size:13px; cursor:pointer; font-family:inherit;
+    transition:border-color .15s, background .15s;}
+  .btn:hover{border-color:var(--accent-line); background:var(--accent-soft)}
+  .layout{display:grid; grid-template-columns:224px minmax(0,1fr);
+    gap:44px; max-width:1200px; margin:0 auto; padding:34px 30px 110px;}
+  .toc{position:sticky; top:76px; align-self:start; font-size:14px; max-height:calc(100vh - 100px); overflow:auto}
+  .toc h4{margin:0 0 10px; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); font-weight:600}
+  .toc a{display:block; color:var(--muted); padding:6px 12px; border-left:2px solid transparent; border-radius:0 6px 6px 0}
+  .toc a:hover{color:var(--ink); background:var(--line-soft); text-decoration:none}
+  .toc a.active{color:var(--accent); border-left-color:var(--accent); background:var(--accent-soft); font-weight:600}
+  .toc a.sub{padding-left:26px; font-size:13px}
+  main{min-width:0; max-width:var(--measure)}
+  .hero{margin-bottom:34px}
+  .hero h1{font-size:30px; line-height:1.3; margin:0 0 10px; letter-spacing:-.3px}
+  .hero p{margin:0; color:var(--muted); font-size:16.5px; line-height:1.85}
+  .hero .meta{margin-top:16px; font-size:13.5px; color:var(--faint)}
+  section{margin-bottom:64px; scroll-margin-top:78px}
+  h2{font-size:22px; line-height:1.5; margin:0 0 20px; padding-bottom:13px; border-bottom:1px solid var(--line); letter-spacing:-.2px}
+  h2 .num{color:var(--faint); font-weight:500; margin-right:10px; font-variant-numeric:tabular-nums}
+  h3{font-size:17px; line-height:1.55; margin:34px 0 12px}
+  p{margin:0 0 18px}
+  ul,ol{margin:0 0 18px; padding-left:24px}
+  li{margin:9px 0}
+  li > ul, li > ol{margin:8px 0 4px}
+  strong{font-weight:650}
+  code{font-family:var(--mono); font-size:.85em; background:var(--code-bg); color:var(--code-ink);
+    padding:2px 6px; border-radius:5px;}
+  pre{background:var(--code-bg); color:var(--code-ink); border:1px solid var(--line-soft);
+    border-radius:var(--radius); padding:18px 20px; overflow-x:auto; font-family:var(--mono);
+    font-size:13px; line-height:1.75; margin:0 0 20px;}
+  pre code{background:none; padding:0; font-size:inherit}
+  table{width:100%; border-collapse:collapse; margin:0 0 22px; font-size:15px; line-height:1.7;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;}
+  th,td{padding:12px 16px; text-align:left; border-bottom:1px solid var(--line-soft); vertical-align:top}
+  th{background:var(--line-soft); font-weight:600; font-size:14px; color:var(--muted)}
+  tr:last-child td{border-bottom:none}
+  .callout{background:var(--note-bg); border:1px solid var(--note-line); border-left:3px solid var(--accent);
+    border-radius:var(--radius-sm); padding:15px 18px; margin:0 0 22px; font-size:15.5px; line-height:1.85;}
+  .callout.warn{background:var(--warn-bg); border-color:var(--warn-line); border-left-color:#c9922f}
+  .callout .label{display:block; font-weight:650; font-size:11.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--accent); margin-bottom:5px}
+  .callout.warn .label{color:#b07d22}
+  /* 截图：按源分辨率显示，永不放大（放大必糊）；仅对超大图做上限收敛 */
+  figure{margin:0 0 28px; max-width:600px}
+  figure img{display:block; width:auto; max-width:100%; height:auto; margin:0;
+  border-radius:var(--radius); border:1px solid var(--line); background:var(--surface); cursor:zoom-in;}
+  figure.shot-md{max-width:480px}
+  figure.shot-xs{max-width:300px}
+  figcaption{margin-top:10px; font-size:13.5px; color:var(--faint); text-align:left; line-height:1.6}
+  /* 点击截图放大：正文按小图排版，看细节时点开原图浮层 */
+  .doc-lightbox{position:fixed; inset:0; z-index:9999; display:none; align-items:center; justify-content:center;
+    background:rgba(10,12,16,.9); padding:26px; cursor:zoom-out}
+  .doc-lightbox[data-open="1"]{display:flex}
+  .doc-lightbox img{max-width:95vw; max-height:88vh; width:auto; height:auto;
+    border-radius:var(--radius); border:1px solid rgba(255,255,255,.16); box-shadow:0 20px 70px rgba(0,0,0,.55)}
+  .doc-lightbox-hint{position:fixed; left:0; right:0; bottom:18px; text-align:center;
+    color:#c8cfd8; font-size:13px; letter-spacing:.02em}
+
+  /* ── 流程可视化（替代 ASCII 图）────────────────────────────── */
+  .flow{margin:2px 0 22px}
+  .flow-stage{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px;}
+  .flow-head{display:flex; align-items:center; gap:10px; margin-bottom:14px}
+  .flow-num{flex:none; display:flex; align-items:center; justify-content:center;
+    width:26px; height:26px; border-radius:8px; font-size:13px; font-weight:650;
+    color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); font-variant-numeric:tabular-nums;}
+  .flow-title{font-weight:650; font-size:16px}
+  .flow-tag{margin-left:auto; font-size:12.5px; color:var(--muted);
+    background:var(--line-soft); border:1px solid var(--line); border-radius:999px; padding:2px 10px;}
+  .flow-cols{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .flow-col{border:1px solid var(--line); border-radius:var(--radius-sm); padding:14px 16px; background:var(--bg)}
+  .flow-lane{display:flex; align-items:center; gap:8px; font-size:13.5px; font-weight:650; color:var(--accent); margin-bottom:11px}
+  .flow-lane .dot{width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none}
+  .flow-steps{list-style:none; margin:0; padding:0}
+  .flow-steps li{position:relative; padding-left:21px; margin:10px 0; font-size:15px; line-height:1.75}
+  .flow-steps li::before{content:""; position:absolute; left:3px; top:.66em; width:6px; height:6px; border-radius:50%; background:var(--accent-line);}
+  .flow-steps li:not(:last-child)::after{content:""; position:absolute; left:5.5px; top:1.45em; bottom:-.4em; width:1px; background:var(--line);}
+  .flow-arrow{display:flex; justify-content:center; padding:6px 0; color:var(--faint)}
+  .flow-arrow svg{display:block}
+  .flow-cards{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+  .flow-card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:17px 18px;}
+  .flow-card .flow-head{margin-bottom:11px}
+  .flow-card ul{list-style:none; margin:0; padding:0}
+  .flow-card li{position:relative; padding-left:17px; margin:9px 0; font-size:14.5px; line-height:1.7}
+  .flow-card li::before{content:""; position:absolute; left:2px; top:.6em; width:5px; height:5px; border-radius:50%; background:var(--accent-line);}
+  @media (max-width:760px){
+    .flow-cols, .flow-cards{grid-template-columns:1fr}
+    .flow-stage{padding:14px}
   }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); color: var(--code-ink); padding: 0.1em 0.35em; border-radius: 4px; }
-  pre { background: var(--code-bg); color: var(--code-ink); padding: 14px 16px; border-radius: var(--radius); overflow: auto; font-family: var(--mono); font-size: 13px; line-height: 1.65; }
-  pre code { background: none; padding: 0; }
-
-  .topbar {
-    position: sticky; top: 0; z-index: 30;
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 12px 28px;
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--border);
+  footer{border-top:1px solid var(--line); padding:22px 0 0; color:var(--faint); font-size:13px}
+  @media (max-width:900px){
+    .layout{grid-template-columns:1fr; gap:20px; padding:22px 18px 80px}
+    .toc{position:static; max-height:none; border:1px solid var(--line); border-radius:var(--radius); padding:12px; background:var(--surface)}
+    .toc a{display:inline-block; border-left:0; padding:3px 10px}
+    .toc a.active{border-left:0}
+    .hero h1{font-size:24px}
   }
-  .topbar .brand { font-weight: 650; font-size: 14px; letter-spacing: 0.2px; }
-  .topbar .brand small { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 13px; }
-  .btn {
-    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
-    padding: 5px 12px; border-radius: 7px; font-size: 13px; cursor: pointer;
-    box-shadow: var(--shadow); transition: border-color 0.15s ease, color 0.15s ease;
+  @media print{
+    .topbar,.toc{display:none}
+    .layout{display:block; max-width:none}
+    body{background:#fff}
   }
-  .btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
-
-  .layout { display: grid; grid-template-columns: 228px minmax(0, 1fr); gap: 48px; max-width: 1080px; margin: 0 auto; padding: 36px 32px 96px; }
-  .toc { position: sticky; top: 72px; align-self: start; max-height: calc(100vh - 96px); overflow: auto; }
-  .toc-label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 0 0 10px; padding-left: 12px; }
-  .toc a { display: block; padding: 5px 12px; border-radius: 6px; color: var(--muted); font-size: 13.5px; line-height: 1.5; border-left: 2px solid transparent; }
-  .toc a:hover { color: var(--ink); background: var(--accent-soft); text-decoration: none; }
-  .toc a.lv2 { padding-left: 26px; font-size: 13px; }
-  .toc a.active { color: var(--accent); background: var(--accent-soft); border-left-color: var(--accent); }
-
-  .content { min-width: 0; max-width: 760px; }
-  .hero { margin-bottom: 30px; padding-bottom: 22px; border-bottom: 1px solid var(--border); }
-  .hero h1 { font-size: 28px; line-height: 1.3; margin: 0 0 8px; font-weight: 700; letter-spacing: -0.01em; }
-  .hero p { color: var(--muted); margin: 0; }
-  section { margin-bottom: 46px; scroll-margin-top: 76px; }
-  h2 { font-size: 21px; margin: 0 0 14px; padding-top: 6px; font-weight: 700; }
-  h2::before { content: ""; display: block; width: 40px; height: 3px; background: var(--accent); border-radius: 3px; margin-bottom: 10px; }
-  h2 .num { color: var(--accent); margin-right: 8px; }
-  h3 { font-size: 17px; margin: 26px 0 8px; font-weight: 650; color: var(--ink); }
-  h3 .subnum { color: var(--accent); margin-right: 6px; }
-  h4 { font-size: 15px; margin: 18px 0 6px; font-weight: 600; }
-  p { margin: 10px 0; }
-
-  ul, ol { padding-left: 22px; margin: 10px 0; }
-  li { margin: 6px 0; }
-  li > ul { margin: 4px 0; }
-
-  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14.5px; }
-  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { font-weight: 600; color: var(--muted); background: none; font-size: 13px; letter-spacing: 0.02em; }
-  td:first-child { color: var(--ink); font-weight: 550; }
-
-  .callout { padding: 12px 16px; margin: 16px 0; border-radius: var(--radius); background: var(--accent-soft); border-left: 3px solid var(--accent); font-size: 14.5px; }
-  .callout.warn { background: var(--warn-bg); border-left-color: var(--warn-border); }
-  .callout .title { display: block; font-size: 12px; font-weight: 650; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 2px; text-transform: uppercase; }
-  .callout.warn .title { color: #b07a2a; }
-
-  ol.steps { list-style: none; counter-reset: step; padding-left: 0; }
-  ol.steps > li { counter-increment: step; position: relative; padding-left: 34px; margin: 11px 0; }
-  ol.steps > li::before { content: counter(step); position: absolute; left: 0; top: 3px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
-
-  .flow { background: var(--code-bg); color: var(--code-ink); border-radius: var(--radius); padding: 14px 16px; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; overflow: auto; white-space: pre; }
-
-  figure.shot { margin: 20px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
-  figure.shot figcaption { padding: 9px 14px; font-size: 13px; color: var(--muted); background: var(--surface); border-top: 1px solid var(--border); }
-  figure.shot figcaption .fn { font-family: var(--mono); font-size: 12px; color: var(--accent); }
-  .shot-slot { position: relative; min-height: 180px; background: var(--code-bg); }
-  .shot-meta { display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; text-align: center; padding: 28px 18px; min-height: 180px; }
-  .shot-meta .hint { color: var(--muted); font-size: 13px; font-weight: 550; }
-  .shot-meta code { color: var(--accent); font-size: 12px; }
-  .shot-meta .desc { color: var(--faint); font-size: 12.5px; max-width: 360px; line-height: 1.6; }
-  .shot-img { display: none; width: 100%; max-height: 520px; object-fit: contain; background: var(--surface); }
-  .shot-img.pending { display: none; }
-
-  footer { color: var(--muted); font-size: 13px; text-align: center; padding: 24px; border-top: 1px solid var(--border); }
-
-  @media (max-width: 860px) {
-    .layout { grid-template-columns: 1fr; gap: 20px; padding: 24px 18px 72px; }
-    .toc { position: static; max-height: none; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 4px; margin-bottom: 20px; }
-    .hero h1 { font-size: 23px; }
-    td:first-child { white-space: normal; }
-  }
-  @media print {
-    .topbar, .toc { display: none; }
-    body { background: #fff; color: #111; }
-    .shot-meta { display: none; }
+  /* 嵌入式模式（Nezha 首页帮助文档 iframe）：隐藏页头，保留侧边目录并压缩留白。 */
+  html[data-embed="1"] .topbar{display:none}
+  /* 嵌进首页后视口通常很宽，用满整宽并放宽容纳宽度，避免版面缩在中间。 */
+  html[data-embed="1"] .layout{grid-template-columns:206px minmax(0,1fr); gap:40px; max-width:none; margin:0; padding:26px 40px 90px}
+  html[data-embed="1"] main{max-width:1120px}
+  html[data-embed="1"] .toc{position:sticky; top:26px; max-height:calc(100vh - 52px); border:0; background:transparent; padding:0}
+  html[data-embed="1"] .toc a{display:block; border-left:2px solid transparent; padding:5px 12px}
+  html[data-embed="1"] .toc a.active{border-left-color:var(--accent)}
+  html[data-embed="1"] .hero h1{font-size:27px}
+  @media (max-width:780px){
+    html[data-embed="1"] .layout{grid-template-columns:1fr; gap:18px; padding:18px 16px 70px}
+    html[data-embed="1"] .toc{position:static; max-height:none; border:1px solid var(--line); border-radius:var(--radius); padding:12px; background:var(--surface)}
+    html[data-embed="1"] .toc a{display:inline-block; border-left:0; padding:3px 10px}
+    html[data-embed="1"] .hero h1{font-size:23px}
   }
 </style>
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand">Nezha 操作手册<small>云效议题闭环 · 知识沉淀闭环 · 技能管理</small></div>
+  <div class="brand">Nezha 操作手册<small>云效议题 · 构建 · 知识图谱 · 创建 PR · 技能管理</small></div>
   <div class="actions">
-    <a class="btn" href="operation-manual.md" target="_blank">Markdown 版</a>
-    <button class="btn" id="themeBtn" type="button">暗色模式</button>
+    <a class="btn" href="operation-manual.md">Markdown 版</a>
+    <a class="btn" href="yunxiao-launch-modes.html">云效议题详解</a>
+    <a class="btn" href="build-tool-manual.md">构建工具详解</a>
+    <button class="btn" id="themeBtn" type="button">暗色</button>
   </div>
 </header>
 
 <div class="layout">
-  <nav class="toc" id="toc" aria-label="目录">
-    <div class="toc-label">目录</div>
-  </nav>
+  <nav class="toc" id="toc" aria-label="目录"><h4>目录</h4></nav>
 
-  <main class="content">
+  <main>
     <div class="hero">
       <h1>Nezha 操作手册</h1>
-      <p>面向使用 Nezha 管理 AI 编程任务，并把结果沉淀回云效议题与知识库的团队。聚焦三条功能线：云效议题闭环、知识沉淀闭环、技能管理。</p>
+      <p>覆盖六大功能线：<strong>云效议题闭环</strong>、<strong>知识沉淀</strong>、<strong>技能管理</strong>、<strong>构建</strong>、<strong>知识图谱</strong>、<strong>创建 PR 与合并审核</strong>。</p>
+      <div class="meta">适用 Nezha 桌面端（Tauri 2 + React 19）· 面向使用 Nezha 管理 AI 编程任务并把结果沉淀回云效、代码库与知识库的团队</div>
     </div>
 
     <section id="sec0">
       <h2><span class="num">0</span>环境与前置条件</h2>
-      <p>使用这三条功能线之前，确认以下条件已满足：</p>
       <table>
         <thead><tr><th>条件</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>已安装 Claude Code / Codex</td><td>Nezha 通过它们执行 Agent 会话，需能在终端正常调用。</td></tr>
-          <tr><td>云效 Projex 个人访问令牌</td><td>格式 <code>pt-xxxx</code>，用于读取 / 评论 / 创建议题；只存于 <code>~/.nezha/settings.json</code>。</td></tr>
-          <tr><td>目标仓库已注册为 Nezha 项目</td><td>欢迎页 →「打开项目」，选定仓库根目录即可。</td></tr>
-          <tr><td>技能仓库已配置</td><td>如需统一分发技能，先在「应用设置 → 技能」配置来源（见第 3 节）。</td></tr>
+          <tr><td>已安装 Claude Code / Codex</td><td>Nezha 通过它们执行 Agent 会话，需能在终端正常调用</td></tr>
+          <tr><td>云效 Projex 个人访问令牌</td><td>格式 <code>pt-xxxx</code>，用于读议题、发评论、建 PR / 议题；只存于 <code>~/.nezha/settings.json</code></td></tr>
+          <tr><td>目标仓库已注册为 Nezha 项目</td><td>欢迎页 →「打开项目」，选定仓库根目录即可</td></tr>
+          <tr><td>技能仓库已配置</td><td>构建、知识图谱、补录议题等能力都依赖技能仓库，先按第 5 节配置来源</td></tr>
         </tbody>
       </table>
-      <div class="callout"><span class="title">安全说明</span>云效访问令牌<strong>不会</strong>写入代码、日志或提交仓库；Agent 进程也不持有该令牌，所有云效写操作都由 Nezha 后端代劳。</div>
+      <div class="callout">
+        <span class="label">说明</span>
+        云效访问令牌<strong>不会</strong>写入代码、日志或提交仓库；Agent 进程也不持有该令牌，所有云效写操作都由 Nezha 后端代劳。
+      </div>
     </section>
 
     <section id="sec1">
       <h2><span class="num">1</span>云效议题闭环</h2>
-      <p>云效议题闭环覆盖完整生命周期：<strong>云效看议题 → 导入为本地待办 → 补全 / 讨论 → 提交关联编号 → 方案回写云效 →（必要时）补录新议题</strong>。核心入口是欢迎页左侧边栏的「云效议题」（云朵图标）。</p>
+      <p>云效议题闭环覆盖完整生命周期：<strong>云效看议题 → 选路（直接开始 / 发起讨论）→ 方案讨论或直接执行 → 生成待办拆解 → 提交关联编号 → 回写云效 →（必要时）补录新议题</strong>。核心入口是欢迎页左侧边栏的「<strong>云效议题</strong>」（云朵图标）。</p>
 
       <h3><span class="subnum">1.1</span>连接云效</h3>
-      <p>首次进入「云效议题」视图会显示连接表单：</p>
-      <ol class="steps">
+      <ol>
         <li>填入云效<strong>个人访问令牌</strong>（<code>pt-xxxx</code>）。</li>
         <li>点「<strong>获取组织</strong>」，拉取当前令牌可见的组织列表；若该令牌只对应一个组织，会自动选中并加载项目。</li>
         <li>选择<strong>组织</strong> → 点「<strong>加载项目</strong>」选择<strong>项目</strong>。</li>
         <li>可选：填入「我的用户 ID / 我的用户名」（留空则自动探测），用于「只看我负责的」过滤。</li>
         <li>点「<strong>保存连接</strong>」。成功后视图顶部显示「<code>组织名 · 项目名</code>」。</li>
       </ol>
-      <p>后续如需切换账号或项目：顶部「<strong>重新连接</strong>」进连接表单；「<strong>刷新</strong>」重新拉取当前项目议题。连接信息保存在应用级设置（<code>~/.nezha/settings.json</code>），每个项目打开时可直接复用。</p>
-
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>01-yunxiao-connect-dark.png</code><span class="desc">深色截图，展示令牌 → 获取组织 → 选择项目 → 保存连接的完整表单。</span></div><img class="shot-img" src="screenshots/operation-manual/01-yunxiao-connect-dark.png" alt="" /></div>
-        <figcaption>图 1 · 云效连接表单 <span class="fn">01-yunxiao-connect-dark.png</span></figcaption>
-      </figure>
+      <p>后续如需切换账号或项目：顶部「<strong>重新连接</strong>」进连接表单；「<strong>刷新</strong>」重新拉取当前项目议题。</p>
+      <p>连接信息保存在应用级设置（<code>~/.nezha/settings.json</code>），每个项目打开时可直接复用。该令牌同时被「合并审核」「创建 PR」等云效功能复用。</p>
 
       <h3><span class="subnum">1.2</span>浏览与筛选议题</h3>
+      <figure>
+        <img src="screenshots/yunxiao-launch-mode/01-issue-list-entries.png" alt="议题列表" />
+        <figcaption>议题列表：类别 Tab、项目切换、状态 / 版本过滤、搜索与行内入口</figcaption>
+      </figure>
       <ul>
         <li><strong>类别 Tab</strong>：全部 / 需求 / 任务 / 缺陷。</li>
         <li><strong>项目切换</strong>：顶部下拉可直接切换云效项目，无需重新进设置。</li>
-        <li><strong>状态过滤</strong>：多选状态；「<strong>只看我负责的</strong>」开关（需已正确识别当前用户）。</li>
+        <li><strong>状态过滤</strong>：多选状态；「<strong>只看我负责的</strong>」开关（需已正确识别当前用户，否则会提示到连接设置里补填）。</li>
         <li><strong>搜索框</strong>：按标题或编号模糊搜索（本地过滤）。</li>
         <li><strong>分页</strong>：每页 100 条，底部「<strong>加载更多</strong>」，顶部显示 <code>{count} 条议题</code>。</li>
       </ul>
 
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>02-yunxiao-issue-list-dark.png</code><span class="desc">展示类别 Tab、项目切换、状态过滤、搜索框与「导入」按钮。</span></div><img class="shot-img" src="screenshots/operation-manual/02-yunxiao-issue-list-dark.png" alt="" /></div>
-        <figcaption>图 2 · 云效议题列表 <span class="fn">02-yunxiao-issue-list-dark.png</span></figcaption>
-      </figure>
-
-      <h3><span class="subnum">1.3</span>导入为待办任务</h3>
-      <p>每条议题右侧有「<strong>导入</strong>」按钮：</p>
-      <ol class="steps">
-        <li>在议题列表上方的「<strong>导入到项目</strong>」下拉框选择目标本地项目（会记住上次选择）。</li>
-        <li>点「<strong>导入</strong>」。生成一条 <code>status: todo</code> 的本地任务：
-          <ul>
-            <li><strong>任务名</strong>：议题编号 + 标题（如 <code>QHDK-29728 医保主表合同单位回写不匹配</code>）。</li>
-            <li><strong>提示词</strong>：议题标题 + 描述 + 状态 / 负责人 / 优先级 / 议题 ID，作为 Agent 上下文。</li>
-            <li>任务侧记录 <code>yunxiaoWorkitemId</code>，可回溯、可去重。</li>
-          </ul>
-        </li>
-        <li><strong>去重</strong>：同一议题只允许导入一次；已导入的按钮变为「<strong>已导入</strong>」并禁用。</li>
-        <li>导入后，前往该本地项目的任务看板，任务出现在「<strong>待办</strong>」列。</li>
-      </ol>
-
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>03-kanban-todo-dark.png</code><span class="desc">展示已导入议题落成的待办卡片，含「已导入 / 待回写」等徽标。</span></div><img class="shot-img" src="screenshots/operation-manual/03-kanban-todo-dark.png" alt="" /></div>
-        <figcaption>图 3 · 任务看板「待办」列 <span class="fn">03-kanban-todo-dark.png</span></figcaption>
-      </figure>
-
-      <h3><span class="subnum">1.4</span>补全议题内容</h3>
-      <p>单击「待办」列中的云效议题任务，进入<strong>待办任务详情</strong>（云效议题详情视图）。若议题字段尚未补全：</p>
-      <ol class="steps">
-        <li>在「补全议题内容」表单中填写固定格式字段（需求类：背景 / 描述 / 使用频率 / 紧急程度；缺陷类：问题描述 / 复现步骤 / 回归信息等）。</li>
-        <li>可点「<strong>AI 预填</strong>」由 headless Agent 根据描述生成草稿，失败则手工填写。</li>
-        <li>点「<strong>定稿</strong>」，草稿写入任务，之后才可发起讨论。</li>
-      </ol>
-      <div class="callout warn"><span class="title">注意</span>未定稿前「发起讨论」按钮会禁用，并提示「请先定稿议题内容」。</div>
-
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>04-yunxiao-supplement-dark.png</code><span class="desc">展示「AI 预填 / 定稿」按钮与字段分节。</span></div><img class="shot-img" src="screenshots/operation-manual/04-yunxiao-supplement-dark.png" alt="" /></div>
-        <figcaption>图 4 · 补全议题内容 <span class="fn">04-yunxiao-supplement-dark.png</span></figcaption>
-      </figure>
-
-      <h3><span class="subnum">1.5</span>发起讨论</h3>
-      <p>定稿后点「<strong>发起讨论</strong>」：</p>
+      <h3><span class="subnum">1.3</span>把议题变成任务：两个入口</h3>
+      <p>议题列表每一行右侧有两个按钮（未勾选任何议题时可见）：</p>
       <ul>
-        <li>选择 <strong>Agent</strong>（Claude / Codex）与<strong>权限模式</strong>（Ask / Auto-edit / YOLO）。</li>
-        <li>议题中若含图片（<code>&lt;img&gt;</code>、富文本图片节点、Markdown 图片），发起讨论时 Nezha 会按域名白名单自动下载到 <code>.nezha/attachments/&lt;taskId&gt;/</code>，并把路径拼进 <code>[Attached images]</code> 提示词，Agent 用自身视觉能力读原图（单张 ≤10MB，最多 20 张；失败部分跳过，全部失败则阻断并允许重试）。</li>
-        <li>讨论提示词会附带指令：<strong>提交信息必须包含 <code>#&lt;议题编号&gt;</code></strong>（如 <code>#QHDK-29312</code>），以便云效自动关联代码。</li>
+        <li>「<strong>直接开始</strong>」（实心蓝）——跳过讨论，直接执行该议题。</li>
+        <li>「<strong>发起讨论</strong>」（描边）——进入方案讨论链路，N=1 的单条快捷入口。</li>
       </ul>
-      <div class="callout"><span class="title">机制说明</span><code>git_commit</code> 会校验提交信息是否含议题 tag，缺时自动追加；<code>merge_task_worktree</code> 合并前也会校验 <code>base..branch</code> 全部提交含 tag，缺失即阻断并列出违规提交。</div>
+      <p>议题列表上方的「<strong>导入到项目</strong>」下拉用于选择这两个入口的目标本地项目（会记住上次选择）。</p>
+      <div class="callout warn">
+        <span class="label">关于「已导入」</span>
+        若某议题本地已存在绑定任务，按钮区会显示「<strong>已导入</strong>」且不再提供入口，避免重复建任务——这是<strong>去重标记，不是一个可点的「导入」操作</strong>。把议题落成待办的实际路径只有两条：<strong>发起讨论 →「生成待办」</strong>，或<strong>补录议题</strong>（见 1.6）。
+      </div>
+      <p>完整对照（含工作流路由与逐条决策指南）见 <a href="yunxiao-launch-modes.html">云效议题完整闭环说明（HTML）</a> · <a href="yunxiao-launch-modes.md">Markdown</a>。</p>
 
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>05-yunxiao-discussion-dark.png</code><span class="desc">展示 Agent / 权限模式选择，以及「议题含 N 张图片，发起讨论时自动下载」提示。</span></div><img class="shot-img" src="screenshots/operation-manual/05-yunxiao-discussion-dark.png" alt="" /></div>
-        <figcaption>图 5 · 发起讨论 <span class="fn">05-yunxiao-discussion-dark.png</span></figcaption>
+      <h3><span class="subnum">1.4</span>发起讨论：先出方案，再执行</h3>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/05-discussion-plan-dialog.png" alt="发起讨论对话框" />
+        <figcaption>发起讨论确认框：议题预览、已归档图片数、讨论补充与 Agent / 权限选择</figcaption>
       </figure>
+      <p>点「发起讨论」，在确认框里选择 <strong>Agent</strong>（Claude / Codex / DSH）与<strong>权限模式</strong>（询问 / 自动编辑 / YOLO）、填写「<strong>讨论补充</strong>」，确认后：</p>
+      <ol>
+        <li><strong>打开对话框即已创建 draft 方案（Plan）</strong>，议题详情与图片归档到 <code>.nezha/plans/&lt;planId&gt;/</code>；</li>
+        <li>待办（或新建任务）转化为<strong>方案讨论任务</strong>并立即启动；按议题类别走 <code>grilling</code> 决策树（Bug 议题先用 <code>diagnosing-bugs</code> 定位根因）；</li>
+        <li>讨论阶段<strong>先不写代码</strong>，产出一份固定结构的方案文档 <code>plan.md</code>。</li>
+      </ol>
+      <p>方案定稿后，从任务头部「<strong>方案</strong>」按钮打开预览，点「<strong>生成待办</strong>」按议题拆成执行任务（一议题一任务，落成 <code>todo</code>、不自动启动，由人工把关后运行）：</p>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/07-plan-preview.png" alt="方案预览" />
+        <figcaption>方案预览与「生成待办」入口</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/08-generate-todos.png" alt="从方案生成待办" />
+        <figcaption>从方案生成待办：可调顺序、剔除议题，冲突议题自动排除</figcaption>
+      </figure>
+      <div class="callout">
+        <span class="label">注意</span>
+        取消「发起讨论」对话框会一并清理 draft 方案与已下载图片，不留残留。
+      </div>
 
-      <h3><span class="subnum">1.6</span>方案回写云效（正向闭环收口）</h3>
-      <p>任务完成后（<code>done</code> 且云效导入任务）：</p>
-      <ol class="steps">
+      <h3><span class="subnum">1.5</span>直接开始：议题即 spec</h3>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/02-direct-req-default.png" alt="直接开始对话框" />
+        <figcaption>「直接开始」确认框：需求类默认「直接执行（implement）」</figcaption>
+      </figure>
+      <p>点「直接开始」先在确认框里预览议题详情、填写「补充说明（可选）」并选择 Agent / 权限，再点「直接开始」才真正建任务。按议题类别路由：</p>
+      <table>
+        <thead><tr><th>议题类别</th><th>勾选状态</th><th>实际工作流</th></tr></thead>
+        <tbody>
+          <tr><td>缺陷（Bug）</td><td>复选框不出现</td><td>先 <code>diagnosing-bugs</code> 定位根因（要有可复现证据）→ 再 <code>implement</code></td></tr>
+          <tr><td>需求 / 任务</td><td>不勾（默认）</td><td>直接 <code>implement</code>，议题描述即 spec</td></tr>
+          <tr><td>需求 / 任务</td><td>勾选「先做需求澄清」</td><td>先 <code>grilling</code> 一次一问澄清需求 → 达成共识后立即 <code>implement</code></td></tr>
+        </tbody>
+      </table>
+      <p>直接执行<strong>不生成 <code>plan.md</code></strong>，同样要求提交信息带 <code>#议题编号</code>、同样支持完成后的「回写云效」。</p>
+
+      <h3><span class="subnum">1.6</span>补录议题（反向闭环）</h3>
+      <p>如果<strong>讨论 / 执行中途</strong>发现了需要立项的新问题，可以反向补录成正式议题（不打断当前会话）：</p>
+      <ol>
+        <li>在任务运行中，手动调用 <code>yunxiao-backfill-issue</code> 技能（该技能位于技能仓库，需已安装到项目）。</li>
+        <li>Agent 先问「<strong>缺陷还是需求</strong>」，再按对应模板逐项盘问（缺陷描述/发生频率/影响范围/业务影响；或需求背景/详细描述/使用频率/紧急程度），并对基础字段做判断（负责人=令牌当前用户，优先级=按价值评分推导，严重程度=Agent 判断，来源默认「内部反馈」，归属项目=当前议题项目）。</li>
+        <li>汇总成<strong>最终议题预览</strong>，用户确认（可修改），确认即人工闸。</li>
+        <li>Agent 按模板结构写出 <code>.nezha/drafts/&lt;taskId&gt;/backfill-issue.json</code>；Nezha 轮询侦测到后，由<strong>持有令牌的后端</strong>调用 <code>CreateWorkitem</code> 创建云效新议题 Y。</li>
+        <li>新议题 Y 生成后，Nezha 自动创建一个<strong>绑定该议题的本地待办任务</strong>（<code>status=todo</code>，记录来源任务/来源议题），并在云效描述中写清来源行，便于追溯。</li>
+      </ol>
+      <div class="callout">
+        <span class="label">注意</span>
+        新议题默认落成「待办」，<strong>不会自动启动</strong>；由人工把关后进入 1.4～1.7 的常规闭环。
+      </div>
+
+      <h3><span class="subnum">1.7</span>方案回写云效（正向闭环收口）</h3>
+      <p>任务完成后（<code>done</code> 且云效绑定任务）：</p>
+      <ol>
         <li>任务详情头部出现「<strong>回写云效</strong>」按钮；任务列表卡片显示「<strong>待回写</strong>」徽标。</li>
-        <li>点按钮 → 生成「<strong>修改方案汇总</strong>」预览：事实骨架（议题编号/标题、定稿补充字段、关联 commit 短哈希 + 提交信息、变更统计）+ headless Agent 润色的一段方案汇总；AI 失败时回退为纯事实模板。</li>
+        <li>点按钮 → 生成两条评论预览：<strong>开发向评论</strong>（改动内容与「价值评分」由来，素材来自任务的方案文档 / 讨论产物）与<strong>测试向评论</strong>（影响范围与测试指引）；事实骨架含议题编号/标题、关联 commit 短哈希 + 提交信息、变更统计，再由 headless Agent 润色，AI 失败时回退为纯事实模板。</li>
         <li>预览可<strong>编辑</strong>，也可「<strong>重新生成</strong>」。</li>
-        <li>确认后点「<strong>发布评论</strong>」：Nezha 调用 <code>CreateWorkitemComment</code> 把汇总作为<strong>评论</strong>追加到云效议题；「价值评分」小节同时写入云效字段（评分字段写失败时可「<strong>重试字段写入</strong>」）。</li>
+        <li>确认后点「<strong>发布评论</strong>」：Nezha 调用云效接口把两条评论追加到议题；「价值评分」小节同时写入云效字段（字段写失败时可「<strong>补写字段</strong>」）。</li>
         <li>成功后按钮置「<strong>已回写</strong>」。任务记录 <code>yunxiaoWrittenBackAt</code> / <code>yunxiaoCommentId</code>，保证幂等，不重复回写。</li>
       </ol>
 
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>06-yunxiao-writeback-dark.png</code><span class="desc">展示「修改方案汇总」可编辑预览、发布评论按钮与价值评分小节。</span></div><img class="shot-img" src="screenshots/operation-manual/06-yunxiao-writeback-dark.png" alt="" /></div>
-        <figcaption>图 6 · 回写云效弹窗 <span class="fn">06-yunxiao-writeback-dark.png</span></figcaption>
-      </figure>
-
-      <h3><span class="subnum">1.7</span>补录议题（反向闭环）</h3>
-      <p>如果<strong>讨论 / 执行中途</strong>发现了需要立项的新问题，可以反向补录成正式议题（不打断当前会话）：</p>
-      <ol class="steps">
-        <li>在任务运行中，手动调用 <code>yunxiao-backfill-issue</code> 技能（该技能位于技能仓库，需已安装到项目）。</li>
-        <li>Agent 先问「<strong>缺陷还是需求</strong>」，再按对应模板逐项盘问（缺陷描述 / 发生频率 / 影响范围 / 业务影响；或需求背景 / 详细描述 / 使用频率 / 紧急程度），并对基础字段做判断（负责人=令牌当前用户，优先级=按价值评分推导，严重程度=Agent 判断，来源默认「内部反馈」，归属项目=当前议题项目）。</li>
-        <li>汇总成<strong>最终议题预览</strong>，用户确认（可修改），确认即人工闸。</li>
-        <li>Agent 按模板结构写出 <code>.nezha/drafts/&lt;taskId&gt;/backfill-issue.json</code>；Nezha 侦测到后，由<strong>持有令牌的后端</strong>调用 <code>CreateWorkitem</code> 创建云效新议题 Y。</li>
-        <li>新议题 Y 生成后，Nezha 自动创建一个<strong>绑定该议题的本地待办任务</strong>（<code>status=todo</code>，记录来源任务/来源议题），并在云效描述中写清来源行，便于追溯。</li>
-      </ol>
-      <div class="callout warn"><span class="title">注意</span>新议题默认落成「待办」，<strong>不会自动启动</strong>；由人工把关后进入 1.4～1.6 的常规闭环。</div>
-
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图 / 录屏待补充</span><code>07-backfill-issue-dark.png</code><span class="desc">展示 Agent 盘问类型、逐项补全字段、最终议题预览并确认的对话过程（可录屏 ≤10s）。</span></div><img class="shot-img" src="screenshots/operation-manual/07-backfill-issue-dark.png" alt="" /></div>
-        <figcaption>图 7 · 补录议题（CLI） <span class="fn">07-backfill-issue-dark.png</span></figcaption>
-      </figure>
-
       <h3><span class="subnum">1.8</span>议题闭环全景</h3>
-<pre>
-云效议题（浏览 / 筛选 / 导入）
-      │ 导入
-      ▼
-本地「待办」列 ──► 补全议题内容（定稿）──► 发起讨论（含图片 / 编号关联）
-      │                                        │
-      │                                        ▼ 讨论中发现新问题
-      │                                    补录议题（云效建新 + 新待办）
-      │                                        │
-      ▼                                        ▼
-任务 done ──► 回写云效（评论 + 价值评分）     新待办回到「待办」列
-</pre>
+      <div class="flow">
+        <div class="flow-stage">
+          <div class="flow-head">
+            <span class="flow-num">1</span>
+            <span class="flow-title">选一条进入链路</span>
+            <span class="flow-tag">起点：云效议题列表</span>
+          </div>
+          <div class="flow-cols">
+            <div class="flow-col">
+              <div class="flow-lane"><span class="dot"></span>直接开始</div>
+              <ul class="flow-steps">
+                <li>议题即 spec，零方案占位</li>
+              </ul>
+            </div>
+            <div class="flow-col">
+              <div class="flow-lane"><span class="dot"></span>发起讨论</div>
+              <ul class="flow-steps">
+                <li>打开即建 draft 方案（占位）</li>
+                <li>讨论产出 <code>plan.md</code> 方案</li>
+                <li>方案定稿 →【生成待办】拆出执行任务</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="flow-arrow" aria-hidden="true">
+          <svg width="16" height="26" viewBox="0 0 16 26" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1v19M3 15l5 5 5-5"/></svg>
+        </div>
+
+        <div class="flow-stage">
+          <div class="flow-head">
+            <span class="flow-num">2</span>
+            <span class="flow-title">执行任务运行中</span>
+            <span class="flow-tag">两条链路在此汇合</span>
+          </div>
+          <div class="flow-cols">
+            <div class="flow-col">
+              <div class="flow-lane"><span class="dot"></span>改动完成</div>
+              <ul class="flow-steps">
+                <li>任务 done</li>
+                <li>回写云效（评论 + 价值评分）</li>
+                <li>提交带 <code>#议题编号</code> 自动关联</li>
+                <li>议题闭环收口</li>
+              </ul>
+            </div>
+            <div class="flow-col">
+              <div class="flow-lane"><span class="dot"></span>发现新问题</div>
+              <ul class="flow-steps">
+                <li>补录议题立项</li>
+                <li>Nezha 用令牌建云效议题 + 绑定新待办</li>
+                <li>回到「待办」列，人工把关</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h3><span class="subnum">1.9</span>直接开始 vs 发起讨论（怎么选）</h3>
+      <table>
+        <thead><tr><th>你的处境</th><th>选择</th></tr></thead>
+        <tbody>
+          <tr><td>需求不清楚、影响面大、需要方案留痕 / 人工把关、或要跨多个议题统筹</td><td>发起讨论</td></tr>
+          <tr><td>缺陷根因明确要直接修、一句话说得清的小改动</td><td>直接开始（不勾澄清）</td></tr>
+          <tr><td>方向清楚，但验收标准 / 边界细节想和 Agent 对齐一下</td><td>直接开始 + 勾「先做需求澄清」</td></tr>
+          <tr><td>手里这条议题要拆成多个执行任务</td><td>发起讨论 → 生成待办</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <span class="label">回写不分链路</span>
+        两条链路完成后<strong>都支持回写云效</strong>，选择依据只看：<strong>这次改动值不值得先出一份方案、需不需要人工在方案上把关。</strong>
+      </div>
     </section>
 
     <section id="sec2">
       <h2><span class="num">2</span>知识沉淀闭环</h2>
       <p>知识沉淀解决「<strong>Agent 讨论中确认的知识随会话流失</strong>」的问题：把讨论里确认的、且有依据的增量知识，提取出来并格式化成<strong>云效审核议题</strong>，交给知识库负责人审核后更新图谱数据。</p>
-      <div class="callout"><span class="title">前置条件</span>任务为云效导入任务，状态 <code>done</code>，且项目内已安装 / 可读取 <code>knowledge-sedimentation</code> 技能（知识提取规则所在）。</div>
+      <div class="callout">
+        <span class="label">前置条件</span>
+        任务为云效绑定任务，状态 <code>done</code>，且项目内已安装 / 可读取 <code>knowledge-sedimentation</code> 技能（知识提取规则所在）。
+      </div>
 
       <h3><span class="subnum">2.1</span>入口</h3>
-      <p>任务为 <code>done</code> 且云效导入时，任务详情头部在「回写云效」旁出现「<strong>沉淀知识</strong>」按钮（未处理时）；任务卡片可识别处理情况。若任务已记录 <code>knowledgeIssueIds</code>，按钮置「<strong>已沉淀</strong>」。</p>
+      <p>任务为 <code>done</code> 且云效绑定时，任务详情头部在「回写云效」旁出现「<strong>沉淀知识</strong>」按钮（未处理时）；任务卡片可识别处理情况。若任务已记录 <code>knowledgeIssueIds</code>，按钮置「<strong>已沉淀</strong>」。</p>
 
       <h3><span class="subnum">2.2</span>生成候选知识</h3>
-      <p>点「<strong>沉淀知识</strong>」：</p>
       <ul>
         <li>后端读取 <code>knowledge-sedimentation</code> 技能内容，注入 headless prompt。</li>
         <li>输入包括：会话摘要（约 8000 字截断）、云效议题补充字段与链接、知识图谱 data 目录（现场比对）、项目根代码（用于 <code>rg</code> 验证依据）。</li>
-        <li>按「卡片六段骨架」判定优先级：<strong>业务规则 / 已知坑 &gt; 关键实体 / 表映射 &gt; 职责修正 / 依赖补充 &gt; 验证记录</strong>；门槛 = 有依据（代码 / 文档 / 用户确认）；排除图谱已有内容、无依据猜测、纯实现细节。</li>
+        <li>按「卡片六段骨架」判定优先级：<strong>业务规则/已知坑 &gt; 关键实体/表映射 &gt; 职责修正/依赖补充 &gt; 验证记录</strong>；门槛 = 有依据（代码/文档/用户确认）；排除图谱已有内容、无依据猜测、纯实现细节。</li>
         <li>输出标签化 JSON，每条含：<code>模块 / 段落 / 内容 / 依据 / 置信度（已确认|待验证）/ 建议标题</code>。</li>
       </ul>
 
       <h3><span class="subnum">2.3</span>预览与编辑</h3>
-      <p>弹窗列出候选知识：</p>
+      <p>弹窗「<strong>知识沉淀 · 创建审核议题</strong>」列出候选知识：</p>
       <ul>
         <li>每条可<strong>编辑</strong>内容、依据、标题、置信度。</li>
         <li>可<strong>勾选</strong>要创建的候选（未勾选的跳过）。</li>
-        <li>无有效候选时提示「未发现图谱之外的、有价值的可沉淀知识」；可「<strong>重新生成</strong>」重新提取。</li>
+        <li>无有效候选时提示「未识别到有价值且图谱中没有的知识」；可「<strong>重新生成</strong>」重新提取。</li>
       </ul>
 
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>08-knowledge-sedimentation-dark.png</code><span class="desc">展示候选列表（模块 / 段落 / 内容 / 依据 / 置信度）、逐条编辑与勾选、批量创建按钮。</span></div><img class="shot-img" src="screenshots/operation-manual/08-knowledge-sedimentation-dark.png" alt="" /></div>
-        <figcaption>图 8 · 知识沉淀候选弹窗 <span class="fn">08-knowledge-sedimentation-dark.png</span></figcaption>
-      </figure>
-
       <h3><span class="subnum">2.4</span>创建审核议题</h3>
-      <p>勾选后点「<strong>创建所选议题（N）</strong>」：</p>
+      <p>勾选后点「<strong>创建所选（N）</strong>」：</p>
       <ul>
-        <li>后端调用 <code>CreateWorkitem</code>，逐条创建到<strong>「知识库图谱」项目</strong>（<code>Req</code>；项目 ID 见 <code>YunxiaoSettings.knowledgeBaseProjectId</code>，默认 <code>bc826ccda665f0718511440fac</code>）。</li>
+        <li>后端调用云效接口，逐条创建到<strong>「知识库图谱」项目</strong>（<code>Req</code>；项目 ID 见 <code>YunxiaoSettings.knowledgeBaseProjectId</code>，默认 <code>bc826ccda665f0718511440fac</code>）。</li>
         <li>议题标题格式：<code>【知识沉淀】&lt;模块id&gt;-&lt;知识点摘要&gt;</code>。</li>
         <li>议题描述固定模板：来源议题（编号 + 链接）→ 目标模块卡片 → 建议更新段落 → 具体内容 → 依据 → 置信度 → 审核指引。</li>
         <li><strong>去重</strong>：创建前按标题关键词搜索该项目已有议题，命中则跳过，不重复创建。</li>
         <li>成功后任务记录 <code>knowledgeIssueIds</code>，按钮置「<strong>已沉淀</strong>」；弹窗汇总「已创建 x/y，其余为重复」。</li>
       </ul>
 
-      <h3><span class="subnum">2.5</span>边界与后续</h3>
+      <h3><span class="subnum">2.5</span>自动回写（可选）与人工审核</h3>
+      <p>在「应用设置 → 技能」中有一个开关「<strong>知识沉淀自动回写</strong>」（提交后经质量门自动写入技能库）：</p>
       <ul>
-        <li>本环节<strong>只到「创建审核议题」</strong>；知识不入库图谱 <code>data/</code>。</li>
-        <li>审核通过后，由<strong>知识库负责人</strong>人工更新 <code>data/modules/&lt;模块&gt;.md</code> 并 <code>commit + push</code>（图谱数据由 git 统一管理）。自动应用是后续迭代范围。</li>
+        <li><strong>关闭（默认）</strong>：知识只到「创建审核议题」这一步，不入库图谱 <code>data/</code>。审核通过后由<strong>知识库负责人</strong>人工更新模块卡片并提交推送（图谱数据由 git 统一管理）。</li>
+        <li><strong>开启</strong>：创建审核议题后，Nezha 立即对「已确认」且有依据的条目跑一次<strong>回写质量门</strong>；全部通过时把知识<strong>追加</strong>写入项目设置中选定的知识图谱模块卡片、推送技能库，并把该议题置为「已完成」。未通过的条目保留人工审核。</li>
       </ul>
+      <div class="callout warn">
+        <span class="label">注意</span>
+        自动回写是<strong>只增不改</strong>（在匹配的卡片段落末尾追加），且不会覆盖该卡片尚未提交的手工改动。
+      </div>
     </section>
 
     <section id="sec3">
       <h2><span class="num">3</span>技能管理</h2>
-      <p>Nezha 用<strong>技能仓库</strong>统一管理技能：一个来源（本地目录或 git 远端），通过<strong>软链</strong>安装到各项目 / 全局；技能内容随仓库版本走，更新后已安装项零成本跟随。</p>
+      <p>Nezha 用<strong>技能仓库</strong>统一管理技能：一个来源（本地目录或 git 远端），通过<strong>软链</strong>安装到各项目/全局；技能内容随仓库版本走，更新后已安装项零成本跟随。</p>
 
       <h3><span class="subnum">3.1</span>入口</h3>
       <ul>
-        <li><strong>技能库视图</strong>：欢迎页左侧「<strong>技能</strong>」（积木图标）→ <code>SkillHubView</code>。</li>
+        <li><strong>技能库视图</strong>：欢迎页左侧「<strong>技能库</strong>」（积木图标）→ <code>SkillHubView</code>。</li>
         <li><strong>来源配置</strong>：欢迎页右下角齿轮 → 应用设置 →「<strong>技能</strong>」→ <code>SkillsPanel</code>。</li>
       </ul>
 
       <h3><span class="subnum">3.2</span>配置技能来源</h3>
-      <p>在「应用设置 → 技能」选择来源类型：</p>
-
-      <h4>本地目录</h4>
-      <p>选一个含技能子目录（每个子目录有 <code>SKILL.md</code>）的文件夹。确定后 Nezha 把它注册为一个特殊项目，可在任务视图内编辑技能。</p>
-
-      <h4>git 远端</h4>
+      <p><strong>本地目录</strong>：选一个含技能子目录（每个子目录有 <code>SKILL.md</code>）的文件夹。确定后 Nezha 把它注册为一个特殊项目，可在任务视图内编辑技能。</p>
+      <p><strong>git 远端</strong>：</p>
       <ul>
         <li>填仓库 URL（仅允许 <code>https://</code> 或 <code>git@</code>，拒绝其它协议与本地路径伪装）+ 可选分支（缺省跟随远端默认分支）。</li>
-        <li>点「<strong>保存并同步</strong>」：首次自动 <code>git clone --depth 1</code> 到 <code>~/.nezha/skill_repos/&lt;sanitized-repo-name&gt;/</code>；已存在则 <code>git fetch</code> 探测变更，<strong>有变更才</strong> <code>--ff-only</code> 拉取（不自作聪明 <code>reset</code>，不覆盖本地改动）。</li>
+        <li>点「<strong>保存并同步</strong>」：首次自动 <code>git clone --depth 1</code> 到 <code>~/.nezha/skill_repos/&lt;sanitized-repo-name&gt;/</code>；已存在则 <code>git fetch</code> 探测变更，<strong>有变更才</strong> <code>--ff-only</code> 拉取（不 <code>reset</code>，不覆盖本地改动）。</li>
         <li>面板下方展示解析后的<strong>技能库路径</strong>、上次同步时间、当前 commit，及同步失败标记。</li>
       </ul>
-      <div class="callout warn"><span class="title">注意</span>同步失败 / 离线时，Nezha 继续使用上次缓存，来源标记 <code>stale</code>（过期）并记录错误，UI 可手动重试。</div>
-
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>09-skill-source-settings-dark.png</code><span class="desc">展示「本地目录 / git 远端」单选、URL + 分支输入、解析路径与上次同步状态。</span></div><img class="shot-img" src="screenshots/operation-manual/09-skill-source-settings-dark.png" alt="" /></div>
-        <figcaption>图 9 · 技能来源设置 <span class="fn">09-skill-source-settings-dark.png</span></figcaption>
-      </figure>
+      <div class="callout">
+        <span class="label">离线</span>
+        同步失败 / 离线时，Nezha 继续使用上次缓存，来源标记 <code>stale</code>（过期）并记录错误，UI 可手动重试。
+      </div>
 
       <h3><span class="subnum">3.3</span>同步与状态</h3>
-      <p>进入「技能库」视图：</p>
       <ul>
-        <li>头部显示：来源类型、来源地址、<strong>上次同步时间</strong>、<strong>当前 commit</strong>（前 12 位）、同步失败标记（<code>同步失败，使用缓存技能: &lt;错误&gt;</code>）。</li>
+        <li>头部显示：来源类型、来源地址、<strong>上次同步时间</strong>、<strong>当前 commit</strong>（前 12 位）、同步失败标记。</li>
         <li>「<strong>立即同步</strong>」按钮：手动触发一次同步。</li>
         <li><strong>自动探测</strong>：启动时异步一次 + 窗口聚焦 + 每 30–60 分钟周期探测；本地路径来源用文件变更监听（<code>notify</code>）实时重扫。</li>
-        <li>「<strong>在任务视图中打开</strong>」：进入技能库项目，用代码 / 文件视图直接编辑技能。</li>
+        <li>「<strong>在任务视图中打开</strong>」：进入技能库项目，用代码/文件视图直接编辑技能。</li>
       </ul>
 
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>10-skillhub-dark.png</code><span class="desc">展示来源 / commit / 上次同步 / 立即同步，以及技能列表、健康标记。</span></div><img class="shot-img" src="screenshots/operation-manual/10-skillhub-dark.png" alt="" /></div>
-        <figcaption>图 10 · 技能库视图 <span class="fn">10-skillhub-dark.png</span></figcaption>
-      </figure>
-
       <h3><span class="subnum">3.4</span>安装技能到项目</h3>
-      <p>技能列表中每条技能：</p>
-      <ol class="steps">
+      <ol>
         <li>点「<strong>管理</strong>」→ 弹窗「<strong>安装到项目</strong>」。</li>
         <li>选择目标项目与 Agent（Claude / Codex），或选择「<strong>全局</strong>」（装到 <code>~/.claude/skills</code>、<code>~/.codex/skills</code>，所有项目可用）。</li>
-        <li>确认安装 —— 该技能<strong>在你的项目中以软链存在</strong>，指向 Hub 内的技能目录。因此 Hub 内容更新后，已安装技能自动跟随，无需重装。</li>
+        <li>确认安装 —— 该技能<strong>在你的项目中以软链存在</strong>，指向 Hub 内的技能目录，因此 Hub 更新后已安装技能自动跟随，无需重装。</li>
       </ol>
       <p>健康检查标记：<code>ok</code>（正常） / <code>broken</code>（软链目标丢失） / <code>diverged</code>（路径在 Nezha 之外被修改）。</p>
-
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>11-skill-install-dark.png</code><span class="desc">展示目标项目选择 + Agent 种类 + 全局选项。</span></div><img class="shot-img" src="screenshots/operation-manual/11-skill-install-dark.png" alt="" /></div>
-        <figcaption>图 11 · 安装技能到项目 <span class="fn">11-skill-install-dark.png</span></figcaption>
-      </figure>
 
       <h3><span class="subnum">3.5</span>技能数据管理</h3>
       <p>若技能安装到项目且技能目录含声明数据目录（如 <code>his-knowledge-graph/data/</code>）：</p>
@@ -414,166 +483,335 @@
         <li>数据目录由 <code>NEZHA_SKILL_DATA_DIR</code> 等环境变量注入，随技能仓库 git 统一管理。</li>
       </ul>
 
-      <figure class="shot">
-        <div class="shot-slot"><div class="shot-meta"><span class="hint">截图待补充</span><code>12-skill-data-dark.png</code><span class="desc">展示数据目录的文件数 / 修改时间，以及「打开 / 备份 / 重新构建」按钮。</span></div><img class="shot-img" src="screenshots/operation-manual/12-skill-data-dark.png" alt="" /></div>
-        <figcaption>图 12 · 技能数据管理 <span class="fn">12-skill-data-dark.png</span></figcaption>
-      </figure>
-
       <h3><span class="subnum">3.6</span>失效安装与删除</h3>
       <ul>
         <li><strong>清理失效安装</strong>：「技能库」工具栏「<strong>清理全部失效安装</strong>」——只删除指向失效目标的软链与安装记录，<strong>不删除任何普通目录</strong>。</li>
         <li><strong>删除技能</strong>：每条技能右侧垃圾桶 → 默认会删除技能目录 + 所有安装软链（有二次确认）。</li>
-        <li>技能被改名 / 删除后，已安装项目健康标记会变为 <code>broken</code> / <code>diverged</code>，由用户手动卸载，Nezha 不做自动删除。</li>
+        <li>技能被改名/删除后，已安装项目健康标记会变为 <code>broken</code>/<code>diverged</code>，由用户手动卸载，Nezha 不做自动删除。</li>
       </ul>
 
       <h3><span class="subnum">3.7</span>SkillHub 任务视图</h3>
-      <p>技能库作为特殊项目注册进 <code>projects.json</code>，你可以在普通任务 / 文件 / 终端视图里打开它，像编辑普通项目一样编辑技能内容（适合在讨论中直接改技能再提交）。</p>
+      <p>技能库作为特殊项目注册进 <code>projects.json</code>，你可以在普通任务/文件/终端视图里打开它，像编辑普通项目一样编辑技能内容。</p>
     </section>
 
     <section id="sec4">
-      <h2><span class="num">4</span>常见问题</h2>
+      <h2><span class="num">4</span>构建</h2>
+      <p>面向 HIS 这类 .NET Framework 大解决方案的<strong>一键多仓库拉取 + 依赖拓扑编译</strong>面板，负责「拉代码 → 排依赖 → 编译 → 收集报错 → 派发修复任务」。</p>
+
+      <h3><span class="subnum">4.1</span>入口与前置</h3>
+      <figure class="shot-xs">
+        <img src="screenshots/module-guide/01-build-panel.png" alt="构建面板" />
+        <figcaption>构建面板：仓库拉取、构建模式、基线、环境检查与阶段流水线</figcaption>
+      </figure>
+      <ul>
+        <li>进入项目后，点右侧工具栏的<strong>锤子图标</strong>（悬停提示「<strong>构建</strong>」），右侧展开「<strong>构建</strong>」面板；面板右上角「<strong>全屏</strong>」可进入专注监视器。</li>
+        <li>前置：目标项目为 git 仓库；已安装 <code>hsp-build-order</code> 技能（提供 <code>hsp-build-order.ps1</code>）；机器具备 VS18 <code>MSBuild.exe</code>、NuGet 缓存与共享输出目录（含外部 dll）。</li>
+        <li>若面板显示「未发现 git 仓库」，点「<strong>刷新</strong>」重新探测。</li>
+      </ul>
+
+      <h3><span class="subnum">4.2</span>仓库拉取</h3>
+      <ul>
+        <li>「<strong>仓库拉取</strong>」列出自动推导的仓库：主仓库 + <code>.gitmodules</code> 子模块（当前只展示 HIS / DrugInOut / Term）。</li>
+        <li>每个仓库可<strong>独立切换分支</strong>（下拉），并显示当前分支 / <code>脏</code>（有未提交改动）/ <code>缺失</code> 状态。</li>
+        <li>勾选要拉取的仓库 → 点「<strong>拉取</strong>」：走 <code>git pull --ff-only --no-rebase</code>；<strong>脏仓库会被阻断</strong>（绝不 stash / reset）；远端引用陈旧导致失败时自动 <code>git fetch --prune --force origin</code> 后重试；结果显示为压缩摘要。</li>
+        <li>「<strong>刷新基线</strong>」把当前各仓库 HEAD 写入 <code>.nezha/build-state.json</code>，作为增量构建的比较基准（不编译）。</li>
+      </ul>
+
+      <h3><span class="subnum">4.3</span>分析 / 计划</h3>
+      <p>点「<strong>分析/计划</strong>」：以 <code>-DryRun</code> 生成<strong>阶段流水线、依赖图、循环组、外部 dll 引用清单、引用健康</strong>（重复引用 / TFM 低于被引用项目）与环境检查（NuGet 还原 / VS18-RID 兼容 / 外部 dll 缺失），写入 <code>Log/build-plan.json</code>。<strong>不编译</strong>。</p>
+      <p>「环境检查」卡片会显示：外部依赖 dll 引用数、缺失项、版本冲突、引用健康问题；「阶段流水线」按阶段列出各工程状态。</p>
+
+      <h3><span class="subnum">4.4</span>运行构建</h3>
+      <ul>
+        <li><strong>构建模式</strong>：<code>全量</code> / <code>增量</code> / <code>仅失败</code>。</li>
+        <li><strong>增量范围</strong>：默认<strong>只编 git 变更文件直接命中的工程</strong>（对比 <code>.nezha/build-state.json</code> 的基线 commit，覆盖已提交、已暂存、未暂存改动与未跟踪新文件）。因为本解决方案的工程之间是 HintPath 引用共享目录 dll（不是 <code>ProjectReference</code>），改动不会自动传播到依赖方，所以默认不扩散反向依赖闭包——否则实测 4 个变更工程会被放大成 100+ 个。
+          <ul>
+            <li>若改了公共 API / 基类，需要把依赖方一起编，勾选「<strong>附带反向依赖方</strong>」即可恢复闭包语义。</li>
+            <li>增量与仅失败模式<strong>跳过坏状态清理</strong>（不搬移 <code>obj</code>），保证增量编译复用中间产物；需要清理 <code>obj</code> 时用「全量」。</li>
+          </ul>
+        </li>
+        <li>点「<strong>运行构建</strong>」：子进程跑 <code>hsp-build-order.ps1</code>，按依赖拓扑（就绪波）编译；<code>MaxParallel</code> 控制并发（默认 2，1=串行）。运行中显示<strong>进度 <code>N/总数 · xx% · 阶段</code></strong>、进度条与<strong>用时</strong>；「<strong>取消</strong>」整树终止（含 MSBuild / dotnet）。</li>
+        <li>成功自动刷新构建基线；失败保留在全屏监视器里便于排查。</li>
+      </ul>
+
+      <h3><span class="subnum">4.5</span>错误清单与修复</h3>
+      <ul>
+        <li>构建失败后生成「<strong>错误信息列表</strong>」：每个失败项目 + <code>error</code> 行 + <code>依赖失败: ...</code>（链式）/ <code>[工具链] ...</code> 诊断。</li>
+        <li>每项一个 <strong>checkbox</strong>：勾选 = 标记已修复，持久化到 <code>.nezha/build-fix-status.json</code>。</li>
+        <li>「<strong>发起修复任务</strong>」：新建 agent 任务（当前工作区、YOLO 全权限），prompt 指引 agent <strong>先读取 <code>Log/build-errors.txt</code> → 总结错误类别 → 逐个修复并重编验证 → 把修好的项目名写入 <code>.nezha/build-fix-status.json</code> 的 <code>fixed</code> 数组</strong>，最后刷新构建基线。</li>
+        <li>「<strong>导出错误信息</strong>」：把错误列表写入 <code>Log/build-errors.txt</code>。</li>
+        <li>修复后重跑：切到「<strong>仅失败</strong>」模式，只编未勾选的失败项 + 依赖方，快速验证；通过后再「全量」。</li>
+      </ul>
+
+      <h3><span class="subnum">4.6</span>构建配置</h3>
+      <table>
+        <thead><tr><th>字段</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>script_path</code></td><td><code>hsp-build-order.ps1</code> 路径（留空自动探测，通常走 SkillHub 托管副本）</td></tr>
+          <tr><td><code>msbuild_path</code></td><td>VS18 <code>MSBuild.exe</code>（留空自动探测）</td></tr>
+          <tr><td><code>max_parallel</code></td><td>并行度（1=串行，2–8 并行）</td></tr>
+          <tr><td><code>auto_fix_on_failure</code></td><td>构建失败时自动发起修复任务（默认 <code>false</code>；同一批失败工程只自动发起一次）</td></tr>
+          <tr><td><code>solution / configuration / platform / external_dll_dir / skip_*</code></td><td>对应 ps1 参数，一般无需手改</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <span class="label">相关文件</span>
+        <code>.nezha/build-state.json</code>（增量基线）、<code>.nezha/build-fix-status.json</code>（修复标记）、<code>Log/build-plan.json</code>、<code>Log/build-errors.txt</code>。
+        该面板面向 Windows + PowerShell + MSBuild 场景；更细的脚本说明见 <a href="build-tool-manual.md">构建工具详解</a>。
+      </div>
+    </section>
+
+    <section id="sec5">
+      <h2><span class="num">5</span>知识图谱</h2>
+      <p>知识图谱是 Agent 的「项目认知底座」：把模块职责、关键实体、数据表、业务规则、已知坑等固化成<strong>模块卡片</strong>，供讨论/执行时查阅，也让沉淀的知识有处可落。分两个操作面。</p>
+
+      <h3><span class="subnum">5.1</span>入口</h3>
+      <ul>
+        <li><strong>浏览 / 编辑</strong>：项目右侧工具栏「<strong>知识库</strong>」（书本图标）——浏览并编辑当前项目绑定图谱的模块卡片。</li>
+        <li><strong>绑定 / 初始化 / 扫描</strong>：项目「<strong>设置</strong>」→ 左侧「<strong>知识库</strong>」。</li>
+      </ul>
+      <figure class="shot-xs">
+        <img src="screenshots/module-guide/04-knowledge-panel.png" alt="知识库面板" />
+        <figcaption>「知识库」面板：卡片数量、搜索与「提交并推送」</figcaption>
+      </figure>
+
+      <h3><span class="subnum">5.2</span>面板：浏览、编辑与推送</h3>
+      <ul>
+        <li>顶部显示卡片数量与「<strong>提交并推送（N）</strong>」；有未提交改动时卡片带「<strong>已改</strong>」标记。</li>
+        <li>「<strong>搜索模块卡片</strong>」按模块名过滤。</li>
+        <li>点某张卡片会在主窗口以 Markdown 页签打开，可直接编辑（自动保存），也可提交推送。</li>
+        <li>未绑定图谱时提示「当前项目未绑定知识库，请到项目设置中配置。」</li>
+      </ul>
+
+      <h3><span class="subnum">5.3</span>设置：图谱绑定与维护</h3>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/05-knowledge-graph-settings.png" alt="知识图谱设置" />
+        <figcaption>设置 → 知识库：图谱绑定、扫描项目、管理模块卡片、新建图谱</figcaption>
+      </figure>
+      <ul>
+        <li><strong>图谱绑定</strong>：下拉选择要绑定的知识图谱（或「未配置」表示不启用）。提示语说明「讨论上下文、知识沉淀、质量门和自动回写都使用该目标」。</li>
+        <li>已绑定图谱显示状态（如「<strong>已就绪 · &lt;适配器&gt;</strong>」），并提供「<strong>扫描项目</strong>」（跑 <code>bootstrap.py --mode scan</code> 依据项目代码重建 <code>index.md</code> / <code>graph.json</code>，<strong>已有模块卡片不会被覆盖</strong>）与「<strong>管理模块卡片（N）</strong>」（新建 / 编辑 / 重命名 / 删除卡片，并提交推送）。</li>
+        <li><strong>新建图谱</strong>：填「图谱 ID」「图谱名称」、选「选择适配器」，点「<strong>创建</strong>」新建一张图谱并绑定到当前项目。</li>
+      </ul>
+
+      <h3><span class="subnum">5.4</span>数据与约束</h3>
+      <ul>
+        <li>图谱数据由技能仓库统一管理：<code>knowledge-graphs/&lt;图谱ID&gt;/graph.toml</code>（清单：id/name/adapter）与 <code>knowledge-graphs/&lt;图谱ID&gt;/data/modules/*.md</code>（模块卡片）；脚本在 <code>knowledge-graph/</code>（<code>bootstrap.py</code> 与 <code>adapters/&lt;adapter&gt;.py</code>）。</li>
+        <li>项目绑定写在 <code>.nezha/config.toml</code> 的 <code>[knowledge] graph_id</code>；留空 = 不启用。</li>
+        <li>「已就绪」需同时具备 <code>data/modules</code> 与 <code>knowledge-graph/</code> 脚本目录；「扫描项目」还需存在对应适配器。</li>
+        <li>需先配置技能仓库（第 3 节），否则提示「技能库未配置，无法选择知识库」。</li>
+        <li>与「知识沉淀」（第 2 节）的关系：沉淀从会话提取候选并创建<strong>云效审核议题</strong>；本面板负责<strong>查看 / 编辑 / 推送图谱数据本身</strong>。开启「知识沉淀自动回写」后，确认过的知识也会自动落到这里的卡片。</li>
+      </ul>
+    </section>
+
+    <section id="sec6">
+      <h2><span class="num">6</span>创建 PR</h2>
+      <p>把一批已完成的议题改动，打包成「批次 + 分支 + worktree」，再推送成一个云效 Codeup 合并请求（MR）。认证复用「云效议题」里配置的令牌与组织（第 1.1 节），无需单独配置。</p>
+
+      <h3><span class="subnum">6.1</span>新建 PR</h3>
+      <p>进入项目后，点右侧工具栏「<strong>PR</strong>」图标，展开 PR 面板 → 点「<strong>新建 PR</strong>」：</p>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/02-create-pr.png" alt="创建 PR 对话框" />
+        <figcaption>「创建 PR」对话框：代码目录、批名称、类型、源/基础/目标分支与议题选择</figcaption>
+      </figure>
+      <table>
+        <thead><tr><th>字段</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><strong>代码目录</strong></td><td>worktree 创建位置（点「选择」挑目录，不自动复制运行程序）</td></tr>
+          <tr><td><strong>批名称</strong></td><td>如「门诊挂号优化」</td></tr>
+          <tr><td><strong>类型</strong></td><td><code>feature · 日常开发</code> / <code>patch · 现场响应</code> / <code>release · 上线验收</code> / <code>hotfix · 补丁</code></td></tr>
+          <tr><td><strong>源分支</strong></td><td>点「检测」校验是否与远端 / 本地重名，冲突时可「继续使用远端分支」或「改名」</td></tr>
+          <tr><td><strong>基础分支</strong></td><td>从哪个分支切出</td></tr>
+          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标</td></tr>
+          <tr><td><strong>选择议题</strong></td><td>勾选组成该批次的议题（顺序即任务顺序）</td></tr>
+        </tbody>
+      </table>
+      <p>点「<strong>创建批 + 分支 + worktree</strong>」完成创建。之后批卡片上可「<strong>打开</strong>」「<strong>删除 WorkTree</strong>」，或点「<strong>提交 MR</strong>」。</p>
+
+      <h3><span class="subnum">6.2</span>提交合并请求</h3>
+      <p>点「<strong>提交 MR</strong>」→「<strong>提交合并请求</strong>」对话框：</p>
+      <ul>
+        <li>可填「<strong>审核人</strong>」（默认取目标分支管理人员，可编辑，逗号分隔）；</li>
+        <li>确认后点「<strong>提交到 Codeup</strong>」——Nezha 先把批次分支推送到远端，再调用 Codeup 接口创建 MR，并把 MR 状态回写到该批次。</li>
+      </ul>
+    </section>
+
+    <section id="sec7">
+      <h2><span class="num">7</span>合并审核</h2>
+      <p>欢迎页左侧「<strong>合并审核</strong>」进入合并审核中心，集中处理各仓库<strong>待处理 / 待合并</strong>的 MR —— 从拉代码、审查、合并，到把审查报告回写到云效评论。</p>
+
+      <h3><span class="subnum">7.1</span>入口与列表</h3>
+      <figure>
+        <img src="screenshots/module-guide/03-merge-hub.png" alt="合并审核" />
+        <figcaption>合并审核中心（示例为空态）：仓库筛选与「刷新」入口</figcaption>
+      </figure>
+      <ul>
+        <li>顶部「<strong>全部仓库</strong>」下拉筛选仓库、「<strong>刷新</strong>」重新拉取。</li>
+        <li>每张 MR 卡片显示：状态徽标（<strong>评审中 / 待合并 / 已合并 / 已关闭 / 已通过</strong>、<strong>有冲突</strong>）、<code>源分支 → 目标分支</code>、所属仓库、<strong>作者</strong>、<strong>审核人</strong>。</li>
+      </ul>
+
+      <h3><span class="subnum">7.2</span>四个操作</h3>
+      <table>
+        <thead><tr><th>操作</th><th>作用</th><th>前置 / 说明</th></tr></thead>
+        <tbody>
+          <tr><td><strong>拉取代码</strong></td><td>把 MR 的源分支拉到本地临时仓库</td><td>完成后按钮变「重新拉取」；合并前必须先做这一步</td></tr>
+          <tr><td><strong>代码审查</strong></td><td>启动 Agent 任务，按 <code>merge-code-review</code> 技能出具审查报告</td><td>任务名形如 <code>代码审查 &lt;标题&gt;</code></td></tr>
+          <tr><td><strong>分支合并</strong></td><td>启动 Agent 任务，把源分支合并并推送到目标分支</td><td><strong>需先拉取代码</strong>；报告含阻止级 <code>fail</code> 会二次确认</td></tr>
+          <tr><td><strong>查看审查结果</strong></td><td>打开审查报告弹窗</td><td>无报告时提示先执行「代码审查」</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <span class="label">注意</span>
+        「代码审查」与「分支合并」都是<strong>启动真实 Agent 任务</strong>，并非直接调平台 API 一键完成；合并最终由 Agent 在本地 git 推送（默认 fast-forward，不 force）。
+      </div>
+
+      <h3><span class="subnum">7.3</span>审查报告</h3>
+      <p>「<strong>查看审查结果</strong>」弹窗内可：</p>
+      <ul>
+        <li>「<strong>回写到评论</strong>」：先进入可编辑态（可改 Markdown，带字数提示），确认后作为<strong>整体评论</strong>发布到云效 MR；</li>
+        <li>「<strong>复制</strong>」：复制全文到剪贴板；</li>
+        <li>「<strong>导出 .md</strong>」：导出为本地 Markdown 文件。</li>
+      </ul>
+
+      <h3><span class="subnum">7.4</span>临时仓库与认证</h3>
+      <ul>
+        <li>合并审核用到的临时仓库默认放在 <code>~/.nezha/codeup_worktrees/</code>；可在「应用设置 → Git 和源代码设置」的「<strong>临时仓库基路径</strong>」里改。</li>
+        <li>认证复用云效个人访问令牌，若未配置会提示先到「云效议题」里完成连接。</li>
+      </ul>
+    </section>
+
+    <section id="sec8">
+      <h2><span class="num">8</span>常见问题</h2>
       <table>
         <thead><tr><th>现象</th><th>处理</th></tr></thead>
         <tbody>
           <tr><td>云效「获取组织」失败 / 列表为空</td><td>检查令牌是否有云效 Projex 读权限；确认组织在令牌可见范围内。</td></tr>
           <tr><td>「只看我负责的」不可用</td><td>当前用户未能自动识别，到连接设置补填「我的用户 ID / 用户名」后重试。</td></tr>
-          <tr><td>导入提示「该议题已导入」</td><td>去重规则：同一 <code>yunxiaoWorkitemId</code> 只导入一次；到对应项目「待办」列找该任务。</td></tr>
-          <tr><td>发起讨论后 Agent 读不到议题图片</td><td>图片在发起时下载；若任务重跑 / 恢复，图片可能已随任务清理，可重新发起或用附件补图。</td></tr>
-          <tr><td>提交信息不含 <code>#编号</code></td><td><code>git_commit</code> 会自动追加；<code>merge_task_worktree</code> 会校验并阻断缺失提交（去对应提交补 tag）。</td></tr>
-          <tr><td>「回写云效」后没有出现在议题</td><td>确认云效工作项「评论」权限；如价值评分字段写入失败，用「重试字段写入」。</td></tr>
+          <tr><td>议题行显示「已导入」，没有入口</td><td>该议题本地已有绑定任务（去重标记）。到对应项目「待办」列找它，或删除旧任务后重新发起。</td></tr>
+          <tr><td>想把一条议题直接落成待办</td><td>没有单独的「导入」按钮；请用「发起讨论 → 生成待办」，或直接操刀已有任务。</td></tr>
+          <tr><td>发起讨论后 Agent 读不到议题图片</td><td>图片在发起时下载；若任务重跑/恢复，图片可能已随任务清理，可重新发起或用附件补图。</td></tr>
+          <tr><td>提交信息不含 <code>#编号</code></td><td><code>git_commit</code> 会自动追加；<code>merge_task_worktree</code> 会校验并阻断缺失提交。</td></tr>
+          <tr><td>「回写云效」后没有出现在议题</td><td>确认云效工作项「评论」权限；如价值评分字段写入失败，用「补写字段」。</td></tr>
           <tr><td>「沉淀知识」无候选</td><td>说明本次讨论没有图谱之外的、有依据的增量；可「重新生成」或换更聚焦的知识技能后再试。</td></tr>
-          <tr><td>技能库显示「同步失败，使用缓存技能」</td><td>网络 / 凭据问题。检查 URL / 分支、网络，点「立即同步」重试；失败时不阻塞使用缓存。</td></tr>
-          <tr><td>已安装技能健康标记 <code>broken</code> / <code>diverged</code></td><td>Hub 里技能被改名 / 删除，或路径被外部修改；手动卸载或清理失效安装（不会删除普通目录）。</td></tr>
-          <tr><td>git 源 URL 报错</td><td>仅允许 <code>https://</code> 与 <code>git@</code> scheme；私有仓库需在本地 git 配置好凭据。</td></tr>
+          <tr><td>知识沉淀后没人去改图谱</td><td>在「应用设置 → 技能」开启「知识沉淀自动回写」，确认过的知识会经质量门自动写入绑定图谱。</td></tr>
+          <tr><td>技能库显示「同步失败，使用缓存技能」</td><td>网络/凭据问题。检查 URL/分支、网络，点「立即同步」重试。</td></tr>
+          <tr><td>已安装技能健康标记 <code>broken</code>/<code>diverged</code></td><td>Hub 里技能被改名/删除，或路径被外部修改；手动卸载或清理失效安装。</td></tr>
+          <tr><td>构建面板显示「未发现 git 仓库」</td><td>点面板「刷新」重新探测；确认项目根确是 git 仓库。</td></tr>
+          <tr><td>构建报「找不到 hsp-build-order.ps1」</td><td>到「构建配置」填写 <code>script_path</code>，或确认技能仓库已配置且装了 <code>hsp-build-order</code> 技能。</td></tr>
+          <tr><td>增量构建报「未检测到变更」/「请先建立基线」</td><td>先跑一次「全量构建」或点「刷新基线」建立基线；随后再增量。</td></tr>
+          <tr><td>「扫描项目」按钮灰着</td><td>图谱未就绪或缺对应适配器脚本；确认图谱「已就绪」，并保证 <code>adapters/&lt;adapter&gt;.py</code> 存在。</td></tr>
+          <tr><td>「知识库」提示「技能库未配置」</td><td>先到「应用设置 → 技能」配置技能仓库来源。</td></tr>
+          <tr><td>「分支合并」点不动</td><td>需先对该 MR「拉取代码」。</td></tr>
+          <tr><td>创建 PR 报分支重名</td><td>用「检测」后选「继续使用远端分支」或「改名」。</td></tr>
+          <tr><td>审查报告「回写到评论」失败</td><td>确认云效令牌有合并请求评论权限；报告本身可先「复制」或「导出 .md」保底。</td></tr>
+          <tr><td>合并审核列表一直为空</td><td>当前筛选仓库下确实没有待处理 / 待合并的 MR；换「全部仓库」或点「刷新」。</td></tr>
         </tbody>
       </table>
-    </section>
-
-    <section id="sec5">
-      <h2><span class="num">5</span>截图清单</h2>
-      <p>截图只提供<strong>深色</strong>即可，放置在 <code>docs/screenshots/operation-manual/</code>，命名统一为 <code>NN-名称-dark.png</code>（或同名 <code>.gif</code>）。静态界面用 PNG；动效 / 交互（如图 7 补录议题、技能同步）建议用 ≤10s 的 GIF 动图。页面会自动识别 PNG / GIF 并替换占位框。</p>
-      <table>
-        <thead><tr><th>编号</th><th>界面</th><th>建议命名</th></tr></thead>
-        <tbody>
-          <tr><td>图 1</td><td>云效连接表单</td><td><code>01-yunxiao-connect-dark.png</code></td></tr>
-          <tr><td>图 2</td><td>云效议题列表</td><td><code>02-yunxiao-issue-list-dark.png</code></td></tr>
-          <tr><td>图 3</td><td>任务看板「待办」列</td><td><code>03-kanban-todo-dark.png</code></td></tr>
-          <tr><td>图 4</td><td>补全议题内容表单</td><td><code>04-yunxiao-supplement-dark.png</code></td></tr>
-          <tr><td>图 5</td><td>发起讨论</td><td><code>05-yunxiao-discussion-dark.png</code></td></tr>
-          <tr><td>图 6</td><td>回写云效弹窗</td><td><code>06-yunxiao-writeback-dark.png</code></td></tr>
-          <tr><td>图 7</td><td>补录议题（CLI 对话，可选录屏）</td><td><code>07-backfill-issue-dark.png</code></td></tr>
-          <tr><td>图 8</td><td>知识沉淀候选弹窗</td><td><code>08-knowledge-sedimentation-dark.png</code></td></tr>
-          <tr><td>图 9</td><td>技能来源设置</td><td><code>09-skill-source-settings-dark.png</code></td></tr>
-          <tr><td>图 10</td><td>技能库视图</td><td><code>10-skillhub-dark.png</code></td></tr>
-          <tr><td>图 11</td><td>安装技能到项目</td><td><code>11-skill-install-dark.png</code></td></tr>
-          <tr><td>图 12</td><td>技能数据管理</td><td><code>12-skill-data-dark.png</code></td></tr>
-        </tbody>
-      </table>
-      <div class="callout"><span class="title">截图规范</span>只需深色截图。私有项目名、token、邮箱等敏感信息请先打码；GIF 动图直接用 <code>NN-名称-dark.gif</code> 命名即可，无需改 HTML。</div>
-    </section>
-
-    <section id="sec6">
-      <h2><span class="num">6</span>相关文档</h2>
-      <ul>
-        <li>云效议题集成 v1：<code>docs/proposals/yunxiao-issues-integration-v1.md</code></li>
-        <li>云效议题识图 + 修改方案回写闭环 V3：<code>docs/proposals/yunxiao-v3-close-loop-and-images.md</code></li>
-        <li>云效议题知识沉淀：<code>docs/proposals/yunxiao-knowledge-sedimentation.md</code></li>
-        <li>云效「补录议题」：<code>docs/proposals/yunxiao-backfill-issue-skill-v1.md</code></li>
-        <li>Skill 仓库管理：<code>docs/proposals/skill-repo-management.md</code></li>
-      </ul>
+      <footer>Nezha 操作手册 · 本页为静态说明文档，截图取自真实运行界面</footer>
     </section>
   </main>
 </div>
 
-<footer>Nezha 操作手册 · 云效议题闭环 / 知识沉淀闭环 / 技能管理</footer>
-
 <script>
-  (function () {
-    const root = document.documentElement;
-    const themeBtn = document.getElementById('themeBtn');
-    const saved = localStorage.getItem('nezha-manual-theme');
-    if (saved === 'dark' || saved === 'light') root.dataset.theme = saved;
-    if (themeBtn) {
-      function syncBtn() { themeBtn.textContent = root.dataset.theme === 'dark' ? '亮色模式' : '暗色模式'; }
-      syncBtn();
-      themeBtn.addEventListener('click', () => {
-        root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
-        localStorage.setItem('nezha-manual-theme', root.dataset.theme);
-        syncBtn();
-      });
-    }
-
-    function shotFallback(img) {
-      if (!img._candidates) {
-        const src = img.getAttribute('src') || '';
-        const dot = src.lastIndexOf('.');
-        const base = src.slice(0, dot);
-        const segs = base.split('/');
-        const file = segs.pop();
-        const dir = segs.join('/');
-        const stem = file.replace(/-(dark|light)$/, '');
-        const exts = ['png', 'gif', 'webp'];
-        img._candidates = [];
-        for (const n of [file, stem]) {
-          for (const e of exts) {
-            const url = dir + '/' + n + '.' + e;
-            if (url !== src) img._candidates.push(url);
-          }
-        }
-      }
-      const next = img._candidates.shift();
-      if (!next) { img.remove(); return; }
-      img.src = next;
-    }
-
-    document.querySelectorAll('.shot-img').forEach((img) => {
-      const slot = img.closest('.shot-slot');
-      img.onload = () => {
-        const meta = slot && slot.querySelector('.shot-meta');
-        img.style.display = 'block';
-        if (meta) meta.style.display = 'none';
-      };
-      img.onerror = () => shotFallback(img);
-      // 图片可能已在脚本运行前加载失败，主动触发一次兜底
-      if (img.complete && img.naturalWidth === 0) shotFallback(img);
+  // 主题：独立打开时读本地偏好 + 顶栏按钮；嵌入 Nezha 首页时由宿主通过 ?theme= 与 postMessage 驱动。
+  const themeBtn = document.getElementById('themeBtn');
+  const isEmbed = document.documentElement.dataset.embed === '1';
+  const setTheme = (theme) => {
+    if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
+  };
+  if (isEmbed) {
+    window.addEventListener('message', (ev) => {
+      const data = ev.data;
+      if (data && data.type === 'nezha-help-theme') setTheme(data.theme);
     });
-
-    const toc = document.getElementById('toc');
-    const sections = document.querySelectorAll('main.content section');
-    const links = [];
-    sections.forEach((sec) => {
-      const title = sec.querySelector('h2');
-      if (!title) return;
-      const id = sec.id;
-      const a = document.createElement('a');
-      a.href = '#' + id;
-      a.textContent = title.textContent.trim();
-      a.dataset.target = id;
-      toc.appendChild(a);
-      links.push(a);
-      sec.querySelectorAll('h3').forEach((h3) => {
-        const aid = document.createElement('a');
-        aid.href = '#' + id;
-        aid.textContent = h3.textContent.trim();
-        aid.classList.add('lv2');
-        aid.dataset.target = id;
-        toc.appendChild(aid);
-        links.push(aid);
-      });
-    });
-
-    const sectionIds = Array.from(sections).map((s) => s.id);
-    const onScroll = () => {
-      const y = window.scrollY + 90;
-      let active = sectionIds[0];
-      for (const id of sectionIds) {
-        const el = document.getElementById(id);
-        if (el && el.offsetTop <= y) active = id;
+    // 站内交叉链接（另一份文档 / Markdown 版）交由宿主处理，避免 iframe 内部跳转与标签态失联。
+    document.addEventListener('click', (ev) => {
+      const anchor = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+      if (!anchor) return;
+      const href = anchor.getAttribute('href') || '';
+      if (/\.html$/.test(href)) {
+        ev.preventDefault();
+        parent.postMessage({ type: 'nezha-help-open', file: href.split('/').pop() }, '*');
+      } else if (/\.md$/.test(href)) {
+        ev.preventDefault();
       }
-      links.forEach((a) => a.classList.toggle('active', a.dataset.target === active));
+    });
+  } else {
+    const syncLabel = () => {
+      if (themeBtn) themeBtn.textContent = document.documentElement.dataset.theme === 'dark' ? '亮色' : '暗色';
     };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
+    syncLabel();
+    if (themeBtn) themeBtn.addEventListener('click', () => {
+      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      setTheme(next);
+      localStorage.setItem('nezha-doc-theme', next);
+      syncLabel();
+    });
+  }
+
+  const toc = document.getElementById('toc');
+  const sections = [...document.querySelectorAll('main section')];
+  const slug = (s) => s.replace(/\s+/g, '-').replace(/[^\w\u4e00-\u9fa5-]/g, '');
+  sections.forEach((sec) => {
+    const h2 = sec.querySelector('h2');
+    const a = document.createElement('a');
+    a.href = '#' + sec.id;
+    a.textContent = h2.textContent.replace(/\s+/g, ' ').trim();
+    toc.appendChild(a);
+    sec.querySelectorAll('h3').forEach((h3) => {
+      const id = sec.id + '-' + slug(h3.textContent.trim());
+      h3.id = id;
+      const sub = document.createElement('a');
+      sub.href = '#' + id;
+      sub.className = 'sub';
+      sub.textContent = h3.textContent.replace(/\s+/g, ' ').trim();
+      toc.appendChild(sub);
+    });
+  });
+  const links = [...toc.querySelectorAll('a')];
+  const allTargets = links.map((a) => document.getElementById(a.getAttribute('href').slice(1))).filter(Boolean);
+  const obs = new IntersectionObserver(
+    (entries) => {
+      const vis = entries.filter((e) => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (vis.length) {
+        const id = vis[0].target.id;
+        links.forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+      }
+    },
+    { rootMargin: '-70px 0px -75% 0px', threshold: 0 }
+  );
+  allTargets.forEach((t) => obs.observe(t));
+
+  // 点击截图 → 原图浮层（正文小图排版，点击查看细节）
+  (() => {
+    let box = null;
+    const ensure = () => {
+      if (box) return box;
+      box = document.createElement('div');
+      box.className = 'doc-lightbox';
+      box.dataset.open = '0';
+      const img = document.createElement('img');
+      img.alt = '';
+      const hint = document.createElement('span');
+      hint.className = 'doc-lightbox-hint';
+      hint.textContent = '点击任意处 / 按 Esc 关闭';
+      box.append(img, hint);
+      box.addEventListener('click', () => { box.dataset.open = '0'; });
+      document.body.appendChild(box);
+      return box;
+    };
+    document.addEventListener('click', (ev) => {
+      const img = ev.target && ev.target.closest ? ev.target.closest('figure img') : null;
+      if (!img) return;
+      ev.preventDefault();
+      const b = ensure();
+      b.querySelector('img').src = img.currentSrc || img.src;
+      b.dataset.open = '1';
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && box) box.dataset.open = '0';
+    });
   })();
 </script>
 </body>
