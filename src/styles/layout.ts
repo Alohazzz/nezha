@@ -80,6 +80,12 @@ export const layout = {
   },
   sidebarBrandMeta: { marginTop: 3, fontSize: 12, color: "var(--text-muted)" },
   sidebarNav: { display: "flex", flexDirection: "column", gap: 6 },
+  sidebarNavSecondary: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    marginTop: 18,
+  },
   sidebarSectionTitle: {
     fontSize: 11,
     fontWeight: 700,

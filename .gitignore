@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# 帮助中心产物：由 scripts/sync-help-docs.mjs 从 docs/ 生成
+public/help/
+
 # Editor directories and files
 .vscode/
 .idea
