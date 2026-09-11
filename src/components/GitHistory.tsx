@@ -59,7 +59,12 @@ interface Props {
   onCommitSelect: (hash: string, message: string) => void;
   onFileClick?: (hash: string, filePath: string, label: string) => void;
   width?: number;
+  /** 当前项目是否可见；后台项目不参与轮询，避免叠加 IPC 打爆后端 */
+  active?: boolean;
 }
+
+/** 外部提交/推送不会通知前端，靠轮询更新提交列表与 ahead/behind 计数。 */
+const GIT_HISTORY_POLL_MS = 10000;
 
 export function GitHistory({
   projectRoot,
@@ -67,6 +72,7 @@ export function GitHistory({
   onCommitSelect,
   onFileClick,
   width = 280,
+  active = true,
 }: Props) {
   const { t } = useI18n();
   const repoKey = `${projectRoot}\0${repoPath}`;
@@ -152,10 +158,12 @@ export function GitHistory({
   }, [projectRoot, repoPath, repoKey, safeInvoke]);
 
   const refresh = useCallback(
-    async (query?: string, branch?: string) => {
+    async (query?: string, branch?: string, options?: { silent?: boolean }) => {
       const sequence = ++refreshSequenceRef.current;
-      setLoading(true);
-      setError(null);
+      const silent = options?.silent === true;
+      // 轮询刷新不切 loading（会闪 spinner），失败也不打断面板。
+      if (!silent) setLoading(true);
+      if (!silent) setError(null);
       const activeBranch = branch ?? selectedBranch;
       const requestRepoKey = repoKey;
       try {
@@ -182,8 +190,10 @@ export function GitHistory({
         }
         setCommitState({ repoKey: requestRepoKey, commits: log });
         setRemoteCounts((remote as GitRemoteCounts) ?? { ahead: 0, behind: 0, branch: "" });
+        if (silent) setError(null);
       } catch (e) {
         if (
+          !silent &&
           !isCancelled() &&
           activeRepoKeyRef.current === requestRepoKey &&
           refreshSequenceRef.current === sequence
@@ -192,6 +202,7 @@ export function GitHistory({
         }
       } finally {
         if (
+          !silent &&
           !isCancelled() &&
           activeRepoKeyRef.current === requestRepoKey &&
           refreshSequenceRef.current === sequence
@@ -219,6 +230,35 @@ export function GitHistory({
     // refresh 依赖 searchQuery，若加入 deps 会在搜索变化时触发此 effect（不预期的行为）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBranch]);
+
+  // 外部提交/推送（agent 在终端里 commit & push）自动刷新：窗口获焦 + 定时轮询兜底。
+  // 同步刷新分支列表，让外部分支切换后的 current 标记也对得上。仅可见项目轮询。
+  const pollInFlightRef = useRef(false);
+  const pollRefresh = useCallback(async () => {
+    if (pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
+    try {
+      await Promise.all([refresh(undefined, undefined, { silent: true }), loadBranches()]);
+    } finally {
+      pollInFlightRef.current = false;
+    }
+  }, [refresh, loadBranches]);
+
+  useEffect(() => {
+    if (!active) return;
+    const poll = () => {
+      if (document.visibilityState !== "visible") return;
+      void pollRefresh();
+    };
+    window.addEventListener("focus", poll);
+    document.addEventListener("visibilitychange", poll);
+    const timer = window.setInterval(poll, GIT_HISTORY_POLL_MS);
+    return () => {
+      window.removeEventListener("focus", poll);
+      document.removeEventListener("visibilitychange", poll);
+      window.clearInterval(timer);
+    };
+  }, [active, pollRefresh]);
 
   const handleSearch = useCallback(
     (q: string) => {
