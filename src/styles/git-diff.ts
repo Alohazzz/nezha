@@ -590,10 +590,6 @@ export const gitDiff = {
   gitFileFolderIcon: {
     display: "flex",
     alignItems: "center",
-    color: "var(--text-muted)",
-    flexShrink: 0,
-  },
-  gitFileIcon: {
     flexShrink: 0,
   },
   gitFileName: {

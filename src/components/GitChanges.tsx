@@ -35,6 +35,8 @@ interface GitFileChange {
   path: string;
   status: string;
   staged: boolean;
+  additions?: number;
+  deletions?: number;
 }
 
 interface Props {
@@ -500,6 +502,7 @@ export function GitChanges({
                       entries={stagedFiles}
                       mode={fileViewMode}
                       scrollContext={fileListScrollContext}
+                      showStats
                       onFileClick={(c) =>
                         onFileSelect(c.path, true, `${fileName(c.path)} (staged)`)
                       }
@@ -522,6 +525,7 @@ export function GitChanges({
                       entries={unstagedFiles}
                       mode={fileViewMode}
                       scrollContext={fileListScrollContext}
+                      showStats
                       onFileClick={(c) =>
                         onFileSelect(c.path, false, `${fileName(c.path)} (unstaged)`)
                       }
@@ -552,6 +556,7 @@ export function GitChanges({
                 entries={untrackedFiles}
                 mode={fileViewMode}
                 scrollContext={fileListScrollContext}
+                showStats
                 onFileClick={(c) => onFileSelect(c.path, false, `${fileName(c.path)} (untracked)`)}
                 onStageToggle={handleStageToggle}
                 onDirectoryStageToggle={handleDirectoryStageToggle}
