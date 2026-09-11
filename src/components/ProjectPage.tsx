@@ -1341,6 +1341,7 @@ export function ProjectPage({
                 }
                 onFileSelect={handleDiffFileSelectWithCollapse}
                 width={rightPanelWidth}
+                active={visible}
               />
             </ErrorBoundary>
           )}
@@ -1352,6 +1353,7 @@ export function ProjectPage({
                 onCommitSelect={handleCommitSelectWithCollapse}
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={rightPanelWidth}
+                active={visible}
               />
             </ErrorBoundary>
           )}

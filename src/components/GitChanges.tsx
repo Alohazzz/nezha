@@ -47,7 +47,12 @@ interface Props {
   issueTag?: string;
   onFileSelect: (filePath: string, staged: boolean, label: string) => void;
   width?: number;
+  /** 当前项目是否可见；后台项目不参与轮询，避免叠加 IPC 打爆后端 */
+  active?: boolean;
 }
+
+/** 外部提交（agent 在终端里 commit & push、外部工具改文件）不会通知前端，靠轮询兜底。 */
+const GIT_STATUS_POLL_MS = 5000;
 
 function fileName(path: string): string {
   return path.split("/").pop() ?? path;
@@ -60,6 +65,7 @@ export function GitChanges({
   issueTag,
   onFileSelect,
   width = 280,
+  active = true,
 }: Props) {
   const { t } = useI18n();
   const repoKey = `${projectRoot}\0${repoPath}`;
@@ -111,10 +117,12 @@ export function GitChanges({
   }, []);
 
   const refresh = useCallback(
-    async (options?: { clearError?: boolean }) => {
+    async (options?: { clearError?: boolean; silent?: boolean }) => {
       const sequence = ++refreshSequenceRef.current;
-      setLoading(true);
-      if (options?.clearError !== false) setError(null);
+      const silent = options?.silent === true;
+      // 轮询刷新不切 loading（会闪 spinner），失败也不打断面板——例如提交瞬间索引被占用。
+      if (!silent) setLoading(true);
+      if (!silent && options?.clearError !== false) setError(null);
       try {
         const requestRepoKey = repoKey;
         const result = await safeInvoke<GitFileChange[]>("git_status", {
@@ -129,8 +137,10 @@ export function GitChanges({
           return;
         }
         setChangeState({ repoKey: requestRepoKey, changes: result });
+        if (silent) setError(null);
       } catch (e) {
         if (
+          !silent &&
           !isCancelled() &&
           activeRepoKeyRef.current === repoKey &&
           refreshSequenceRef.current === sequence
@@ -139,6 +149,7 @@ export function GitChanges({
         }
       } finally {
         if (
+          !silent &&
           !isCancelled() &&
           activeRepoKeyRef.current === repoKey &&
           refreshSequenceRef.current === sequence
@@ -153,6 +164,35 @@ export function GitChanges({
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // 外部 git 状态变更（agent 提交/推送、其他工具操作）自动刷新：窗口获焦 + 定时轮询兜底。
+  // 仅可见项目轮询，避免后台项目叠加 IPC；页面隐藏时跳过，回到前台立即补一次。
+  const pollInFlightRef = useRef(false);
+  const pollRefresh = useCallback(async () => {
+    if (pollInFlightRef.current) return;
+    pollInFlightRef.current = true;
+    try {
+      await refresh({ silent: true });
+    } finally {
+      pollInFlightRef.current = false;
+    }
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!active) return;
+    const poll = () => {
+      if (document.visibilityState !== "visible") return;
+      void pollRefresh();
+    };
+    window.addEventListener("focus", poll);
+    document.addEventListener("visibilitychange", poll);
+    const timer = window.setInterval(poll, GIT_STATUS_POLL_MS);
+    return () => {
+      window.removeEventListener("focus", poll);
+      document.removeEventListener("visibilitychange", poll);
+      window.clearInterval(timer);
+    };
+  }, [active, pollRefresh]);
 
   useEffect(() => {
     // 切仓后允许新仓库立即发起操作，并让旧仓库尚未完成的响应失效。
