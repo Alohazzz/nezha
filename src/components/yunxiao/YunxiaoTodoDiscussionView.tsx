@@ -35,6 +35,10 @@ function agentLabel(agent: AgentType): string {
   return agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : "DSH";
 }
 
+function isBugCategory(categoryId: string | undefined): boolean {
+  return (categoryId ?? "").trim().toLowerCase() === "bug";
+}
+
 /**
  * 云效绑定待办（补录议题 / 存量导入）的讨论入口视图：不再有补充表单与定稿，
  * 直接「发起讨论」——待办自身转化为方案讨论任务（建 plan、写 plan.md、方案预览、
@@ -63,6 +67,7 @@ export function YunxiaoTodoDiscussionView({
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
+    clarifyFirst: boolean,
   ) => void;
 }) {
   const { t } = useI18n();
@@ -79,6 +84,8 @@ export function YunxiaoTodoDiscussionView({
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
   // 发起人手动补充（背景/参考资料/已有方案），原样拼进讨论 prompt。
   const [notes, setNotes] = useState("");
+  // 「直接开始」的需求澄清开关：仅非 Bug 议题可勾，详情未就绪时禁用。
+  const [clarifyFirst, setClarifyFirst] = useState(false);
   // 待办切换时重置议题相关状态（组件实例复用防串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
   if (openedTaskId !== task.id) {
@@ -87,6 +94,7 @@ export function YunxiaoTodoDiscussionView({
     setPermission(getLastYunxiaoPermission(task.projectId) ?? task.permissionMode);
     setAgent(getLastYunxiaoAgent(task.projectId) ?? task.agent);
     setNotes("");
+    setClarifyFirst(false);
   }
 
   useEffect(() => {
@@ -162,8 +170,8 @@ export function YunxiaoTodoDiscussionView({
 
   const handleStartDirect = useCallback(() => {
     if (starting) return;
-    onStartDirect(task.id, notes, agent, permission);
-  }, [starting, notes, agent, permission, onStartDirect, task.id]);
+    onStartDirect(task.id, notes, agent, permission, clarifyFirst);
+  }, [starting, notes, agent, permission, clarifyFirst, onStartDirect, task.id]);
 
   return (
     <div style={s.yunxiaoDetailPane}>
@@ -227,6 +235,28 @@ export function YunxiaoTodoDiscussionView({
               </button>
             )}
             {starting && <span style={s.planLaunchProgress}>{t("plan.launch.starting")}</span>}
+          </div>
+          <div style={s.directLaunchWorkflow}>
+            {detail && isBugCategory(detail.categoryId) ? (
+              <div style={s.directLaunchFlowBug}>{t("yunxiao.direct.flowBug")}</div>
+            ) : (
+              <>
+                <label style={s.directLaunchCheckboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={clarifyFirst}
+                    disabled={!detail}
+                    onChange={(e) => setClarifyFirst(e.target.checked)}
+                  />
+                  {t("yunxiao.direct.clarifyLabel")}
+                </label>
+                <div style={s.directLaunchFlowHint}>
+                  {clarifyFirst
+                    ? t("yunxiao.direct.flowClarify")
+                    : t("yunxiao.direct.flowDirect")}
+                </div>
+              </>
+            )}
           </div>
           <div style={s.yunxiaoFormActions}>
             <button
