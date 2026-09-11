@@ -493,6 +493,10 @@ pub(crate) struct GitFileChange {
     path: String,
     status: String,
     staged: bool,
+    /// 该条目相对其基线的新增行数；未跟踪文件按整文件行数计。
+    additions: i32,
+    /// 该条目相对其基线的删除行数；未跟踪文件恒为 0。
+    deletions: i32,
 }
 
 fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
@@ -519,6 +523,8 @@ fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
                 path: display_path,
                 status: "?".to_string(),
                 staged: false,
+                additions: 0,
+                deletions: 0,
             });
         } else {
             if x != ' ' && x != '?' {
@@ -526,6 +532,8 @@ fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
                     path: display_path.clone(),
                     status: x.to_string(),
                     staged: true,
+                    additions: 0,
+                    deletions: 0,
                 });
             }
             if y != ' ' && y != '?' {
@@ -533,6 +541,8 @@ fn parse_porcelain_z_status(stdout: &[u8]) -> Vec<GitFileChange> {
                     path: display_path,
                     status: y.to_string(),
                     staged: false,
+                    additions: 0,
+                    deletions: 0,
                 });
             }
         }
@@ -556,7 +566,7 @@ pub async fn git_status(
         "--untracked-files=all".to_string(),
     ];
 
-    let output = run_git_with_timeout(cwd, args, Duration::from_secs(5)).await?;
+    let output = run_git_with_timeout(cwd.clone(), args, Duration::from_secs(5)).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -570,7 +580,142 @@ pub async fn git_status(
         });
     }
 
-    Ok(parse_porcelain_z_status(&output.stdout))
+    let mut changes = parse_porcelain_z_status(&output.stdout);
+    attach_git_line_stats(&cwd, &mut changes).await;
+    Ok(changes)
+}
+
+/// 为状态条目补 +/− 行数：已跟踪改动按 staged（index vs HEAD）/ unstaged（worktree vs index）
+/// 分别取 numstat，未跟踪文件按整文件行数计为新增。
+/// 统计失败只让对应条目留 0，不影响状态列表本身。
+async fn attach_git_line_stats(cwd: &str, changes: &mut [GitFileChange]) {
+    let (unstaged_stats, staged_stats) = tokio::join!(
+        git_numstat_z(cwd, &["diff", "--numstat", "-z"]),
+        git_numstat_z(cwd, &["diff", "--cached", "--numstat", "-z"]),
+    );
+    let unstaged_stats = unstaged_stats.unwrap_or_default();
+    let staged_stats = staged_stats.unwrap_or_default();
+
+    let untracked_paths: Vec<String> = changes
+        .iter()
+        .filter(|change| change.status == "?")
+        .map(|change| change.path.clone())
+        .collect();
+    let untracked_stats = if untracked_paths.is_empty() {
+        HashMap::new()
+    } else {
+        let cwd = cwd.to_string();
+        tokio::task::spawn_blocking(move || count_untracked_additions(&cwd, &untracked_paths))
+            .await
+            .unwrap_or_default()
+    };
+
+    for change in changes.iter_mut() {
+        let stats = if change.status == "?" {
+            untracked_stats.get(&change.path)
+        } else if change.staged {
+            staged_stats.get(&change.path)
+        } else {
+            unstaged_stats.get(&change.path)
+        };
+        if let Some((additions, deletions)) = stats {
+            change.additions = *additions;
+            change.deletions = *deletions;
+        }
+    }
+}
+
+async fn git_numstat_z(
+    cwd: &str,
+    args: &[&str],
+) -> Result<HashMap<String, (i32, i32)>, String> {
+    let argv = args.iter().map(|arg| arg.to_string()).collect();
+    let output = run_git_with_timeout(cwd.to_string(), argv, Duration::from_secs(5)).await?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(parse_numstat_z(&output.stdout))
+}
+
+/// 解析 `git diff --numstat -z` 输出为 path → (additions, deletions)。
+/// NUL 分隔；重命名/复制的 path 字段为空，其后紧跟 old、new 两个字段，按 new 归档。
+/// 二进制文件输出 `-`，按 0 处理。
+fn parse_numstat_z(stdout: &[u8]) -> HashMap<String, (i32, i32)> {
+    let mut stats = HashMap::new();
+    let mut fields = stdout.split(|byte| *byte == 0);
+
+    while let Some(field) = fields.next() {
+        if field.is_empty() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(field);
+        let parts: Vec<&str> = text.splitn(3, '\t').collect();
+        if parts.len() != 3 {
+            continue;
+        }
+        let additions = parts[0].parse::<i32>().unwrap_or(0);
+        let deletions = parts[1].parse::<i32>().unwrap_or(0);
+
+        let path = if parts[2].is_empty() {
+            // rename/copy: path 字段为空，随后是 old、new。
+            let _old = fields.next();
+            match fields.next() {
+                Some(new) => String::from_utf8_lossy(new).into_owned(),
+                None => continue,
+            }
+        } else {
+            parts[2].to_string()
+        };
+
+        stats.insert(path, (additions, deletions));
+    }
+
+    stats
+}
+
+/// 逐个统计未跟踪文件的行数（新增行数）。二进制文件（前若干字节含 NUL）按 0 处理。
+fn count_untracked_additions(
+    cwd: &str,
+    paths: &[String],
+) -> HashMap<String, (i32, i32)> {
+    let mut stats = HashMap::with_capacity(paths.len());
+    for rel in paths {
+        if let Some(lines) = count_file_lines(&Path::new(cwd).join(rel)) {
+            stats.insert(rel.clone(), (lines, 0));
+        }
+    }
+    stats
+}
+
+fn count_file_lines(path: &Path) -> Option<i32> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut buf = [0u8; 8192];
+    let mut lines: i64 = 0;
+    let mut last_byte: Option<u8> = None;
+    let mut saw_any = false;
+
+    loop {
+        let read = reader.read(&mut buf).ok()?;
+        if read == 0 {
+            break;
+        }
+        saw_any = true;
+        let chunk = &buf[..read];
+        if chunk.contains(&0) {
+            return None;
+        }
+        lines += chunk.iter().filter(|byte| **byte == b'\n').count() as i64;
+        last_byte = Some(chunk[read - 1]);
+    }
+
+    if saw_any && last_byte != Some(b'\n') {
+        // 无结尾换行的末行同样计为一行。
+        lines += 1;
+    }
+    Some(lines.min(i32::MAX as i64) as i32)
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -2462,8 +2607,9 @@ pub async fn commit_conflict_resolution(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_commit_message_agent_args, dir_is_git_repo, discover_git_roots_blocking,
-        git_has_head, git_worktree_root, is_protected_project_relative_path, list_untracked_files,
+        build_commit_message_agent_args, count_file_lines, dir_is_git_repo,
+        discover_git_roots_blocking, git_has_head, git_worktree_root,
+        is_protected_project_relative_path, list_untracked_files, parse_numstat_z,
         parse_porcelain_z_status, path_to_string, resolve_repo_path_blocking,
         resolve_source_branch_ref, run_git_check, untracked_files_under_directory, GitFileChange,
     };
@@ -2642,6 +2788,8 @@ mod tests {
                 path: "te st2.txt".to_string(),
                 status: "?".to_string(),
                 staged: false,
+                additions: 0,
+                deletions: 0,
             }]
         );
     }
@@ -2657,11 +2805,15 @@ mod tests {
                     path: "src/file name.ts".to_string(),
                     status: "M".to_string(),
                     staged: true,
+                    additions: 0,
+                    deletions: 0,
                 },
                 GitFileChange {
                     path: "src/file name.ts".to_string(),
                     status: "M".to_string(),
                     staged: false,
+                    additions: 0,
+                    deletions: 0,
                 },
             ]
         );
@@ -2677,8 +2829,50 @@ mod tests {
                 path: "new name.txt".to_string(),
                 status: "R".to_string(),
                 staged: true,
+                additions: 0,
+                deletions: 0,
             }]
         );
+    }
+
+    #[test]
+    fn parses_numstat_z_with_plain_and_binary_entries() {
+        let stats = parse_numstat_z(b"5\t13\tsrc/a.ts\0-\t-\timg.png\0");
+
+        assert_eq!(stats.get("src/a.ts"), Some(&(5, 13)));
+        assert_eq!(stats.get("img.png"), Some(&(0, 0)));
+    }
+
+    #[test]
+    fn parses_numstat_z_rename_under_new_path() {
+        let stats = parse_numstat_z(b"0\t0\t\0old name.txt\0new name.txt\0");
+
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats.get("new name.txt"), Some(&(0, 0)));
+    }
+
+    #[test]
+    fn counts_file_lines_with_and_without_trailing_newline() {
+        let dir = std::env::temp_dir().join(format!("nezha-lines-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let trailing = dir.join("trailing.txt");
+        std::fs::write(&trailing, b"a\nb\nc\n").unwrap();
+        assert_eq!(count_file_lines(&trailing), Some(3));
+
+        let no_trailing = dir.join("no-trailing.txt");
+        std::fs::write(&no_trailing, b"a\nb\nc").unwrap();
+        assert_eq!(count_file_lines(&no_trailing), Some(3));
+
+        let empty = dir.join("empty.txt");
+        std::fs::write(&empty, b"").unwrap();
+        assert_eq!(count_file_lines(&empty), Some(0));
+
+        let binary = dir.join("binary.bin");
+        std::fs::write(&binary, b"a\0b\n").unwrap();
+        assert_eq!(count_file_lines(&binary), None);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
