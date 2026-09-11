@@ -1,17 +1,9 @@
 import type React from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  File,
-  Folder,
-  FolderOpen,
-  List,
-  ListTree,
-  Undo2,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, List, ListTree, Undo2 } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+import { FileIcon } from "../file-explorer/FileIcon";
 import {
   GIT_FILE_BROWSER_MAX_HEIGHT,
   GIT_FILE_BROWSER_ROW_HEIGHT,
@@ -24,7 +16,7 @@ import {
   gitFileVirtualListStyle,
   gitFileVirtualRowStyle,
 } from "../../styles/git-diff";
-import { getFileColor, getGitStatusColor, getGitStatusLabel, load, save } from "../../utils";
+import { getGitStatusColor, getGitStatusLabel, load, save } from "../../utils";
 
 export type GitFileViewMode = "tree" | "list";
 
@@ -399,7 +391,7 @@ function GitDirectoryRow<T extends GitFileEntry>({
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </span>
         <span style={s.gitFileFolderIcon}>
-          {expanded ? <FolderOpen size={13} /> : <Folder size={13} />}
+          <FileIcon name={node.name} isDir expanded={expanded} />
         </span>
         <span style={s.gitFileDirectoryName}>{node.name}</span>
       </button>
@@ -500,7 +492,7 @@ function GitFileRow<T extends GitFileEntry>({
     >
       <span style={gitFileStatusDotStyle(color)} />
       <span style={gitFileStatusLabelStyle(color)}>{label}</span>
-      <File size={13} color={getFileColor(name)} style={s.gitFileIcon} aria-hidden="true" />
+      <FileIcon name={name} isDir={false} />
       <span style={s.gitFileNameWrap}>
         <span style={hovered && clickable ? s.gitFileNameHover : s.gitFileName}>{name}</span>
         {mode === "list" && dir && <span style={s.gitFileDir}>{dir}</span>}
