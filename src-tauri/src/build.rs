@@ -38,6 +38,10 @@ pub struct BuildConfig {
     pub default_branch: String,
     #[serde(default = "default_max_parallel")]
     pub max_parallel: u32,
+    /// 构建失败后自动创建修复任务（full_access）。默认关闭：不经确认就拉起智能体进程
+    /// 属于有副作用的行为，需要用户显式打开。前端读取该开关决定是否自动发起修复任务。
+    #[serde(default)]
+    pub auto_fix_on_failure: bool,
 }
 
 fn default_solution() -> String {
@@ -67,6 +71,7 @@ impl Default for BuildConfig {
             skip_clean: false,
             default_branch: String::new(),
             max_parallel: default_max_parallel(),
+            auto_fix_on_failure: false,
         }
     }
 }
@@ -989,25 +994,96 @@ struct IncrementalProject {
     dependents: Vec<String>,
 }
 
-/// 计算增量编译的 include 集合：以 build-state 的 last_built 为基准，
-/// 对勾选仓库做 git diff → 变更文件映射到所属项目 → 按计划里的
-/// 反向依赖（Dependents）求闭包。返回项目名列表（供 ps1 `-IncludeProjects`）。
+/// 计算增量编译的 include 集合：以 build-state 的 last_built 为基准，对勾选仓库做
+/// git diff → 变更文件映射到所属项目。
+///
+/// 默认**只返回变更文件直接命中的工程**，不扩散反向依赖闭包。原因：本解决方案的工程之间
+/// 用 HintPath 引用共享输出目录里的 dll（不是 ProjectReference），MSBuild 不会因为被引用
+/// 的 dll 更新而重编依赖方；把反向依赖闭包一起塞进 include，会把实测 4 个变更工程放大成
+/// 100+ 个工程，每次「增量」都要几十分钟，等于没有增量。改了公共 API 导致的依赖方编译错误
+/// 交给「仅失败 / 修复任务」兜底。
+///
+/// `include_dependents` 为 true 时恢复旧的闭包语义（变更工程 + 全部反向依赖方）。
 #[tauri::command]
 pub async fn compute_incremental_include(
     project_path: String,
     selected: Vec<String>,
+    include_dependents: Option<bool>,
 ) -> Result<Vec<String>, String> {
     validate_project_path(&project_path)?;
+    let include_dependents = include_dependents.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        compute_incremental_blocking(&project_path, &selected)
+        compute_incremental_blocking(&project_path, &selected, include_dependents)
     })
     .await
     .map_err(|e| format!("compute_incremental_include panicked: {e}"))?
 }
 
+/// 相对当前基线收集「git 修改的内容」。以基线 commit 为基准对比工作区（`git diff <base>`），
+/// 因此同时覆盖：基线之后的新提交、已暂存、以及未暂存的本地修改——只比 `base..HEAD` 会漏掉
+/// 未提交的改动，而那恰恰是增量构建最常见的触发场景。另外把未跟踪文件（新建、尚未 `git add`
+/// 的源码）也算进来。
+fn git_changed_files(dir: &str, base: &str) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(out) = run_git_in(dir, &["diff", base, "--name-only"]) {
+        if out.status.success() {
+            for l in String::from_utf8_lossy(&out.stdout).lines() {
+                let l = l.trim();
+                if !l.is_empty() {
+                    files.push(l.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(out) = run_git_in(dir, &["ls-files", "--others", "--exclude-standard"]) {
+        if out.status.success() {
+            for l in String::from_utf8_lossy(&out.stdout).lines() {
+                let l = l.trim();
+                if !l.is_empty() {
+                    files.push(l.to_string());
+                }
+            }
+        }
+    }
+    files
+}
+
+/// 子模块 gitlink 路径（`git ls-files -s` 中 mode=160000 的条目）。主仓库的 diff 会把子模块
+/// 指针变更列成一个普通路径（如 `Nto.Emr`），若不剔除，会被误映射到根目录下的首个工程。
+/// 子模块自身的改动由 `discover_repos_blocking` 单独发现、单独 diff，不会漏。
+fn git_submodule_paths(dir: &str) -> Vec<String> {
+    let out = match run_git_in(dir, &["ls-files", "-s"]) {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let mut parts = l.splitn(2, '\t');
+            let mode = parts.next()?.split_whitespace().next()?;
+            let path = parts.next()?;
+            if mode == "160000" {
+                Some(path.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `rel` 是否落在某个子模块目录内（本身或其后代）。
+fn is_submodule_path(rel: &str, submodules: &[String]) -> bool {
+    let rel = rel.replace('\\', "/");
+    submodules.iter().any(|s| {
+        let s = s.replace('\\', "/");
+        rel == s || rel.starts_with(&format!("{s}/"))
+    })
+}
+
 fn compute_incremental_blocking(
     project_path: &str,
     selected: &[String],
+    include_dependents: bool,
 ) -> Result<Vec<String>, String> {
     let repos = discover_repos_blocking(project_path)?;
     let state = read_build_state_blocking(project_path);
@@ -1029,14 +1105,9 @@ fn compute_incremental_blocking(
             continue;
         }
         had_baseline = true;
-        let range = format!("{}..HEAD", base);
-        let out = run_git_in(&r.path, &["diff", &range, "--name-only"])?;
-        if !out.status.success() {
-            continue;
-        }
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let rel = line.trim();
-            if rel.is_empty() {
+        let submodules = git_submodule_paths(&r.path);
+        for rel in git_changed_files(&r.path, base) {
+            if is_submodule_path(&rel, &submodules) {
                 continue;
             }
             changed_abs.push(format!("{}/{}", r.path, rel));
@@ -1088,7 +1159,12 @@ fn compute_incremental_blocking(
         return Err("无法把变更文件映射到工程".to_string());
     }
 
-    // 4) 反向依赖闭包
+    // 默认只编变更工程，不做反向依赖扩散（见函数上方说明）。
+    if !include_dependents {
+        return Ok(changed_projects);
+    }
+
+    // 4) 反向依赖闭包（仅在 include_dependents 时启用）
     let mut name_deps: HashMap<String, Vec<String>> = HashMap::new();
     for p in &plan.projects {
         name_deps.insert(p.name.clone(), p.dependents.clone());
@@ -1210,7 +1286,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
-    use super::git_dirty;
+    use super::*;
 
     struct TempRepo {
         path: PathBuf,
@@ -1252,6 +1328,56 @@ mod tests {
                 .unwrap();
             assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         }
+
+        /// 仓库名：与 `discover_repos_blocking` 对主仓库的命名一致（目录名）。
+        fn name(&self) -> String {
+            self.path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap()
+        }
+
+        fn head(&self) -> String {
+            let o = Command::new("git")
+                .arg("-C")
+                .arg(&self.path)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        }
+
+        /// 写 `.nezha/build-state.json`（基线）与 `Log/build-plan.json`。
+        /// `projects`：工程目录名 → 其反向依赖方（Dependents）名字列表。
+        fn write_plan_and_state(&self, base: &str, projects: &[(&str, &[&str])]) {
+            let nezha = self.path.join(".nezha");
+            std::fs::create_dir_all(&nezha).unwrap();
+            std::fs::write(
+                nezha.join("build-state.json"),
+                format!("{{\"last_built\":{{\"{}\":\"{base}\"}}}}", self.name()),
+            )
+            .unwrap();
+            let log = self.path.join("Log");
+            std::fs::create_dir_all(&log).unwrap();
+            let entries: Vec<String> = projects
+                .iter()
+                .map(|(pname, deps)| {
+                    let path = self.path.join(pname).join(format!("{pname}.csproj"));
+                    let deps_json: Vec<String> =
+                        deps.iter().map(|d| format!("\"{d}\"")).collect();
+                    format!(
+                        "{{\"Path\":\"{}\",\"Name\":\"{pname}\",\"Dependents\":[{}]}}",
+                        path.to_string_lossy().replace('\\', "\\\\"),
+                        deps_json.join(",")
+                    )
+                })
+                .collect();
+            std::fs::write(
+                log.join("build-plan.json"),
+                format!("{{\"Projects\":[{}]}}", entries.join(",")),
+            )
+            .unwrap();
+        }
     }
 
     impl Drop for TempRepo {
@@ -1289,5 +1415,61 @@ mod tests {
         // 暂存后仍为脏
         repo.git(&["add", "tracked.txt"]);
         assert!(git_dirty(repo.dir()));
+    }
+
+    // 增量必须把「基线之后未提交」的本地改动算进来：只比 base..HEAD 会漏掉它，
+    // 而那正是增量构建最常见的触发场景。
+    #[test]
+    fn incremental_detects_uncommitted_working_tree_changes() {
+        let repo = TempRepo::new();
+        std::fs::create_dir_all(repo.path.join("Proj")).unwrap();
+        std::fs::write(repo.path.join("Proj/Proj.csproj"), "<Project/>").unwrap();
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-m", "init"]);
+        repo.write_plan_and_state(&repo.head(), &[("Proj", &[])]);
+
+        // 未提交、未暂存的改动
+        std::fs::write(repo.path.join("Proj/File.cs"), "class C {}").unwrap();
+
+        let inc =
+            compute_incremental_blocking(repo.dir(), &[repo.name()], false).unwrap();
+        assert_eq!(inc, vec!["Proj".to_string()]);
+    }
+
+    // 默认只编变更工程；只有显式 include_dependents 才扩散反向依赖闭包。
+    #[test]
+    fn incremental_closure_is_opt_in() {
+        let repo = TempRepo::new();
+        for p in ["A", "B"] {
+            std::fs::create_dir_all(repo.path.join(p)).unwrap();
+            std::fs::write(repo.path.join(p).join(format!("{p}.csproj")), "<Project/>")
+                .unwrap();
+        }
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-m", "init"]);
+        // A 的反向依赖方是 B：改了 A，闭包应把 B 也带上。
+        repo.write_plan_and_state(&repo.head(), &[("A", &["B"]), ("B", &[])]);
+
+        std::fs::write(repo.path.join("A/File.cs"), "class A {}").unwrap();
+
+        let only_changed =
+            compute_incremental_blocking(repo.dir(), &[repo.name()], false).unwrap();
+        assert_eq!(only_changed, vec!["A".to_string()]);
+
+        let with_deps =
+            compute_incremental_blocking(repo.dir(), &[repo.name()], true).unwrap();
+        assert!(with_deps.contains(&"A".to_string()));
+        assert!(with_deps.contains(&"B".to_string()));
+    }
+
+    // 主仓库 diff 里的子模块 gitlink（如 `Nto.Emr`）不应被误映射到同前缀的普通工程。
+    #[test]
+    fn submodule_gitlink_paths_are_filtered() {
+        let subs = vec!["Nto.Emr".to_string(), "Nto.His/Term".to_string()];
+        assert!(is_submodule_path("Nto.Emr", &subs));
+        assert!(is_submodule_path("Nto.Emr\\x.cs", &subs));
+        assert!(is_submodule_path("Nto.His/Term/foo.cs", &subs));
+        assert!(!is_submodule_path("Nto.Emr2", &subs));
+        assert!(!is_submodule_path("Nto.His/DrugInOut", &subs));
     }
 }

@@ -283,6 +283,25 @@
   border-color: var(--border-focus);
 }
 
+/* 复选项（增量范围 / 失败自动修复） */
+.build-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.build-check input {
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
 /* 构建进度 */
 .build-progress-text {
   font-size: 11px;

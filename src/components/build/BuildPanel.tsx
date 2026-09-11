@@ -30,6 +30,7 @@ interface BuildConfig {
   skip_clean: boolean;
   default_branch: string;
   max_parallel: number;
+  auto_fix_on_failure: boolean;
 }
 
 interface BuildState {
@@ -71,6 +72,9 @@ interface Plan {
 }
 
 type ProjStatus = "pending" | "building" | "ok" | "failed";
+
+/** 构建错误清单里的一项（单个失败工程）。 */
+type FixError = { project: string; errors: string[]; depFailed: string[]; toolchain: string[] };
 
 function toFileNoExt(p: string): string {
   return p.replace(/\\/g, "/").split("/").pop()?.replace(/\.csproj$/, "") ?? "";
@@ -249,6 +253,8 @@ export function BuildPanel({
   const [pullResults, setPullResults] = useState<PullResult[]>([]);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [mode, setMode] = useState<"full" | "incremental" | "failed">("full");
+  // 增量是否附带「反向依赖方」闭包。默认关闭：只编 git 变更工程，避免被放大到上百个工程。
+  const [includeDependents, setIncludeDependents] = useState(false);
   const [view, setView] = useState<"panel" | "fullscreen" | "collapsed">("panel");
   const [logOpen, setLogOpen] = useState(false);
   const [logText, setLogText] = useState("");
@@ -274,6 +280,11 @@ export function BuildPanel({
   const buildStartRef = useRef(0);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const configRef = useRef<BuildConfig | null>(null);
+  configRef.current = config;
+  // 本轮构建是否已因失败自动发起过修复任务（按失败工程集合去重，避免重复拉起）。
+  const autoFixSigRef = useRef("");
+  const createFixTaskRef = useRef<((list?: FixError[]) => void) | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -459,8 +470,9 @@ export function BuildPanel({
     projDirtyRef.current = true;
   }, []);
 
-  const handleCreateFixTask = useCallback(async () => {
-    if (errorList.length === 0) return;
+  const handleCreateFixTask = useCallback(async (list?: FixError[]) => {
+    const errs = list ?? errorList;
+    if (errs.length === 0) return;
     // 从错误日志里取第一个 .csproj 绝对路径，定位它所属的仓库（取最长前缀匹配）
     const m = logRef.current.match(/[A-Za-z]:\\[^\s:]+\.csproj/);
     let repo: BuildRepo | undefined;
@@ -476,16 +488,14 @@ export function BuildPanel({
 
     // 先把错误信息写到日志文件，让 agent 读取，避免把整段塞进 prompt（上下文爆炸）
     const errText =
-      "HIS 构建错误信息\n" +
-      `失败项目数: ${errorList.length}\n\n` +
-      buildFixPrompt(errorList);
+      "HIS 构建错误信息\n" + `失败项目数: ${errs.length}\n\n` + buildFixPrompt(errs);
     try {
       await invoke("export_build_errors", { projectPath, content: errText });
     } catch {
       /* 写失败不阻塞，prompt 里仍会引用该路径 */
     }
 
-    const failNames = errorList.map((e) => e.project).join(", ");
+    const failNames = errs.map((e) => e.project).join(", ");
     const fixPrompt =
       "请修复以下 HIS .NET Framework 构建失败：\n\n" +
       "第一步：用只读工具读取 " +
@@ -522,6 +532,12 @@ export function BuildPanel({
     }
   }, [errorList, repos, agentInfo, projectPath, onCreateFixTask]);
 
+  // appendLog 是稳定回调（只依赖 markProject），自动修复通过 ref 调用最新的创建逻辑，
+  // 避免把 handleCreateFixTask 塞进 appendLog 依赖导致其每次重渲染重建。
+  useEffect(() => {
+    createFixTaskRef.current = (list) => void handleCreateFixTask(list);
+  }, [handleCreateFixTask]);
+
   const appendLog = useCallback(
     (chunk: string) => {
       logRef.current += chunk;
@@ -536,8 +552,21 @@ export function BuildPanel({
           if (code === "0") setView("panel");
           setStatusText(code === "0" ? "构建完成" : `构建结束 exit=${code}`);
           // 每次构建结束都重算错误列表：成功则清空，失败则列出当前失败项目
-          setErrorList(aggregateErrors(logRef.current));
+          const errs = aggregateErrors(logRef.current);
+          setErrorList(errs);
           setMode(code === "0" ? "full" : "failed");
+          // 失败可选自动发起修复任务（配置开关，默认关）。按失败工程集合去重，
+          // 同一批失败只自动拉一次，避免 agent 修复后再次构建失败时反复拉起。
+          if (code !== "0" && errs.length > 0 && configRef.current?.auto_fix_on_failure) {
+            const sig = errs
+              .map((e) => e.project)
+              .sort()
+              .join(",");
+            if (sig && autoFixSigRef.current !== sig) {
+              autoFixSigRef.current = sig;
+              createFixTaskRef.current?.(errs);
+            }
+          }
           continue;
         }
         let m = line.match(/Building:\s*(.+?)\s*\.\.\./);
@@ -563,6 +592,7 @@ export function BuildPanel({
     setError("");
     setLogText("");
     logRef.current = "";
+    autoFixSigRef.current = "";
     setProjStatus({});
     projStatusRef.current = {};
     if (plan?.Projects) {
@@ -586,6 +616,7 @@ export function BuildPanel({
         include = await invoke<string[]>("compute_incremental_include", {
           projectPath,
           selected: Array.from(selectedRef.current),
+          includeDependents,
         });
       } catch (e) {
         setError(String(e));
@@ -617,7 +648,7 @@ export function BuildPanel({
       setError(String(e));
       setStatusText("");
     }
-  }, [projectPath, plan, mode, config, appendLog, load, errorList, fixedProjects, worktreePath]);
+  }, [projectPath, plan, mode, config, appendLog, load, errorList, fixedProjects, worktreePath, includeDependents]);
 
   const handleCancel = useCallback(async () => {
     if (!runningId) return;
@@ -1001,6 +1032,16 @@ export function BuildPanel({
               </button>
             ))}
           </div>
+          {mode === "incremental" && (
+            <label className="build-check">
+              <input
+                type="checkbox"
+                checked={includeDependents}
+                onChange={(e) => setIncludeDependents(e.target.checked)}
+              />
+              附带反向依赖方（默认只编 git 变更的工程；勾选后改动会扩散到依赖方，范围更大）
+            </label>
+          )}
           <div className="build-actions">
             {runningId ? (
               <button className="rp-btn" data-block="true" data-variant="danger" onClick={handleCancel}>
@@ -1148,6 +1189,16 @@ export function BuildPanel({
                   onChange={(e) => setConfig({ ...config, max_parallel: Number(e.target.value) })}
                 />
               </div>
+              <label className="build-check">
+                <input
+                  type="checkbox"
+                  checked={config.auto_fix_on_failure}
+                  onChange={(e) =>
+                    setConfig({ ...config, auto_fix_on_failure: e.target.checked })
+                  }
+                />
+                构建失败时自动发起修复任务（full_access，会直接创建并运行 agent 任务）
+              </label>
               <div className="build-actions">
                 <button className="rp-btn" onClick={handleConfigSave}>
                   保存配置
