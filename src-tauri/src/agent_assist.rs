@@ -595,7 +595,7 @@ fn plan_execution_draft_instructions(
 1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的素材（只写本议题执行增量）：
    - 结构固定两段（按顺序）：
      a. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；回写云效时与方案文档的「修改方案汇总」合并为开发向评论，数值同时写入议题「价值评分」字段。
-     b. `## 影响范围与测试（测试向）`：字段固定三行——`修改分支`（本任务改动所在分支，如 master）、`修改文件`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`测试步骤`（可执行的测试步骤与回归点）；若执行与方案一致，可基于方案文档对应节整理。
+     b. `## 影响范围与测试（测试向）`：字段固定三行，**字段名加粗**（与开发向评论的小标题一致，不要用列表符号）——`**修改分支**`（本任务改动所在分支，如 master）、`**修改文件**`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`**测试步骤**`（可执行的测试步骤与回归点）；若执行与方案一致，可基于方案文档对应节整理。
    - 「修改方案汇总」不在本文件维护（由方案文档 plan.md 提供，回写时自动合并），不要在此重复。
    - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。{knowledge_section}"#,
         task_id = task_id,
@@ -673,7 +673,7 @@ fn direct_execution_draft_instructions(
    - 结构固定三段（按顺序）：
      a. `## 修改方案汇总`：本议题实际做了什么改动、为什么这样改（回写时作为开发向评论的主体，承担方案文档的角色）；
      b. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；数值同时写入议题「价值评分」字段。
-     c. `## 影响范围与测试（测试向）`：字段固定三行——`修改分支`（本任务改动所在分支，如 master）、`修改文件`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`测试步骤`（可执行的测试步骤与回归点）。
+     c. `## 影响范围与测试（测试向）`：字段固定三行，**字段名加粗**（与开发向评论的小标题一致，不要用列表符号）——`**修改分支**`（本任务改动所在分支，如 master）、`**修改文件**`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`**测试步骤**`（可执行的测试步骤与回归点）。
    - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。{knowledge_section}"#,
         task_id = task_id,
     )
@@ -960,10 +960,10 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
    - 开发向评论：<DEV_SUMMARY>...</DEV_SUMMARY>，直接回写本次修改方案：
      - 基于提交与变更统计忠实呈现方案本身：改了什么、怎么改（关键改动点与实现方式，可引用 commit 短号/文件）；
      - 不要套用其他模板结构，不要在方案之外额外扩写，事实里没有的内容不要补。
-   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，固定为「影响范围与测试指引」，字段固定三行：
-     - 修改分支：直接使用下方给定的「修改分支」，不要改动、不要编造；
-     - 修改文件：受影响的项目/工程名（从变更统计的文件路径归纳，如 Nto.His.Register.UI），多个用顿号分隔；
-     - 测试步骤：给出可执行的测试步骤与回归点。
+   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，首行固定为标题 `## 影响范围与测试指引`，其后为三个固定字段；**字段名必须加粗**（与开发向评论的小标题一致），不要用列表符号：
+     - `**修改分支**`：直接使用下方给定的「修改分支」，不要改动、不要编造；
+     - `**修改文件**`：受影响的项目/工程名（从变更统计的文件路径归纳，如 Nto.His.Register.UI），多个用顿号分隔；
+     - `**测试步骤**`：给出可执行的测试步骤与回归点。
 3. 每条评论语言与议题标题一致（中文议题输出中文），各 200-500 字，控制在 12 行以内。
 4. 某条若缺少事实支撑，就写「（无）」占位，不要编造。
 
@@ -1078,6 +1078,59 @@ pub struct YunxiaoWritebackDraft {
 /// discussion.md 中「影响范围与测试」小节标题前缀。
 const TEST_SECTION_HEADER: &str = "## 影响范围与测试";
 
+/// 测试向评论的固定字段标签——与开发向评论的小标题同位，需要加粗显示。
+const TEST_COMMENT_FIELD_LABELS: [&str; 3] = ["修改分支", "修改文件", "测试步骤"];
+
+/// 把测试向评论的固定字段标签统一加粗（`- 修改分支：x` / `### 修改分支` / `修改分支：x`
+/// 均归一为 `**修改分支**：x`），与开发向评论的小标题一致。
+///
+/// 云效富文本只在普通段落内识别 `**…**`（列表项、标题行里的加粗标记会被 `strip_markdown_line`
+/// 剥掉），因此这里同时去掉行首的列表 / 标题前缀，落成「加粗标签 + 原内容」的段落。
+/// 已是 `**修改分支**：` 写法的行保持幂等，不会被重复包裹。
+fn bolden_test_comment_fields(text: &str) -> String {
+    /// 识别单个字段标签（兼容已加粗写法），命中则返回归一后的行。
+    fn normalize_line(body: &str) -> Option<String> {
+        let (bold_wrapped, rest) = match body.strip_prefix("**") {
+            Some(rest) => (true, rest),
+            None => (false, body),
+        };
+        for label in TEST_COMMENT_FIELD_LABELS {
+            let Some(after) = rest.strip_prefix(label) else {
+                continue;
+            };
+            // 已加粗时吞掉闭合的 `**`，避免生成 `**修改分支****：`。
+            let after = if bold_wrapped {
+                after.strip_prefix("**").unwrap_or(after)
+            } else {
+                after
+            };
+            // 仅当标签后紧跟分隔符或行尾时替换，避免误伤「修改分支说明」这类正文。
+            if after.is_empty() || after.starts_with('：') || after.starts_with(':') {
+                return Some(format!("**{label}**{after}"));
+            }
+        }
+        None
+    }
+
+    if text.trim().is_empty() {
+        return text.to_string();
+    }
+    text.lines()
+        .map(|raw| {
+            let trimmed = raw.trim_start();
+            // 去掉行首列表符（- / * / +）或标题符（#…），保留其后内容。
+            let stripped = trimmed
+                .strip_prefix("- ")
+                .or_else(|| trimmed.strip_prefix("* "))
+                .or_else(|| trimmed.strip_prefix("+ "))
+                .map(str::trim_start)
+                .unwrap_or_else(|| trimmed.trim_start_matches('#').trim_start());
+            normalize_line(stripped).unwrap_or_else(|| raw.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// 把 discussion.md 拆成（开发向评论，测试向评论）：
 /// - 开发向 = 从开头到 `## 影响范围与测试` 之前（含 `## 修改方案汇总` 与 `## 价值评分`）；
 /// - 测试向 = 从 `## 影响范围与测试` 到文档末尾。
@@ -1132,7 +1185,7 @@ fn build_fallback_draft(
         dev.push(format!("```\n{diff_stat}\n```"));
     }
     let test = format!(
-        "## 影响范围与测试指引\n\n- 修改分支：{}\n- 修改文件：（无）\n- 测试步骤：请在预览中补充。",
+        "## 影响范围与测试指引\n\n**修改分支**：{}\n**修改文件**：（无）\n**测试步骤**：请在预览中补充。",
         if branch.trim().is_empty() {
             "（无）"
         } else {
@@ -1187,7 +1240,7 @@ fn merge_plan_writeback_draft(
     };
     YunxiaoWritebackDraft {
         dev_comment,
-        test_comment,
+        test_comment: bolden_test_comment_fields(&test_comment),
     }
 }
 
@@ -1243,7 +1296,7 @@ pub async fn generate_yunxiao_writeback_summary(
             let (dev_comment, test_comment) = split_discussion_into_comments(&draft);
             return Ok(YunxiaoWritebackDraft {
                 dev_comment,
-                test_comment,
+                test_comment: bolden_test_comment_fields(&test_comment),
             });
         }
     }
@@ -1312,7 +1365,7 @@ pub async fn generate_yunxiao_writeback_summary(
         crate::value_score::reappend_value_score_section(&dev, preserved_score_section.as_deref());
     Ok(YunxiaoWritebackDraft {
         dev_comment,
-        test_comment: test,
+        test_comment: bolden_test_comment_fields(&test),
     })
 }
 
@@ -1690,6 +1743,46 @@ mod tests {
         let (dev, test) = split_discussion_into_comments(text);
         assert_eq!(dev, "## 修改方案汇总\n\n内容");
         assert!(test.is_empty());
+    }
+
+    #[test]
+    fn bolden_test_comment_fields_bolds_list_labels_and_keeps_heading() {
+        // 真实草稿样式：三字段为无序列表项，测试步骤含多行编号内容（缩进）。
+        let text = "## 影响范围与测试（测试向）\n\n- 修改分支：v2.20260901.0.0-rc\n- 修改文件：Nto.His.Order.UI（Hsp 主解决方案）\n- 测试步骤：\n  1. 打开中草药开立窗口\n  2. 点击「上次处方」";
+        let out = bolden_test_comment_fields(text);
+        // 标题行不参与字段加粗，保持原样（开发向小标题同级）。
+        assert!(out.starts_with("## 影响范围与测试（测试向）"));
+        assert!(out.contains("**修改分支**：v2.20260901.0.0-rc"));
+        assert!(out.contains("**修改文件**：Nto.His.Order.UI（Hsp 主解决方案）"));
+        assert!(out.contains("**测试步骤**："));
+        // 列表前缀被去掉了（列表项里的 `**` 会被云效转换器剥掉）。
+        assert!(!out.contains("\n- 修改分支"));
+        // 测试步骤正文不受影响。
+        assert!(out.contains("1. 打开中草药开立窗口"));
+    }
+
+    #[test]
+    fn bolden_test_comment_fields_is_idempotent() {
+        let text = "**修改分支**：master\n**修改文件**：Nto.X\n**测试步骤**：1. 复现";
+        assert_eq!(bolden_test_comment_fields(text), text);
+    }
+
+    #[test]
+    fn bolden_test_comment_fields_handles_colon_and_bare_labels() {
+        let out = bolden_test_comment_fields("修改分支: master\n修改文件：Nto.X");
+        assert!(out.contains("**修改分支**: master"));
+        assert!(out.contains("**修改文件**：Nto.X"));
+        // 非字段行不受影响。
+        let other = bolden_test_comment_fields("修改分支说明：这里不是字段行");
+        assert_eq!(other, "修改分支说明：这里不是字段行");
+    }
+
+    #[test]
+    fn fallback_draft_test_comment_uses_bold_labels() {
+        let draft = build_fallback_draft("HJWE-65", "标题", "master", "", "");
+        assert!(draft.test_comment.contains("**修改分支**：master"));
+        assert!(draft.test_comment.contains("**修改文件**：（无）"));
+        assert!(draft.test_comment.contains("**测试步骤**："));
     }
 
     #[test]
