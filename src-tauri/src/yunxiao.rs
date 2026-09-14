@@ -815,6 +815,9 @@ fn is_allowed_image_host(host: &str) -> bool {
     host.ends_with(".aliyuncs.com")
         || host.ends_with(".alicdn.com")
         || host.ends_with(".aliyun.com")
+        // 钉钉侧复制粘贴到云效的图片落在钉钉静态媒体 CDN（阿里云基础设施，无重定向直链）。
+        || host == "static.dingtalk.com"
+        || host.ends_with(".dingtalk.com")
 }
 
 /// 校验图片 URL：必须 https 且域名在白名单内。
@@ -2389,10 +2392,17 @@ mod tests {
             "yunxiao.oss-cn-hangzhou.aliyuncs.com"
         ));
         assert!(is_allowed_image_host("devops.aliyun.com"));
+        assert!(is_allowed_image_host("static.dingtalk.com"));
+        assert!(is_allowed_image_host("media.dingtalk.com"));
         assert!(!is_allowed_image_host("evil.example.com"));
+        assert!(!is_allowed_image_host("evil.dingtalk.com.evil.cn"));
         assert!(normalize_image_url("http://img.alicdn.com/a.png").is_none());
         assert!(normalize_image_url("https://evil.example.com/a.png").is_none());
         assert!(normalize_image_url("https://img.alicdn.com/a.png").is_some());
+        assert!(normalize_image_url(
+            "https://static.dingtalk.com/media/lQLPKHWN.png"
+        )
+        .is_some());
     }
 
     #[test]
