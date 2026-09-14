@@ -67,16 +67,16 @@ describe("planBoardColumn / isPlanArchived", () => {
 });
 
 describe("planLifecycleActions", () => {
-  it("定稿 / 执行中可标记完成，已完成可重开", () => {
-    expect(planLifecycleActions(makePlan({ status: "finalized" })).canComplete).toBe(true);
+  it("只有执行中可标记完成；已完成可重开", () => {
     expect(planLifecycleActions(makePlan({ status: "executing" })).canComplete).toBe(true);
     expect(planLifecycleActions(makePlan({ status: "completed" })).canComplete).toBe(false);
     expect(planLifecycleActions(makePlan({ status: "completed" })).canReopen).toBe(true);
     expect(planLifecycleActions(makePlan({ status: "executing" })).canReopen).toBe(false);
   });
 
-  it("讨论中（draft）不能标记完成——尚未定稿", () => {
+  it("讨论中 / 已定稿都不能标记完成——尚未开展或尚未生成待办，收尾应走取消", () => {
     expect(planLifecycleActions(makePlan({ status: "draft" })).canComplete).toBe(false);
+    expect(planLifecycleActions(makePlan({ status: "finalized" })).canComplete).toBe(false);
   });
 
   it("取消是留存态：非 cancelled 均可取消，已取消不可再取消", () => {

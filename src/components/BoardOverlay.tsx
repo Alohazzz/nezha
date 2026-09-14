@@ -112,7 +112,7 @@ export function BoardOverlay({
         <PlanBoard
           plans={plans}
           tasks={tasks}
-          projectDeps={planDeps}
+          depsByPlanId={planDeps}
           projectNames={projectNames}
           projectPaths={projectPaths}
           onPreview={onPlanPreview}

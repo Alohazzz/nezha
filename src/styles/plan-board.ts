@@ -308,6 +308,23 @@ export const planBoard = {
     color: "var(--text-hint)",
     cursor: "pointer",
   },
+  /** 议题展开箭头：展开朝下，收起朝右。 */
+  boardChevronExpanded: {
+    transform: "rotate(0deg)",
+  },
+  boardChevronCollapsed: {
+    transform: "rotate(-90deg)",
+  },
+  /** 生命周期徽章（卡片上的 PlanStatus 文案）。 */
+  boardStatusBadge: {
+    fontSize: 10,
+    padding: "1px 5px",
+    borderRadius: 4,
+    background: "var(--bg-hover)",
+    border: "1px solid var(--border-dim)",
+    color: "var(--text-muted)",
+    whiteSpace: "nowrap" as const,
+  },
 
   // ── 议题展开行 ────────────────────────────────────────────────────────
   boardIssueRow: {

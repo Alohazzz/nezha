@@ -9,7 +9,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import type { Plan, Task } from "../../../types";
+import { taskStatusI18nKey, type Plan, Task } from "../../../types";
 import { buildPlanDisplayName } from "../../../utils/plan";
 import {
   derivePlanProgress,
@@ -24,32 +24,6 @@ import s from "../../../styles";
 export function planTitle(plan: Plan): string {
   if (plan.name.trim()) return plan.name;
   return buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber));
-}
-
-/** 任务状态 → i18n key 后缀（与 TaskListItem 保持一致的最小映射）。 */
-function statusKey(status: NonNullable<PlanIssueProgress["status"]>): string {
-  switch (status) {
-    case "todo":
-      return "todo";
-    case "pending":
-      return "pending";
-    case "running":
-      return "running";
-    case "input_required":
-      return "inputRequired";
-    case "awaiting_review":
-      return "awaitingReview";
-    case "detached":
-      return "detached";
-    case "interrupted":
-      return "interrupted";
-    case "done":
-      return "done";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-  }
 }
 
 /** 议题 chip 的状态样式：done 绿 / 失败红 / 有未满足前置 黄 / 其他灰。 */
@@ -87,7 +61,7 @@ function PlanIssueRow({
         <span style={s.boardIssueStatus}>{t("board.taskMissing")}</span>
       ) : (
         <span style={failed ? s.boardIssueStatusFailed : s.boardIssueStatus}>
-          {t(`status.${statusKey(issue.status)}`)}
+          {t(`status.${taskStatusI18nKey(issue.status)}`)}
         </span>
       )}
       <span style={s.boardIconSlot}>
@@ -165,7 +139,7 @@ export function PlanBoardCard({
           <ChevronDown
             size={13}
             strokeWidth={2}
-            style={expanded ? undefined : { transform: "rotate(-90deg)" }}
+            style={expanded ? s.boardChevronExpanded : s.boardChevronCollapsed}
           />
         </button>
       </div>
@@ -197,7 +171,7 @@ export function PlanBoardCard({
           <span style={s.boardBadgeWaiting}>{t("board.blocked", { count: progress.unmetEdges })}</span>
         ) : null}
         {progress.noTasks ? <span style={s.boardLockedBadge}>{t("board.noTasks")}</span> : null}
-        {progress.allDone && plan.status !== "completed" ? (
+        {actions.canComplete && progress.allDone ? (
           <span style={s.boardBadgeReady}>{t("board.readyHint")}</span>
         ) : null}
         {plan.batchId ? <span style={s.boardLockedBadge}>{t("plan.preview.batchLinked")}</span> : null}

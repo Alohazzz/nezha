@@ -31,7 +31,7 @@ const COLUMN_DOT: Record<PlanBoardColumn, CSSProperties> = {
 export function PlanBoard({
   plans,
   tasks,
-  projectDeps,
+  depsByPlanId,
   projectNames,
   projectPaths,
   onPreview,
@@ -46,7 +46,7 @@ export function PlanBoard({
   plans: Plan[];
   tasks: Task[];
   /** planId → 已解析 deps.json。 */
-  projectDeps: Record<string, PlanDeps | undefined>;
+  depsByPlanId: Record<string, PlanDeps | undefined>;
   projectNames: Map<string, string>;
   projectPaths: Map<string, string>;
   onPreview: (plan: Plan) => void;
@@ -61,7 +61,17 @@ export function PlanBoard({
   const { t } = useI18n();
   const [projectFilter, setProjectFilter] = useState("");
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
-  const [archivedOpen, setArchivedOpen] = useState(false);
+  // 归档区按项目独立展开（每个项目一条计数条）；用一个 Set 记录已展开的项目 id。
+  const [archivedOpenProjectIds, setArchivedOpenProjectIds] = useState<Set<string>>(() => new Set());
+
+  const toggleArchived = (projectId: string) => {
+    setArchivedOpenProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
 
   const visiblePlans = useMemo(() => {
     if (!projectFilter.trim()) return plans;
@@ -146,7 +156,7 @@ export function PlanBoard({
                           key={plan.id}
                           plan={plan}
                           tasks={tasks}
-                          deps={projectDeps[plan.id]}
+                          deps={depsByPlanId[plan.id]}
                           expanded={expandedPlanIds.has(plan.id)}
                           onToggleExpand={() => toggleExpand(plan.id)}
                           onPreview={() => onPreview(plan)}
@@ -170,17 +180,17 @@ export function PlanBoard({
                 <button
                   type="button"
                   style={s.boardArchiveBar}
-                  onClick={() => setArchivedOpen((v) => !v)}
+                  onClick={() => toggleArchived(group.projectId)}
                 >
                   <ArchiveRestore size={12} strokeWidth={2} />
                   {t("board.archivedBar", { count: group.archived.length })}
                 </button>
-                {archivedOpen && (
+                {archivedOpenProjectIds.has(group.projectId) && (
                   <div style={s.boardArchiveList}>
                     {group.archived.map((plan) => (
                       <div key={plan.id} style={s.boardArchiveRow}>
                         <span style={s.boardArchiveName}>{planTitle(plan)}</span>
-                        <span style={s.kanbanColumnTitle}>{t(`board.column.${plan.status}`)}</span>
+                        <span style={s.boardStatusBadge}>{t(`board.column.${plan.status}`)}</span>
                         <button
                           type="button"
                           style={s.boardMiniBtn}

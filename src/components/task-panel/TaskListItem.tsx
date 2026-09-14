@@ -1,36 +1,11 @@
 import { useState, memo } from "react";
 import { Trash2, Star, Play, GitBranch } from "lucide-react";
-import type { Task } from "../../types";
+import { taskStatusI18nKey, type Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
-
-function statusLabelKey(status: Task["status"]): string {
-  switch (status) {
-    case "todo":
-      return "status.todo";
-    case "pending":
-      return "status.pending";
-    case "running":
-      return "status.running";
-    case "input_required":
-      return "status.inputRequired";
-    case "awaiting_review":
-      return "status.awaitingReview";
-    case "detached":
-      return "status.detached";
-    case "interrupted":
-      return "status.interrupted";
-    case "done":
-      return "status.done";
-    case "failed":
-      return "status.failed";
-    case "cancelled":
-      return "status.cancelled";
-  }
-}
 
 export const TaskListItem = memo(
   function TaskListItem({
@@ -71,7 +46,7 @@ export const TaskListItem = memo(
             {displayTitle.length > 70 ? "…" : ""}
           </div>
           <div style={s.taskCardSub}>
-            {t(statusLabelKey(task.status))}
+            {t(`status.${taskStatusI18nKey(task.status)}`)}
             {task.status === "done" &&
               task.yunxiaoWorkitemId &&
               !task.yunxiaoWrittenBackAt && (

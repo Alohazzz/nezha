@@ -557,6 +557,35 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: "Cancelled",
 };
 
+/**
+ * `TaskStatus` → i18n key 后缀（`status.*`）。集中在此处，避免任务列表行 / 看板卡片
+ * 各写一份 switch——新增状态时由穷尽 switch 强制同步，不会静默漏掉某个视图。
+ */
+export function taskStatusI18nKey(status: TaskStatus): string {
+  switch (status) {
+    case "todo":
+      return "todo";
+    case "pending":
+      return "pending";
+    case "running":
+      return "running";
+    case "input_required":
+      return "inputRequired";
+    case "awaiting_review":
+      return "awaitingReview";
+    case "detached":
+      return "detached";
+    case "interrupted":
+      return "interrupted";
+    case "done":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+  }
+}
+
 export function isActiveTaskStatus(status: TaskStatus): boolean {
   return (
     status === "pending" ||

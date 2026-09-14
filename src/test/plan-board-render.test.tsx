@@ -65,7 +65,7 @@ function renderBoard(
       <PlanBoard
         plans={[makePlan()]}
         tasks={[]}
-        projectDeps={{}}
+        depsByPlanId={{}}
         projectNames={new Map([["p1", "demo"]])}
         projectPaths={new Map([["p1", "/workspace/demo"]])}
         {...handlers}
@@ -155,7 +155,7 @@ describe("PlanBoard — 渲染与生命周期动作", () => {
       tasks: [
         makeTask({ id: "t1", planId: "plan1", yunxiaoSerialNumber: "QHDK-A", status: "running" }),
       ],
-      projectDeps: {
+      depsByPlanId: {
         plan1: {
           graph: { "QHDK-A": [], "QHDK-B": ["QHDK-A"] },
           executionOrder: ["QHDK-A", "QHDK-B"],

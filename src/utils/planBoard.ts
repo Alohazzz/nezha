@@ -172,11 +172,14 @@ export interface PlanLifecycleActions {
 /**
  * 生命周期动作可用性集中判定，UI 只读此结果——避免各处散落 `status === ...` 判断。
  * 依据决策：M1 完成手动、可重开；F1 取消为留存态；AR1 归档是展示层动作。
+ *
+ * 「标记完成」只对**执行中**开放：完成意味着「方案计划的工作已做完」，而 `finalized`
+ * 尚未生成待办、`draft` 还在讨论，想收尾应走「取消」而非「完成」。
  */
 export function planLifecycleActions(plan: Pick<Plan, "status" | "archivedAt">): PlanLifecycleActions {
   const archived = isPlanArchived(plan);
   return {
-    canComplete: !archived && (plan.status === "finalized" || plan.status === "executing"),
+    canComplete: !archived && plan.status === "executing",
     canReopen: !archived && plan.status === "completed",
     canCancel: !archived && plan.status !== "cancelled",
     canArchive: !archived && plan.status === "completed",
