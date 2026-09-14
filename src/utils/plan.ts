@@ -16,6 +16,12 @@ export function planMdPath(projectPath: string, planId: string): string {
   return `${planDirPath(projectPath, planId)}/plan.md`;
 }
 
+/** 方案依赖文件绝对路径（契约见 SkillHub `yunxiao-plan-discussion`「方案依赖文件」节；
+ *  与后端 get_plan_discussion_instructions 注入给 agent 的路径同一约定）。 */
+export function planDepsPath(projectPath: string, planId: string): string {
+  return `${planDirPath(projectPath, planId)}/deps.json`;
+}
+
 /** 议题在方案图片目录下的归档目录（与后端 prepare_issue_images 的 plan 分支一致）。 */
 export function planIssueImagesDir(projectPath: string, planId: string, workitemId: string): string {
   return `${planDirPath(projectPath, planId)}/images/${workitemId}`;

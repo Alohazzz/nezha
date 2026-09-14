@@ -520,17 +520,22 @@ const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
 /// 改技能免重编）；此处只注入技能引用与动态参数（plan.md 路径、Bug 议题提示）。
 const PLAN_DISCUSSION_SKILL: &str = "yunxiao-plan-discussion";
 
-/// 方案讨论任务的完整指令：技能引用 + Bug 议题提示 + 方案文档落盘路径。
+/// 方案讨论任务的完整指令：技能引用 + Bug 议题提示 + 方案文档/依赖文件落盘路径。
 /// has_bug：方案内是否含 Bug 类议题（议题类别快照由前端传入），决定是否提示执行技能中的根因诊断。
-pub fn plan_discussion_instructions(plan_md_path: &str, has_bug: bool) -> String {
+pub fn plan_discussion_instructions(
+    plan_md_path: &str,
+    deps_json_path: &str,
+    has_bug: bool,
+) -> String {
     let bug_hint = if has_bug {
         "本方案含 Bug 缺陷类议题：先按技能「Bug 根因诊断」的要求，用 diagnosing-bugs 方法论定位根因（结论要有可复现的证据）后再进入方案产出。"
     } else {
         "本方案不含 Bug 类议题，可跳过技能中的「Bug 根因诊断」。"
     };
     format!(
-        "## 工作流程\n请先读取并遵循 `{PLAN_DISCUSSION_SKILL}` 技能：严格按技能定义的讨论流程（含性能影响分析强制分支与前置知识认知）走完决策树并产出方案文档；先不要写代码。单议题与多议题联合的格式约定见技能对应小节。\n{bug_hint}\n\n## 输出与产物\n方案文档（绝对路径，技能中的落盘指令以此路径为准）：{plan_md_path}（目录不存在就先创建）。",
+        "## 工作流程\n请先读取并遵循 `{PLAN_DISCUSSION_SKILL}` 技能：严格按技能定义的讨论流程（含性能影响分析强制分支与前置知识认知）走完决策树并产出方案文档；先不要写代码。单议题与多议题联合的格式约定见技能对应小节。\n{bug_hint}\n\n## 输出与产物\n方案文档（绝对路径，技能中的落盘指令以此路径为准）：{plan_md_path}（目录不存在就先创建）。\n依赖文件（绝对路径，schema 与产出要求见技能「方案依赖文件」节）：{deps_json_path}",
         plan_md_path = plan_md_path,
+        deps_json_path = deps_json_path,
     )
 }
 
@@ -547,19 +552,22 @@ pub async fn get_plan_discussion_instructions(
         return Err("非法的方案 ID".to_string());
     }
     let project_path_for_dir = project_path;
-    let plan_md_path = tokio::task::spawn_blocking(move || -> Result<String, String> {
+    let paths = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
         let canonical = std::path::Path::new(&project_path_for_dir)
             .canonicalize()
             .map_err(|e| format!("项目路径无效: {e}"))?;
-        Ok(crate::storage::plan_dir(&canonical, &plan_id)
-            .join("plan.md")
-            .to_string_lossy()
-            .into_owned()
-            .replace("\\\\?\\", ""))
+        let dir = crate::storage::plan_dir(&canonical, &plan_id);
+        let normalize = |path: std::path::PathBuf| {
+            path.to_string_lossy().into_owned().replace("\\\\?\\", "")
+        };
+        Ok((
+            normalize(dir.join("plan.md")),
+            normalize(dir.join("deps.json")),
+        ))
     })
     .await
     .map_err(|e| format!("方案目录解析线程错误: {e}"))??;
-    Ok(plan_discussion_instructions(&plan_md_path, has_bug))
+    Ok(plan_discussion_instructions(&paths.0, &paths.1, has_bug))
 }
 
 /// 方案执行流程：方案已定稿，直接执行；发现方案与代码现实冲突即停。
@@ -1676,10 +1684,16 @@ mod tests {
 
     #[test]
     fn plan_discussion_references_skill_and_dynamic_params() {
-        let prompt = plan_discussion_instructions("H:/proj/.nezha/plans/p1/plan.md", false);
+        let prompt = plan_discussion_instructions(
+            "H:/proj/.nezha/plans/p1/plan.md",
+            "H:/proj/.nezha/plans/p1/deps.json",
+            false,
+        );
         // 技能引用 + plan.md 动态路径必须齐备；流程与文档契约文本由技能承载，不再内联。
         assert!(prompt.contains("yunxiao-plan-discussion"));
         assert!(prompt.contains("H:/proj/.nezha/plans/p1/plan.md"));
+        // deps.json 绝对路径由宿主注入，schema 由技能承载。
+        assert!(prompt.contains("H:/proj/.nezha/plans/p1/deps.json"));
         // 图谱 id 不能被当成技能名；知识认知与补录细节由技能/执行路径承载，讨论提示词不内联。
         assert!(!prompt.contains("使用 `ICUCIS` 技能"));
         assert!(!prompt.contains("knowledge-graph"));
@@ -1930,11 +1944,19 @@ mod tests {
 
     #[test]
     fn plan_instructions_inject_bug_diagnosing_only_with_bug() {
-        let with_bug = plan_discussion_instructions("C:/p/.nezha/plans/1/plan.md", true);
+        let with_bug = plan_discussion_instructions(
+            "C:/p/.nezha/plans/1/plan.md",
+            "C:/p/.nezha/plans/1/deps.json",
+            true,
+        );
         assert!(with_bug.contains("diagnosing-bugs"));
         assert!(with_bug.contains("Bug 根因诊断"));
 
-        let without_bug = plan_discussion_instructions("C:/p/.nezha/plans/1/plan.md", false);
+        let without_bug = plan_discussion_instructions(
+            "C:/p/.nezha/plans/1/plan.md",
+            "C:/p/.nezha/plans/1/deps.json",
+            false,
+        );
         assert!(!without_bug.contains("diagnosing-bugs"));
         assert!(without_bug.contains("Bug 根因诊断"));
     }
