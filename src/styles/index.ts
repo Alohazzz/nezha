@@ -8,6 +8,7 @@ import { gitDiff } from "./git-diff";
 import { kanban } from "./kanban";
 import { layout } from "./layout";
 import { panels } from "./panels";
+import { planBoard } from "./plan-board";
 import { reviewComments } from "./review-comments";
 import { skillHub } from "./skill-hub";
 import { task } from "./task";
@@ -34,6 +35,7 @@ const s = {
   ...yunxiao,
   ...branchBatch,
   ...update,
+  ...planBoard,
 } satisfies Record<string, React.CSSProperties>;
 
 export default s;
@@ -47,6 +49,7 @@ export {
   kanban,
   layout,
   panels,
+  planBoard,
   reviewComments,
   skillHub,
   task,

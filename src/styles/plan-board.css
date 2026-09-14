@@ -1,0 +1,11 @@
+/*
+ * 方案看板：进度条填充。
+ * 填充宽度是运行时算出的连续百分比（非静态条件样式），无法用 CSS 选择器表达；
+ * 参照 build.css 的 .build-progress-fill：视觉规则放这里，组件只传动态 width。
+ */
+.plan-board-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--success);
+  transition: width 0.2s ease;
+}

@@ -57,12 +57,16 @@ import {
   buildPlanDiscussionPrompt,
   buildPlanExecutionPrompt,
   buildPlanTaskName,
+  buildPlanDisplayName,
   buildDirectExecutionPrompt,
   extractPlanIssueSection,
   extractPlanOverviewForIssues,
   planIssueImagesDir,
+  planDepsPath,
   planMdPath,
 } from "./utils/plan";
+import { parsePlanDeps, type PlanDeps } from "./utils/planDeps";
+import { planLifecycleActions } from "./utils/planBoard";
 import {
   EMPTY_YUNXIAO_SETTINGS,
   type KnowledgeSettings,
@@ -71,7 +75,8 @@ import {
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
-import { KanbanView, OPEN_KANBAN_VIEW_EVENT } from "./components/KanbanView";
+import { OPEN_KANBAN_VIEW_EVENT } from "./components/KanbanView";
+import { BoardOverlay } from "./components/BoardOverlay";
 import { UpdateController } from "./components/update/UpdateController";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut, isToggleKanbanShortcut } from "./shortcuts";
@@ -383,6 +388,8 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   // 多议题联合方案（全项目合并持有，按 projectId 过滤持久化，与 tasks 同构）。
   const [plans, setPlans] = useState<Plan[]>([]);
+  // 方案依赖（planId → 已解析 deps.json）：看板的依赖摘要用；缺省视为无依赖。
+  const [planDeps, setPlanDeps] = useState<Record<string, PlanDeps | undefined>>({});
   // 待办「发起讨论」进行中标记（拉详情/图片/建方案期间锁定入口按钮）。
   const [todoDiscussionStarting, setTodoDiscussionStarting] = useState(false);
   const todoDiscussionStartingRef = useRef(false);
@@ -402,6 +409,8 @@ function App() {
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
   const [hubMode, setHubMode] = useState(false);
   const [showKanban, setShowKanban] = useState(false);
+  // 看板 → 方案预览：跨项目打开时先切到目标项目，再由 ProjectPage 消费一次该 id。
+  const [pendingPlanPreviewId, setPendingPlanPreviewId] = useState<string | null>(null);
 
   const tm = useTerminalManager();
   const pendingResumeStartsRef = useRef<Record<string, () => void>>({});
@@ -441,6 +450,41 @@ function App() {
   const mountProject = useCallback((projectId: string) => {
     setMountedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
   }, []);
+
+  /** 读单个方案的 deps.json 并解析；缺失/损坏降级为「无依赖」（parsePlanDeps 内部处理）。 */
+  async function readPlanDepsFor(plan: Plan, projectPath: string): Promise<PlanDeps> {
+    const serials = plan.issues.map((issue) => issue.serialNumber);
+    try {
+      const raw = await invoke<string>("read_file_content", {
+        path: planDepsPath(projectPath, plan.id),
+        projectPath,
+      });
+      return parsePlanDeps(raw, serials);
+    } catch {
+      // 存量方案（无该文件）或读盘失败：按无依赖处理，不阻断看板渲染。
+      return parsePlanDeps(null, serials);
+    }
+  }
+
+  /** 批量刷新方案依赖缓存（挂载时 / 生成待办后调用）。 */
+  const refreshPlanDeps = useCallback(
+    async (targetPlans: Plan[], projectList: Project[]) => {
+      const projectById = new Map(projectList.map((p) => [p.id, p]));
+      const entries = await Promise.all(
+        targetPlans.map(async (plan) => {
+          const project = projectById.get(plan.projectId);
+          if (!project) return null;
+          return [plan.id, await readPlanDepsFor(plan, project.path)] as const;
+        }),
+      );
+      const loaded: Record<string, PlanDeps> = {};
+      for (const entry of entries) {
+        if (entry) loaded[entry[0]] = entry[1];
+      }
+      setPlanDeps((prev) => ({ ...prev, ...loaded }));
+    },
+    [],
+  );
 
   const updateProjectView = useCallback((projectId: string, patch: Partial<ProjectViewState>) => {
     setProjectViews((prev) => ({
@@ -666,6 +710,8 @@ function App() {
         console.error(`[plans] load failed for ${loadedProjects[i].name}:`, result.reason);
       });
       setPlans(loadedPlans);
+      // 方案依赖随方案同批加载；失败不阻断（按无依赖处理）。
+      void refreshPlanDeps(loadedPlans, loadedProjects);
     }
 
     init().catch(console.error);
@@ -1597,8 +1643,8 @@ function App() {
     invokeRunTask(task, project.path, [], [], project.path);
   }
 
-  /** 发起对话框取消：删除 draft 方案记录与 `.nezha/plans/<planId>/` 目录。 */
-  async function handleCancelYunxiaoPlan(planId: string) {
+  /** 移除方案记录并清理 `.nezha/plans/<planId>/` 目录：用于发起失败清理、对话框取消，以及显式删除（已在 handleDeletePlan 二次确认）。 */
+  async function handleRemovePlanRecord(planId: string) {
     const plan = plans.find((p) => p.id === planId);
     if (!plan) return;
     const project = projects.find((p) => p.id === plan.projectId);
@@ -1617,6 +1663,64 @@ function App() {
       console.error("[plans] delete failed:", e);
       showToast(t("plan.deleteFailed", { error: String(e) }), "error");
     }
+  }
+
+  /** 更新本地方案对象（含持久化）；供生命周期动作复用。 */
+  function updatePlan(projectId: string, planId: string, patch: Partial<Plan>) {
+    setPlans((prev) => {
+      const next = prev.map((p) => (p.id === planId ? { ...p, ...patch } : p));
+      persistProjectPlans(projectId, next);
+      return next;
+    });
+  }
+
+  /** 标记完成（M1 手动）：不自动收敛，由使用者判断方案是否算完成。 */
+  function handleCompletePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canComplete) return;
+    updatePlan(plan.projectId, planId, { status: "completed" });
+  }
+
+  /** 重开：已完成 → 执行中（发现仍有未了事项时用）。 */
+  function handleReopenPlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canReopen) return;
+    updatePlan(plan.projectId, planId, { status: "executing" });
+  }
+
+  /** 取消（F1 留存态）：保留方案记录与目录，议题占用随之释放（可重新导入）。 */
+  function handleCancelPlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canCancel) return;
+    updatePlan(plan.projectId, planId, { status: "cancelled" });
+  }
+
+  /** 归档（AR1）：从看板主视图移出（展示层动作，不改 status）。 */
+  function handleArchivePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canArchive) return;
+    updatePlan(plan.projectId, planId, { archivedAt: Date.now() });
+  }
+
+  /** 反归档：回到看板主视图。 */
+  function handleUnarchivePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canUnarchive) return;
+    updatePlan(plan.projectId, planId, { archivedAt: undefined });
+  }
+
+  /** 显式删除方案（危险操作）：连同 `.nezha/plans/<planId>/` 目录一并清理，先二次确认。 */
+  async function handleDeletePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
+    const ok = await confirm(
+      t("board.deletePrompt", {
+        name: plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber)),
+      }),
+      { title: t("board.delete"), kind: "warning" },
+    );
+    if (!ok) return;
+    await handleRemovePlanRecord(planId);
   }
 
   /**
@@ -1686,7 +1790,7 @@ function App() {
             t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }),
             "error",
           );
-          await handleCancelYunxiaoPlan(plan.id);
+          await handleRemovePlanRecord(plan.id);
           return;
         }
         if (images.failed > 0) {
@@ -1703,7 +1807,7 @@ function App() {
         imagePaths = images.paths;
       } catch (e) {
         showToast(t("yunxiao.images.allFailed", { error: String(e) }), "error");
-        await handleCancelYunxiaoPlan(plan.id);
+        await handleRemovePlanRecord(plan.id);
         return;
       }
 
@@ -3033,7 +3137,15 @@ function App() {
               plans={plans}
               onGeneratePlanTodos={handleGeneratePlanTodos}
               onRebindTaskPlan={handleRebindTaskPlan}
-              onCancelPlan={handleCancelYunxiaoPlan}
+              onDeletePlan={handleDeletePlan}
+              initialPlanPreviewId={
+                activeProject && pendingPlanPreviewId
+                  ? (plans.find(
+                      (p) => p.id === pendingPlanPreviewId && p.projectId === activeProject.id,
+                    )?.id ?? null)
+                  : null
+              }
+              onInitialPlanPreviewConsumed={() => setPendingPlanPreviewId(null)}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
               onResumeTaskAndSend={handleResumeTaskAndSend}
@@ -3074,15 +3186,30 @@ function App() {
       </div>
       {showKanban && (
         <div style={s.kanbanOverlay}>
-          <KanbanView
+          <BoardOverlay
             projects={sortedProjects}
             tasks={tasks}
+            plans={plans}
+            planDeps={planDeps}
             onClose={() => setShowKanban(false)}
             onTaskClick={(task) => {
               const project = projects.find((p) => p.id === task.projectId);
               if (project) enterProjectFromKanban(project, task.id);
             }}
             onProjectClick={(project) => enterProjectFromKanban(project)}
+            onPlanPreview={(plan) => {
+              const project = projects.find((p) => p.id === plan.projectId);
+              if (!project) return;
+              setShowKanban(false);
+              enterProjectFromKanban(project);
+              setPendingPlanPreviewId(plan.id);
+            }}
+            onPlanComplete={handleCompletePlan}
+            onPlanReopen={handleReopenPlan}
+            onPlanCancel={handleCancelPlan}
+            onPlanArchive={handleArchivePlan}
+            onPlanUnarchive={handleUnarchivePlan}
+            onPlanDelete={handleDeletePlan}
           />
         </div>
       )}
@@ -3103,7 +3230,7 @@ function App() {
             onCreateYunxiaoPlan={handleCreateYunxiaoPlan}
             onStartYunxiaoPlanDiscussion={handleStartYunxiaoPlanDiscussion}
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
-            onCancelYunxiaoPlan={handleCancelYunxiaoPlan}
+            onCancelYunxiaoPlan={handleRemovePlanRecord}
             plans={plans}
             themeVariant={themeVariant}
             themeMode={themeMode}

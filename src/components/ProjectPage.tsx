@@ -104,7 +104,9 @@ export function ProjectPage({
   plans,
   onGeneratePlanTodos,
   onRebindTaskPlan,
-  onCancelPlan,
+  onDeletePlan,
+  initialPlanPreviewId,
+  onInitialPlanPreviewConsumed,
   onCancelTask,
   onResumeTask,
   onResumeTaskAndSend,
@@ -220,7 +222,11 @@ export function ProjectPage({
     permissionMode: PermissionMode;
   }) => Promise<boolean>;
   onRebindTaskPlan: (taskId: string, planId: string | null) => void | Promise<void>;
-  onCancelPlan: (planId: string) => void | Promise<void>;
+  /** 显式删除方案（后端会拒绝仍有任务引用的方案） */
+  onDeletePlan: (planId: string) => void | Promise<void>;
+  /** 由看板发起的方案预览请求；打开后通过 onInitialPlanPreviewConsumed 通知外层清空。 */
+  initialPlanPreviewId?: string | null;
+  onInitialPlanPreviewConsumed?: () => void;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
   /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
@@ -307,6 +313,13 @@ export function ProjectPage({
   const [worktreeScope, setWorktreeScope] = useState<string>("");
   // 方案预览面板当前展示的方案 id（顶栏「方案」按钮 / PlanTaskView 预览入口写入）。
   const [planPreviewId, setPlanPreviewId] = useState<string | null>(null);
+
+  // 由看板（跨项目）发起的方案预览：进入本项目后自动打开一次，随即消费掉请求。
+  useEffect(() => {
+    if (!initialPlanPreviewId) return;
+    setPlanPreviewId(initialPlanPreviewId);
+    onInitialPlanPreviewConsumed?.();
+  }, [initialPlanPreviewId, onInitialPlanPreviewConsumed]);
   // 云效云项目 id（PlanTaskView 议题链接用）。
   const [yunxiaoProjectId, setYunxiaoProjectId] = useState("");
 
@@ -1485,7 +1498,7 @@ export function ProjectPage({
               projectPath={project.path}
               onCreateTodos={onGeneratePlanTodos}
               onDeletePlan={async (planId) => {
-                await onCancelPlan(planId);
+                await onDeletePlan(planId);
                 setPlanPreviewId(null);
               }}
               onClose={() => setPlanPreviewId(null)}

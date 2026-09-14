@@ -100,7 +100,7 @@ function renderPage(props: {
           plans={[]}
           onGeneratePlanTodos={vi.fn()}
           onRebindTaskPlan={vi.fn()}
-          onCancelPlan={vi.fn()}
+          onDeletePlan={vi.fn()}
           onCancelTask={noop}
           onResumeTask={noop}
           onResumeTaskAndSend={noop}

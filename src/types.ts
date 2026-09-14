@@ -309,8 +309,12 @@ export interface Plan {
   discussionTaskId?: string;
   /** 生成待办时创建的分支批 id */
   batchId?: string;
+  /** 主方案 id：本方案是它的追加子方案（一次追加的一批议题合成）。依赖不由它决定，见 deps.json */
+  parentPlanId?: string;
   createdAt: number;
   finalizedAt?: number;
+  /** 归档时间戳：非空即不占方案看板主列（展示层标记，与 status 正交，可反归档） */
+  archivedAt?: number;
 }
 
 /** 知识沉淀候选：一条对应一个云效审核议题。 */
