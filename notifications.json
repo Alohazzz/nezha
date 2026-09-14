@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.19.1",
+      "level": "info",
+      "title": "Nezha v0.19.1 released",
+      "body": "修复云效议题「直接开始」报「议题图片全部下载失败」的问题：从钉钉聊天复制粘贴进议题描述的图片托管在钉钉静态媒体 CDN（static.dingtalk.com），不在原有的阿里云域名下载白名单内，导致这类议题发起直接开始时全部图片下载被拦截；现已将钉钉媒体域名加入白名单，相关 https 校验、重定向域二次校验与体积限制保持不变。",
+      "body_zh": "修复云效议题「直接开始」报「议题图片全部下载失败」的问题：从钉钉聊天复制粘贴进议题描述的图片托管在钉钉静态媒体 CDN（static.dingtalk.com），不在原有的阿里云域名下载白名单内，导致这类议题发起直接开始时全部图片下载被拦截；现已将钉钉媒体域名加入白名单，相关 https 校验、重定向域二次校验与体积限制保持不变。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.19.1",
+      "created_at": "2026-09-14",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.19.0",
       "level": "info",
       "title": "Nezha v0.19.0 released",
