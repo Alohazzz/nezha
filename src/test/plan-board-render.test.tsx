@@ -278,4 +278,87 @@ describe("PlanBoard — 任务为主体的看板", () => {
     expect(screen.queryByText("医保目录联合方案")).toBeNull();
     expect(screen.getByText("处方回写方案")).toBeInTheDocument();
   });
+
+  it("方案状态多选过滤：选中态只留下该状态的方案", () => {
+    renderBoard({
+      plans: [
+        makePlan({ id: "a", name: "讨论中的方案", status: "draft" }),
+        makePlan({ id: "b", name: "执行中的方案", status: "executing" }),
+      ],
+    });
+    expect(screen.getByText("讨论中的方案")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("方案状态"));
+    fireEvent.click(screen.getByLabelText("执行中"));
+    expect(screen.queryByText("讨论中的方案")).toBeNull();
+    expect(screen.getByText("执行中的方案")).toBeInTheDocument();
+    expect(screen.getByText("方案状态：1")).toBeInTheDocument();
+  });
+
+  it("状态过滤可多选（并集），清空后恢复全部", () => {
+    renderBoard({
+      plans: [
+        makePlan({ id: "a", name: "讨论中的方案", status: "draft" }),
+        makePlan({ id: "b", name: "执行中的方案", status: "executing" }),
+        makePlan({ id: "c", name: "已完成的方案", status: "completed" }),
+      ],
+    });
+    const input = screen.getByPlaceholderText(/筛选方案或项目/);
+    const trigger = screen.getByLabelText("方案状态");
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByLabelText("讨论中"));
+    fireEvent.click(screen.getByLabelText("执行中"));
+    expect(screen.getByText("讨论中的方案")).toBeInTheDocument();
+    expect(screen.getByText("执行中的方案")).toBeInTheDocument();
+    expect(screen.queryByText("已完成的方案")).toBeNull();
+    // 多选与文本筛选可叠加（「已完成的方案」同时被两个条件排除）
+    fireEvent.change(input, { target: { value: "方案" } });
+    expect(screen.getByText("讨论中的方案")).toBeInTheDocument();
+    expect(screen.queryByText("已完成的方案")).toBeNull();
+    fireEvent.change(input, { target: { value: "执行" } });
+    expect(screen.queryByText("讨论中的方案")).toBeNull();
+    expect(screen.getByText("执行中的方案")).toBeInTheDocument();
+    // 清空状态下拉后文本筛选仍然生效（两个筛选器互不干扰）
+    fireEvent.click(screen.getByText("清空"));
+    expect(screen.queryByText("讨论中的方案")).toBeNull();
+    expect(screen.getByText("执行中的方案")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.getByText("讨论中的方案")).toBeInTheDocument();
+    expect(screen.getByText("已完成的方案")).toBeInTheDocument();
+  });
+
+  it("「仅看进行中」只留下有任务在动的方案", () => {
+    renderBoard({
+      plans: [
+        makePlan({ id: "a", name: "有任务在跑", issues: [{ workitemId: "w1", serialNumber: "QHDK-A", subject: "议题 A" }] }),
+        makePlan({ id: "b", name: "完全静止", issues: [{ workitemId: "w2", serialNumber: "QHDK-B", subject: "议题 B" }] }),
+      ],
+      tasks: [
+        makeTask({
+          id: "t1",
+          planId: "a",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "running",
+        }),
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "仅看进行中" }));
+    expect(screen.getByText("有任务在跑")).toBeInTheDocument();
+    expect(screen.queryByText("完全静止")).toBeNull();
+    // 再点一次取消该筛选
+    fireEvent.click(screen.getByRole("button", { name: "仅看进行中" }));
+    expect(screen.getByText("完全静止")).toBeInTheDocument();
+  });
+
+  it("筛选无结果时显示空态并可清除筛选", () => {
+    renderBoard({
+      plans: [makePlan({ id: "a", name: "医保目录联合方案" })],
+    });
+    fireEvent.change(screen.getByPlaceholderText(/筛选方案或项目/), {
+      target: { value: "不存在的方案" },
+    });
+    expect(screen.getByText("没有符合筛选条件的方案")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByText("医保目录联合方案")).toBeInTheDocument();
+    expect(screen.queryByText("没有符合筛选条件的方案")).toBeNull();
+  });
 });

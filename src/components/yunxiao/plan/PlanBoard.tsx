@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArchiveRestore, BookOpenText, Circle } from "lucide-react";
 import type { Plan, Task } from "../../../types";
-import { derivePlanTaskRows, groupPlansByProject } from "../../../utils/planBoard";
+import {
+  derivePlanTaskRows,
+  groupPlansByProject,
+  isPlanArchived,
+  PLAN_STATUS_ORDER,
+} from "../../../utils/planBoard";
 import type { PlanDeps } from "../../../utils/planDeps";
 import { shortenPath } from "../../../utils";
 import { ProjectAvatar } from "../../ProjectAvatar";
+import { FilterMultiSelect, type FilterOption } from "../FilterMultiSelect";
 import { useI18n, pluralKey } from "../../../i18n";
 import { planTitle, PlanGroup } from "./PlanGroup";
 import s from "../../../styles";
@@ -49,6 +55,10 @@ export function PlanBoard({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
+  /** 方案状态多选（空选 = 不限）；纯展示层筛选，不影响方案真实状态。 */
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  /** 只保留「有任务在动」的方案。 */
+  const [livelyOnly, setLivelyOnly] = useState(false);
   // null = 尚未用户干预：默认展开「有任务在动」的方案，折叠完全静止的。
   const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string> | null>(null);
   const [archivedOpenProjectIds, setArchivedOpenProjectIds] = useState<Set<string>>(
@@ -61,19 +71,14 @@ export function PlanBoard({
     return () => window.clearInterval(timer);
   }, []);
 
-  const visiblePlans = useMemo(() => {
-    if (!query.trim()) return plans;
-    const q = query.trim().toLowerCase();
-    return plans.filter((plan) => {
-      const projectName = projectNames.get(plan.projectId) ?? "";
-      return planTitle(plan).toLowerCase().includes(q) || projectName.toLowerCase().includes(q);
-    });
-  }, [plans, query, projectNames]);
-
-  /** 有任务在「动」的方案（在跑 / 等待 / 异常），用于分组排序与默认展开。 */
+  /**
+   * 有任务在「动」的方案（在跑 / 等待 / 异常）。**对所有方案计算**：活跃与否是方案自身
+   * 的属性，不该随筛选结果漂移（否则「仅看进行中」会和自己的输入互为条件）。
+   * 同时用于分组排序与默认展开。
+   */
   const livelyPlanIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const plan of visiblePlans) {
+    for (const plan of plans) {
       const summary = derivePlanTaskRows(plan, tasks, depsByPlanId[plan.id]);
       const hasLivelyTask = summary.rows.some(
         (row) =>
@@ -88,7 +93,31 @@ export function PlanBoard({
       if (hasLivelyTask) ids.add(plan.id);
     }
     return ids;
-  }, [visiblePlans, tasks, depsByPlanId]);
+  }, [plans, tasks, depsByPlanId]);
+
+  // 筛选只发生在展示层：状态（多选）+ 名称/项目（自由文本）+ 仅看进行中。已归档方案
+  // 同样受状态与文本筛选约束，避免筛选态下归档区仍混进不匹配的方案。
+  const visiblePlans = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return plans.filter((plan) => {
+      if (statusFilter.length > 0 && !statusFilter.includes(plan.status)) return false;
+      if (livelyOnly && (isPlanArchived(plan) || !livelyPlanIds.has(plan.id))) return false;
+      if (!q) return true;
+      const projectName = projectNames.get(plan.projectId) ?? "";
+      return planTitle(plan).toLowerCase().includes(q) || projectName.toLowerCase().includes(q);
+    });
+  }, [plans, query, projectNames, statusFilter, livelyOnly, livelyPlanIds]);
+
+  const statusOptions = useMemo<FilterOption[]>(
+    () => PLAN_STATUS_ORDER.map((status) => ({ id: status, label: t(`board.column.${status}`) })),
+    [t],
+  );
+  const filtersActive = query.trim().length > 0 || statusFilter.length > 0 || livelyOnly;
+  const clearFilters = () => {
+    setQuery("");
+    setStatusFilter([]);
+    setLivelyOnly(false);
+  };
 
   const groups = useMemo(
     () => groupPlansByProject(visiblePlans, livelyPlanIds),
@@ -131,6 +160,22 @@ export function PlanBoard({
         <div style={s.kanbanSubtitle}>
           {t("board.summary", { projects: groups.length, plans: totalActive })}
         </div>
+        <button
+          type="button"
+          style={livelyOnly ? s.yunxiaoFilterBtnActive : s.yunxiaoFilterBtn}
+          aria-pressed={livelyOnly}
+          onClick={() => setLivelyOnly((prev) => !prev)}
+        >
+          {t("board.livelyOnly")}
+        </button>
+        <FilterMultiSelect
+          options={statusOptions}
+          selectedIds={statusFilter}
+          onChange={setStatusFilter}
+          label={t("board.statusFilter")}
+          selectedLabel={t("board.statusCount", { count: statusFilter.length })}
+          emptyLabel={t("board.statusFilter")}
+        />
         <input
           style={s.boardFilterInput}
           value={query}
@@ -139,6 +184,18 @@ export function PlanBoard({
           aria-label={t("board.filterPlaceholder")}
         />
       </div>
+
+      {visiblePlans.length === 0 ? (
+        <div style={s.kanbanEmpty}>
+          <Circle size={28} strokeWidth={1.2} color="var(--text-hint)" />
+          <div>{t("board.filterEmpty")}</div>
+          {filtersActive && (
+            <button type="button" style={s.boardMiniBtn} onClick={clearFilters}>
+              {t("board.clearFilters")}
+            </button>
+          )}
+        </div>
+      ) : null}
 
       {groups.map((group) => {
         const projectName = projectNames.get(group.projectId) ?? group.projectId;
