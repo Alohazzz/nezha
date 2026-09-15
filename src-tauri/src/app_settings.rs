@@ -224,6 +224,11 @@ pub struct AppSettings {
     /// Agent 需要确认或任务完成/失败时发送 OS 级系统通知（窗口未聚焦时）。
     #[serde(default = "default_system_notifications")]
     pub system_notifications: bool,
+    /// 测试技能：开启后在云效议题讨论链路（「直接开始（先澄清）」与「方案讨论」）
+    /// 改用 `batch-grill-me` 技能做批量盘问（一轮抛出全部前沿问题），
+    /// 替换默认的逐条 grilling（一次只问一个问题）。
+    #[serde(default)]
+    pub batch_grill_enabled: bool,
     /// 轻量 AI 辅助调用（任务命名 / 议题预填 / 汇总 / 知识沉淀 / commit message）
     /// 使用的模型；None = 跟随 Agent 默认（不传 --model）。
     #[serde(default)]
@@ -264,6 +269,7 @@ impl Default for AppSettings {
             terminal_copy_on_select: false,
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
             system_notifications: default_system_notifications(),
+            batch_grill_enabled: false,
             claude_light_model: None,
             codex_light_model: None,
             claude_light_reasoning_effort: None,
@@ -708,6 +714,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         terminal_copy_on_select: settings.terminal_copy_on_select,
         use_sideloaded_conpty: settings.use_sideloaded_conpty,
         system_notifications: settings.system_notifications,
+        batch_grill_enabled: settings.batch_grill_enabled,
         claude_light_model: normalize_optional_catalog_value(
             settings.claude_light_model,
             "Claude light model",
@@ -762,6 +769,7 @@ fn load_settings_unlocked() -> AppSettings {
             terminal_copy_on_select: false,
             use_sideloaded_conpty: default_use_sideloaded_conpty(),
             system_notifications: default_system_notifications(),
+            batch_grill_enabled: false,
             claude_light_model: None,
             codex_light_model: None,
             claude_light_reasoning_effort: None,
@@ -1473,6 +1481,27 @@ pub async fn save_knowledge_auto_writeback(enabled: bool) -> Result<AppSettings,
     .map_err(|e| e.to_string())?
 }
 
+/// 测试技能开关：切换后，云效议题讨论链路（「直接开始（先澄清）」与「方案讨论」）
+/// 组装提示词时改用 `batch-grill-me` 批量盘问（见 agent_assist）。
+#[tauri::command]
+pub async fn save_batch_grill_enabled(enabled: bool) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.batch_grill_enabled = enabled;
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn save_claude_force_default_tui(enabled: bool) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
@@ -1857,5 +1886,17 @@ mod model_catalog_tests {
 
         let absent: AppSettings = serde_json::from_str(r#"{"knowledge":{}}"#).unwrap();
         assert!(!absent.knowledge.auto_writeback);
+    }
+
+    // 前端读 settings.batch_grill_enabled（snake_case，无重命名）；缺省为关闭。
+    #[test]
+    fn batch_grill_enabled_serializes_snake_case_and_defaults_off() {
+        let mut settings = AppSettings::default();
+        settings.batch_grill_enabled = true;
+        let value: Value = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(value["batch_grill_enabled"], Value::Bool(true));
+
+        let absent: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(!absent.batch_grill_enabled);
     }
 }

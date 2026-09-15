@@ -75,6 +75,8 @@ export function DirectLaunchDialog({
   const [detail, setDetail] = useState<YunxiaoWorkitem | null>(null);
   const [detailState, setDetailState] = useState<"loading" | "done" | "failed">("loading");
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
+  // 应用级「批量盘问（测试技能）」开关：开启时澄清环节改走 batch-grill-me，仅影响文案提示。
+  const [batchGrill, setBatchGrill] = useState(false);
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(targetProjectId) ?? "codex",
   );
@@ -117,6 +119,7 @@ export function DirectLaunchDialog({
     invoke<AppSettings>("load_app_settings")
       .then((appSettings) => {
         setAgentSettings(appSettings);
+        setBatchGrill(appSettings.batch_grill_enabled ?? false);
         setAgent((prev) => (isAgentEnabled(appSettings, prev) ? prev : firstEnabledAgent(appSettings)));
       })
       .catch(() => undefined);
@@ -263,11 +266,15 @@ export function DirectLaunchDialog({
                   checked={clarifyFirst}
                   onChange={(e) => setClarifyFirst(e.target.checked)}
                 />
-                {t("yunxiao.direct.clarifyLabel")}
+                {batchGrill
+                  ? t("yunxiao.direct.clarifyLabelBatch")
+                  : t("yunxiao.direct.clarifyLabel")}
               </label>
               <div style={s.directLaunchFlowHint}>
                 {clarifyFirst
-                  ? t("yunxiao.direct.flowClarify")
+                  ? batchGrill
+                    ? t("yunxiao.direct.flowClarifyBatch")
+                    : t("yunxiao.direct.flowClarify")
                   : t("yunxiao.direct.flowDirect")}
               </div>
             </>

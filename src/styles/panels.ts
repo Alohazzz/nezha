@@ -276,6 +276,19 @@ export const panels = {
     marginBottom: 5,
     display: "block",
   },
+  // 测试/实验标记:跟在设置项标签后的胶囊徽标
+  settingFieldLabelBadge: {
+    display: "inline-block",
+    marginLeft: 6,
+    padding: "1px 6px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 600,
+    lineHeight: 1.5,
+    color: "var(--warning, #c98a00)",
+    border: "1px solid var(--warning, #c98a00)",
+    verticalAlign: "middle",
+  },
   settingFieldHint: {
     fontSize: 11,
     color: "var(--text-hint)",
