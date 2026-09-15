@@ -1,11 +1,1303 @@
 /*
- * 方案看板：进度条填充。
- * 填充宽度是运行时算出的连续百分比（非静态条件样式），无法用 CSS 选择器表达；
- * 参照 build.css 的 .build-progress-fill：视觉规则放这里，组件只传动态 width。
+ * 方案看板 v2：单方案详情布局（左栏方案列表 + 右栏依赖图/任务列表）。
+ *
+ * 这里承载 `s.xxx` 对象表达不了的东西：伪类（:hover/:focus-visible）、状态属性选择器
+ * （[data-*]）、@keyframes、窄窗媒体查询。纯布局仍走 `styles/plan-board.ts` 的对象。
+ *
+ * 唯一的行内动态值是进度条填充宽度（连续百分比，CSS 选择器无法表达）——与 build.css 的
+ * `.build-progress-fill` 同一既有约定：视觉规则在这里，组件只传 width。
  */
-.plan-board-progress-fill {
+
+/* ── 骨架 ───────────────────────────────────────────────────────────── */
+
+.plan-board-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  /* 关键：作为 flex item，默认 min-width:auto 会被依赖图的固定宽度 SVG 撑开，
+     导致整页横向溢出（而不是让图区自己滚动）。必须显式归零。 */
+  min-width: 0;
+  width: 100%;
+  min-height: 0;
+  padding: 14px 18px 18px;
+  background: var(--bg-panel);
+}
+
+/* ── 面包屑 ─────────────────────────────────────────────────────────── */
+
+.plan-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  min-height: 22px;
+}
+
+.plan-crumb-sep {
+  color: var(--text-hint);
+  font-size: 11px;
+  user-select: none;
+}
+
+.plan-crumb-chevron {
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.plan-crumb-chevron[data-open="true"] {
+  transform: rotate(180deg);
+}
+
+.plan-crumb-current {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 有上限且可收缩：方案名很长时截断，而不是把详情头部的动作按钮推出视口。 */
+  max-width: min(46vw, 420px);
+  min-width: 0;
+}
+
+.plan-crumbs-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+/* ── 项目切换器弹层 ─────────────────────────────────────────────────── */
+
+.plan-project-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 7px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.plan-project-option:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.plan-project-option[data-selected="true"] {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.plan-project-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-project-option-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-hint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 窄窗返回按钮：只在窄窗出现 ─────────────────────────────────────── */
+
+.plan-narrow-back {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.plan-crumbs-summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── 左栏 ───────────────────────────────────────────────────────────── */
+
+.plan-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 236px;
+  flex-shrink: 0;
+  min-height: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--border-dim);
+}
+
+.plan-rail-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.plan-rail-search-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.plan-rail-search-icon {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-hint);
+  pointer-events: none;
+}
+
+.plan-rail-search {
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.plan-rail-search-with-icon {
+  padding-left: 22px;
+}
+
+.plan-rail-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.plan-rail-search:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.plan-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+  padding-right: 2px;
+}
+
+.plan-rail-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 7px 8px 7px 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    transform 0.14s ease;
+}
+
+/* 选中指示条：scaleY 从中间展开，比改 border-width 便宜且不引起重排。 */
+.plan-rail-item::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  bottom: 6px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: center;
+  transition: transform 0.18s ease;
+}
+
+.plan-rail-item:hover {
+  background: var(--bg-hover);
+}
+
+.plan-rail-item[data-active="true"] {
+  background: var(--bg-selected);
+  border-color: var(--border-dim);
+}
+
+.plan-rail-item[data-active="true"]::before {
+  transform: scaleY(1);
+}
+
+.plan-rail-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── 追加子方案：左栏缩进树 ─────────────────────────────────────────────────
+   子方案缩进挂在主方案下（决策：子方案不能被独立筛选，左栏不出现孤儿行）。
+   缩进用 margin-left 而非 padding：让选中背景块也跟着缩进，层级才看得出来。 */
+.plan-rail-node {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.plan-rail-node[data-depth="1"] {
+  margin-left: 12px;
+}
+.plan-rail-node[data-depth="2"] {
+  margin-left: 24px;
+}
+.plan-rail-node[data-depth="3"] {
+  margin-left: 36px;
+}
+.plan-rail-node[data-depth="4"] {
+  margin-left: 48px;
+}
+.plan-rail-node[data-depth="5"] {
+  margin-left: 60px;
+}
+.plan-rail-node[data-depth="6"] {
+  margin-left: 72px;
+}
+
+/* 仅为带出命中子方案而显示的父方案：弱化，让真正命中的仍是视觉焦点。 */
+.plan-rail-node[data-ancestor-only="true"] .plan-rail-item {
+  opacity: 0.62;
+}
+
+.plan-rail-node-gutter {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 14px;
+}
+
+.plan-rail-node-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-hint);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.plan-rail-node-toggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.plan-rail-node-toggle svg {
+  transform: rotate(-90deg);
+  transition: transform 0.16s ease;
+}
+
+.plan-rail-node-toggle[data-open="true"] svg {
+  transform: rotate(0deg);
+}
+
+/* 子方案：左侧一条细导引线，表明它挂在上面那个方案下。 */
+.plan-rail-item[data-child="true"] {
+  border-left-color: var(--border-dim);
+  border-left-width: 2px;
+  border-top-left-radius: 2px;
+  border-bottom-left-radius: 2px;
+}
+
+/* ── 详情头部的归属链接（追加自 / 追加子方案） ─────────────────────────────── */
+.plan-detail-parent {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-dim);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.plan-detail-parent:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.plan-detail-children {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.plan-detail-children-label {
+  font-size: 11px;
+  color: var(--text-hint);
+  white-space: nowrap;
+}
+
+.plan-detail-child {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-dim);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-detail-child:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.plan-rail-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-rail-item-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-hint);
+}
+
+.plan-rail-item-dot[data-lively="true"] {
+  background: var(--accent);
+  animation: plan-pulse 2s ease-in-out infinite;
+}
+
+.plan-rail-item-dot[data-status="completed"] {
+  background: var(--success);
+}
+
+.plan-rail-item-dot[data-status="cancelled"] {
+  background: var(--text-hint);
+}
+
+.plan-rail-item-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-rail-item-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-rail-item-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+  font-size: 10px;
+  color: var(--text-hint);
+  white-space: nowrap;
+}
+
+.plan-rail-item-sub-blocked {
+  color: var(--warning);
+}
+
+.plan-rail-item-sub-ready {
+  color: var(--success);
+}
+
+.plan-rail-item-sub-abnormal {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.plan-rail-item-track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-dim);
+  overflow: hidden;
+}
+
+.plan-fill {
   height: 100%;
   border-radius: 2px;
   background: var(--success);
-  transition: width 0.2s ease;
+  transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.plan-rail-sep {
+  height: 1px;
+  background: var(--border-dim);
+  margin: 4px 0 2px;
+}
+
+.plan-rail-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: transparent;
+  border: 1px dashed var(--border-dim);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.plan-rail-archived-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.plan-rail-archived-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  animation: plan-fade-in 0.18s ease both;
+}
+
+.plan-rail-archived-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border-dim);
+}
+
+.plan-rail-archived-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.14s ease;
+}
+
+.plan-rail-archived-name:hover {
+  color: var(--text-primary);
+}
+
+/* 归档区里的子方案：不缩进（归档区保持平铺），但照样标出所属主方案。 */
+.plan-rail-archived-parent {
+  margin-left: 5px;
+  color: var(--text-hint);
+  white-space: nowrap;
+}
+
+.plan-rail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  padding: 24px 8px;
+  color: var(--text-hint);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* ── 右栏 ───────────────────────────────────────────────────────────── */
+
+.plan-board-main {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.plan-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding-left: 14px;
+}
+
+.plan-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  animation: plan-detail-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.plan-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex-shrink: 0;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border-dim);
+  margin-bottom: 10px;
+}
+
+.plan-detail-head-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-detail-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 可收缩：标题过长时截断，把空间让给右侧常驻动作按钮（它们不能被挤出视口）。 */
+  max-width: min(44vw, 420px);
+  min-width: 0;
+}
+
+.plan-detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.plan-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.plan-detail-progress {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 148px;
+}
+
+.plan-detail-progress-track {
+  width: 76px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border-dim);
+  overflow: hidden;
+}
+
+/* 进度数字变化时重放一次淡入（React key 变化触发重新挂载 → 动画重播）。 */
+.plan-detail-progress-label {
+  font-variant-numeric: tabular-nums;
+  animation: plan-fade-in 0.3s ease both;
+}
+
+/* ── 依赖图 ─────────────────────────────────────────────────────────── */
+
+.plan-graph-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.plan-graph-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-hint);
+}
+
+.plan-graph-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--warning-surface);
+  border: 1px solid var(--warning-border);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.plan-graph-warn-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
+.plan-graph-scroll {
+  width: 100%;
+  min-width: 0;
+  max-height: 42vh;
+  overflow: auto;
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  background: var(--bg-subtle, var(--bg-hover));
+}
+
+.plan-graph-svg {
+  display: block;
+}
+
+.plan-graph-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 20px;
+  border: 1px dashed var(--border-dim);
+  border-radius: 8px;
+  color: var(--text-hint);
+  font-size: 11px;
+}
+
+.plan-graph-node {
+  cursor: pointer;
+  transition: opacity 0.16s ease;
+  animation: plan-fade-in 0.26s ease both;
+}
+
+/* 节点入场：delay 走 nth-child，避免逐个传行内变量。 */
+.plan-graph-nodes > .plan-graph-node:nth-child(2) {
+  animation-delay: 0.03s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(3) {
+  animation-delay: 0.06s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(4) {
+  animation-delay: 0.09s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(5) {
+  animation-delay: 0.12s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(6) {
+  animation-delay: 0.15s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(n + 7) {
+  animation-delay: 0.18s;
+}
+
+.plan-graph-node-box {
+  fill: var(--bg-card);
+  stroke: var(--border-medium);
+  stroke-width: 1;
+  transition:
+    stroke 0.16s ease,
+    fill 0.16s ease,
+    stroke-width 0.16s ease;
+}
+
+.plan-graph-node:hover .plan-graph-node-box {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.plan-graph-node[data-status="running"] .plan-graph-node-box {
+  stroke: var(--accent);
+}
+
+.plan-graph-node[data-status="failed"] .plan-graph-node-box,
+.plan-graph-node[data-status="cancelled"] .plan-graph-node-box,
+.plan-graph-node[data-status="interrupted"] .plan-graph-node-box {
+  stroke: var(--danger);
+}
+
+.plan-graph-node[data-status="done"] .plan-graph-node-box {
+  stroke: var(--success-border);
+}
+
+.plan-graph-node[data-hot="true"] .plan-graph-node-box {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: var(--accent-subtle);
+}
+
+.plan-graph-node[data-hot="false"] {
+  opacity: 0.42;
+}
+
+/* 上游方案议题（追加子方案的跨方案前置）：虚线描边 + 弱化底色，与「本方案议题」区分。
+   它不是本方案的议题，点击跳所属方案而不是滚动定位任务行。 */
+.plan-graph-node[data-upstream="true"] .plan-graph-node-box {
+  fill: var(--bg-input);
+  stroke: var(--border-dim);
+  stroke-dasharray: 4 3;
+}
+
+.plan-graph-node[data-upstream="true"] .plan-graph-node-subject,
+.plan-graph-node[data-upstream="true"] .plan-graph-node-serial {
+  fill: var(--text-secondary);
+}
+
+.plan-graph-node[data-upstream="true"][data-hot="true"] .plan-graph-node-box {
+  stroke: var(--accent);
+  stroke-dasharray: 4 3;
+}
+
+/* 运行中节点：外圈光晕脉冲（只画描边，不填充，避免盖住文字）。 */
+.plan-graph-node-pulse {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plan-graph-node[data-status="running"] .plan-graph-node-pulse {
+  animation: plan-node-halo 2.2s ease-in-out infinite;
+}
+
+.plan-graph-node-index {
+  font-size: 9px;
+  font-weight: 700;
+  fill: var(--text-hint);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-graph-node-serial {
+  font-size: 10.5px;
+  font-weight: 700;
+  fill: var(--accent);
+}
+
+.plan-graph-node-subject {
+  font-size: 10px;
+  fill: var(--text-secondary);
+}
+
+.plan-graph-node-state {
+  font-size: 9px;
+  fill: var(--text-muted);
+}
+
+/* 边从上游"画出"：pathLength=1 归一化后，dasharray/dashoffset 与真实长度无关。
+   delay 用 nth-child 表达，避免逐条传行内变量。 */
+.plan-graph-edge {
+  fill: none;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: plan-edge-draw 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
+  transition:
+    opacity 0.16s ease,
+    stroke 0.16s ease;
+}
+
+.plan-graph-edge[data-state="satisfied"] {
+  stroke: var(--success);
+}
+
+.plan-graph-edge[data-state="unmet"] {
+  stroke: var(--warning);
+}
+
+.plan-graph-edge[data-state="abnormal"] {
+  stroke: var(--danger);
+}
+
+.plan-graph-edge[data-hot="false"] {
+  opacity: 0.2;
+}
+
+.plan-graph-edge[data-hot="true"] {
+  stroke-width: 2;
+}
+
+.plan-graph-arrow-satisfied {
+  fill: var(--success);
+}
+
+.plan-graph-arrow-unmet {
+  fill: var(--warning);
+}
+
+.plan-graph-arrow-abnormal {
+  fill: var(--danger);
+}
+
+/* 边绘制动画的 delay：nth-child 定位，无需逐条行内变量。 */
+.plan-graph-edges > .plan-graph-edge:nth-child(2) {
+  animation-delay: 0.04s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(3) {
+  animation-delay: 0.08s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(4) {
+  animation-delay: 0.12s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(5) {
+  animation-delay: 0.16s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(6) {
+  animation-delay: 0.2s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(7) {
+  animation-delay: 0.24s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(8) {
+  animation-delay: 0.28s;
+}
+.plan-graph-edges > .plan-graph-edge:nth-child(n + 9) {
+  animation-delay: 0.32s;
+}
+
+.plan-graph-nodes > .plan-graph-node {
+  animation: plan-fade-in 0.26s ease both;
+}
+
+.plan-graph-nodes > .plan-graph-node:nth-child(2) {
+  animation-delay: 0.03s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(3) {
+  animation-delay: 0.06s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(4) {
+  animation-delay: 0.09s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(5) {
+  animation-delay: 0.12s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(6) {
+  animation-delay: 0.15s;
+}
+.plan-graph-nodes > .plan-graph-node:nth-child(n + 7) {
+  animation-delay: 0.18s;
+}
+
+/* ── 任务行（两行紧凑行） ───────────────────────────────────────────── */
+
+.plan-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-task-list-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-hint);
+  margin-bottom: 4px;
+}
+
+.plan-task-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  border-bottom-color: var(--border-dim);
+  cursor: default;
+  animation: plan-row-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 逐行入场：delay 走 nth-child，避免逐行传行内变量。 */
+.plan-task-row:nth-child(2) {
+  animation-delay: 0.04s;
+}
+.plan-task-row:nth-child(3) {
+  animation-delay: 0.08s;
+}
+.plan-task-row:nth-child(4) {
+  animation-delay: 0.12s;
+}
+.plan-task-row:nth-child(5) {
+  animation-delay: 0.16s;
+}
+.plan-task-row:nth-child(6) {
+  animation-delay: 0.2s;
+}
+.plan-task-row:nth-child(7) {
+  animation-delay: 0.24s;
+}
+.plan-task-row:nth-child(8) {
+  animation-delay: 0.28s;
+}
+.plan-task-row:nth-child(n + 9) {
+  animation-delay: 0.32s;
+}
+
+.plan-task-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-dim);
+}
+
+.plan-task-row[data-hot="true"] {
+  background: var(--accent-subtle);
+  border-color: var(--accent-soft);
+}
+
+.plan-task-row[data-hot="false"] {
+  opacity: 0.46;
+}
+
+.plan-task-row,
+.plan-task-row-main,
+.plan-task-row-sub {
+  transition:
+    opacity 0.16s ease,
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.plan-task-row[data-running="true"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.plan-task-row[data-abnormal="true"] {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.plan-task-row-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.plan-task-index {
+  flex-shrink: 0;
+  min-width: 15px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-hint);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-task-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  width: 16px;
+}
+
+.plan-task-serial {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.plan-task-subject {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-task-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.plan-task-status[data-tone="running"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.plan-task-status[data-tone="bad"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.plan-task-row-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-left: 22px;
+  font-size: 10px;
+  color: var(--text-hint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.plan-task-dep {
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-task-dep[data-tone="blocked"] {
+  color: var(--warning);
+}
+
+.plan-task-dep[data-tone="abnormal"] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.plan-task-dep[data-tone="ready"] {
+  color: var(--success);
+}
+
+.plan-task-meta {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-task-diff-add {
+  flex-shrink: 0;
+  color: var(--success);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-task-diff-del {
+  flex-shrink: 0;
+  color: var(--danger);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-task-fail {
+  flex: 1;
+  min-width: 0;
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-task-open {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-hint);
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.plan-task-row:hover .plan-task-open,
+.plan-task-row:focus-within .plan-task-open {
+  opacity: 1;
+}
+
+.plan-task-open:hover {
+  background: var(--bg-card);
+  border-color: var(--border-dim);
+  color: var(--text-primary);
+}
+
+.plan-task-open:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── 动画 ───────────────────────────────────────────────────────────── */
+
+@keyframes plan-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes plan-row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes plan-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes plan-edge-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes plan-node-halo {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes plan-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.78);
+  }
+}
+
+/* ── 窄窗：单栏钻取（左栏列表 → 点方案进详情 → 返回） ───────────────── */
+
+@media (max-width: 760px) {
+  .plan-board-main {
+    flex-direction: column;
+  }
+
+  .plan-rail {
+    width: 100%;
+    padding-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border-dim);
+    padding-bottom: 10px;
+    max-height: 42vh;
+  }
+
+  .plan-detail {
+    padding-left: 0;
+    padding-top: 10px;
+  }
+
+  .plan-board-shell[data-narrow-view="list"] .plan-detail {
+    display: none;
+  }
+
+  .plan-board-shell[data-narrow-view="detail"] .plan-rail {
+    display: none;
+  }
+
+  .plan-detail-title {
+    max-width: 60vw;
+  }
+
+  .plan-narrow-back {
+    display: inline-flex;
+  }
+}
+
+/* ── 降低动效偏好：全部关掉，只留状态色 ──────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-detail-body,
+  .plan-task-row,
+  .plan-graph-node,
+  .plan-graph-edge,
+  .plan-rail-archived-list,
+  .plan-detail-progress-label {
+    animation: none;
+  }
+
+  .plan-graph-edge {
+    stroke-dashoffset: 0;
+  }
+
+  .plan-graph-node[data-status="running"] .plan-graph-node-pulse,
+  .plan-rail-item-dot[data-lively="true"] {
+    animation: none;
+  }
+
+  .plan-rail-item,
+  .plan-rail-item::before,
+  .plan-fill,
+  .plan-graph-node-box,
+  .plan-task-open,
+  .plan-crumb-chevron {
+    transition: none;
+  }
 }

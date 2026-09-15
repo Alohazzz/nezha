@@ -102,6 +102,7 @@ describe("YunxiaoView 版本过滤", () => {
             onStartPlanDiscussion={vi.fn()}
             onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
+            onSetParentPlan={vi.fn()}
           />
         </ToastProvider>
       </I18nProvider>,

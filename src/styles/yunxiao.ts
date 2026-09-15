@@ -1363,6 +1363,18 @@ export const yunxiao = {
     padding: "10px 18px 0",
     flexShrink: 0,
   },
+  planLaunchParent: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    padding: "10px 18px 0",
+    flexShrink: 0,
+  },
+  planLaunchParentHint: {
+    fontSize: 11.5,
+    lineHeight: 1.6,
+    color: "var(--text-muted)",
+  },
   planLaunchNotesInput: {
     width: "100%",
     boxSizing: "border-box",

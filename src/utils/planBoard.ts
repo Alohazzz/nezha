@@ -12,6 +12,7 @@
 import type { Plan, PlanIssue, PlanStatus, Task, TaskStatus } from "../types";
 import type { PlanDeps } from "./planDeps";
 import { topoSortPlanIssues } from "./planDeps";
+import { planAncestorChain } from "./plan";
 
 /** 已归档（展示层标记，与 status 正交）。 */
 export function isPlanArchived(plan: Pick<Plan, "archivedAt">): boolean {
@@ -196,6 +197,150 @@ export function planLifecycleActions(
     canUnarchive: archived,
     canDelete: true,
   };
+}
+
+/**
+ * 某方案能否接收「追加议题」（阶段三：追加 = 新建子方案）。
+ *
+ * 条件与「关联方案」下拉的可选范围同源：**已定稿**的方案才有可被依赖的内容（`draft`
+ * 的 plan.md 未定稿，决策 R1）；`cancelled` 是留存态且无恢复路径，追加会造出等一个
+ * 永不推进的前置、永远标红的子方案；`archived` 表示这条线已收尾移出主列（决策 AR1），
+ * 真要追加先反归档即可。三者都排除，剩下的正是 `finalized` / `executing` / `completed`。
+ */
+export function canReceiveAppend(plan: Pick<Plan, "status" | "archivedAt">): boolean {
+  if (isPlanArchived(plan)) return false;
+  return plan.status === "finalized" || plan.status === "executing" || plan.status === "completed";
+}
+
+/**
+ * 「关联方案」下拉的候选清单：**限定同一项目**（方案目录与讨论任务工作目录都落在
+ * `<project>/.nezha/plans/` 下，跨项目无意义），且排除不可追加者（见 `canReceiveAppend`）。
+ * `excludePlanId` 用于排除正在创建的方案自身。按 createdAt 升序，结果确定。
+ */
+export function appendableParentPlans(
+  plans: readonly Plan[],
+  projectId: string,
+  excludePlanId?: string,
+): Plan[] {
+  return plans
+    .filter(
+      (plan) =>
+        plan.projectId === projectId && plan.id !== excludePlanId && canReceiveAppend(plan),
+    )
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** 看板左栏的一行：方案 + 其在「方案树」里的缩进位置。 */
+export interface PlanTreeRow {
+  plan: Plan;
+  /** 缩进层级：0 = 根（或父不在可见范围内）。 */
+  depth: number;
+  /** 该方案**自身**命中筛选（用于区分「自己命中」与「为带出子方案而显示的祖先」）。 */
+  selfMatched: boolean;
+  /** 有子方案，可折叠。 */
+  hasChildren: boolean;
+}
+
+/**
+ * 把方案列表组织成左栏的**缩进树**（决策：子方案缩进挂在主方案下，且不能被独立筛选）。
+ *
+ * 规则：
+ * 1. **筛选取子树语义**：任一方案自身命中，就把该方案**及其整条祖先链**纳入可见集。
+ *    因此左栏永不出现「父被筛掉、子单独一行」的孤儿态；同时也不出现「主方案已 completed
+ *    被筛掉、唯一在执行的子方案反而消失」。仅对根求值做不到这一点。
+ * 2. **折叠**：手动折叠隐藏子方案，但**筛选生效时**若折叠会藏掉「因筛选才可见」的命中
+ *    后代，则该分支强制展开——否则筛选命中的子方案会被折叠吞掉，筛选等于失效。
+ *    筛选未生效时不强制展开：此时所有方案都命中，强制展开等于用户永远收不起子树
+ *    （`filtersActive=false` 必须传入，这不是可选的优化）。
+ * 3. **顺序**：沿用入参顺序（调用方已按「有任务在动优先 + createdAt」排好），先根后子
+ *    深度优先；父不在可见范围内的方案当根处理（不会丢行）。
+ */
+export function buildPlanTree(
+  plans: readonly Plan[],
+  /** 筛选谓词：逐方案求值（子树语义由本函数补全）。 */
+  matches: (plan: Plan) => boolean,
+  /** 用户手动折叠的方案 id。 */
+  collapsed: ReadonlySet<string>,
+  /** 是否有筛选生效。为 false 时折叠严格生效，不做命中强制展开。 */
+  filtersActive: boolean,
+): PlanTreeRow[] {
+  const byId = new Map<string, Plan>();
+  for (const plan of plans) byId.set(plan.id, plan);
+
+  const selfMatched = new Set<string>();
+  for (const plan of plans) {
+    if (matches(plan)) selfMatched.add(plan.id);
+  }
+
+  // 可见集 = 命中集 ∪ 其祖先闭包（祖先必须存在且在同一列表内，断链即当根）。
+  const visible = new Set<string>();
+  for (const id of selfMatched) {
+    visible.add(id);
+    for (const ancestor of planAncestorChain(id, plans)) visible.add(ancestor.id);
+  }
+
+  // 子方案分组（仅同一列表内的父子关系），保持入参顺序。
+  const childrenOf = new Map<string, string[]>();
+  for (const plan of plans) {
+    const parentId = plan.parentPlanId?.trim();
+    if (!parentId || !byId.has(parentId)) continue;
+    const list = childrenOf.get(parentId);
+    if (list) list.push(plan.id);
+    else childrenOf.set(parentId, [plan.id]);
+  }
+
+  /** 有任一命中后代时需要强制展开（否则筛选命中被折叠吞掉）。 */
+  const hasMatchedDescendant = (id: string): boolean => {
+    const stack = [...(childrenOf.get(id) ?? [])];
+    const guard = new Set<string>();
+    while (stack.length > 0) {
+      const next = stack.pop() as string;
+      if (guard.has(next)) continue;
+      guard.add(next);
+      if (selfMatched.has(next)) return true;
+      stack.push(...(childrenOf.get(next) ?? []));
+    }
+    return false;
+  };
+
+  const rows: PlanTreeRow[] = [];
+  const emitted = new Set<string>();
+  const emit = (id: string, depth: number): void => {
+    if (emitted.has(id)) return;
+    const plan = byId.get(id);
+    if (!plan) return;
+    emitted.add(id);
+    const childIds = (childrenOf.get(id) ?? []).filter((child) => visible.has(child));
+    rows.push({
+      plan,
+      depth,
+      selfMatched: selfMatched.has(id),
+      hasChildren: childIds.length > 0,
+    });
+    if (collapsed.has(id) && !(filtersActive && hasMatchedDescendant(id))) return;
+    for (const child of childIds) emit(child, depth + 1);
+  };
+
+  /**
+   * 该方案是否「由可见父方案带出」。成环（a↔b）时两者都在等对方先输出，会一个都不出——
+   * 因此上溯遇到已访问过的节点即判定为环，让环上节点当根落地（不丢行、不死循环）。
+   */
+  const broughtOutByParent = (plan: Plan): boolean => {
+    const parentId = plan.parentPlanId?.trim();
+    if (!parentId || !visible.has(parentId) || !byId.has(parentId)) return false;
+    const chain = planAncestorChain(plan.id, plans);
+    const last = chain[chain.length - 1];
+    const onChain = new Set([plan.id, ...chain.map((item) => item.id)]);
+    // 链停在环上（末项仍指向链内节点）→ 环上节点当根；正常链会追到无父的根。
+    return !(last?.parentPlanId?.trim() && onChain.has(last.parentPlanId.trim()));
+  };
+
+  for (const plan of plans) {
+    if (!visible.has(plan.id)) continue;
+    if (broughtOutByParent(plan)) continue;
+    emit(plan.id, 0);
+  }
+  return rows;
 }
 
 export interface PlanBoardProjectGroup {

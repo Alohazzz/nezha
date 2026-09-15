@@ -62,6 +62,7 @@ import {
   planIssueSubjects,
   type PlanWaitingBadge,
 } from "../utils/planQueue";
+import { planAncestorChain, planTitle } from "../utils/plan";
 import type { PlanDeps } from "../utils/planDeps";
 import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
@@ -438,10 +439,46 @@ export function ProjectPage({
       buildTaskBySerial(projectTasks),
     );
   }, [selectedTask, planDeps, projectTasks]);
-  const selectedTaskSubjects = useMemo(
-    () => planIssueSubjects(plans.find((p) => p.id === selectedTask?.planId) ?? null),
-    [plans, selectedTask?.planId],
-  );
+  /**
+   * 选中任务所属方案 + 其祖先链方案（追加子方案的上游）。两个下游派生都要用，
+   * 单独缓存一次，避免各自重复 `plans.find` 与上溯。
+   */
+  const selectedTaskPlanContext = useMemo(() => {
+    const own = plans.find((p) => p.id === selectedTask?.planId) ?? null;
+    return { own, ancestors: own ? planAncestorChain(own.id, plans) : [] };
+  }, [plans, selectedTask?.planId]);
+
+  /**
+   * Checklist 的议题标题来源：本方案 ∪ 祖先链方案。
+   * 追加子方案的前置可能指向主方案的议题——只查本方案会让那条前置渲染成光秃秃的编号，
+   * 用户无法判断「能不能忽略它」。跨方案条目在视图层额外标注所属方案（见 depPeers）。
+   */
+  const selectedTaskSubjects = useMemo(() => {
+    const { own, ancestors } = selectedTaskPlanContext;
+    if (!own) return new Map<string, PlanIssue>();
+    const subjects = planIssueSubjects(own);
+    for (const ancestor of ancestors) {
+      for (const [serial, issue] of planIssueSubjects(ancestor)) {
+        if (!subjects.has(serial)) subjects.set(serial, issue);
+      }
+    }
+    return subjects;
+  }, [selectedTaskPlanContext]);
+
+  /**
+   * 跨方案前置的归属：祖先链议题编号 → 所属方案名。Checklist 据此标注「主方案」来源——
+   * 用户要判断「敢不敢忽略这条前置」，就得知道它等的是本方案的下一步还是上游方案。
+   */
+  const selectedTaskDepPeerPlans = useMemo(() => {
+    const peers = new Map<string, string>();
+    for (const ancestor of selectedTaskPlanContext.ancestors) {
+      const name = planTitle(ancestor);
+      for (const issue of ancestor.issues) {
+        if (!peers.has(issue.serialNumber)) peers.set(issue.serialNumber, name);
+      }
+    }
+    return peers;
+  }, [selectedTaskPlanContext]);
 
   // 渲染任务 PTY 层（在 partition 左列与 fullscreen 背景共用）。
   // ptyVisible 由调用方决定：partition 常显；fullscreen 仅在未被文件/diff 覆盖时显示。
@@ -550,6 +587,7 @@ export function ProjectPage({
               plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
               entries={selectedTaskGate.entries}
               subjects={selectedTaskSubjects}
+              depPeerPlans={selectedTaskDepPeerPlans}
               onJump={onSelectTask}
               onCancelWait={onCancelWaitingDeps ?? (() => {})}
               onIgnoreRun={onIgnoreDepsAndRun ?? (() => {})}

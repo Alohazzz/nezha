@@ -13,6 +13,11 @@
  * 本模块只做纯计算：不做 IO、不感知 Task 状态机。「前置是否已完成」由调用方以
  * 判定函数注入（见 `unmetDependencies`）。方案外的编号、自依赖、成环一律就地剔除
  * 并记入 `warnings` —— 门禁宁可少拦，也不能因为一份坏文件把任务永久卡住。
+ *
+ * 唯一的例外是**祖先链引用**（`allowedExternalSerials`，阶段三「追加议题 = 子方案」）：
+ * 子方案的 `dependsOn` 允许指向主方案及其父链的议题编号（决策 D-b）。那只是**引用许可**——
+ * 图里仍只为本方案议题建键，外部编号不参与定序与破环（祖先链天然无环），也不影响
+ * `unknownIssue` 的判定（外部编号不是本方案的议题，不允许作为 `issues[]` 条目出现）。
  */
 
 /** 硬依赖图：议题编号 → 直接前置的议题编号（方案内每个议题都有键，无依赖为空数组）。 */
@@ -25,7 +30,7 @@ export type PlanDepsWarningKind =
   | "malformed"
   /** 出现了方案议题清单之外的编号 */
   | "unknownIssue"
-  /** dependsOn 指向方案外的编号：该边丢弃 */
+  /** dependsOn 指向本方案外、且不在祖先链内的编号：该边丢弃 */
   | "unknownDependency"
   /** 议题依赖自身：该边丢弃 */
   | "selfDependency"
@@ -195,13 +200,24 @@ function normalizeExecutionOrder(
  *
  * `planSerials` 是本方案的议题编号清单，作为唯一的合法编号来源（与 plan.md 的
  * `## <编号> ` 节、`Task.yunxiaoSerialNumber` 同一字符串）。
+ *
+ * `allowedExternalSerials` 是额外允许被 `dependsOn` 引用的编号（追加子方案时传入祖先链
+ * 议题，决策 D-b）。它只放宽**引用**：这些编号不建图键、不进 `executionOrder`、不参与
+ * 破环，且引用它们不产生任何告警（合法引用）。链外编号照旧丢弃并记 `unknownDependency`。
  */
 export function parsePlanDeps(
   raw: string | null | undefined,
   planSerials: readonly string[],
+  allowedExternalSerials?: readonly string[],
 ): PlanDeps {
   const serials = uniqueSerials(planSerials);
   const member = new Set(serials);
+  // 可被引用的编号 = 本方案 ∪ 祖先链；`member` 仍单独保留给「议题清单」类判定用。
+  const referable = new Set(serials);
+  for (const rawExternal of allowedExternalSerials ?? []) {
+    const external = rawExternal.trim();
+    if (external) referable.add(external);
+  }
   const warnings: PlanDepsWarning[] = [];
   const graph: PlanDepGraph = {};
   for (const serial of serials) graph[serial] = [];
@@ -260,7 +276,7 @@ export function parsePlanDeps(
         warnings.push({ kind: "selfDependency", serialNumbers: [serial] });
         continue;
       }
-      if (!member.has(dep)) {
+      if (!referable.has(dep)) {
         warnings.push({ kind: "unknownDependency", serialNumbers: [serial, dep] });
         continue;
       }

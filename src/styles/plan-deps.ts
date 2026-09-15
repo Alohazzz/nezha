@@ -101,6 +101,16 @@ export const planDeps = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   } satisfies React.CSSProperties,
+  // 跨方案前置的归属徽标（追加子方案：该前置来自上游方案，不是本方案议题）。
+  depsEntryPeer: {
+    flexShrink: 0,
+    padding: "1px 6px",
+    borderRadius: 999,
+    border: "1px solid var(--border-dim)",
+    fontSize: 10.5,
+    color: "var(--text-muted)",
+    whiteSpace: "nowrap",
+  } satisfies React.CSSProperties,
   depsEntryStatus: {
     flexShrink: 0,
     fontSize: 11,

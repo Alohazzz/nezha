@@ -1119,7 +1119,17 @@ pub async fn delete_yunxiao_plan(
             return Err("仍有任务关联本方案（先解绑或删除这些任务）".to_string());
         }
 
+        // 归属检查：本方案是某些方案的追加主方案时拒绝删除。删掉会让子方案的
+        // parentPlanId 悬空、deps.json 的祖先引用失去上下文，且祖先方案目录（含
+        // plan.md）一并消失——先把子方案删掉或改归属。查任务在前：两条提示分别告知。
         let mut plans = crate::storage::load_project_plans(project_id.clone())?;
+        if plans
+            .iter()
+            .any(|p| p.parent_plan_id.as_deref() == Some(plan_id.as_str()))
+        {
+            return Err("仍有追加子方案关联本方案（先删除这些子方案）".to_string());
+        }
+
         let before = plans.len();
         plans.retain(|p| p.id != plan_id);
         if plans.len() == before {

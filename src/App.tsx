@@ -62,6 +62,7 @@ import {
   extractPlanIssueSection,
   extractPlanOverviewForIssues,
   planIssueImagesDir,
+  planAncestorSerials,
   planDepsPath,
   planMdPath,
 } from "./utils/plan";
@@ -463,30 +464,45 @@ function App() {
     setMountedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
   }, []);
 
-  /** 读单个方案的 deps.json 并解析；缺失/损坏降级为「无依赖」（parsePlanDeps 内部处理）。 */
-  async function readPlanDepsFor(plan: Plan, projectPath: string): Promise<PlanDeps> {
+  /**
+   * 读单个方案的 deps.json 并解析；缺失/损坏降级为「无依赖」（parsePlanDeps 内部处理）。
+   *
+   * 追加子方案（决策 D-b）时把**祖先链**议题编号作为额外可引用集合传入——子方案的
+   * `dependsOn` 允许指向主方案及其父链的具体议题，链外编号仍被丢弃并告警。
+   */
+  async function readPlanDepsFor(
+    plan: Plan,
+    projectPath: string,
+    allPlans: readonly Plan[],
+  ): Promise<PlanDeps> {
     const serials = plan.issues.map((issue) => issue.serialNumber);
+    const ancestorSerials = planAncestorSerials(plan.id, allPlans);
     try {
       const raw = await invoke<string>("read_file_content", {
         path: planDepsPath(projectPath, plan.id),
         projectPath,
       });
-      return parsePlanDeps(raw, serials);
+      return parsePlanDeps(raw, serials, ancestorSerials);
     } catch {
       // 存量方案（无该文件）或读盘失败：按无依赖处理，不阻断看板渲染。
-      return parsePlanDeps(null, serials);
+      return parsePlanDeps(null, serials, ancestorSerials);
     }
   }
 
-  /** 批量刷新方案依赖缓存（挂载时 / 生成待办后调用）。 */
+  /**
+   * 批量刷新方案依赖缓存（挂载时 / 生成待办后调用）。
+   *
+   * `allPlans` 是**全量**方案（不只待刷新的子集）——解析 deps.json 需要按 `parentPlanId`
+   * 上溯祖先链来放行跨方案引用，只看待刷新的子集会丢掉祖先上下文。
+   */
   const refreshPlanDeps = useCallback(
-    async (targetPlans: Plan[], projectList: Project[]) => {
-      const projectById = new Map(projectList.map((p) => [p.id, p]));
+    async (input: { plans: Plan[]; projects: Project[]; allPlans: Plan[] }) => {
+      const projectById = new Map(input.projects.map((p) => [p.id, p]));
       const entries = await Promise.all(
-        targetPlans.map(async (plan) => {
+        input.plans.map(async (plan) => {
           const project = projectById.get(plan.projectId);
           if (!project) return null;
-          return [plan.id, await readPlanDepsFor(plan, project.path)] as const;
+          return [plan.id, await readPlanDepsFor(plan, project.path, input.allPlans)] as const;
         }),
       );
       const loaded: Record<string, PlanDeps> = {};
@@ -749,7 +765,7 @@ function App() {
       });
       setPlans(loadedPlans);
       // 方案依赖随方案同批加载；失败不阻断（按无依赖处理）。
-      void refreshPlanDeps(loadedPlans, loadedProjects);
+      void refreshPlanDeps({ plans: loadedPlans, projects: loadedProjects, allPlans: loadedPlans });
       void refreshPlanMaxConcurrent(loadedProjects);
     }
 
@@ -1814,6 +1830,16 @@ function App() {
     });
   }
 
+  /**
+   * 关联方案（阶段三「追加议题 = 子方案」）：把 draft 方案挂到选定的主方案下，
+   * 或取消关联（传 undefined）。只写归属——依赖不由该字段决定，逐议题由 deps.json 判定。
+   */
+  function handleSetPlanParent(planId: string, parentPlanId: string | undefined) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
+    updatePlan(plan.projectId, planId, { parentPlanId });
+  }
+
   /** 标记完成（M1 手动）：不自动收敛，由使用者判断方案是否算完成。 */
   function handleCompletePlan(planId: string) {
     const plan = plans.find((p) => p.id === planId);
@@ -2274,7 +2300,7 @@ function App() {
     // 否则新方案的依赖未知会被当成无依赖，按创建顺序直接起跑。
     let freshDeps: PlanDeps | undefined;
     if (input.autoStart) {
-      freshDeps = await readPlanDepsFor(plan, project.path);
+      freshDeps = await readPlanDepsFor(plan, project.path, plans);
       setPlanDeps((prev) => ({ ...prev, [plan.id]: freshDeps }));
     }
 
@@ -2347,6 +2373,10 @@ function App() {
 
     // autoStart 的待办先入 waiting_deps，由串行调度按依赖顺序放行；其余保持 todo 待用户手动开始。
     const initialStatus: TaskStatus = input.autoStart ? "waiting_deps" : "todo";
+    // 追加子方案：执行 prompt 附上游方案文档路径，让执行者能查证统筹节里引用的上游议题。
+    const upstreamPlan = plan.parentPlanId
+      ? plans.find((p) => p.id === plan.parentPlanId) ?? null
+      : null;
     const tasksToCreate: Task[] = [];
     for (let i = 0; i < issues.length; i++) {
       const issue = issues[i];
@@ -2367,6 +2397,9 @@ function App() {
         planOverview: overview,
         issueSection: section,
         planMdAbsolutePath: planMdPath(project.path, plan.id),
+        upstreamPlanMdAbsolutePath: upstreamPlan
+          ? planMdPath(project.path, upstreamPlan.id)
+          : undefined,
         imagePaths: imagePathsByIssue[issue.workitemId] ?? [],
         instructions: instructionsByTaskId[taskIds[i]] ?? "",
       });
@@ -3433,6 +3466,7 @@ function App() {
             tasks={tasks}
             plans={plans}
             planDeps={planDeps}
+            activeProjectId={activeProject?.id ?? null}
             onClose={() => setShowKanban(false)}
             onTaskClick={(task) => {
               const project = projects.find((p) => p.id === task.projectId);
@@ -3471,6 +3505,7 @@ function App() {
             onEnterSkillHub={handleEnterSkillHub}
             onCreateYunxiaoPlan={handleCreateYunxiaoPlan}
             onStartYunxiaoPlanDiscussion={handleStartYunxiaoPlanDiscussion}
+            onSetYunxiaoPlanParent={handleSetPlanParent}
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleRemovePlanRecord}
             plans={plans}

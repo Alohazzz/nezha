@@ -2,19 +2,24 @@ import { useCallback } from "react";
 import { CheckCircle2, Circle, ChevronRight, Hourglass, PlayCircle, XCircle } from "lucide-react";
 import type { Plan, PlanIssue, Task } from "../../../types";
 import type { PlanDepEntry } from "../../../utils/planQueue";
-import { buildPlanDisplayName } from "../../../utils/plan";
+import { planTitle } from "../../../utils/plan";
 import { useI18n } from "../../../i18n";
 import s from "../../../styles";
 
 /**
  * 等待前置任务的详情视图：完整 Checklist（前置议题编号 + 标题 + 当前状态，可点击跳转），
  * 底部提供「取消等待」；存在异常 / 缺失前置时额外给「忽略依赖，仍然开始」。
+ *
+ * 追加子方案（阶段三）的 Checklist 可能含**上游方案**的议题（跨方案前置）；这类条目
+ * 用 `depPeerPlans` 标注所属方案——用户要决定「敢不敢忽略」，就得知道等的是本方案
+ * 的下一步还是主方案里某个议题。
  */
 export function WaitingDepsView({
   task,
   plan,
   entries,
   subjects,
+  depPeerPlans,
   onJump,
   onCancelWait,
   onIgnoreRun,
@@ -23,6 +28,8 @@ export function WaitingDepsView({
   plan: Plan | null;
   entries: PlanDepEntry[];
   subjects: Map<string, PlanIssue>;
+  /** 跨方案前置：编号 → 所属（祖先）方案名；本方案内的前置不在其中。 */
+  depPeerPlans: Map<string, string>;
   onJump: (taskId: string) => void;
   onCancelWait: (taskId: string) => void;
   onIgnoreRun: (taskId: string) => void;
@@ -43,9 +50,7 @@ export function WaitingDepsView({
           <div style={s.yunxiaoHeaderTitle}>{task.name ?? t("plan.task.title")}</div>
           <div style={s.yunxiaoHeaderMeta}>
             {task.yunxiaoSerialNumber ? `${task.yunxiaoSerialNumber} · ` : ""}
-            {plan
-              ? plan.name || buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber))
-              : t("status.waitingDeps")}
+            {plan ? planTitle(plan) : t("status.waitingDeps")}
           </div>
         </div>
       </div>
@@ -89,6 +94,13 @@ export function WaitingDepsView({
                   <div style={s.depsEntryBody}>
                     <span style={s.depsEntrySerial}>{entry.serialNumber}</span>
                     {subject ? <span style={s.depsEntrySubject}>{subject.subject}</span> : null}
+                    {depPeerPlans.has(entry.serialNumber) ? (
+                      <span style={s.depsEntryPeer}>
+                        {t("plan.deps.entryPeer", {
+                          plan: depPeerPlans.get(entry.serialNumber) ?? "",
+                        })}
+                      </span>
+                    ) : null}
                   </div>
                   <span style={abnormal ? s.depsEntryStatusAbnormal : s.depsEntryStatus}>
                     {statusLabel}

@@ -198,6 +198,89 @@ describe("parsePlanDeps — 越界编号与自依赖", () => {
   });
 });
 
+describe("parsePlanDeps — 祖先链引用（追加子方案，决策 D-b）", () => {
+  /** 子方案 B（议题 QHDK-B）依赖主方案 A 的 QHDK-A。 */
+  const CHILD_DEPS = JSON.stringify({
+    version: 1,
+    issues: [{ serialNumber: "QHDK-B", dependsOn: ["QHDK-A"] }],
+  });
+
+  it("祖先链编号可被引用：保留该边且不产生任何告警", () => {
+    const deps = parsePlanDeps(CHILD_DEPS, ["QHDK-B"], ["QHDK-A"]);
+    expect(deps.warnings).toEqual([]);
+    expect(deps.graph["QHDK-B"]).toEqual(["QHDK-A"]);
+  });
+
+  it("外部编号只作引用方，不为它建图键、不进 executionOrder", () => {
+    const deps = parsePlanDeps(CHILD_DEPS, ["QHDK-B"], ["QHDK-A"]);
+    expect(Object.keys(deps.graph)).toEqual(["QHDK-B"]);
+    expect(deps.executionOrder).toEqual(["QHDK-B"]);
+  });
+
+  it("祖先链编号不允许作为 issues[] 条目（仍记 unknownIssue）", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      issues: [
+        { serialNumber: "QHDK-B", dependsOn: [] },
+        { serialNumber: "QHDK-A", dependsOn: [] },
+      ],
+    });
+    const deps = parsePlanDeps(raw, ["QHDK-B"], ["QHDK-A"]);
+    expect(Object.keys(deps.graph)).toEqual(["QHDK-B"]);
+    expect(deps.warnings.find((w) => w.kind === "unknownIssue")?.serialNumbers).toEqual(["QHDK-A"]);
+  });
+
+  it("链外编号照旧丢弃并告警（自依赖判定也不受白名单影响）", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      issues: [{ serialNumber: "QHDK-B", dependsOn: ["QHDK-A", "OTHER-PLAN-1"] }],
+    });
+    const deps = parsePlanDeps(raw, ["QHDK-B"], ["QHDK-A"]);
+    expect(deps.graph["QHDK-B"]).toEqual(["QHDK-A"]);
+    const unknown = deps.warnings.find((w) => w.kind === "unknownDependency");
+    expect(unknown?.serialNumbers).toEqual(["QHDK-B", "OTHER-PLAN-1"]);
+
+    const self = parsePlanDeps(
+      JSON.stringify({ version: 1, issues: [{ serialNumber: "QHDK-A", dependsOn: ["QHDK-A"] }] }),
+      ["QHDK-A"],
+      ["QHDK-A"],
+    );
+    expect(kinds(self)).toEqual(["selfDependency"]);
+  });
+
+  it("未传白名单时行为与从前一致（方案外引用一律丢弃）", () => {
+    const deps = parsePlanDeps(CHILD_DEPS, ["QHDK-B"]);
+    expect(deps.graph["QHDK-B"]).toEqual([]);
+    expect(kinds(deps)).toEqual(["unknownDependency"]);
+  });
+
+  it("祖先链上的边不影响本方案定序（外部编号不算入度）", () => {
+    const deps = parsePlanDeps(
+      JSON.stringify({
+        version: 1,
+        issues: [
+          { serialNumber: "QHDK-B1", dependsOn: ["QHDK-A"] },
+          { serialNumber: "QHDK-B2", dependsOn: ["QHDK-B1"] },
+        ],
+        executionOrder: ["QHDK-B1", "QHDK-B2"],
+      }),
+      ["QHDK-B1", "QHDK-B2"],
+      ["QHDK-A"],
+    );
+    expect(deps.warnings).toEqual([]);
+    expect(topoSortPlanIssues(["QHDK-B1", "QHDK-B2"], deps.graph, deps.executionOrder)).toEqual([
+      "QHDK-B1",
+      "QHDK-B2",
+    ]);
+  });
+
+  it("跨方案前置被如实报告为未满足（门禁据此拦住子议题）", () => {
+    const deps = parsePlanDeps(CHILD_DEPS, ["QHDK-B"], ["QHDK-A"]);
+    expect(unmetDependencies(deps.graph, "QHDK-B", () => false)).toEqual(["QHDK-A"]);
+    expect(unmetDependencies(deps.graph, "QHDK-B", (serial) => serial === "QHDK-A")).toEqual([]);
+  });
+});
+
 describe("parsePlanDeps — 成环", () => {
   it("二元环 → 环上边全部丢弃 + cycle 告警，图变为无环", () => {
     const raw = JSON.stringify({

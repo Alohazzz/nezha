@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Plan, PlanStatus, Task, TaskStatus } from "../types";
 import { parsePlanDeps } from "../utils/planDeps";
 import {
+  appendableParentPlans,
+  buildPlanTree,
   buildTaskBySerial,
+  canReceiveAppend,
   derivePlanTaskRows,
   groupPlansByProject,
   isPlanArchived,
@@ -95,8 +98,40 @@ describe("planLifecycleActions", () => {
   });
 });
 
-describe("tasksForPlan / buildTaskBySerial", () => {
-  it("只收本方案任务，忽略其他方案与无编号任务", () => {
+describe("canReceiveAppend / appendableParentPlans（追加子方案的候选范围）", () => {
+  it("只有已定稿 / 执行中 / 已完成可接收追加；讨论中与已取消不可", () => {
+    expect(canReceiveAppend(makePlan({ status: "finalized" }))).toBe(true);
+    expect(canReceiveAppend(makePlan({ status: "executing" }))).toBe(true);
+    expect(canReceiveAppend(makePlan({ status: "completed" }))).toBe(true);
+    expect(canReceiveAppend(makePlan({ status: "draft" }))).toBe(false);
+    expect(canReceiveAppend(makePlan({ status: "cancelled" }))).toBe(false);
+  });
+
+  it("已归档一律不可追加（即使状态是已完成）", () => {
+    expect(canReceiveAppend(makePlan({ status: "completed", archivedAt: 7 }))).toBe(false);
+    expect(canReceiveAppend(makePlan({ status: "executing", archivedAt: 7 }))).toBe(false);
+  });
+
+  it("候选限定同一项目、排除自身、按 createdAt 升序", () => {
+    const plans = [
+      makePlan({ id: "a", projectId: "P", status: "executing", createdAt: 30 }),
+      makePlan({ id: "b", projectId: "P", status: "completed", createdAt: 10 }),
+      makePlan({ id: "c", projectId: "OTHER", status: "executing", createdAt: 5 }),
+      makePlan({ id: "d", projectId: "P", status: "draft", createdAt: 1 }),
+      makePlan({ id: "self", projectId: "P", status: "draft", createdAt: 0 }),
+    ];
+    expect(appendableParentPlans(plans, "P", "self").map((p) => p.id)).toEqual(["b", "a"]);
+    expect(appendableParentPlans(plans, "P").map((p) => p.id)).toEqual(["b", "a"]);
+    expect(appendableParentPlans(plans, "OTHER").map((p) => p.id)).toEqual(["c"]);
+  });
+
+  it("没有可追加的方案时返回空数组（UI 据此隐藏关联下拉）", () => {
+    const plans = [makePlan({ id: "d", status: "draft" }), makePlan({ id: "x", status: "cancelled" })];
+    expect(appendableParentPlans(plans, "proj")).toEqual([]);
+  });
+});
+
+describe("tasksForPlan / buildTaskBySerial", () => {  it("只收本方案任务，忽略其他方案与无编号任务", () => {
     const tasks = [
       makeTask({ id: "t1", planId: "p1", yunxiaoSerialNumber: "QHDK-A" }),
       makeTask({ id: "t2", planId: "p2", yunxiaoSerialNumber: "QHDK-B" }),
@@ -327,5 +362,81 @@ describe("PlanStatus 覆盖", () => {
       expect(derivePlanTaskRows(plan, []).rows).toHaveLength(2);
       expect(planLifecycleActions(plan).canDelete).toBe(true);
     }
+  });
+});
+
+describe("buildPlanTree（追加子方案的缩进树 + 子树语义筛选）", () => {
+  const plans = [
+    makePlan({ id: "root", name: "根", status: "completed", createdAt: 1 }),
+    makePlan({ id: "mid", name: "中", status: "completed", parentPlanId: "root", createdAt: 2 }),
+    makePlan({ id: "leaf", name: "叶", status: "executing", parentPlanId: "mid", createdAt: 3 }),
+    makePlan({ id: "solo", name: "独立", status: "executing", createdAt: 4 }),
+  ];
+  const all = () => true;
+  const none = () => false;
+  const only = (id: string) => (plan: Plan) => plan.id === id;
+
+  it("无筛选时按入参顺序深度优先输出，子方案缩进一级", () => {
+    const rows = buildPlanTree(plans, all, new Set(), false);
+    expect(rows.map((r) => [r.plan.id, r.depth])).toEqual([
+      ["root", 0],
+      ["mid", 1],
+      ["leaf", 2],
+      ["solo", 0],
+    ]);
+    // 有子才可折叠：root/mid 有子，leaf/solo 是叶。
+    expect(rows.map((r) => r.hasChildren)).toEqual([true, true, false, false]);
+  });
+
+  it("筛选取子树语义：只命中叶子时把整条祖先链带出（无孤儿行，深度依次递增）", () => {
+    const rows = buildPlanTree(plans, only("leaf"), new Set(), true);
+    expect(rows.map((r) => r.plan.id)).toEqual(["root", "mid", "leaf"]);
+    expect(rows.map((r) => r.selfMatched)).toEqual([false, false, true]);
+    // 深度 0/1/2 连续递增 ⇒ 每个非根行的父都在结果里（无孤儿行）。
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 2]);
+  });
+
+  it("命中父但不命中子时子不出现（筛选取交集而非并集）", () => {
+    const rows = buildPlanTree(plans, only("mid"), new Set(), true);
+    // mid 可见 → 祖先 root 带出；但 mid 的子 leaf 未命中且 root 也不是为 leaf 而显示。
+    expect(rows.map((r) => r.plan.id)).toEqual(["root", "mid"]);
+  });
+
+  it("无筛选时折叠严格生效：收起父即收起整棵子树", () => {
+    const rows = buildPlanTree(plans, all, new Set(["root"]), false);
+    expect(rows.map((r) => r.plan.id)).toEqual(["root", "solo"]);
+  });
+
+  it("筛选生效时折叠不吞命中分支：命中孙节点则父被强制展开", () => {
+    const rows = buildPlanTree(plans, only("leaf"), new Set(["root", "mid"]), true);
+    expect(rows.map((r) => r.plan.id)).toEqual(["root", "mid", "leaf"]);
+  });
+
+  it("筛选生效时折叠藏不住命中分支（可见子方案必然命中，故父被强制展开）", () => {
+    // 只 solo 命中：root 不在可见集里，不属于「被折叠藏掉」的情形。
+    expect(
+      buildPlanTree(plans, only("solo"), new Set(["root"]), true).map((r) => r.plan.id),
+    ).toEqual(["solo"]);
+    // mid 命中（可见集含 root/mid）：折叠 root 也藏不住它。
+    expect(
+      buildPlanTree(plans, only("mid"), new Set(["root"]), true).map((r) => r.plan.id),
+    ).toEqual(["root", "mid"]);
+  });
+
+  it("父方案不在列表内（断链）时当根处理，不丢行", () => {
+    const orphan = makePlan({ id: "orphan", name: "孤儿", parentPlanId: "gone", createdAt: 5 });
+    const rows = buildPlanTree([orphan], all, new Set(), false);
+    expect(rows.map((r) => [r.plan.id, r.depth])).toEqual([["orphan", 0]]);
+  });
+
+  it("parentPlanId 成环时不死循环，环上方案各自落位", () => {
+    const a = makePlan({ id: "a", parentPlanId: "b", createdAt: 1 });
+    const b = makePlan({ id: "b", parentPlanId: "a", createdAt: 2 });
+    const rows = buildPlanTree([a, b], all, new Set(), false);
+    expect(rows.map((r) => r.plan.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("筛选全部不命中时返回空（空态由调用方说明）", () => {
+    expect(buildPlanTree(plans, none, new Set(), true)).toEqual([]);
   });
 });

@@ -11,7 +11,8 @@ export type BoardTab = "tasks" | "plans";
 
 /**
  * 看板浮层：任务看板与方案看板共用一个浮层、以 Tab 切换（避免项目栏入口膨胀）。
- * 两个子视图都按「跨项目总览」呈现，各自的空态与摘要由子视图负责。
+ * 任务看板按「跨项目总览」呈现；方案看板专注单个方案（顶部项目切换器锁定项目，
+ * 左栏方案列表 + 右栏详情），空态与摘要由各自子视图负责。
  */
 export function BoardOverlay({
   initialTab = "tasks",
@@ -19,6 +20,7 @@ export function BoardOverlay({
   tasks,
   plans,
   planDeps,
+  activeProjectId,
   onClose,
   onTaskClick,
   onProjectClick,
@@ -35,6 +37,8 @@ export function BoardOverlay({
   tasks: Task[];
   plans: Plan[];
   planDeps: Record<string, PlanDeps | undefined>;
+  /** 应用当前活动项目：方案看板以此作为锁定项目的初值。 */
+  activeProjectId?: string | null;
   onClose: () => void;
   onTaskClick: (task: Task) => void;
   onProjectClick: (project: Project) => void;
@@ -115,6 +119,7 @@ export function BoardOverlay({
           depsByPlanId={planDeps}
           projectNames={projectNames}
           projectPaths={projectPaths}
+          activeProjectId={activeProjectId}
           onPreview={onPlanPreview}
           onOpenTask={(taskId) => {
             const task = tasks.find((item) => item.id === taskId);

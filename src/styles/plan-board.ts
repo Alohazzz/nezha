@@ -1,27 +1,31 @@
 import type React from "react";
 
 /**
- * 方案看板样式（**任务为主体**）：方案是可折叠分组表头，任务是主体行。
- * 禁用行内样式（AGENTS.md）；进度条填充的唯一动态值走 `.plan-board-progress-fill`（plan-board.css）。
+ * 方案看板 v2 的**布局**样式对象：只放静态布局/盒模型。
+ * 伪类（:hover/:focus-visible）、状态属性（[data-*]）、@keyframes、媒体查询一律放
+ * `plan-board.css`（对象表达不了这些）；动画相关类名也在那里定义。
+ *
+ * 唯一例外是进度条填充宽度：连续的运行时百分比无法用选择器表达，沿用仓库既有约定
+ * （参照 build.css / 旧 plan-board.css 的 `.plan-fill`）——视觉规则在 CSS，组件只传 width。
  */
 
-const planBoardMiniBtn = {
+const planMiniBtn = {
   display: "inline-flex",
   alignItems: "center" as const,
   justifyContent: "center" as const,
   gap: 3,
-  padding: "2px 6px",
+  padding: "2px 7px",
   background: "transparent",
   border: "1px solid var(--border-dim)",
-  borderRadius: 4,
+  borderRadius: 5,
   color: "var(--text-muted)",
   fontSize: 10.5,
   cursor: "pointer",
   whiteSpace: "nowrap" as const,
-  transition: "background 0.12s, color 0.12s, border-color 0.12s",
+  transition: "background 0.14s ease, color 0.14s ease, border-color 0.14s ease",
 };
 
-const planBoardIconBtn = {
+const planIconBtn = {
   flexShrink: 0,
   display: "inline-flex",
   alignItems: "center" as const,
@@ -34,12 +38,12 @@ const planBoardIconBtn = {
   cursor: "pointer",
 };
 
-const planBoardBadge = {
+const planBadge = {
   display: "inline-flex",
   alignItems: "center" as const,
   gap: 3,
   fontSize: 10,
-  padding: "1px 5px",
+  padding: "1px 6px",
   borderRadius: 4,
   background: "var(--bg-hover)",
   border: "1px solid var(--border-dim)",
@@ -48,24 +52,33 @@ const planBoardBadge = {
 };
 
 export const planBoard = {
-  /** 看板浮层内容容器（Tab 化后由 BoardOverlay 使用；与 kanbanPane 同规格）。 */
+  /** 浮层内容容器（BoardOverlay 使用；与 kanbanPane 同规格）。 */
   planBoardPane: {
     flex: 1,
     display: "flex",
     flexDirection: "column" as const,
-    overflowY: "auto" as const,
+    minHeight: 0,
     background: "var(--bg-panel)",
-    padding: "16px 20px 20px",
   },
 
-  // ── 顶部工具条 ─────────────────────────────────────────────────────────
-  boardToolbar: {
-    display: "flex",
+  // ── 面包屑 ────────────────────────────────────────────────────────────
+  /** 项目节点：既是面包屑的一节，也是项目切换器触发器。 */
+  planCrumbProject: {
+    display: "inline-flex",
     alignItems: "center" as const,
-    gap: 8,
-    marginBottom: 10,
-    flexWrap: "wrap" as const,
+    gap: 5,
+    padding: "3px 7px",
+    background: "transparent",
+    border: "1px solid transparent",
+    borderRadius: 6,
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "background 0.14s ease, border-color 0.14s ease",
   },
+
+  // ── 顶部 Tab 与关闭（沿用任务看板形态） ───────────────────────────────
   boardTabs: {
     display: "inline-flex",
     alignItems: "center" as const,
@@ -96,297 +109,68 @@ export const planBoard = {
     cursor: "pointer",
     boxShadow: "0 1px 2px rgba(0,0,0,0.12)",
   },
-  boardFilterInput: {
-    marginLeft: "auto",
-    padding: "3px 8px",
-    background: "var(--bg-card)",
-    border: "1px solid var(--border-dim)",
-    borderRadius: 6,
-    color: "var(--text-primary)",
-    fontSize: 11.5,
-    outline: "none",
-    minWidth: 160,
-  },
 
-  // ── 方案分组（表头 + 任务行） ──────────────────────────────────────────
-  planGroup: {
-    display: "flex",
-    flexDirection: "column" as const,
-    border: "1px solid var(--border-dim)",
-    borderRadius: 8,
-    marginBottom: 8,
-    overflow: "hidden" as const,
-  },
-  planGroupHeader: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 7,
-    padding: "6px 8px",
-    background: "var(--bg-hover)",
-    border: "none",
-    borderBottom: "1px solid var(--border-dim)",
-    width: "100%",
-    textAlign: "left" as const,
-    cursor: "pointer",
-    color: "inherit",
-  },
-  planGroupHeaderCollapsed: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 7,
-    padding: "6px 8px",
-    background: "var(--bg-hover)",
-    border: "none",
-    width: "100%",
-    textAlign: "left" as const,
-    cursor: "pointer",
-    color: "inherit",
-  },
-  planGroupName: {
-    fontSize: 12,
-    fontWeight: 650,
-    color: "var(--text-primary)",
-    overflow: "hidden" as const,
-    textOverflow: "ellipsis" as const,
-    whiteSpace: "nowrap" as const,
-    maxWidth: 380,
-  },
-  planGroupSpacer: {
-    flex: 1,
-    minWidth: 4,
-  },
-  planGroupActions: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 4,
-    flexWrap: "wrap" as const,
-  },
-
-  // ── 任务行（主体） ────────────────────────────────────────────────────
-  taskRows: {
-    display: "flex",
-    flexDirection: "column" as const,
-  },
-  taskRow: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 7,
-    padding: "5px 8px 5px 10px",
-    borderBottom: "1px solid var(--border-dim)",
-    fontSize: 11.5,
-  },
-  taskRowLast: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 7,
-    padding: "5px 8px 5px 10px",
-    fontSize: 11.5,
-  },
-  taskRowRunning: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 7,
-    padding: "5px 8px 5px 10px",
-    borderBottom: "1px solid var(--border-dim)",
-    fontSize: 11.5,
-    background: "var(--accent-subtle, var(--bg-hover))",
-  },
-  taskRowAbnormal: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 7,
-    padding: "5px 8px 5px 10px",
-    borderBottom: "1px solid var(--border-dim)",
-    fontSize: 11.5,
-    background: "var(--bg-hover)",
-    boxShadow: "inset 2px 0 0 var(--danger)",
-  },
-  taskRowIcon: {
-    flexShrink: 0,
-    display: "inline-flex",
-    alignItems: "center" as const,
-    width: 16,
-  },
-  taskRowSerial: {
-    fontSize: 11,
-    fontWeight: 700,
-    color: "var(--accent)",
-    whiteSpace: "nowrap" as const,
+  // ── 详情头部 ──────────────────────────────────────────────────────────
+  planStatusBadge: {
+    ...planBadge,
     flexShrink: 0,
   },
-  taskRowSubject: {
-    flex: 1,
-    minWidth: 0,
-    color: "var(--text-primary)",
-    overflow: "hidden" as const,
-    textOverflow: "ellipsis" as const,
-    whiteSpace: "nowrap" as const,
+  planBadgeWaiting: {
+    ...planBadge,
   },
-  taskRowStatus: {
-    flexShrink: 0,
-    color: "var(--text-muted)",
-    whiteSpace: "nowrap" as const,
-  },
-  taskRowStatusRunning: {
-    flexShrink: 0,
-    color: "var(--accent)",
-    fontWeight: 600,
-    whiteSpace: "nowrap" as const,
-  },
-  taskRowStatusFailed: {
-    flexShrink: 0,
-    color: "var(--danger)",
-    fontWeight: 600,
-    whiteSpace: "nowrap" as const,
-  },
-  /** 前置约束：等 X（未满足）/ 前置异常（红）/ 可开工（绿）。 */
-  taskRowDep: {
-    flexShrink: 0,
-    fontSize: 10.5,
-    color: "var(--text-hint)",
-    whiteSpace: "nowrap" as const,
-  },
-  taskRowDepBlocked: {
-    flexShrink: 0,
-    fontSize: 10.5,
-    color: "var(--warning)",
-    whiteSpace: "nowrap" as const,
-  },
-  taskRowDepAbnormal: {
-    flexShrink: 0,
-    fontSize: 10.5,
-    color: "var(--danger)",
-    fontWeight: 600,
-    whiteSpace: "nowrap" as const,
-  },
-  taskRowDepReady: {
-    flexShrink: 0,
-    fontSize: 10.5,
-    color: "var(--success)",
-    whiteSpace: "nowrap" as const,
-  },
-  /** 运行 / 等待时长（等宽数字避免跳动）。 */
-  taskRowRuntime: {
-    flexShrink: 0,
-    fontSize: 10.5,
-    color: "var(--text-muted)",
-    fontVariantNumeric: "tabular-nums" as const,
-    whiteSpace: "nowrap" as const,
-  },
-  taskRowActions: {
-    flexShrink: 0,
-    display: "inline-flex",
-    alignItems: "center" as const,
-    gap: 4,
-  },
-
-  // ── 表头里的进度 / 徽章 ────────────────────────────────────────────────
-  boardProgressRow: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 6,
-    minWidth: 110,
-    flexShrink: 0,
-  },
-  boardProgressTrack: {
-    flex: 1,
-    minWidth: 40,
-    height: 4,
-    borderRadius: 2,
-    background: "var(--border-dim)",
-    overflow: "hidden" as const,
-  },
-  boardProgressLabel: {
-    fontSize: 10.5,
-    color: "var(--text-muted)",
-    fontVariantNumeric: "tabular-nums" as const,
-    whiteSpace: "nowrap" as const,
-  },
-  boardBadgeWaiting: {
-    ...planBoardBadge,
-  },
-  boardBadgeBlocked: {
-    ...planBoardBadge,
-    borderColor: "var(--danger)",
-    color: "var(--danger)",
-    fontWeight: 600,
-  },
-  boardBadgeReady: {
-    ...planBoardBadge,
+  planBadgeReady: {
+    ...planBadge,
     background: "transparent",
-    borderColor: "var(--success)",
+    borderColor: "var(--success-border)",
     color: "var(--success)",
   },
-  boardLockedBadge: {
-    ...planBoardBadge,
+  planBadgeLocked: {
+    ...planBadge,
     color: "var(--text-hint)",
-  },
-  boardStatusBadge: {
-    ...planBoardBadge,
-    flexShrink: 0,
   },
 
   // ── 按钮 ──────────────────────────────────────────────────────────────
   boardMiniBtn: {
-    ...planBoardMiniBtn,
+    ...planMiniBtn,
   },
   boardMiniBtnDanger: {
-    ...planBoardMiniBtn,
+    ...planMiniBtn,
     borderColor: "transparent",
     color: "var(--danger)",
   },
-  boardIconSlot: {
-    display: "inline-flex",
-    alignItems: "center" as const,
-    flexShrink: 0,
-  },
   boardIconBtn: {
-    ...planBoardIconBtn,
+    ...planIconBtn,
   },
-  /** 展开箭头：展开朝下，收起朝右。 */
-  boardChevronExpanded: {
-    transform: "rotate(0deg)",
-  },
-  boardChevronCollapsed: {
-    transform: "rotate(-90deg)",
+  boardMiniBtnPrimary: {
+    ...planMiniBtn,
+    borderColor: "var(--accent-soft)",
+    color: "var(--accent)",
   },
 
-  // ── 已归档区 ──────────────────────────────────────────────────────────
-  boardArchiveBar: {
+  // ── 窄窗返回按钮（仅在窄窗显示，由 CSS 媒体查询控制） ──────────────────
+  // ── draft 方案的讨论卡（右栏空图态的替代内容） ─────────────────────────
+  planDiscussionCard: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+    padding: 12,
+    border: "1px solid var(--border-dim)",
+    borderRadius: 8,
+    background: "var(--bg-hover)",
+  },
+  planDiscussionTitle: {
+    fontSize: 11.5,
+    fontWeight: 650,
+    color: "var(--text-primary)",
+  },
+  planDiscussionHint: {
+    fontSize: 11,
+    color: "var(--text-muted)",
+    lineHeight: 1.6,
+  },
+  planDiscussionActions: {
     display: "flex",
     alignItems: "center" as const,
     gap: 6,
-    marginTop: 8,
-    padding: "4px 6px",
-    background: "transparent",
-    border: "1px dashed var(--border-dim)",
-    borderRadius: 6,
-    color: "var(--text-muted)",
-    fontSize: 11,
-    cursor: "pointer",
-    width: "fit-content" as const,
-  },
-  boardArchiveList: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 4,
-    marginTop: 6,
-  },
-  boardArchiveRow: {
-    display: "flex",
-    alignItems: "center" as const,
-    gap: 8,
-    padding: "4px 6px",
-    borderRadius: 5,
-    border: "1px solid var(--border-dim)",
-  },
-  boardArchiveName: {
-    flex: 1,
-    minWidth: 0,
-    fontSize: 11.5,
-    color: "var(--text-muted)",
-    overflow: "hidden" as const,
-    textOverflow: "ellipsis" as const,
-    whiteSpace: "nowrap" as const,
   },
 } satisfies Record<string, React.CSSProperties>;
