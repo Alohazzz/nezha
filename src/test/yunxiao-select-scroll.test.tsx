@@ -57,6 +57,8 @@ describe("YunxiaoView 连接配置：项目下拉滚动", () => {
     invokeMock.mockReset();
   });
 
+  // 与 yunxiao-connect-projects 同类：userEvent + Radix 交互在全量并行跑时远超默认 5s，
+  // 反复出现「Test timed out in 5000ms」的假失败（单独跑恒过），故显式放宽。
   it("项目很多时下拉列表高度受限且可滚动", async () => {
     const user = userEvent.setup();
     render(
@@ -71,6 +73,7 @@ describe("YunxiaoView 连接配置：项目下拉滚动", () => {
             onStartPlanDiscussion={vi.fn()}
             onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
+            onSetParentPlan={vi.fn()}
           />
         </ToastProvider>
       </I18nProvider>,
@@ -91,5 +94,5 @@ describe("YunxiaoView 连接配置：项目下拉滚动", () => {
     // 高度受限 + 纵向可滚动，否则选项一多下拉会超出屏幕无法滚动。
     expect(viewport.style.maxHeight).toBe("320px");
     expect(viewport.style.overflowY).toBe("auto");
-  });
+  }, 15_000);
 });

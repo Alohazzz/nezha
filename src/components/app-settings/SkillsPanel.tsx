@@ -24,18 +24,29 @@ export function SkillsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [autoWriteback, setAutoWriteback] = useState<boolean | null>(null);
   const [writebackBusy, setWritebackBusy] = useState(true);
+  const [batchGrill, setBatchGrill] = useState<boolean | null>(null);
+  const [batchGrillBusy, setBatchGrillBusy] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     invoke<AppSettings>("load_app_settings")
       .then((settings) => {
-        if (!cancelled) setAutoWriteback(settings.knowledge?.autoWriteback ?? false);
+        if (!cancelled) {
+          setAutoWriteback(settings.knowledge?.autoWriteback ?? false);
+          setBatchGrill(settings.batch_grill_enabled ?? false);
+        }
       })
       .catch(() => {
-        if (!cancelled) setAutoWriteback(false);
+        if (!cancelled) {
+          setAutoWriteback(false);
+          setBatchGrill(false);
+        }
       })
       .finally(() => {
-        if (!cancelled) setWritebackBusy(false);
+        if (!cancelled) {
+          setWritebackBusy(false);
+          setBatchGrillBusy(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -155,6 +166,21 @@ export function SkillsPanel() {
       setWritebackBusy(false);
     }
   }, [writebackBusy, autoWriteback]);
+
+  const handleBatchGrillToggle = useCallback(async () => {
+    if (batchGrillBusy || batchGrill === null) return;
+    const enabled = !batchGrill;
+    setBatchGrillBusy(true);
+    setError(null);
+    try {
+      const next = await invoke<AppSettings>("save_batch_grill_enabled", { enabled });
+      setBatchGrill(next.batch_grill_enabled ?? enabled);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBatchGrillBusy(false);
+    }
+  }, [batchGrillBusy, batchGrill]);
 
   const hubPath = config?.hubPath ?? "";
   const lastSyncedAt = config?.lastSyncedAt;
@@ -312,6 +338,32 @@ export function SkillsPanel() {
           </span>
         </button>
         <span style={s.settingFieldHint}>{t("appSettings.knowledgeAutoWritebackHint")}</span>
+      </div>
+
+      <div style={s.settingFieldSpaced}>
+        <label style={s.settingFieldLabel}>
+          {t("appSettings.batchGrill")}
+          <span style={s.settingFieldLabelBadge}>{t("appSettings.experimentalBadge")}</span>
+        </label>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={batchGrill === true}
+          aria-label={t("appSettings.batchGrill")}
+          disabled={batchGrillBusy}
+          data-checked={batchGrill === true}
+          data-disabled={batchGrillBusy}
+          onClick={() => void handleBatchGrillToggle()}
+          className="app-settings-toggle"
+        >
+          <span className="app-settings-toggle-label">
+            {t("appSettings.batchGrillToggle")}
+          </span>
+          <span className="app-settings-toggle-track">
+            <span className="app-settings-toggle-knob" />
+          </span>
+        </button>
+        <span style={s.settingFieldHint}>{t("appSettings.batchGrillHint")}</span>
       </div>
 
       {error ? <div style={s.skillsPanelError}>{error}</div> : null}

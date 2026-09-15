@@ -58,6 +58,7 @@ export function YunxiaoView({
   onStartPlanDiscussion,
   onStartDirectExecution,
   onCancelPlan,
+  onSetParentPlan,
 }: {
   projects: Project[];
   tasks: Task[];
@@ -78,6 +79,8 @@ export function YunxiaoView({
     options: DirectLaunchOptions,
   ) => void | Promise<void>;
   onCancelPlan: (planId: string) => void | Promise<void>;
+  /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
+  onSetParentPlan: (planId: string, parentPlanId: string | undefined) => void;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -519,11 +522,14 @@ export function YunxiaoView({
         <PlanLaunchDialog
           key={launchIssues.map((issue) => issue.id).join(",")}
           issues={launchIssues}
+          plans={plans}
+          tasks={tasks}
           targetProjectId={targetProject.id}
           projectPath={targetProject.path}
           projectName={targetProject.name}
           settings={settings}
           onCreatePlan={onCreatePlan}
+          onSetParentPlan={onSetParentPlan}
           onStartDiscussion={onStartPlanDiscussion}
           onCancelPlan={onCancelPlan}
           onClose={() => setLaunchIssues(null)}

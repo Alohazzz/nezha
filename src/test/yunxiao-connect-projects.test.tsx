@@ -90,6 +90,7 @@ describe("YunxiaoView 连接配置：项目下拉列表", () => {
               onStartPlanDiscussion={vi.fn()}
               onStartDirectExecution={vi.fn()}
               onCancelPlan={vi.fn()}
+              onSetParentPlan={vi.fn()}
             />
           </ToastProvider>
         </I18nProvider>,

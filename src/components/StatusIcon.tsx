@@ -4,6 +4,7 @@ import {
   XCircle,
   MinusCircle,
   Circle,
+  Hourglass,
   Loader2,
   AlertCircle,
   AlertTriangle,
@@ -21,6 +22,8 @@ export function StatusIcon({ status }: { status: TaskStatus }) {
       );
     case "input_required":
       return <AlertCircle size={14} style={{ color: "var(--warning)" }} />;
+    case "waiting_deps":
+      return <Hourglass size={14} style={{ color: "var(--text-muted)" }} />;
     case "awaiting_review":
       return <CircleCheck size={14} style={{ color: "var(--accent)" }} />;
     case "detached":

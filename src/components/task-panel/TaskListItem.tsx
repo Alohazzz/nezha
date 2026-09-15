@@ -1,36 +1,11 @@
 import { useState, memo } from "react";
-import { Trash2, Star, Play, GitBranch } from "lucide-react";
-import type { Task } from "../../types";
+import { Trash2, Star, Play, GitBranch, Hourglass } from "lucide-react";
+import { taskStatusI18nKey, type Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import claudeLogo from "../../assets/claude.svg";
 import chatgptLogo from "../../assets/chatgpt.svg";
-
-function statusLabelKey(status: Task["status"]): string {
-  switch (status) {
-    case "todo":
-      return "status.todo";
-    case "pending":
-      return "status.pending";
-    case "running":
-      return "status.running";
-    case "input_required":
-      return "status.inputRequired";
-    case "awaiting_review":
-      return "status.awaitingReview";
-    case "detached":
-      return "status.detached";
-    case "interrupted":
-      return "status.interrupted";
-    case "done":
-      return "status.done";
-    case "failed":
-      return "status.failed";
-    case "cancelled":
-      return "status.cancelled";
-  }
-}
 
 export const TaskListItem = memo(
   function TaskListItem({
@@ -40,6 +15,9 @@ export const TaskListItem = memo(
     onDelete,
     onToggleStar,
     onRunTodo,
+    waitingBadgeKind,
+    waitingBadgeCount,
+    waitingBadgeBlocked,
   }: {
     task: Task;
     selected: boolean;
@@ -47,6 +25,11 @@ export const TaskListItem = memo(
     onDelete: () => void;
     onToggleStar: () => void;
     onRunTodo?: () => void;
+    /** 等待前置角标：deps = 等前置，slot = 前置已满足、排队等并发槽位。 */
+    waitingBadgeKind?: "deps" | "slot";
+    waitingBadgeCount?: number;
+    /** 存在异常/缺失前置（角标标红）。 */
+    waitingBadgeBlocked?: boolean;
   }) {
     const { t } = useI18n();
     const [hov, setHov] = useState(false);
@@ -71,7 +54,15 @@ export const TaskListItem = memo(
             {displayTitle.length > 70 ? "…" : ""}
           </div>
           <div style={s.taskCardSub}>
-            {t(statusLabelKey(task.status))}
+            {t(`status.${taskStatusI18nKey(task.status)}`)}
+            {waitingBadgeKind && (
+              <span style={waitingBadgeBlocked ? s.taskWaitingBadgeBlocked : s.taskWaitingBadge}>
+                <Hourglass size={10} strokeWidth={2.2} />
+                {waitingBadgeKind === "slot"
+                  ? t("plan.deps.waitingSlotBadge")
+                  : t("plan.deps.waitingBadge", { count: waitingBadgeCount ?? 0 })}
+              </span>
+            )}
             {task.status === "done" &&
               task.yunxiaoWorkitemId &&
               !task.yunxiaoWrittenBackAt && (
@@ -191,5 +182,8 @@ export const TaskListItem = memo(
   (prev, next) =>
     prev.task === next.task &&
     prev.selected === next.selected &&
-    (prev.onRunTodo !== undefined) === (next.onRunTodo !== undefined),
+    (prev.onRunTodo !== undefined) === (next.onRunTodo !== undefined) &&
+    prev.waitingBadgeKind === next.waitingBadgeKind &&
+    prev.waitingBadgeCount === next.waitingBadgeCount &&
+    prev.waitingBadgeBlocked === next.waitingBadgeBlocked,
 );

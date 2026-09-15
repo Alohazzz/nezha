@@ -55,6 +55,15 @@ import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
 import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
+import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
+import {
+  buildTaskBySerial,
+  evaluateTaskGate,
+  planIssueSubjects,
+  type PlanWaitingBadge,
+} from "../utils/planQueue";
+import { planAncestorChain, planTitle } from "../utils/plan";
+import type { PlanDeps } from "../utils/planDeps";
 import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -104,7 +113,13 @@ export function ProjectPage({
   plans,
   onGeneratePlanTodos,
   onRebindTaskPlan,
-  onCancelPlan,
+  onDeletePlan,
+  initialPlanPreviewId,
+  onInitialPlanPreviewConsumed,
+  planDeps,
+  waitingBadges,
+  onCancelWaitingDeps,
+  onIgnoreDepsAndRun,
   onCancelTask,
   onResumeTask,
   onResumeTaskAndSend,
@@ -218,9 +233,23 @@ export function ProjectPage({
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
+    /** 预览页「开始」：生成待办后交给串行调度立即执行。 */
+    autoStart?: boolean;
   }) => Promise<boolean>;
   onRebindTaskPlan: (taskId: string, planId: string | null) => void | Promise<void>;
-  onCancelPlan: (planId: string) => void | Promise<void>;
+  /** 显式删除方案（后端会拒绝仍有任务引用的方案） */
+  onDeletePlan: (planId: string) => void | Promise<void>;
+  /** 由看板发起的方案预览请求；打开后通过 onInitialPlanPreviewConsumed 通知外层清空。 */
+  initialPlanPreviewId?: string | null;
+  onInitialPlanPreviewConsumed?: () => void;
+  /** 方案依赖（planId → 已解析 deps.json）；等待任务门禁与 Checklist 用。 */
+  planDeps?: Record<string, PlanDeps | undefined>;
+  /** 方案待办等待角标（taskId → 角标）；透传给任务列表行。 */
+  waitingBadges?: Map<string, PlanWaitingBadge>;
+  /** 取消等待：等待前置的任务退回 todo。 */
+  onCancelWaitingDeps?: (taskId: string) => void;
+  /** 忽略依赖、立即开始（异常/缺失前置时的人工越过）。 */
+  onIgnoreDepsAndRun?: (taskId: string) => void;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
   /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
@@ -307,6 +336,13 @@ export function ProjectPage({
   const [worktreeScope, setWorktreeScope] = useState<string>("");
   // 方案预览面板当前展示的方案 id（顶栏「方案」按钮 / PlanTaskView 预览入口写入）。
   const [planPreviewId, setPlanPreviewId] = useState<string | null>(null);
+
+  // 由看板（跨项目）发起的方案预览：进入本项目后自动打开一次，随即消费掉请求。
+  useEffect(() => {
+    if (!initialPlanPreviewId) return;
+    setPlanPreviewId(initialPlanPreviewId);
+    onInitialPlanPreviewConsumed?.();
+  }, [initialPlanPreviewId, onInitialPlanPreviewConsumed]);
   // 云效云项目 id（PlanTaskView 议题链接用）。
   const [yunxiaoProjectId, setYunxiaoProjectId] = useState("");
 
@@ -391,6 +427,59 @@ export function ProjectPage({
   );
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
 
+  // 等待任务的依赖 Checklist：从项目任务 + 已解析的 deps.json 派生（纯计算，无 IO）。
+  const selectedTaskGate = useMemo(() => {
+    const empty = { entries: [], unmet: [], needsOverride: [], blocked: false };
+    if (!selectedTask || selectedTask.status !== "waiting_deps") return empty;
+    const deps = selectedTask.planId ? planDeps?.[selectedTask.planId] : undefined;
+    if (!deps) return empty;
+    return evaluateTaskGate(
+      selectedTask.yunxiaoSerialNumber ?? "",
+      deps.graph,
+      buildTaskBySerial(projectTasks),
+    );
+  }, [selectedTask, planDeps, projectTasks]);
+  /**
+   * 选中任务所属方案 + 其祖先链方案（追加子方案的上游）。两个下游派生都要用，
+   * 单独缓存一次，避免各自重复 `plans.find` 与上溯。
+   */
+  const selectedTaskPlanContext = useMemo(() => {
+    const own = plans.find((p) => p.id === selectedTask?.planId) ?? null;
+    return { own, ancestors: own ? planAncestorChain(own.id, plans) : [] };
+  }, [plans, selectedTask?.planId]);
+
+  /**
+   * Checklist 的议题标题来源：本方案 ∪ 祖先链方案。
+   * 追加子方案的前置可能指向主方案的议题——只查本方案会让那条前置渲染成光秃秃的编号，
+   * 用户无法判断「能不能忽略它」。跨方案条目在视图层额外标注所属方案（见 depPeers）。
+   */
+  const selectedTaskSubjects = useMemo(() => {
+    const { own, ancestors } = selectedTaskPlanContext;
+    if (!own) return new Map<string, PlanIssue>();
+    const subjects = planIssueSubjects(own);
+    for (const ancestor of ancestors) {
+      for (const [serial, issue] of planIssueSubjects(ancestor)) {
+        if (!subjects.has(serial)) subjects.set(serial, issue);
+      }
+    }
+    return subjects;
+  }, [selectedTaskPlanContext]);
+
+  /**
+   * 跨方案前置的归属：祖先链议题编号 → 所属方案名。Checklist 据此标注「主方案」来源——
+   * 用户要判断「敢不敢忽略这条前置」，就得知道它等的是本方案的下一步还是上游方案。
+   */
+  const selectedTaskDepPeerPlans = useMemo(() => {
+    const peers = new Map<string, string>();
+    for (const ancestor of selectedTaskPlanContext.ancestors) {
+      const name = planTitle(ancestor);
+      for (const issue of ancestor.issues) {
+        if (!peers.has(issue.serialNumber)) peers.set(issue.serialNumber, name);
+      }
+    }
+    return peers;
+  }, [selectedTaskPlanContext]);
+
   // 渲染任务 PTY 层（在 partition 左列与 fullscreen 背景共用）。
   // ptyVisible 由调用方决定：partition 常显；fullscreen 仅在未被文件/diff 覆盖时显示。
   const renderPty = (ptyVisible: boolean) => {
@@ -398,7 +487,7 @@ export function ProjectPage({
       <>
         {projectTasks
           .filter((t) => mountedTaskIds.has(t.id))
-          .filter((t) => t.id === selectedTaskId && t.status !== "todo")
+          .filter((t) => t.id === selectedTaskId && t.status !== "todo" && t.status !== "waiting_deps")
           .map((task) => {
             const worktreePath =
               task.worktreePath && !task.worktreeDiscarded ? task.worktreePath : null;
@@ -445,7 +534,11 @@ export function ProjectPage({
             );
           })}
         {!projectTasks.some(
-          (t) => t.id === selectedTaskId && t.status !== "todo" && mountedTaskIds.has(t.id),
+          (t) =>
+            t.id === selectedTaskId &&
+            t.status !== "todo" &&
+            t.status !== "waiting_deps" &&
+            mountedTaskIds.has(t.id),
         ) && (
           isNewTask || !selectedTask ? (
             <NewTaskView
@@ -488,6 +581,17 @@ export function ProjectPage({
                 onUpdateTodo={onUpdateTodo}
               />
             )
+          ) : selectedTask.status === ("waiting_deps" as TaskStatus) ? (
+            <WaitingDepsView
+              task={selectedTask}
+              plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
+              entries={selectedTaskGate.entries}
+              subjects={selectedTaskSubjects}
+              depPeerPlans={selectedTaskDepPeerPlans}
+              onJump={onSelectTask}
+              onCancelWait={onCancelWaitingDeps ?? (() => {})}
+              onIgnoreRun={onIgnoreDepsAndRun ?? (() => {})}
+            />
           ) : (
             <div style={s.mainStagePtyEmpty}>选择左侧任务以查看终端输出，或新建任务</div>
           )
@@ -1209,6 +1313,7 @@ export function ProjectPage({
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
         batches={batches}
+        waitingBadges={waitingBadges}
         onCreateTaskInGroup={handleCreateTaskInGroup}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         backTitle={hubMode ? t("skill.taskView.back") : undefined}
@@ -1485,7 +1590,7 @@ export function ProjectPage({
               projectPath={project.path}
               onCreateTodos={onGeneratePlanTodos}
               onDeletePlan={async (planId) => {
-                await onCancelPlan(planId);
+                await onDeletePlan(planId);
                 setPlanPreviewId(null);
               }}
               onClose={() => setPlanPreviewId(null)}

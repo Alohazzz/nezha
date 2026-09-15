@@ -86,6 +86,8 @@ export function YunxiaoTodoDiscussionView({
   const [notes, setNotes] = useState("");
   // 「直接开始」的需求澄清开关：仅非 Bug 议题可勾，详情未就绪时禁用。
   const [clarifyFirst, setClarifyFirst] = useState(false);
+  // 应用级「批量盘问（测试技能）」开关：开启时澄清环节改走 batch-grill-me，仅影响文案提示。
+  const [batchGrill, setBatchGrill] = useState(false);
   // 待办切换时重置议题相关状态（组件实例复用防串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
   if (openedTaskId !== task.id) {
@@ -106,6 +108,7 @@ export function YunxiaoTodoDiscussionView({
         const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
         setSettings(yunxiao);
         setAgentSettings(appSettings);
+        setBatchGrill(appSettings.batch_grill_enabled ?? false);
         if (!yunxiao.token || !yunxiao.organizationId || !workitemId) return;
         const item = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
           token: yunxiao.token,
@@ -248,11 +251,15 @@ export function YunxiaoTodoDiscussionView({
                     disabled={!detail}
                     onChange={(e) => setClarifyFirst(e.target.checked)}
                   />
-                  {t("yunxiao.direct.clarifyLabel")}
+                  {batchGrill
+                    ? t("yunxiao.direct.clarifyLabelBatch")
+                    : t("yunxiao.direct.clarifyLabel")}
                 </label>
                 <div style={s.directLaunchFlowHint}>
                   {clarifyFirst
-                    ? t("yunxiao.direct.flowClarify")
+                    ? batchGrill
+                      ? t("yunxiao.direct.flowClarifyBatch")
+                      : t("yunxiao.direct.flowClarify")
                     : t("yunxiao.direct.flowDirect")}
                 </div>
               </>

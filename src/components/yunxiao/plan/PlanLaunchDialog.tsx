@@ -1,16 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, CheckCircle2, Loader2, Play, X } from "lucide-react";
+import { Loader2, Play, X } from "lucide-react";
 import type {
   AgentType,
   PermissionMode,
   Plan,
   PlanIssue,
+  Task,
   YunxiaoIssueImagesPrepared,
   YunxiaoWorkitem,
 } from "../../../types";
 import { isAgentEnabled, firstEnabledAgent, cycleEnabledAgent, type AgentEnabledState } from "../../../types";
-import { buildPlanDiscussionPrompt, buildPlanDisplayName } from "../../../utils/plan";
+import {
+  buildAppendUpstreamContext,
+  buildPlanDiscussionPrompt,
+  buildPlanDisplayName,
+} from "../../../utils/plan";
+import {
+  PlanLaunchItemList,
+  type PlanLaunchItem,
+  type PlanLaunchItemStatus,
+} from "./PlanLaunchItemList";
+import { PlanLaunchParentField } from "./PlanLaunchParentField";
 import type { YunxiaoSettings } from "../../app-settings/types";
 import {
   buildYunxiaoIssueLink,
@@ -23,18 +34,6 @@ import { useI18n } from "../../../i18n";
 import { useToast } from "../../Toast";
 import s from "../../../styles";
 
-/** 单议题拉取状态：pending → loading → done | failed；removed = 用户剔除。 */
-type ItemStatus = "pending" | "loading" | "done" | "failed" | "removed";
-
-interface LaunchItem {
-  issue: YunxiaoWorkitem;
-  status: ItemStatus;
-  detail?: YunxiaoWorkitem;
-  imagePaths: string[];
-  imageWarning?: string;
-  error?: string;
-}
-
 const FETCH_CONCURRENCY = 2;
 
 function agentLabel(agent: AgentType): string {
@@ -45,24 +44,38 @@ function agentLabel(agent: AgentType): string {
  * 发起联合分析对话框：创建 draft 方案 → 并发拉取详情 + 图片（挂方案目录）→
  * 确认（agent/权限、失败项重试/剔除）→ 组装讨论 prompt 并启动方案讨论任务。
  * 任何非「发起」路径关闭都视为取消：删除 draft 方案记录与已下载图片。
+ *
+ * **追加议题**也走这个对话框（不另设入口）：多选一批未占用的议题，在「关联方案」里
+ * 挑一个本项目已定稿的方案，这批议题就挂成它的**子方案**（决策 A2：一次追加的一批合成
+ * 一个子方案）。选择关联方案后，讨论 prompt 会注入上游方案的议题清单与方案文档路径，
+ * 由讨论 agent 按内容判定跨方案依赖（决策 B2'）。
  */
 export function PlanLaunchDialog({
   issues,
+  plans,
+  tasks,
   targetProjectId,
   projectPath,
   projectName,
   settings,
   onCreatePlan,
+  onSetParentPlan,
   onStartDiscussion,
   onCancelPlan,
   onClose,
 }: {
   issues: YunxiaoWorkitem[];
+  /** 全量方案：用于算「关联方案」候选与祖先链。 */
+  plans: Plan[];
+  /** 全量任务：用于给上游方案议题标注当前状态（未生成待办 / 进行中 / 已完成…）。 */
+  tasks: Task[];
   targetProjectId: string;
   projectPath: string;
   projectName: string;
   settings: YunxiaoSettings;
   onCreatePlan: (targetProjectId: string, issues: PlanIssue[]) => Plan;
+  /** 关联方案变更（含取消关联传 undefined）：写入本方案的 parentPlanId。 */
+  onSetParentPlan: (planId: string, parentPlanId: string | undefined) => void;
   onStartDiscussion: (planId: string, prompt: string, agent: AgentType, permissionMode: PermissionMode) => void;
   onCancelPlan: (planId: string) => void | Promise<void>;
   onClose: () => void;
@@ -71,12 +84,14 @@ export function PlanLaunchDialog({
   const { showToast } = useToast();
 
   const [plan, setPlan] = useState<Plan | null>(null);
-  const [items, setItems] = useState<LaunchItem[]>(() =>
-    issues.map((issue) => ({ issue, status: "pending" as ItemStatus, imagePaths: [] })),
+  const [items, setItems] = useState<PlanLaunchItem[]>(() =>
+    issues.map((issue) => ({ issue, status: "pending" as PlanLaunchItemStatus, imagePaths: [] })),
   );
   const itemsRef = useRef(items);
   const [retryNonce, setRetryNonce] = useState(0);
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
+  // 应用级「批量盘问（测试技能）」开关：开启时讨论环节改走 batch-grill-me，仅影响文案提示。
+  const [batchGrill, setBatchGrill] = useState(false);
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(targetProjectId) ?? "codex",
   );
@@ -87,8 +102,10 @@ export function PlanLaunchDialog({
   const startedRef = useRef(false);
   // 发起人手动补充（背景描述 / 参考资料 / 已有修改方案等），原样拼进讨论 prompt。
   const [notes, setNotes] = useState("");
+  /** 关联方案（追加子方案）：空 = 独立方案。候选见 appendableParentPlans。 */
+  const [parentPlanId, setParentPlanId] = useState("");
 
-  const updateItem = useCallback((issueId: string, patch: Partial<LaunchItem>) => {
+  const updateItem = useCallback((issueId: string, patch: Partial<PlanLaunchItem>) => {
     setItems((prev) => {
       const next = prev.map((item) =>
         item.issue.id === issueId ? { ...item, ...patch } : item,
@@ -112,9 +129,10 @@ export function PlanLaunchDialog({
 
   // Agent 启用状态 + 已禁用 Agent 回退。
   useEffect(() => {
-    invoke<AgentEnabledState>("load_app_settings")
+    invoke<AgentEnabledState & { batch_grill_enabled?: boolean }>("load_app_settings")
       .then((appSettings) => {
         setAgentSettings(appSettings);
+        setBatchGrill(appSettings.batch_grill_enabled ?? false);
         setAgent((prev) => (isAgentEnabled(appSettings, prev) ? prev : firstEnabledAgent(appSettings)));
       })
       .catch(() => undefined);
@@ -184,7 +202,7 @@ export function PlanLaunchDialog({
     setItems((prev) => {
       const next = prev.map((item) =>
         item.issue.id === issueId
-          ? { ...item, status: "pending" as ItemStatus, error: undefined }
+          ? { ...item, status: "pending" as PlanLaunchItemStatus, error: undefined }
           : item,
       );
       itemsRef.current = next;
@@ -235,6 +253,13 @@ export function PlanLaunchDialog({
         planId: plan.id,
         hasBug,
       });
+      // 追加子方案：注入上游方案议题清单 + plan.md 路径，供讨论 agent 判定跨方案依赖。
+      const upstreamContext = buildAppendUpstreamContext({
+        parentPlanId,
+        plans,
+        projectPath,
+        tasks,
+      });
       const prompt = buildPlanDiscussionPrompt({
         issues: doneItems.map((item) => item.detail!),
         imagePathsByIssue: Object.fromEntries(
@@ -249,8 +274,13 @@ export function PlanLaunchDialog({
           ]),
         ),
         userNotes: notes,
+        upstreamContext,
         instructions,
       });
+      // 先写归属再启动：讨论任务一跑起来看板就该显示它挂在哪个主方案下。
+      if (parentPlanId !== (plan.parentPlanId ?? "")) {
+        onSetParentPlan(plan.id, parentPlanId || undefined);
+      }
       startedRef.current = true;
       onStartDiscussion(plan.id, prompt, agent, permission);
     } catch (e) {
@@ -267,6 +297,10 @@ export function PlanLaunchDialog({
     notes,
     agent,
     permission,
+    parentPlanId,
+    plans,
+    tasks,
+    onSetParentPlan,
     onStartDiscussion,
     showToast,
     t,
@@ -298,53 +332,15 @@ export function PlanLaunchDialog({
           </button>
         </div>
 
-        <div style={s.planLaunchList}>
-          {items
-            .filter((item) => item.status !== "removed")
-            .map((item) => (
-              <div key={item.issue.id} style={s.planLaunchItem}>
-                <span style={s.planLaunchStatus}>
-                  {item.status === "loading" || item.status === "pending" ? (
-                    <Loader2 size={13} className="spin" />
-                  ) : item.status === "done" ? (
-                    <CheckCircle2 size={13} color="var(--success, #34c759)" />
-                  ) : (
-                    <AlertTriangle size={13} color="var(--danger)" />
-                  )}
-                </span>
-                <div style={s.planLaunchItemBody}>
-                  <div style={s.planLaunchItemTitle}>
-                    <span style={s.yunxiaoIssueSerial}>{item.issue.serialNumber}</span>
-                    {item.issue.subject}
-                  </div>
-                  {(item.status === "done" && (item.imagePaths.length > 0 || item.imageWarning)) ||
-                  item.status === "failed" ? (
-                    <div style={s.planLaunchItemNote}>
-                      {item.status === "done" ? (
-                        <>
-                          {item.imagePaths.length > 0 &&
-                            t("plan.launch.itemImages", { count: item.imagePaths.length })}
-                          {item.imageWarning ? ` · ${item.imageWarning}` : ""}
-                        </>
-                      ) : (
-                        item.error
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-                {item.status === "failed" && (
-                  <div style={s.planLaunchItemActions}>
-                    <button type="button" style={s.knowledgeSecondaryBtn} onClick={() => handleRetry(item.issue.id)}>
-                      {t("yunxiao.retry")}
-                    </button>
-                    <button type="button" style={s.knowledgeSecondaryBtn} onClick={() => handleRemove(item.issue.id)}>
-                      {t("plan.launch.remove")}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-        </div>
+        <PlanLaunchItemList items={items} onRetry={handleRetry} onRemove={handleRemove} />
+
+        <PlanLaunchParentField
+          plans={plans}
+          targetProjectId={targetProjectId}
+          currentPlanId={plan?.id}
+          value={parentPlanId}
+          onChange={setParentPlanId}
+        />
 
         <div style={s.planLaunchNotes}>
           <label style={s.yunxiaoFieldLabel}>{t("plan.launch.notesLabel")}</label>
@@ -371,6 +367,10 @@ export function PlanLaunchDialog({
             <span style={s.planLaunchProgress}>{t("plan.launch.fetching")}</span>
           )}
         </div>
+
+        {batchGrill && (
+          <div style={s.planLaunchParentHint}>{t("plan.launch.batchGrillHint")}</div>
+        )}
 
         <div style={s.bbDialogActions}>
           <button type="button" style={s.bbBtnGhost} onClick={handleClose} disabled={starting}>

@@ -3,8 +3,53 @@
  * 与后端约定保持一致：plan.md 节标题格式 `## <议题编号> <标题>`、测试小节
  * `### 影响范围与测试`（契约由 SkillHub `yunxiao-plan-discussion` 技能维护）。
  */
-import type { YunxiaoWorkitem } from "../types";
+import type { Plan, Task, TaskStatus, YunxiaoWorkitem } from "../types";
 import { normalizeIssueDescription, getYunxiaoPriority } from "./yunxiao";
+import { buildTaskBySerial } from "./planQueue";
+
+/** 方案显示名：有自定义名用自定义名，否则由议题编号拼（看板/面包屑统一口径）。 */
+export function planTitle(plan: Pick<Plan, "name" | "issues">): string {
+  if (plan.name.trim()) return plan.name;
+  return buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber));
+}
+
+/**
+ * 方案的祖先链：从**直接父级**到根，顺序排列（决策 D-b：`dependsOn` 可引用整条祖先链）。
+ *
+ * 两级守卫，都只「停在断点」而不抛错——祖先链只用于放宽引用范围与提供展示归属，
+ * 解析不出祖先时子方案照常工作（未被放行的编号由 `parsePlanDeps` 丢边并告警）：
+ * - 链上出现重复 id（`parentPlanId` 成环）→ 停在重复节点；
+ * - 父方案已被删除 / id 不存在 → 停在断点（祖先集合只含仍存在的方案）。
+ */
+export function planAncestorChain<T extends Pick<Plan, "id" | "parentPlanId">>(
+  planId: string,
+  plans: readonly T[],
+): T[] {
+  const byId = new Map<string, T>();
+  for (const plan of plans) byId.set(plan.id, plan);
+
+  const chain: T[] = [];
+  const visited = new Set<string>([planId]);
+  let current = byId.get(planId)?.parentPlanId?.trim();
+  while (current) {
+    if (visited.has(current)) break;
+    const parent = byId.get(current);
+    if (!parent) break;
+    visited.add(current);
+    chain.push(parent);
+    current = parent.parentPlanId?.trim();
+  }
+  return chain;
+}
+
+/** 祖先链（含父 / 祖父…）的议题编号合集，供 deps.json 引用放宽与 Checklist 标题来源共用。 */
+export function planAncestorSerials(planId: string, plans: readonly Plan[]): string[] {
+  const serials: string[] = [];
+  for (const ancestor of planAncestorChain(planId, plans)) {
+    for (const issue of ancestor.issues) serials.push(issue.serialNumber);
+  }
+  return serials;
+}
 
 /** 项目内方案目录：`<project>/.nezha/plans/<planId>/`。 */
 export function planDirPath(projectPath: string, planId: string): string {
@@ -14,6 +59,12 @@ export function planDirPath(projectPath: string, planId: string): string {
 /** 方案文档绝对路径。 */
 export function planMdPath(projectPath: string, planId: string): string {
   return `${planDirPath(projectPath, planId)}/plan.md`;
+}
+
+/** 方案依赖文件绝对路径（契约见 SkillHub `yunxiao-plan-discussion`「方案依赖文件」节；
+ *  与后端 get_plan_discussion_instructions 注入给 agent 的路径同一约定）。 */
+export function planDepsPath(projectPath: string, planId: string): string {
+  return `${planDirPath(projectPath, planId)}/deps.json`;
 }
 
 /** 议题在方案图片目录下的归档目录（与后端 prepare_issue_images 的 plan 分支一致）。 */
@@ -36,6 +87,8 @@ export function buildPlanDiscussionPrompt(input: {
   linksByIssue: Record<string, string>;
   /** 发起人在对话框手动补充的内容（背景描述/参考资料/已有修改方案等），可空。 */
   userNotes?: string;
+  /** 追加子方案时的上游方案上下文（`buildUpstreamPlanContext` 产出），可空。 */
+  upstreamContext?: string;
   instructions: string;
 }): string {
   const pieces: string[] = [];
@@ -91,10 +144,96 @@ export function buildPlanDiscussionPrompt(input: {
     );
   }
 
+  // 上游方案上下文紧跟议题清单：判依赖前必须先有可引用的编号与状态。
+  const upstream = input.upstreamContext?.trim();
+  if (upstream) {
+    pieces.push(upstream);
+  }
+
   if (input.instructions.trim()) {
     pieces.push(input.instructions.trim());
   }
   return pieces.filter((p) => p && p.trim()).join("\n\n");
+}
+
+/**
+ * 追加子方案时注入讨论 prompt 的「上游方案上下文」（决策 B2'）。
+ *
+ * 两件事各司其职：**议题清单内联**（`dependsOn` 要写精确编号，不能靠模型猜），
+ * **正文给绝对路径**（可能很长，让 agent 按需读取，与执行 prompt 同一套做法）。
+ * 状态一律显式给出：门禁对「尚未生成待办」按 `missing`、`failed`/`cancelled`/`interrupted`
+ * 按 `abnormal` 处理，agent 需要与门禁对同一份信息有共识。
+ */
+export function buildUpstreamPlanContext(input: {
+  /** 祖先链：从直接父级到根（`planAncestorChain` 的返回值）。 */
+  ancestors: readonly Plan[];
+  /** 祖先方案 id → `plan.md` 绝对路径。 */
+  planMdPathById: Readonly<Record<string, string>>;
+  /** 承载议题的任务（全局，跨方案按编号索引）——用于判断上游议题是否已有任务。 */
+  taskBySerial: ReadonlyMap<string, Task>;
+}): string {
+  if (input.ancestors.length === 0) return "";
+  const pieces: string[] = [];
+
+  pieces.push(
+    "## 上游方案（追加来源）\n" +
+      "本次讨论是往一个已定稿的主方案上**追加**议题：这批议题会被挂成一个**新增子方案**，主方案与其在跑任务零改动。" +
+      "判定依赖时，除本批议题彼此之间，还要判断每个议题**是否依赖上游方案中的具体议题**：" +
+      "只有当前置产出确实是本议题的输入时，才把那个议题编号写进本议题的 `dependsOn`；**没有依赖就不要写**" +
+      "（不要整批依赖上游方案，也不要写「等整个上游方案完成」这类粗粒度表达）。" +
+      "写之前先读上游方案的方案文档，确认产出与输入的关系。可引用的编号仅限下列上游方案议题，" +
+      "其他方案 / 项目的编号会被丢弃。",
+  );
+
+  for (const ancestor of input.ancestors) {
+    const lines: string[] = [`### ${planTitle(ancestor)}`];
+    const mdPath = (input.planMdPathById[ancestor.id] ?? "").trim();
+    if (mdPath) lines.push(`- 方案文档（先读取再判定依赖）：${mdPath}`);
+    lines.push("", "议题清单：");
+    for (const issue of ancestor.issues) {
+      const task = input.taskBySerial.get(issue.serialNumber);
+      const status = task ? taskStatusLabel(task.status) : "未生成待办";
+      lines.push(`- ${issue.serialNumber} ${issue.subject}（${status}）`);
+    }
+    pieces.push(lines.join("\n"));
+  }
+
+  return pieces.join("\n\n");
+}
+
+/** deps 门禁口径下的任务状态文案（与 `isDependencySatisfied` / `isDependencyAbnormal` 同源）。 */
+function taskStatusLabel(status: TaskStatus): string {
+  if (status === "done") return "已完成";
+  if (status === "failed") return "已失败";
+  if (status === "cancelled") return "已取消";
+  if (status === "interrupted") return "已中断";
+  return "进行中";
+}
+
+/**
+ * 讨论入口用：由「选中的父方案」组装注入讨论 prompt 的上游上下文。
+ *
+ * 从**选中的父方案**起算祖先链（含父方案自身）——此刻 draft 方案的 `parentPlanId`
+ * 尚未落库，用方案 id 上溯拿不到自己。回归独立方案（未选父方案 / 父方案已不存在）返回空串。
+ */
+export function buildAppendUpstreamContext(input: {
+  parentPlanId: string;
+  plans: readonly Plan[];
+  projectPath: string;
+  tasks: readonly Task[];
+}): string {
+  const parentId = input.parentPlanId.trim();
+  if (!parentId) return "";
+  const parent = input.plans.find((plan) => plan.id === parentId);
+  if (!parent) return "";
+  const ancestors = [parent, ...planAncestorChain(parent.id, input.plans)];
+  return buildUpstreamPlanContext({
+    ancestors,
+    planMdPathById: Object.fromEntries(
+      ancestors.map((ancestor) => [ancestor.id, planMdPath(input.projectPath, ancestor.id)]),
+    ),
+    taskBySerial: buildTaskBySerial(input.tasks),
+  });
 }
 
 /** 方案执行提示词：议题信息 + 方案统筹节 + 本议题节内联 + 全文路径 + 协作约束 + 后端执行指令。 */
@@ -104,6 +243,8 @@ export function buildPlanExecutionPrompt(input: {
   planOverview: string;
   issueSection: string;
   planMdAbsolutePath: string;
+  /** 本议题所属方案的上级方案文档绝对路径（追加子方案时才有）。 */
+  upstreamPlanMdAbsolutePath?: string;
   imagePaths: string[];
   instructions: string;
 }): string {
@@ -134,6 +275,14 @@ export function buildPlanExecutionPrompt(input: {
   pieces.push(
     `## 方案全文\n方案文档绝对路径：${input.planMdAbsolutePath}\n（可读取全文了解跨议题统筹与其他议题节，但只执行本议题（${input.issue.serialNumber}）的改动，不要动其他议题的内容。）`,
   );
+
+  // 追加子方案：子方案的统筹节可能引用上游方案议题，执行者需要能查证它是什么。
+  const upstream = input.upstreamPlanMdAbsolutePath?.trim();
+  if (upstream) {
+    pieces.push(
+      `## 上游方案全文\n上游方案文档绝对路径：${upstream}\n（本议题所属方案是它的追加子方案；本议题的硬依赖可能包含上游方案的议题。仅在本议题方案确有引用时按需读取，用于确认前置约定，不要执行上游方案的改动。）`,
+    );
+  }
 
   const tag = input.issue.serialNumber ? `#${input.issue.serialNumber}` : "";
   if (tag) {

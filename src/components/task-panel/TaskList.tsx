@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Plus } from "lucide-react";
 import type { BranchBatch, Task, TaskDisplayWindow } from "../../types";
+import type { PlanWaitingBadge } from "../../utils/planQueue";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -42,6 +43,7 @@ export function TaskList({
   onToggleTaskStar,
   onRunTodo,
   batches,
+  waitingBadges,
   onCreateTaskInGroup,
 }: {
   tasks: Task[];
@@ -54,6 +56,8 @@ export function TaskList({
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
   batches: BranchBatch[];
+  /** 方案待办的等待角标（taskId → 角标信息）；非等待态任务不在表内。 */
+  waitingBadges?: Map<string, PlanWaitingBadge>;
   onCreateTaskInGroup: (groupKey: string) => void;
 }) {
   const { t } = useI18n();
@@ -238,6 +242,9 @@ export function TaskList({
                   onDelete={() => onDeleteTask(row.task.id)}
                   onToggleStar={() => onToggleTaskStar(row.task.id)}
                   onRunTodo={row.showRunTodo ? () => onRunTodo(row.task) : undefined}
+                  waitingBadgeKind={waitingBadges?.get(row.task.id)?.kind}
+                  waitingBadgeCount={waitingBadges?.get(row.task.id)?.count}
+                  waitingBadgeBlocked={waitingBadges?.get(row.task.id)?.blocked}
                 />
               )}
             </div>

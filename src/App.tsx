@@ -57,12 +57,25 @@ import {
   buildPlanDiscussionPrompt,
   buildPlanExecutionPrompt,
   buildPlanTaskName,
+  buildPlanDisplayName,
   buildDirectExecutionPrompt,
   extractPlanIssueSection,
   extractPlanOverviewForIssues,
   planIssueImagesDir,
+  planAncestorSerials,
+  planDepsPath,
   planMdPath,
 } from "./utils/plan";
+import { parsePlanDeps, type PlanDeps } from "./utils/planDeps";
+import { planLifecycleActions } from "./utils/planBoard";
+import {
+  buildTaskBySerial,
+  buildWaitingBadges,
+  evaluateTaskGate,
+  hasFreeSlot,
+  selectAutoStart,
+  type PlanWaitingBadge,
+} from "./utils/planQueue";
 import {
   EMPTY_YUNXIAO_SETTINGS,
   type KnowledgeSettings,
@@ -71,7 +84,8 @@ import {
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
-import { KanbanView, OPEN_KANBAN_VIEW_EVENT } from "./components/KanbanView";
+import { OPEN_KANBAN_VIEW_EVENT } from "./components/KanbanView";
+import { BoardOverlay } from "./components/BoardOverlay";
 import { UpdateController } from "./components/update/UpdateController";
 import { useToast } from "./components/Toast";
 import { isHideWindowShortcut, isToggleKanbanShortcut } from "./shortcuts";
@@ -272,8 +286,10 @@ function shouldIgnoreTaskStatusTransition(current: TaskStatus, next: TaskStatus)
   );
 }
 
-function isLiveTerminalTaskStatus(status: TaskStatus): boolean {
-  return (
+/** 方案待办默认并发上限（project config `[plan] max_concurrent` 缺省时）：1 = 串行。 */
+const DEFAULT_PLAN_MAX_CONCURRENT = 1;
+
+function isLiveTerminalTaskStatus(status: TaskStatus): boolean {  return (
     status === "pending" ||
     status === "running" ||
     status === "input_required" ||
@@ -383,6 +399,10 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   // 多议题联合方案（全项目合并持有，按 projectId 过滤持久化，与 tasks 同构）。
   const [plans, setPlans] = useState<Plan[]>([]);
+  // 方案依赖（planId → 已解析 deps.json）：看板的依赖摘要 + 运行时门禁用；缺省视为无依赖。
+  const [planDeps, setPlanDeps] = useState<Record<string, PlanDeps | undefined>>({});
+  // 项目级「方案待办并发上限」缓存（config.toml），缺省回退 DEFAULT_PLAN_MAX_CONCURRENT。
+  const planMaxConcurrentRef = useRef<Record<string, number>>({});
   // 待办「发起讨论」进行中标记（拉详情/图片/建方案期间锁定入口按钮）。
   const [todoDiscussionStarting, setTodoDiscussionStarting] = useState(false);
   const todoDiscussionStartingRef = useRef(false);
@@ -402,6 +422,8 @@ function App() {
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
   const [hubMode, setHubMode] = useState(false);
   const [showKanban, setShowKanban] = useState(false);
+  // 看板 → 方案预览：跨项目打开时先切到目标项目，再由 ProjectPage 消费一次该 id。
+  const [pendingPlanPreviewId, setPendingPlanPreviewId] = useState<string | null>(null);
 
   const tm = useTerminalManager();
   const pendingResumeStartsRef = useRef<Record<string, () => void>>({});
@@ -441,6 +463,82 @@ function App() {
   const mountProject = useCallback((projectId: string) => {
     setMountedProjectIds((prev) => (prev.includes(projectId) ? prev : [...prev, projectId]));
   }, []);
+
+  /**
+   * 读单个方案的 deps.json 并解析；缺失/损坏降级为「无依赖」（parsePlanDeps 内部处理）。
+   *
+   * 追加子方案（决策 D-b）时把**祖先链**议题编号作为额外可引用集合传入——子方案的
+   * `dependsOn` 允许指向主方案及其父链的具体议题，链外编号仍被丢弃并告警。
+   */
+  async function readPlanDepsFor(
+    plan: Plan,
+    projectPath: string,
+    allPlans: readonly Plan[],
+  ): Promise<PlanDeps> {
+    const serials = plan.issues.map((issue) => issue.serialNumber);
+    const ancestorSerials = planAncestorSerials(plan.id, allPlans);
+    try {
+      const raw = await invoke<string>("read_file_content", {
+        path: planDepsPath(projectPath, plan.id),
+        projectPath,
+      });
+      return parsePlanDeps(raw, serials, ancestorSerials);
+    } catch {
+      // 存量方案（无该文件）或读盘失败：按无依赖处理，不阻断看板渲染。
+      return parsePlanDeps(null, serials, ancestorSerials);
+    }
+  }
+
+  /**
+   * 批量刷新方案依赖缓存（挂载时 / 生成待办后调用）。
+   *
+   * `allPlans` 是**全量**方案（不只待刷新的子集）——解析 deps.json 需要按 `parentPlanId`
+   * 上溯祖先链来放行跨方案引用，只看待刷新的子集会丢掉祖先上下文。
+   */
+  const refreshPlanDeps = useCallback(
+    async (input: { plans: Plan[]; projects: Project[]; allPlans: Plan[] }) => {
+      const projectById = new Map(input.projects.map((p) => [p.id, p]));
+      const entries = await Promise.all(
+        input.plans.map(async (plan) => {
+          const project = projectById.get(plan.projectId);
+          if (!project) return null;
+          return [plan.id, await readPlanDepsFor(plan, project.path, input.allPlans)] as const;
+        }),
+      );
+      const loaded: Record<string, PlanDeps> = {};
+      for (const entry of entries) {
+        if (entry) loaded[entry[0]] = entry[1];
+      }
+      setPlanDeps((prev) => ({ ...prev, ...loaded }));
+    },
+    [],
+  );
+
+  /** 读项目级方案并发上限（config.toml），缓存进 ref 供调度器同步读取。 */
+  const refreshPlanMaxConcurrent = useCallback(async (projectList: Project[]) => {
+    await Promise.all(
+      projectList.map(async (project) => {
+        try {
+          const config = await invoke<{ plan?: { max_concurrent?: number } }>(
+            "read_project_config",
+            { projectPath: project.path },
+          );
+          const value = config.plan?.max_concurrent;
+          if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+            planMaxConcurrentRef.current[project.id] = Math.floor(value);
+          }
+        } catch {
+          // 读配置失败按默认并发处理
+        }
+      }),
+    );
+  }, []);
+
+  // 等待角标：由 tasks + deps 派生，稳定引用避免无谓重渲染。
+  const waitingBadges = useMemo<Map<string, PlanWaitingBadge>>(
+    () => buildWaitingBadges(tasks, planDeps),
+    [tasks, planDeps],
+  );
 
   const updateProjectView = useCallback((projectId: string, patch: Partial<ProjectViewState>) => {
     setProjectViews((prev) => ({
@@ -666,6 +764,9 @@ function App() {
         console.error(`[plans] load failed for ${loadedProjects[i].name}:`, result.reason);
       });
       setPlans(loadedPlans);
+      // 方案依赖随方案同批加载；失败不阻断（按无依赖处理）。
+      void refreshPlanDeps({ plans: loadedPlans, projects: loadedProjects, allPlans: loadedPlans });
+      void refreshPlanMaxConcurrent(loadedProjects);
     }
 
     init().catch(console.error);
@@ -1126,10 +1227,8 @@ function App() {
     invokeRunTask(worktreeTask, worktreePath, [], [], project.path);
   }
 
-  function handleRunTodoTask(task: Task) {
-    const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
-
+  /** 真正启动一个待办（PTY + 视图切换）。依赖门禁已由调用方判定。 */
+  function beginTaskRun(task: Task, project: Project) {
     setTasks((prev) => {
       const next = prev.map((t) =>
         t.id === task.id
@@ -1147,6 +1246,109 @@ function App() {
     tm.resetTaskTerminal(task.id);
     updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
     invokeRunTask(task, task.worktreePath ?? project.path, [], [], project.path);
+  }
+
+  /** 把任务置为等待前置（不创建 PTY），用于启动拦截 / 队列。 */
+  function enterWaitingDeps(task: Task) {
+    setTasks((prev) => {
+      const next = prev.map((t) =>
+        t.id === task.id
+          ? {
+              ...t,
+              status: "waiting_deps" as TaskStatus,
+              updatedAt: Date.now(),
+              attentionRequestedAt: undefined,
+            }
+          : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
+  }
+
+  /**
+   * 任务启动的唯一收口点：方案待办有未完成硬依赖时改入 `waiting_deps`，
+   * 无依赖（或用户已忽略依赖）时立即启动——行为与门禁上线前完全一致。
+   *
+   * 方案待办另受**同项目串行守卫**（决策 L1）：自动接续已按并发上限放行，手动 ▶
+   * 若不守同一上限就能绕过串行、在同一工作区并发跑两个 agent。守卫只约束方案待办，
+   * 普通任务（用户手动建的）保持原行为。
+   */
+  function handleRunTodoTask(task: Task) {
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+
+    if (task.planId && task.yunxiaoSerialNumber && !task.planDepsIgnored) {
+      const deps = planDeps[task.planId];
+      if (deps) {
+        const gate = evaluateTaskGate(
+          task.yunxiaoSerialNumber,
+          deps.graph,
+          buildTaskBySerial(tasks),
+        );
+        if (gate.blocked) {
+          enterWaitingDeps(task);
+          showToast(t("plan.deps.waitingStarted", { count: gate.unmet.length }), "warning");
+          return;
+        }
+      }
+    }
+    if (task.planId && !hasFreeScheduledSlot(task)) {
+      enterWaitingDeps(task);
+      showToast(t("plan.deps.queuedStarted"), "warning");
+      return;
+    }
+    beginTaskRun(task, project);
+  }
+
+  /** 该方案待办所在项目是否还有空闲并发槽位（与自动接续共用同一上限）。 */
+  function hasFreeScheduledSlot(task: Task): boolean {
+    return hasFreeSlot(
+      tasks,
+      task.projectId,
+      planMaxConcurrentRef.current[task.projectId],
+      DEFAULT_PLAN_MAX_CONCURRENT,
+    );
+  }
+
+  /** 「取消等待」：等待前置的任务退回 todo（不启动）。 */
+  function handleCancelWaitingDeps(taskId: string) {
+    setTasks((prev) => {
+      const task = prev.find((t) => t.id === taskId);
+      if (!task) return prev;
+      const next = prev.map((t) =>
+        t.id === taskId
+          ? { ...t, status: "todo" as TaskStatus, updatedAt: Date.now(), planDepsIgnored: undefined }
+          : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+  }
+
+  /**
+   * 「忽略依赖，仍然开始」：记录忽略标记并启动（异常/缺失前置的人工越过）。
+   * 越过的是**前置依赖**，不是同项目串行——项目已有任务在跑时仍排队，等槽位空出后
+   * 由 `selectAutoStart` 放行（`planDepsIgnored` 使其不再受前置约束）。
+   */
+  function handleIgnoreDepsAndRun(taskId: string) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    const marked: Task = { ...task, planDepsIgnored: true };
+    setTasks((prev) => {
+      const next = prev.map((t) => (t.id === taskId ? { ...t, planDepsIgnored: true } : t));
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    if (!hasFreeScheduledSlot(task)) {
+      enterWaitingDeps(marked);
+      showToast(t("plan.deps.queuedStarted"), "warning");
+      return;
+    }
+    beginTaskRun(marked, project);
   }
 
   function markTaskWorktreeDiscarded(taskId: string) {
@@ -1597,8 +1799,8 @@ function App() {
     invokeRunTask(task, project.path, [], [], project.path);
   }
 
-  /** 发起对话框取消：删除 draft 方案记录与 `.nezha/plans/<planId>/` 目录。 */
-  async function handleCancelYunxiaoPlan(planId: string) {
+  /** 移除方案记录并清理 `.nezha/plans/<planId>/` 目录：用于发起失败清理、对话框取消，以及显式删除（已在 handleDeletePlan 二次确认）。 */
+  async function handleRemovePlanRecord(planId: string) {
     const plan = plans.find((p) => p.id === planId);
     if (!plan) return;
     const project = projects.find((p) => p.id === plan.projectId);
@@ -1617,6 +1819,74 @@ function App() {
       console.error("[plans] delete failed:", e);
       showToast(t("plan.deleteFailed", { error: String(e) }), "error");
     }
+  }
+
+  /** 更新本地方案对象（含持久化）；供生命周期动作复用。 */
+  function updatePlan(projectId: string, planId: string, patch: Partial<Plan>) {
+    setPlans((prev) => {
+      const next = prev.map((p) => (p.id === planId ? { ...p, ...patch } : p));
+      persistProjectPlans(projectId, next);
+      return next;
+    });
+  }
+
+  /**
+   * 关联方案（阶段三「追加议题 = 子方案」）：把 draft 方案挂到选定的主方案下，
+   * 或取消关联（传 undefined）。只写归属——依赖不由该字段决定，逐议题由 deps.json 判定。
+   */
+  function handleSetPlanParent(planId: string, parentPlanId: string | undefined) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
+    updatePlan(plan.projectId, planId, { parentPlanId });
+  }
+
+  /** 标记完成（M1 手动）：不自动收敛，由使用者判断方案是否算完成。 */
+  function handleCompletePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canComplete) return;
+    updatePlan(plan.projectId, planId, { status: "completed" });
+  }
+
+  /** 重开：已完成 → 执行中（发现仍有未了事项时用）。 */
+  function handleReopenPlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canReopen) return;
+    updatePlan(plan.projectId, planId, { status: "executing" });
+  }
+
+  /** 取消（F1 留存态）：保留方案记录与目录，议题占用随之释放（可重新导入）。 */
+  function handleCancelPlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canCancel) return;
+    updatePlan(plan.projectId, planId, { status: "cancelled" });
+  }
+
+  /** 归档（AR1）：从看板主视图移出（展示层动作，不改 status）。 */
+  function handleArchivePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canArchive) return;
+    updatePlan(plan.projectId, planId, { archivedAt: Date.now() });
+  }
+
+  /** 反归档：回到看板主视图。 */
+  function handleUnarchivePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan || !planLifecycleActions(plan).canUnarchive) return;
+    updatePlan(plan.projectId, planId, { archivedAt: undefined });
+  }
+
+  /** 显式删除方案（危险操作）：连同 `.nezha/plans/<planId>/` 目录一并清理，先二次确认。 */
+  async function handleDeletePlan(planId: string) {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return;
+    const ok = await confirm(
+      t("board.deletePrompt", {
+        name: plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber)),
+      }),
+      { title: t("board.delete"), kind: "warning" },
+    );
+    if (!ok) return;
+    await handleRemovePlanRecord(planId);
   }
 
   /**
@@ -1686,7 +1956,7 @@ function App() {
             t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }),
             "error",
           );
-          await handleCancelYunxiaoPlan(plan.id);
+          await handleRemovePlanRecord(plan.id);
           return;
         }
         if (images.failed > 0) {
@@ -1703,7 +1973,7 @@ function App() {
         imagePaths = images.paths;
       } catch (e) {
         showToast(t("yunxiao.images.allFailed", { error: String(e) }), "error");
-        await handleCancelYunxiaoPlan(plan.id);
+        await handleRemovePlanRecord(plan.id);
         return;
       }
 
@@ -1996,6 +2266,10 @@ function App() {
   /**
    * 方案定稿后的「生成待办」：按确认页顺序直接生成 N 个执行待办（一议题一任务，
    * 任务↔议题 1:1），不自动建批——任务跑在当前工作区，是否归批由用户后续手动决定。
+   *
+   * `autoStart`（预览页「开始」）不弹确认页：生成的待办一律进 `waiting_deps`，
+   * 交给 `selectAutoStart` 按拓扑序逐个放行——这样「开始」既不绕过依赖门禁，
+   * 也不会无视项目并发上限一起起跑。
    */
   async function handleGeneratePlanTodos(input: {
     planId: string;
@@ -2003,12 +2277,32 @@ function App() {
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
+    /** 预览页「开始」：生成待办后立即交给串行调度启动（无需确认页）。 */
+    autoStart?: boolean;
   }): Promise<boolean> {
     const plan = plans.find((p) => p.id === input.planId);
     if (!plan) return false;
     const project = projects.find((p) => p.id === plan.projectId);
     if (!project) return false;
-    if (input.issues.length === 0) return false;
+
+    // 「一键开始」没有确认页，冲突议题（该议题已有任务）在此剔除，避免同议题重复建待办。
+    const issues = input.autoStart
+      ? input.issues.filter(
+          (issue) => !tasks.some((task) => task.yunxiaoWorkitemId === issue.workitemId),
+        )
+      : input.issues;
+    if (issues.length === 0) {
+      if (input.autoStart) showToast(t("plan.start.noNewIssues"), "warning");
+      return false;
+    }
+
+    // 「一键开始」由串行调度放行，门禁判定必须基于最新 deps.json：先刷新缓存，
+    // 否则新方案的依赖未知会被当成无依赖，按创建顺序直接起跑。
+    let freshDeps: PlanDeps | undefined;
+    if (input.autoStart) {
+      freshDeps = await readPlanDepsFor(plan, project.path, plans);
+      setPlanDeps((prev) => ({ ...prev, [plan.id]: freshDeps }));
+    }
 
     // 1) 读方案文档，按议题切片（执行提示词内联统筹节与本议题节）。
     // 统筹节仅多议题硬性要求（跨议题顺序与公共改动归属）；单议题缺失不阻断。
@@ -2024,7 +2318,7 @@ function App() {
     }
     const { overview, missing } = extractPlanOverviewForIssues(
       planMarkdown,
-      input.issues.length,
+      issues.length,
     );
     if (missing) {
       showToast(t("plan.overviewMissing"), "error");
@@ -2041,7 +2335,7 @@ function App() {
     }
     const imagePathsByIssue: Record<string, string[]> = {};
     await Promise.all(
-      input.issues.map(async (issue) => {
+      issues.map(async (issue) => {
         try {
           const entries = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>(
             "read_dir_entries",
@@ -2061,7 +2355,7 @@ function App() {
 
     // 3) 预生成任务 id + 每任务的执行指令（drafts 目录按任务 id 区分）。
     const now = Date.now();
-    const taskIds = input.issues.map((_, i) => `${now + i}`);
+    const taskIds = issues.map((_, i) => `${now + i}`);
     const instructionsByTaskId: Record<string, string> = {};
     await Promise.all(
       taskIds.map(async (taskId) => {
@@ -2077,9 +2371,15 @@ function App() {
       }),
     );
 
+    // autoStart 的待办先入 waiting_deps，由串行调度按依赖顺序放行；其余保持 todo 待用户手动开始。
+    const initialStatus: TaskStatus = input.autoStart ? "waiting_deps" : "todo";
+    // 追加子方案：执行 prompt 附上游方案文档路径，让执行者能查证统筹节里引用的上游议题。
+    const upstreamPlan = plan.parentPlanId
+      ? plans.find((p) => p.id === plan.parentPlanId) ?? null
+      : null;
     const tasksToCreate: Task[] = [];
-    for (let i = 0; i < input.issues.length; i++) {
-      const issue = input.issues[i];
+    for (let i = 0; i < issues.length; i++) {
+      const issue = issues[i];
       const section = extractPlanIssueSection(planMarkdown, issue.serialNumber);
       if (!section) {
         showToast(t("plan.sectionMissing", { serial: issue.serialNumber }), "error");
@@ -2097,6 +2397,9 @@ function App() {
         planOverview: overview,
         issueSection: section,
         planMdAbsolutePath: planMdPath(project.path, plan.id),
+        upstreamPlanMdAbsolutePath: upstreamPlan
+          ? planMdPath(project.path, upstreamPlan.id)
+          : undefined,
         imagePaths: imagePathsByIssue[issue.workitemId] ?? [],
         instructions: instructionsByTaskId[taskIds[i]] ?? "",
       });
@@ -2108,7 +2411,7 @@ function App() {
         prompt,
         agent: input.agent,
         permissionMode: input.permissionMode,
-        status: "todo",
+        status: initialStatus,
         createdAt: stamp,
         updatedAt: stamp,
         yunxiaoWorkitemId: issue.workitemId,
@@ -2117,7 +2420,7 @@ function App() {
       });
     }
 
-    // 4) 生成待办（普通 todo，跑在当前工作区；不带批/worktree 字段）+ 方案转执行中。
+    // 4) 生成待办（跑在当前工作区；不带批/worktree 字段）+ 方案转执行中。
     setTasks((prev) => {
       const next = [...tasksToCreate, ...prev];
       persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2126,7 +2429,7 @@ function App() {
     setPlans((prev) => {
       const next = prev.map((p) =>
         p.id === plan.id
-          ? { ...p, status: "executing" as PlanStatus, issues: input.issues }
+          ? { ...p, status: "executing" as PlanStatus, issues }
           : p,
       );
       persistProjectPlans(plan.projectId, next);
@@ -2134,8 +2437,27 @@ function App() {
     });
     setActiveProject(project);
     mountProject(project.id);
-    updateProjectView(project.id, { selectedTaskId: taskIds[0], isNewTask: false });
-    showToast(t("plan.todosCreated", { count: tasksToCreate.length }), "success");
+
+    // 选中「刚建好即可开工」的那个议题（无未满足前置），让用户直接看到第一个跑起来的任务。
+    const bySerialAfterCreate = buildTaskBySerial([...tasksToCreate, ...tasks]);
+    const firstStartable = input.autoStart
+      ? tasksToCreate.find(
+          (task) =>
+            !freshDeps ||
+            !evaluateTaskGate(task.yunxiaoSerialNumber ?? "", freshDeps.graph, bySerialAfterCreate)
+              .blocked,
+        )
+      : undefined;
+    updateProjectView(project.id, {
+      selectedTaskId: firstStartable?.id ?? taskIds[0],
+      isNewTask: false,
+    });
+    showToast(
+      input.autoStart
+        ? t("plan.start.created", { count: tasksToCreate.length })
+        : t("plan.todosCreated", { count: tasksToCreate.length }),
+      "success",
+    );
     return true;
   }
 
@@ -2225,6 +2547,59 @@ function App() {
       return next;
     });
   }, [tasks]);
+
+  // 等待队列的自动接续：完全由 tasks / deps 状态派生（零定时器）。前置全部 done 后，
+  // 按拓扑序 → executionOrder → createdAt 逐个放行；同一项目内默认串行（并发上限可配）。
+  // 用 ref 持有「真正启动」函数，避免将其（每次渲染都变化）纳入 deps 造成死循环。
+  const autoStartInFlightRef = useRef<Set<string>>(new Set());
+  const autoStartRunRef = useRef<(taskId: string) => void>(() => {});
+  autoStartRunRef.current = (taskId: string) => {
+    const task = tasks.find((t) => t.id === taskId);
+    const project = task && projects.find((p) => p.id === task.projectId);
+    if (task && project) beginTaskRun(task, project);
+  };
+  useEffect(() => {
+    const planById = new Map(plans.map((p) => [p.id, p]));
+    const startIds = selectAutoStart({
+      tasks,
+      depsByPlanId: planDeps,
+      planById,
+      maxConcurrentByProjectId: planMaxConcurrentRef.current,
+      defaultMaxConcurrent: DEFAULT_PLAN_MAX_CONCURRENT,
+    });
+    const started = new Set(startIds);
+    // 已不在候选中的 id 从在途集合里剔除，避免任务重新进入等待时被误判为「已启动」。
+    for (const id of [...autoStartInFlightRef.current]) {
+      if (!started.has(id)) autoStartInFlightRef.current.delete(id);
+    }
+    for (const id of startIds) {
+      if (autoStartInFlightRef.current.has(id)) continue;
+      autoStartInFlightRef.current.add(id);
+      autoStartRunRef.current(id);
+    }
+  }, [tasks, planDeps, plans]);
+
+  // 前置异常（失败/取消/中断/被删除）：等待任务保持等待 + 标红 + 只通知一次，
+  // 不自动放行（等于白做依赖分析），也不静默永久等待。
+  const depsAlertedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const taskBySerial = buildTaskBySerial(tasks);
+    for (const task of tasks) {
+      if (task.status !== "waiting_deps" || !task.planId) continue;
+      const deps = planDeps[task.planId];
+      if (!deps) continue;
+      const gate = evaluateTaskGate(task.yunxiaoSerialNumber ?? "", deps.graph, taskBySerial);
+      if (gate.needsOverride.length === 0) continue;
+      const signature = `${task.id}:${[...gate.needsOverride].sort().join(",")}`;
+      if (depsAlertedRef.current.has(signature)) continue;
+      depsAlertedRef.current.add(signature);
+      invoke("notify_task_attention", {
+        taskId: task.id,
+        name: task.name ?? "",
+      }).catch(() => {});
+      showToast(t("plan.deps.notifyAbnormal", { name: task.name ?? task.id }), "warning");
+    }
+  }, [tasks, planDeps, t, showToast]);
 
   function handleRenameTask(taskId: string, name: string) {
     setTasks((prev) => {
@@ -3031,9 +3406,21 @@ function App() {
               onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
               onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
               plans={plans}
+              planDeps={planDeps}
+              waitingBadges={waitingBadges}
+              onCancelWaitingDeps={handleCancelWaitingDeps}
+              onIgnoreDepsAndRun={handleIgnoreDepsAndRun}
               onGeneratePlanTodos={handleGeneratePlanTodos}
               onRebindTaskPlan={handleRebindTaskPlan}
-              onCancelPlan={handleCancelYunxiaoPlan}
+              onDeletePlan={handleDeletePlan}
+              initialPlanPreviewId={
+                activeProject && pendingPlanPreviewId
+                  ? (plans.find(
+                      (p) => p.id === pendingPlanPreviewId && p.projectId === activeProject.id,
+                    )?.id ?? null)
+                  : null
+              }
+              onInitialPlanPreviewConsumed={() => setPendingPlanPreviewId(null)}
               onCancelTask={handleCancelTask}
               onResumeTask={handleResumeTask}
               onResumeTaskAndSend={handleResumeTaskAndSend}
@@ -3074,15 +3461,31 @@ function App() {
       </div>
       {showKanban && (
         <div style={s.kanbanOverlay}>
-          <KanbanView
+          <BoardOverlay
             projects={sortedProjects}
             tasks={tasks}
+            plans={plans}
+            planDeps={planDeps}
+            activeProjectId={activeProject?.id ?? null}
             onClose={() => setShowKanban(false)}
             onTaskClick={(task) => {
               const project = projects.find((p) => p.id === task.projectId);
               if (project) enterProjectFromKanban(project, task.id);
             }}
             onProjectClick={(project) => enterProjectFromKanban(project)}
+            onPlanPreview={(plan) => {
+              const project = projects.find((p) => p.id === plan.projectId);
+              if (!project) return;
+              setShowKanban(false);
+              enterProjectFromKanban(project);
+              setPendingPlanPreviewId(plan.id);
+            }}
+            onPlanComplete={handleCompletePlan}
+            onPlanReopen={handleReopenPlan}
+            onPlanCancel={handleCancelPlan}
+            onPlanArchive={handleArchivePlan}
+            onPlanUnarchive={handleUnarchivePlan}
+            onPlanDelete={handleDeletePlan}
           />
         </div>
       )}
@@ -3102,8 +3505,9 @@ function App() {
             onEnterSkillHub={handleEnterSkillHub}
             onCreateYunxiaoPlan={handleCreateYunxiaoPlan}
             onStartYunxiaoPlanDiscussion={handleStartYunxiaoPlanDiscussion}
+            onSetYunxiaoPlanParent={handleSetPlanParent}
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
-            onCancelYunxiaoPlan={handleCancelYunxiaoPlan}
+            onCancelYunxiaoPlan={handleRemovePlanRecord}
             plans={plans}
             themeVariant={themeVariant}
             themeMode={themeMode}

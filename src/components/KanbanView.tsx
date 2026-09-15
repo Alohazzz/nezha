@@ -25,6 +25,10 @@ interface KanbanGroup {
 export function columnForStatus(status: TaskStatus): ColumnKey | null {
   switch (status) {
     case "todo":
+    // 等待前置的任务尚未开展，归入「待办」列（卡片自带等待角标）；
+    // ⚠️ 不能落到 default（返回 null）：那会让等待中的任务在看板上直接消失。
+    // falls through
+    case "waiting_deps":
       return "todo";
     case "pending":
     case "running":
@@ -142,23 +146,28 @@ export function KanbanView({
   onTaskClick,
   onProjectClick,
   onClose,
+  embedded = false,
 }: {
   projects: Project[];
   tasks: Task[];
   onTaskClick: (task: Task) => void;
   onProjectClick: (project: Project) => void;
   onClose: () => void;
+  /** 嵌入模式：由外层（BoardOverlay）提供浮层容器与标题栏，本组件只渲染内容。 */
+  embedded?: boolean;
 }) {
   const { t } = useI18n();
 
   // Esc 关闭浮层。capture 阶段以避免被 xterm/编辑器吞掉。
   useEffect(() => {
+    // 嵌入模式下由外层统一处理 Esc，避免两个浮层组件各挂一个监听。
+    if (embedded) return;
     const handle = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handle, true);
     return () => window.removeEventListener("keydown", handle, true);
-  }, [onClose]);
+  }, [onClose, embedded]);
 
   const projectById = useMemo(() => {
     const map = new Map<string, Project>();
@@ -205,6 +214,20 @@ export function KanbanView({
   const totalActive = groups.reduce((sum, g) => sum + g.totalActive, 0);
 
   if (groups.length === 0) {
+    const empty = (
+      <div style={s.kanbanEmpty}>
+        <LayoutGrid size={28} strokeWidth={1.2} color="var(--text-hint)" />
+        <div>{t("kanban.empty")}</div>
+      </div>
+    );
+    if (embedded) {
+      return (
+        <>
+          <div style={s.kanbanSubtitle}>{t("kanban.subtitle")}</div>
+          {empty}
+        </>
+      );
+    }
     return (
       <div style={s.kanbanPane}>
         <div style={s.kanbanHeader}>
@@ -212,23 +235,13 @@ export function KanbanView({
           <CloseButton onClose={onClose} />
         </div>
         <div style={s.kanbanSubtitle}>{t("kanban.subtitle")}</div>
-        <div style={s.kanbanEmpty}>
-          <LayoutGrid size={28} strokeWidth={1.2} color="var(--text-hint)" />
-          <div>{t("kanban.empty")}</div>
-        </div>
+        {empty}
       </div>
     );
   }
 
-  return (
-    <div style={s.kanbanPane}>
-      <div style={s.kanbanHeader}>
-        <div style={s.kanbanTitle}>{t("kanban.title")}</div>
-        <CloseButton onClose={onClose} />
-      </div>
-      <div style={s.kanbanSubtitle}>
-        {t("kanban.summary", { projects: groups.length, tasks: totalActive })}
-      </div>
+  const body = (
+    <>
       {groups.map((group) => {
         const project = projectById.get(group.projectId);
         return (
@@ -287,6 +300,30 @@ export function KanbanView({
           </section>
         );
       })}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <>
+        <div style={s.kanbanSubtitle}>
+          {t("kanban.summary", { projects: groups.length, tasks: totalActive })}
+        </div>
+        {body}
+      </>
+    );
+  }
+
+  return (
+    <div style={s.kanbanPane}>
+      <div style={s.kanbanHeader}>
+        <div style={s.kanbanTitle}>{t("kanban.title")}</div>
+        <CloseButton onClose={onClose} />
+      </div>
+      <div style={s.kanbanSubtitle}>
+        {t("kanban.summary", { projects: groups.length, tasks: totalActive })}
+      </div>
+      {body}
     </div>
   );
 }

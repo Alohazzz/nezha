@@ -114,6 +114,7 @@ export function WelcomePage({
   onStartYunxiaoPlanDiscussion,
   onStartYunxiaoDirectExecution,
   onCancelYunxiaoPlan,
+  onSetYunxiaoPlanParent,
   plans,
 }: {
   projects: Project[];
@@ -158,6 +159,8 @@ export function WelcomePage({
     options: DirectLaunchOptions,
   ) => void | Promise<void>;
   onCancelYunxiaoPlan: (planId: string) => void | Promise<void>;
+  /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
+  onSetYunxiaoPlanParent: (planId: string, parentPlanId: string | undefined) => void;
   plans: Plan[];
 }) {
   const { t } = useI18n();
@@ -280,6 +283,7 @@ export function WelcomePage({
             onStartPlanDiscussion={onStartYunxiaoPlanDiscussion}
             onStartDirectExecution={onStartYunxiaoDirectExecution}
             onCancelPlan={onCancelYunxiaoPlan}
+            onSetParentPlan={onSetYunxiaoPlanParent}
           />
         ) : view === "timeline" ? (
           <TimelineView

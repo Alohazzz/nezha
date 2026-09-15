@@ -117,6 +117,9 @@ export interface AppSettings {
   use_sideloaded_conpty: boolean;
   /** Agent 需要确认或任务完成/失败时发送 OS 系统通知（窗口未聚焦时） */
   system_notifications: boolean;
+  /** 测试技能：开启后云效议题讨论链路（「直接开始（先澄清）」/「方案讨论」）改用
+   *  `batch-grill-me` 批量盘问（一轮抛出全部前沿问题），替换逐条 grilling。 */
+  batch_grill_enabled: boolean;
   /** 轻量 AI 辅助调用（任务命名/议题预填/汇总/知识沉淀/commit message）使用的模型；null = 跟随 Agent 默认 */
   claude_light_model: string | null;
   codex_light_model: string | null;
@@ -149,6 +152,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminal_copy_on_select: false,
   use_sideloaded_conpty: true,
   system_notifications: true,
+  batch_grill_enabled: false,
   claude_light_model: null,
   codex_light_model: null,
   claude_light_reasoning_effort: null,

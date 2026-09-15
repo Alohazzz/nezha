@@ -520,17 +520,41 @@ const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
 /// 改技能免重编）；此处只注入技能引用与动态参数（plan.md 路径、Bug 议题提示）。
 const PLAN_DISCUSSION_SKILL: &str = "yunxiao-plan-discussion";
 
-/// 方案讨论任务的完整指令：技能引用 + Bug 议题提示 + 方案文档落盘路径。
+/// 测试技能：批量盘问（SkillHub `batch-grill-me`）。开启后在讨论链路里替换技能的
+/// 逐条 grilling——把设计树当前「前沿」的全部问题一轮一次性抛出，而不是一次一问。
+const BATCH_GRILL_SKILL: &str = "batch-grill-me";
+
+/// 批量盘问覆盖指令：`yunxiao-plan-discussion` 的决策树改走 batch 方式，
+/// 其余流程与产物契约（性能强制分支、plan.md 结构、deps.json）保持不变。
+fn batch_grill_override() -> String {
+    format!(
+        r#"本会话改用 `{BATCH_GRILL_SKILL}` 技能执行上述决策树：把当前「前沿」能确定的问题**一轮一次性全部抛出**（每题编号，并给出你的推荐答案），等发起人回答后重算前沿、再问下一轮；**不要退回「一次只问一个问题」的逐条方式**。需要环境事实的问题自己查证（必要时派子 agent），不要拿去问发起人。前沿为空即停止盘问。除提问方式外，其余流程、性能影响分析强制分支、方案文档结构与 deps.json 契约**保持不变**。"#
+    )
+}
+
+/// 方案讨论任务的完整指令：技能引用 + Bug 议题提示 + 方案文档/依赖文件落盘路径。
 /// has_bug：方案内是否含 Bug 类议题（议题类别快照由前端传入），决定是否提示执行技能中的根因诊断。
-pub fn plan_discussion_instructions(plan_md_path: &str, has_bug: bool) -> String {
+/// batch_grill：应用级「批量盘问（测试技能）」开关，为真时追加覆盖指令替换逐条 grilling。
+pub fn plan_discussion_instructions(
+    plan_md_path: &str,
+    deps_json_path: &str,
+    has_bug: bool,
+    batch_grill: bool,
+) -> String {
     let bug_hint = if has_bug {
         "本方案含 Bug 缺陷类议题：先按技能「Bug 根因诊断」的要求，用 diagnosing-bugs 方法论定位根因（结论要有可复现的证据）后再进入方案产出。"
     } else {
         "本方案不含 Bug 类议题，可跳过技能中的「Bug 根因诊断」。"
     };
+    let grill_hint = if batch_grill {
+        format!("\n{}", batch_grill_override())
+    } else {
+        String::new()
+    };
     format!(
-        "## 工作流程\n请先读取并遵循 `{PLAN_DISCUSSION_SKILL}` 技能：严格按技能定义的讨论流程（含性能影响分析强制分支与前置知识认知）走完决策树并产出方案文档；先不要写代码。单议题与多议题联合的格式约定见技能对应小节。\n{bug_hint}\n\n## 输出与产物\n方案文档（绝对路径，技能中的落盘指令以此路径为准）：{plan_md_path}（目录不存在就先创建）。",
+        "## 工作流程\n请先读取并遵循 `{PLAN_DISCUSSION_SKILL}` 技能：严格按技能定义的讨论流程（含性能影响分析强制分支与前置知识认知）走完决策树并产出方案文档；先不要写代码。单议题与多议题联合的格式约定见技能对应小节。\n{bug_hint}{grill_hint}\n\n## 输出与产物\n方案文档（绝对路径，技能中的落盘指令以此路径为准）：{plan_md_path}（目录不存在就先创建）。\n依赖文件（绝对路径，schema 与产出要求见技能「方案依赖文件」节）：{deps_json_path}",
         plan_md_path = plan_md_path,
+        deps_json_path = deps_json_path,
     )
 }
 
@@ -547,19 +571,35 @@ pub async fn get_plan_discussion_instructions(
         return Err("非法的方案 ID".to_string());
     }
     let project_path_for_dir = project_path;
-    let plan_md_path = tokio::task::spawn_blocking(move || -> Result<String, String> {
+    let paths = tokio::task::spawn_blocking(move || -> Result<(String, String), String> {
         let canonical = std::path::Path::new(&project_path_for_dir)
             .canonicalize()
             .map_err(|e| format!("项目路径无效: {e}"))?;
-        Ok(crate::storage::plan_dir(&canonical, &plan_id)
-            .join("plan.md")
-            .to_string_lossy()
-            .into_owned()
-            .replace("\\\\?\\", ""))
+        let dir = crate::storage::plan_dir(&canonical, &plan_id);
+        let normalize = |path: std::path::PathBuf| {
+            path.to_string_lossy().into_owned().replace("\\\\?\\", "")
+        };
+        Ok((
+            normalize(dir.join("plan.md")),
+            normalize(dir.join("deps.json")),
+        ))
     })
     .await
     .map_err(|e| format!("方案目录解析线程错误: {e}"))??;
-    Ok(plan_discussion_instructions(&plan_md_path, has_bug))
+    let batch_grill = batch_grill_enabled().await;
+    Ok(plan_discussion_instructions(
+        &paths.0,
+        &paths.1,
+        has_bug,
+        batch_grill,
+    ))
+}
+
+/// 读取应用级「批量盘问（测试技能）」开关；读盘放到阻塞线程，避免挡住异步运行时。
+async fn batch_grill_enabled() -> bool {
+    tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().batch_grill_enabled)
+        .await
+        .unwrap_or(false)
 }
 
 /// 方案执行流程：方案已定稿，直接执行；发现方案与代码现实冲突即停。
@@ -652,6 +692,11 @@ const DIRECT_BUG_DIAGNOSIS_HINT: &str = "本议题是 Bug 缺陷：动手改代�
 /// 讲不清「为什么这么改」。
 const DIRECT_CLARIFY_FIRST_HINT: &str = "发起人要求在动手前先做需求澄清：请先按 grilling 方法论澄清本议题，再进入实现。澄清阶段：一次只问一个问题并等待回答；只问需求层的关键决策——目标与边界、验收标准、关键取舍与影响面；不要在这一阶段写任何代码。达成共识即停止澄清，不要为了穷尽而继续追问。若澄清中发现本议题不该做、或描述与代码现实矛盾（文件/函数不存在、议题假设错误），停下来在会话中说明并等用户决策，不要自行改方向。达成共识后请立即进入实现，实现阶段不要再把需求盘问一轮——把已确认的共识当作已定稿的 spec 直接执行。澄清结论（确认后的目标、边界、验收标准、关键取舍）必须写入下方工作产物中的「修改方案汇总」段，作为回写云效评论里「为什么这么改」的依据。";
 
+/// 「先澄清再执行」的批量盘问变体（测试技能开关开启时替换 `DIRECT_CLARIFY_FIRST_HINT`）：
+/// 提问方式改走 `batch-grill-me`——前沿问题一轮全抛，其余约束（只问需求层、不写代码、
+/// 共识后立即转 implement、结论必须落进 discussion.md）与逐条版一致。
+const DIRECT_CLARIFY_FIRST_HINT_BATCH: &str = "发起人要求在动手前先做需求澄清：请使用 batch-grill-me 技能澄清本议题，再进入实现。澄清阶段按该技能的「设计树 / 前沿」方式组织：把当前前沿能确定的问题**一轮一次性全部抛出**（每题编号，并给出你的推荐答案），等发起人回答后重算前沿、再问下一轮；**不要退回「一次只问一个问题」的逐条方式**。只问需求层的关键决策——目标与边界、验收标准、关键取舍与影响面；需要环境事实的问题自己查证（必要时派子 agent），不要拿去问发起人；不要在这一阶段写任何代码。前沿为空即停止澄清，不要为了穷尽而继续追问。若澄清中发现本议题不该做、或描述与代码现实矛盾（文件/函数不存在、议题假设错误），停下来在会话中说明并等用户决策，不要自行改方向。达成共识后请立即进入实现，实现阶段不要再把需求盘问一轮——把已确认的共识当作已定稿的 spec 直接执行。澄清结论（确认后的目标、边界、验收标准、关键取舍）必须写入下方工作产物中的「修改方案汇总」段，作为回写云效评论里「为什么这么改」的依据。";
+
 /// 直接执行任务的产物落盘：discussion.md 比方案执行任务多写「修改方案汇总」段
 /// （直接链路没有 plan.md，discussion.md 是回写云效的唯一素材源；
 /// 回写按 `## 影响范围与测试` 前后切分开发向 / 测试向评论）。
@@ -689,17 +734,26 @@ fn direct_execution_draft_instructions(
 /// 评分 + 补录 + 产物落盘。has_bug 由议题类别推导（categoryId == bug）。
 /// Bug 路径优先于 clarify_first：Bug 的澄清已由 diagnosing-bugs 的取证循环承担，
 /// 两者叠加会互相打架，故 Bug 议题忽略 clarify_first。
+/// batch_grill：应用级「批量盘问（测试技能）」开关，为真时澄清段改用 batch 方式。
 pub fn direct_execution_instructions(
     task_id: &str,
     has_bug: bool,
     clarify_first: bool,
+    batch_grill: bool,
     knowledge_target: Option<&crate::knowledge::KnowledgeTarget>,
 ) -> String {
     let mut pieces: Vec<String> = vec![format!("## 工作流程\n{}", DIRECT_EXECUTION_FLOW)];
     if has_bug {
         pieces.push(DIRECT_BUG_DIAGNOSIS_HINT.to_string());
     } else if clarify_first {
-        pieces.push(DIRECT_CLARIFY_FIRST_HINT.to_string());
+        pieces.push(
+            if batch_grill {
+                DIRECT_CLARIFY_FIRST_HINT_BATCH
+            } else {
+                DIRECT_CLARIFY_FIRST_HINT
+            }
+            .to_string(),
+        );
     }
     pieces.push(PLAN_KNOWLEDGE_INSTRUCTION.to_string());
     pieces.push(format!("## 输出与产物\n{}", VALUE_SCORE_INSTRUCTION));
@@ -724,10 +778,12 @@ pub async fn get_direct_execution_instructions(
     let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path)
         .await
         .ok();
+    let batch_grill = batch_grill_enabled().await;
     Ok(direct_execution_instructions(
         &task_id,
         has_bug.unwrap_or(false),
         clarify_first.unwrap_or(false),
+        batch_grill,
         knowledge_target.as_ref(),
     ))
 }
@@ -1676,10 +1732,17 @@ mod tests {
 
     #[test]
     fn plan_discussion_references_skill_and_dynamic_params() {
-        let prompt = plan_discussion_instructions("H:/proj/.nezha/plans/p1/plan.md", false);
+        let prompt = plan_discussion_instructions(
+            "H:/proj/.nezha/plans/p1/plan.md",
+            "H:/proj/.nezha/plans/p1/deps.json",
+            false,
+            false,
+        );
         // 技能引用 + plan.md 动态路径必须齐备；流程与文档契约文本由技能承载，不再内联。
         assert!(prompt.contains("yunxiao-plan-discussion"));
         assert!(prompt.contains("H:/proj/.nezha/plans/p1/plan.md"));
+        // deps.json 绝对路径由宿主注入，schema 由技能承载。
+        assert!(prompt.contains("H:/proj/.nezha/plans/p1/deps.json"));
         // 图谱 id 不能被当成技能名；知识认知与补录细节由技能/执行路径承载，讨论提示词不内联。
         assert!(!prompt.contains("使用 `ICUCIS` 技能"));
         assert!(!prompt.contains("knowledge-graph"));
@@ -1688,7 +1751,7 @@ mod tests {
 
     #[test]
     fn direct_execution_instructions_compose_flow_and_drafts() {
-        let prompt = direct_execution_instructions("9001", true, false, None);
+        let prompt = direct_execution_instructions("9001", true, false, false, None);
         // 议题即 spec 流程 + Bug 根因取证 + 知识认知全注入。
         assert!(prompt.contains("议题即工单"));
         assert!(prompt.contains("diagnosing-bugs"));
@@ -1706,24 +1769,63 @@ mod tests {
 
     #[test]
     fn direct_execution_instructions_bug_hint_conditional() {
-        let no_bug = direct_execution_instructions("9002", false, false, None);
+        let no_bug = direct_execution_instructions("9002", false, false, false, None);
         assert!(!no_bug.contains("diagnosing-bugs"));
         assert!(no_bug.contains("knowledge-graph"));
     }
 
     #[test]
     fn direct_execution_instructions_clarify_first() {
-        let clarify = direct_execution_instructions("9003", false, true, None);
+        let clarify = direct_execution_instructions("9003", false, true, false, None);
         assert!(clarify.contains("grilling"));
         assert!(clarify.contains("一次只问一个问题"));
         assert!(clarify.contains("## 修改方案汇总"));
         // 未勾选时不出现澄清段。
-        let plain = direct_execution_instructions("9004", false, false, None);
+        let plain = direct_execution_instructions("9004", false, false, false, None);
         assert!(!plain.contains("grilling"));
         // Bug 路径优先：has_bug 为真时忽略 clarify_first，避免两个技能各问一轮。
-        let bug_with_clarify = direct_execution_instructions("9005", true, true, None);
+        let bug_with_clarify = direct_execution_instructions("9005", true, true, false, None);
         assert!(bug_with_clarify.contains("diagnosing-bugs"));
         assert!(!bug_with_clarify.contains("一次只问一个问题"));
+    }
+
+    #[test]
+    fn direct_execution_instructions_batch_grill_swaps_clarify_hint() {
+        // 开关开启：澄清段引用 batch-grill-me，且不再承诺逐条 grilling。
+        let batch = direct_execution_instructions("9006", false, true, true, None);
+        assert!(batch.contains("batch-grill-me"));
+        assert!(batch.contains("一轮一次性全部抛出"));
+        assert!(!batch.contains("一次只问一个问题并等待回答"));
+        // 未勾选澄清时开关不生效（不引入 batch 技能引用）。
+        let plain = direct_execution_instructions("9007", false, false, true, None);
+        assert!(!plain.contains("batch-grill-me"));
+        // Bug 路径仍优先：即使开了批量盘问，Bug 走 diagnosing-bugs。
+        let bug = direct_execution_instructions("9008", true, true, true, None);
+        assert!(bug.contains("diagnosing-bugs"));
+        assert!(!bug.contains("batch-grill-me"));
+    }
+
+    #[test]
+    fn plan_discussion_batch_grill_injects_override() {
+        let batch = plan_discussion_instructions(
+            "H:/proj/.nezha/plans/p1/plan.md",
+            "H:/proj/.nezha/plans/p1/deps.json",
+            false,
+            true,
+        );
+        assert!(batch.contains("batch-grill-me"));
+        assert!(batch.contains("一轮一次性全部抛出"));
+        // 技能引用与产物契约不受影响。
+        assert!(batch.contains("yunxiao-plan-discussion"));
+        assert!(batch.contains("H:/proj/.nezha/plans/p1/deps.json"));
+        // 关闭时不注入覆盖指令。
+        let plain = plan_discussion_instructions(
+            "H:/proj/.nezha/plans/p1/plan.md",
+            "H:/proj/.nezha/plans/p1/deps.json",
+            false,
+            false,
+        );
+        assert!(!plain.contains("batch-grill-me"));
     }
 
     #[test]
@@ -1930,11 +2032,21 @@ mod tests {
 
     #[test]
     fn plan_instructions_inject_bug_diagnosing_only_with_bug() {
-        let with_bug = plan_discussion_instructions("C:/p/.nezha/plans/1/plan.md", true);
+        let with_bug = plan_discussion_instructions(
+            "C:/p/.nezha/plans/1/plan.md",
+            "C:/p/.nezha/plans/1/deps.json",
+            true,
+            false,
+        );
         assert!(with_bug.contains("diagnosing-bugs"));
         assert!(with_bug.contains("Bug 根因诊断"));
 
-        let without_bug = plan_discussion_instructions("C:/p/.nezha/plans/1/plan.md", false);
+        let without_bug = plan_discussion_instructions(
+            "C:/p/.nezha/plans/1/plan.md",
+            "C:/p/.nezha/plans/1/deps.json",
+            false,
+            false,
+        );
         assert!(!without_bug.contains("diagnosing-bugs"));
         assert!(without_bug.contains("Bug 根因诊断"));
     }

@@ -149,6 +149,13 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub plan_id: Option<String>,
+    /// 用户对异常/缺失前置选择「忽略依赖，仍然开始」后置 true。
+    #[serde(
+        rename = "planDepsIgnored",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_deps_ignored: Option<bool>,
     /// 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree）。
     #[serde(
         rename = "yunxiaoPlanDiscussion",
@@ -201,6 +208,13 @@ pub struct Plan {
         skip_serializing_if = "Option::is_none"
     )]
     pub batch_id: Option<String>,
+    /// 主方案 id：本方案是它的追加子方案（一次追加的一批议题合成）。
+    #[serde(
+        rename = "parentPlanId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parent_plan_id: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(
@@ -209,6 +223,13 @@ pub struct Plan {
         skip_serializing_if = "Option::is_none"
     )]
     pub finalized_at: Option<i64>,
+    /// 归档时间戳：非空即不占方案看板主列（展示层标记，与 status 正交）。
+    #[serde(
+        rename = "archivedAt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub archived_at: Option<i64>,
 }
 
 /// 分支批 = 一个可独立验收的 PR（一个批对应一个分支 + 一个 worktree，批内任务顺序共用）。
@@ -513,8 +534,10 @@ mod tests {
             status: "draft".into(),
             discussion_task_id: Some("t9".into()),
             batch_id: None,
+            parent_plan_id: None,
             created_at: 1_700_000_000_000,
             finalized_at: None,
+            archived_at: None,
         };
         let json = serde_json::to_string(&plan).unwrap();
         let back: Plan = serde_json::from_str(&json).unwrap();
@@ -522,6 +545,8 @@ mod tests {
         assert_eq!(back.issues.len(), 1);
         assert_eq!(back.issues[0].serial_number, "QHDK-29728");
         assert_eq!(back.discussion_task_id.as_deref(), Some("t9"));
+        assert_eq!(back.parent_plan_id, None);
+        assert_eq!(back.archived_at, None);
     }
 
     #[test]
@@ -531,5 +556,8 @@ mod tests {
         assert_eq!(plan.status, "");
         assert!(plan.issues.is_empty());
         assert_eq!(plan.batch_id, None);
+        // 看板新增字段：旧 plans.json 缺字段时按 None 反序列化（不静默丢状态）。
+        assert_eq!(plan.parent_plan_id, None);
+        assert_eq!(plan.archived_at, None);
     }
 }
