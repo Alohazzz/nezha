@@ -85,6 +85,7 @@
   h2{font-size:22px; line-height:1.5; margin:0 0 20px; padding-bottom:13px; border-bottom:1px solid var(--line); letter-spacing:-.2px}
   h2 .num{color:var(--faint); font-weight:500; margin-right:10px; font-variant-numeric:tabular-nums}
   h3{font-size:17px; line-height:1.55; margin:34px 0 12px}
+  h4{font-size:15.5px; line-height:1.6; margin:26px 0 10px}
   p{margin:0 0 18px}
   ul,ol{margin:0 0 18px; padding-left:24px}
   li{margin:9px 0}
@@ -272,7 +273,7 @@
               <div class="flow-lane"><span class="dot"></span>发起讨论</div>
               <ul class="flow-steps">
                 <li>先出 <code>plan.md</code> 方案</li>
-                <li>定稿后「生成待办」再跑执行任务</li>
+                <li>定稿后在预览里「开始」（立即跑）或「生成待办」（先不跑）</li>
               </ul>
             </div>
           </div>
@@ -293,7 +294,7 @@
               <div class="flow-lane"><span class="dot"></span>生成待办</div>
               <ul class="flow-steps">
                 <li>方案定稿后按议题拆出执行任务</li>
-                <li>一议题一任务</li>
+                <li>一议题一任务，按 <code>deps.json</code> 拓扑顺序</li>
               </ul>
             </div>
             <div class="flow-col">
@@ -357,6 +358,7 @@
         <img src="screenshots/yunxiao-launch-mode/05-discussion-plan-dialog.png" alt="发起讨论对话框" />
         <figcaption>议题已拉取成功、已归档图片数、讨论补充与 Agent / 权限选择</figcaption>
       </figure>
+      <p>若本项目已有<strong>其它已定稿方案</strong>，对话框里会多出「<strong>关联方案（作为子方案追加）</strong>」下拉——选一个主方案后，这批议题会挂成它的<strong>子方案</strong>（见 <a href="#s9">第 9 节</a>）；不选则是独立方案。</p>
 
       <h3>2.2 打开即建方案占位</h3>
       <p>「发起讨论」和「直接开始」最大的流程差异在这里：<strong>打开对话框的瞬间，Nezha 就已经为你创建了一个 draft「方案（Plan）」</strong>，并把议题详情、图片下载到方案目录 <code>.nezha/plans/&lt;planId&gt;/</code> 下。</p>
@@ -385,13 +387,17 @@
         讨论阶段通常<strong>不改业务代码</strong>，它只产出方案。真正的代码改动发生在「生成待办」之后的执行任务里。
       </div>
 
-      <h3>2.4 方案定稿 → 生成待办</h3>
-      <p>讨论任务结束时（手工「标记已完成」或会话自然退出），方案从 <code>draft</code> 转为 <code>finalized</code>（定稿）。此时从任务头部的「<strong>方案</strong>」按钮打开方案预览：</p>
+      <h3>2.4 方案定稿 → 生成待办 / 一键启动</h3>
+      <p>讨论任务结束时（手工「标记已完成」或会话自然退出），方案从 <code>draft</code> 转为 <code>finalized</code>（定稿）。此时从任务头部的「<strong>方案</strong>」按钮打开方案预览，右上角有两个通往执行链路的按钮：</p>
       <figure class="shot-md">
-        <img src="screenshots/yunxiao-launch-mode/07-plan-preview.png" alt="方案预览与生成待办入口" />
-        <figcaption>方案预览：右上角「生成待办 / 重新生成待办」是通往执行链路的闸门</figcaption>
+        <img src="screenshots/yunxiao-launch-mode/07-plan-preview.png" alt="方案预览、开始与生成待办入口" />
+        <figcaption>方案预览右上角：「开始」（生成并立即跑）与「生成待办」（只生成、不启动）</figcaption>
       </figure>
-      <p>点开后进入「从方案生成待办」确认页：</p>
+      <ul>
+        <li><strong>开始</strong>——生成待办并<strong>立即</strong>按依赖顺序跑起来。它<strong>不弹</strong>确认页，直接用方案自带的议题顺序与 <code>deps.json</code>、以及该项目上次选择的 Agent / 权限；生成的任务先进入 <code>waiting_deps</code>，交给依赖门禁按拓扑顺序逐个放行（默认一次一个）。详见<a href="#s9">第 9 节</a>。</li>
+        <li><strong>生成待办</strong>——只生成任务，落成 <code>todo</code>、<strong>不启动</strong>，由人工把关后逐个开跑。适合还想先看看方案拆解得对不对的场景。</li>
+      </ul>
+      <p>点「<strong>生成待办</strong>」进入「从方案生成待办」确认页：</p>
       <figure class="shot-md">
         <img src="screenshots/yunxiao-launch-mode/08-generate-todos.png" alt="从方案生成待办" />
         <figcaption>可调整顺序、剔除议题，冲突议题自动排除，并选择 Agent / 权限</figcaption>
@@ -405,9 +411,9 @@
       </ul>
       <p>点「<strong>生成 N 个待办</strong>」后：</p>
       <ol>
-        <li>每个议题生成一条 <code>todo</code> 任务——一议题一任务，直接在当前工作区创建（<strong>不自动启动，也不建 worktree</strong>）；</li>
+        <li>每个议题生成一条任务——一议题一任务，直接在当前工作区创建（<strong>不建 worktree</strong>）；</li>
         <li>方案状态转为 <code>executing</code>，记住本次确认的议题与顺序；</li>
-        <li>任务落到项目「待办」列，由人工把关后再启动执行；</li>
+        <li>任务落到项目「待办」列：走「<strong>开始</strong>」时它们先停在 <code>waiting_deps</code>，由门禁自动放行；走「<strong>生成待办</strong>」时停在 <code>todo</code>，由人工把关后再启动；</li>
         <li>任务提示词内联了「方案统筹」+「本议题方案」，并要求只改本议题相关改动、提交信息带 <code>#议题编号</code>。</li>
       </ol>
       <div class="callout warn">
@@ -574,7 +580,7 @@
                 <li>讨论任务：<code>grilling</code> / <code>diagnosing-bugs</code></li>
                 <li>产出 <code>plan.md</code>（方案文档）</li>
                 <li>讨论任务 done → 方案 <code>finalised</code></li>
-                <li>【生成待办】拆出 N 个执行任务</li>
+                <li>方案定稿 →「生成待办」或「开始」一键串行执行</li>
               </ul>
             </div>
           </div>
@@ -588,7 +594,7 @@
           <div class="flow-head">
             <span class="flow-num">2</span>
             <span class="flow-title">执行任务运行中</span>
-            <span class="flow-tag">两条正统链路在此汇合</span>
+            <span class="flow-tag">两条正统链路在此汇合 · 受依赖门禁与并发上限约束</span>
           </div>
           <div class="flow-cols">
             <div class="flow-col">
@@ -665,7 +671,141 @@
     </section>
 
     <section id="s8">
-      <h2><span class="num">8</span>常见问题</h2>
+      <h2><span class="num">8</span>方案看板与生命周期</h2>
+      <p>议题列表能看单条议题，执行任务能看单条任务，但你还需要回答第三个问题：<strong>这个项目里有哪些方案、各自走到哪一步了</strong>。这就是「<strong>方案看板</strong>」。</p>
+
+      <h3>8.1 打开</h3>
+      <p><code>Alt + K</code>（Windows）/ <code>⌘ + K</code>（macOS）打开看板浮层，切到「<strong>方案</strong>」标签页。任务看板与方案看板<strong>共用一个浮层</strong>，只用标签页切换，不会在项目栏新增第二个入口。</p>
+
+      <h3>8.2 左栏方案列表</h3>
+      <figure>
+        <img src="screenshots/plan-board/01-board-dark.png" alt="方案看板（暗色）" />
+        <figcaption>左栏方案列表 + 顶部筛选，右栏当前方案详情（依赖图 + 任务行）</figcaption>
+      </figure>
+      <p>左栏按方案列出，每项显示<strong>完成进度</strong>（如 <code>已完成 1/2</code>）与状态标记；顶部可筛选：</p>
+      <ul>
+        <li><strong>方案状态</strong>：多选（讨论中 / 待办 / 执行中 / 已完成 / 已取消…）；</li>
+        <li><strong>仅看进行中</strong>：只留还有任务在运行 / 等待 / 失败的方案；</li>
+        <li><strong>清除筛选</strong>：一键恢复全量。</li>
+      </ul>
+      <p>右栏是当前方案的详情：上方<strong>依赖关系图</strong>（<strong>左 → 右 = 执行顺序</strong>，箭头是硬依赖），下方按拓扑顺序排列的<strong>任务行</strong>，每行标注状态与前置完成情况。</p>
+
+      <h3>8.3 生命周期：完成 / 重开 / 取消 / 归档 / 删除</h3>
+      <p>方案详情右上角提供生命周期操作：</p>
+      <table>
+        <thead><tr><th>操作</th><th>语义</th></tr></thead>
+        <tbody>
+          <tr><td><strong>标记完成</strong></td><td>由<strong>你</strong>决定方案算不算完成（可能还有验收或后续工作，任务状态表达不了）。仅「执行中」的方案可标记。</td></tr>
+          <tr><td><strong>重新打开</strong></td><td>已完成方案的逆操作，回到执行态继续干活。</td></tr>
+          <tr><td><strong>取消方案</strong></td><td>取消是<strong>保留状态</strong>，记录仍在看板上，不会被删掉。</td></tr>
+          <tr><td><strong>归档</strong></td><td>把已完成的方案移出主列，收进底部「<strong>已归档（N）</strong>」区；可随时反归档。归档是展示层标记，与状态正交。</td></tr>
+          <tr><td><strong>删除</strong></td><td>显式删除，会先二次确认；若仍有任务引用该方案，后端会拒绝。</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <span class="label">为什么「完成」要手动</span>
+        早先方案状态里的 <code>completed</code> 从没有任何代码去设置它，方案会永远停在「执行中」；而「取消」当时实际执行的是<strong>删除记录</strong>，所以既没有归档态也没有可回溯的取消态。现在两者都补齐了：完成由你确认，取消是留存态，归档只是移出视野。
+      </div>
+      <figure>
+        <img src="screenshots/plan-board/02-board-light.png" alt="方案看板（亮色）" />
+        <figcaption>亮色主题下的同一方案（依赖图、任务行与右上角生命周期按钮）</figcaption>
+      </figure>
+    </section>
+
+    <section id="s9">
+      <h2><span class="num">9</span>依赖门禁与串行启动</h2>
+      <p>方案讨论时会在 <code>## 统筹</code> 里分析跨议题依赖，但那段结论起初只是 <code>plan.md</code> 里的<strong>散文</strong>——应用既读不到也校验不了，于是生成的待办会<strong>并行</strong>去改同一批文件。为解决这一点，方案目录里多了一份机器可读的 <code>deps.json</code>。</p>
+
+      <h3>9.1 <code>deps.json</code>：依赖契约</h3>
+      <p>讨论结束时，Agent 除 <code>plan.md</code> 外还写一份 <code>deps.json</code>（与 <code>plan.md</code> 同级，就在 <code>.nezha/plans/&lt;planId&gt;/</code> 下），声明各议题之间<strong>谁必须在谁之前完成</strong>。Nezha 解析它并做<strong>拓扑排序</strong>，得到执行顺序。</p>
+      <p>解析刻意<strong>宽松</strong>：文件坏了只是「少一道护栏」，会给出告警并降级放行，不会把任务永久卡死；依赖成环时<strong>环上的边全部丢弃</strong>，门禁因此永不因环而死锁。指向方案外编号、自依赖等都会被丢弃并记录告警。</p>
+
+      <h3>9.2 等待状态 <code>waiting_deps</code></h3>
+      <p>前置没全部完成的任务不会启动，而是停在 <code>waiting_deps</code>（「等待前置」）；前置完成后<strong>自动放行</strong>。等待中的任务<strong>不创建 PTY</strong>，所以它既不算活跃任务，也不占用启动恢复逻辑。</p>
+      <figure>
+        <img src="screenshots/plan-board/04-dep-chain.png" alt="依赖链：按拓扑顺序解锁" />
+        <figcaption>3 项串成一条链：TEST-101 → TEST-102 → TEST-103，任务行按执行顺序排列</figcaption>
+      </figure>
+
+      <h4>前置异常：不静默跳过</h4>
+      <p>如果某个前置是<strong>失败 / 取消 / 中断 / 缺失</strong>，Nezha <strong>不会</strong>悄悄把它当成「已完成」放行：依赖它的任务继续等待，并在看板上<strong>标红</strong>、<strong>只通知一次</strong>，把决定权交给你——可以「<strong>忽略依赖，仍然开始</strong>」。</p>
+      <figure>
+        <img src="screenshots/plan-board/03-waiting-deps.png" alt="前置异常：等待前置并标红" />
+        <figcaption>前置 TEST-103 异常中断 → TEST-104 停在等待前置并标红提示</figcaption>
+      </figure>
+
+      <h3>9.3 并发上限与串行</h3>
+      <p>放行还受<strong>每项目并发上限</strong>约束，由项目配置 <code>[plan] max_concurrent</code> 控制，<strong>默认 1 = 串行</strong>。也就是说，走「开始」一键启动时，同一工作区里默认<strong>一次只跑一个</strong>方案任务——这正是依赖门禁想守住的东西：避免同一工作区里并发互相踩。</p>
+      <table>
+        <thead><tr><th>规则</th><th>行为</th></tr></thead>
+        <tbody>
+          <tr><td>前置全部 <code>done</code></td><td>按拓扑顺序自动放行，受并发上限约束</td></tr>
+          <tr><td>前置异常（失败/取消/中断/缺失）</td><td>保持等待、标红、通知一次；可人工「忽略依赖，仍然开始」</td></tr>
+          <tr><td>「忽略依赖」</td><td><strong>只</strong>绕过前置判断，<strong>不</strong>绕过并发上限</td></tr>
+          <tr><td>手动点 ▶ 启动</td><td>同样受串行闸门约束（点第二个会被排队，而不是并发跑）</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <span class="label">串行闸门在哪</span>
+        串行约束统一收在<strong>唯一</strong>的启动入口上，与自动调度共用同一个「有没有空槽」判断。因此无论走「开始」一键启动、还是手动点 ▶，都不会出现「绕过依赖门禁并发跑」的漏洞。<strong>普通用户自己建的任务不受此限</strong>，只有方案待办走这套门禁。
+      </div>
+    </section>
+
+    <section id="s10">
+      <h2><span class="num">10</span>追加议题：挂成子方案</h2>
+      <p>方案定稿并执行之后，常常又来了一批相关议题，想把它们<strong>接着挂到同一个主方案下</strong>。这就是「追加议题」——一次追加的一批议题合成一个<strong>子方案</strong>，挂在主方案下，有自己的 <code>plan.md</code> 与 <code>deps.json</code>。</p>
+
+      <h3>10.1 入口</h3>
+      <p>入口就在「<strong>发起讨论</strong>」对话框里（见 <a href="#s2">2.1</a>），<strong>不</strong>另设一个议题选择器：那个视图本来就有多选、筛选、分页和「已占用议题」置灰，追加只是在那里多一个可选字段。</p>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/10-append-parent-plans.png" alt="关联方案下拉：选择主方案" />
+        <figcaption>「关联方案（作为子方案追加）」下拉，候选为本项目已定稿的方案</figcaption>
+      </figure>
+      <ul>
+        <li>选一个<strong>已定稿</strong>的主方案 → 这批议题成为它的子方案；</li>
+        <li>保持「<strong>不关联（独立方案）</strong>」→ 与以前一样是独立方案；</li>
+        <li>候选只列本项目内、非讨论中 / 已取消 / 已归档的方案，并排除正在创建的方案自身。</li>
+      </ul>
+
+      <h3>10.2 关联之后</h3>
+      <ul>
+        <li><strong>讨论拿到上游上下文</strong>：子方案的讨论会话会拿到主方案的<strong>议题清单与方案文档路径</strong>，由 Agent 按内容判定<strong>跨方案依赖</strong>（而不是让你手工填）。</li>
+        <li><strong>看板上缩进显示</strong>：子方案在左栏<strong>缩进</strong>在父方案之下，不能<strong>独立</strong>筛选——筛选按子树语义生效，命中子方案时会连带其整条祖先链一起显示。</li>
+        <li><strong>跨方案依赖渲染为外部节点</strong>：若子方案的某个前置属于别的方案，依赖图里会把它画成外部节点，否则该议题会落在第 0 层、声称自己无前置，而任务行又显示在等待，自相矛盾。</li>
+      </ul>
+      <div class="callout">
+        <span class="label">父方案被删了怎么办</span>
+        祖先链的遍历在遇到「断链」或「成环」时会停下，因此被删掉的父方案会降级为「丢弃这条边」，而<strong>不是</strong>抛错——子方案仍能正常打开和生成待办。
+      </div>
+    </section>
+
+    <section id="s11">
+      <h2><span class="num">11</span>批量盘问开关（实验性）</h2>
+      <p>默认情况下，需求澄清与方案讨论走的是<strong>决策树逐问</strong>：一次只问一个问题，每个问题先给推荐答案。议题多、设计树宽的时候，这种走法每个分支都要一次往返。</p>
+      <p>开启「<strong>批量盘问</strong>」后，改成<strong>一轮抛出当前前沿的全部问题</strong>（每题附推荐答案），你回一次，Agent 再据回复重算前沿、问下一轮。同样的决策，把往返次数压下来。</p>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="批量盘问开关" />
+        <figcaption>应用设置 → 技能库 →「批量盘问（测试）」开关</figcaption>
+      </figure>
+      <table>
+        <thead><tr><th>项目</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>开关位置</td><td>应用设置 → <strong>技能库</strong>（带「测试」徽标），为应用级设置</td></tr>
+          <tr><td>影响范围</td><td>只改<strong>提示词措辞</strong>：云效议题的「发起讨论」与「直接开始（先澄清）」会改走 <code>batch-grill-me</code></td></tr>
+          <tr><td>前置</td><td>需先在技能库<strong>安装</strong> <code>batch-grill-me</code> 技能，否则开关不起作用</td></tr>
+          <tr><td>Bug 议题</td><td><strong>不受影响</strong>，保持一次一问的 <code>diagnosing-bugs</code> 根因取证循环</td></tr>
+          <tr><td>不改变</td><td><code>plan.md</code> 结构、性能影响分析分支、<code>deps.json</code> 契约都不变</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <span class="label">实验性</span>
+        这是<strong>实验性</strong>功能（界面带「测试」徽标）。它只切换提示词风格，不改变产物的契约；使用前请确认 <code>batch-grill-me</code> 技能已安装到项目。
+      </div>
+    </section>
+
+    <section id="s12">
+      <h2><span class="num">12</span>常见问题</h2>
       <table>
         <thead><tr><th>现象</th><th>说明 / 处理</th></tr></thead>
         <tbody>
@@ -683,6 +823,15 @@
           <tr><td>补录时能把令牌给 Agent 吗</td><td>不需要也不应该。Agent 只写 <code>backfill-issue.json</code>；建议题由持有令牌的 Nezha 完成。</td></tr>
           <tr><td>待办视图里「先做需求澄清」是灰的</td><td>议题详情还在加载。等详情就绪后即可勾选；若该议题是 Bug，复选框会被替换为锁定的根因诊断提示。</td></tr>
           <tr><td>图片没被 Agent 读到</td><td>图片在发起时下载到附件目录；任务重跑/恢复后可能已随任务清理，必要时重新发起或手动补图。</td></tr>
+          <tr><td>方案在哪看全貌</td><td><code>Alt + K</code> / <code>⌘ + K</code> 打开看板浮层，切「方案」标签页；左栏清单、右栏依赖图 + 任务行。</td></tr>
+          <tr><td>「开始」和「生成待办」有什么区别</td><td>「开始」= 生成<strong>并立即</strong>按依赖顺序跑，不弹确认页；「生成待办」只生成 <code>todo</code>、不启动，等你人工把关。</td></tr>
+          <tr><td>任务一直停在「等待前置」</td><td>它的前置还没 <code>done</code>。若前置是失败/取消/中断/缺失，会标红并通知一次——可「忽略依赖，仍然开始」，那只会绕过前置判断，不绕过并发上限。</td></tr>
+          <tr><td>方案能不能删掉 / 取消是不是就没了</td><td>取消是<strong>留存状态</strong>，记录还在；想移出视野用「归档」（可在底部「已归档」区反归档）；真删要显式点删除并二次确认，仍有任务引用时后端会拒绝。</td></tr>
+          <tr><td>「标记完成」为什么不能点</td><td>只有「执行中」的方案可标记完成。<strong>已完成</strong>的方案请用「重新打开」回到执行态。</td></tr>
+          <tr><td>并行改同一批文件 / 想让它串行</td><td>方案待办默认受 <code>[plan] max_concurrent</code> 约束（默认 1 = 串行），由 <code>deps.json</code> 拓扑顺序逐个放行。手动点 ▶ 也受同一闸门约束。</td></tr>
+          <tr><td><code>deps.json</code> 写坏了会怎样</td><td>降级处理：给告警、少一道护栏，不会卡死任务；依赖成环时环上的边全部丢弃，门禁不会死锁。</td></tr>
+          <tr><td>怎么把新议题挂到已有方案下</td><td>在「发起讨论」对话框里选「关联方案（作为子方案追加）」，选一个已定稿的主方案即可；不选就是独立方案。</td></tr>
+          <tr><td>开了「批量盘问」怎么没生效</td><td>需先在技能库安装 <code>batch-grill-me</code> 技能；该开关只改提示词风格，且 Bug 议题仍走一次一问的根因取证。</td></tr>
         </tbody>
       </table>
       <footer>Nezha 云效议题完整闭环 · 本页为静态说明文档，截图取自真实运行界面</footer>

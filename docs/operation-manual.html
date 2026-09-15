@@ -245,26 +245,31 @@
       <p>议题列表上方的「<strong>导入到项目</strong>」下拉用于选择这两个入口的目标本地项目（会记住上次选择）。</p>
       <div class="callout warn">
         <span class="label">关于「已导入」</span>
-        若某议题本地已存在绑定任务，按钮区会显示「<strong>已导入</strong>」且不再提供入口，避免重复建任务——这是<strong>去重标记，不是一个可点的「导入」操作</strong>。把议题落成待办的实际路径只有两条：<strong>发起讨论 →「生成待办」</strong>，或<strong>补录议题</strong>（见 1.6）。
+        若某议题本地已存在绑定任务，按钮区会显示「<strong>已导入</strong>」且不再提供入口，避免重复建任务——这是<strong>去重标记，不是一个可点的「导入」操作</strong>。把议题落成待办的实际路径只有两条：<strong>发起讨论 →「生成待办」/「开始」</strong>，或<strong>补录议题</strong>（见 1.7）。
       </div>
       <p>完整对照（含工作流路由与逐条决策指南）见 <a href="yunxiao-launch-modes.html">云效议题完整闭环说明（HTML）</a> · <a href="yunxiao-launch-modes.md">Markdown</a>。</p>
 
       <h3><span class="subnum">1.4</span>发起讨论：先出方案，再执行</h3>
       <figure class="shot-md">
         <img src="screenshots/yunxiao-launch-mode/05-discussion-plan-dialog.png" alt="发起讨论对话框" />
-        <figcaption>发起讨论确认框：议题预览、已归档图片数、讨论补充与 Agent / 权限选择</figcaption>
+        <figcaption>发起讨论确认框：议题预览、已归档图片数、关联方案、讨论补充与 Agent / 权限选择</figcaption>
       </figure>
       <p>点「发起讨论」，在确认框里选择 <strong>Agent</strong>（Claude / Codex / DSH）与<strong>权限模式</strong>（询问 / 自动编辑 / YOLO）、填写「<strong>讨论补充</strong>」，确认后：</p>
       <ol>
         <li><strong>打开对话框即已创建 draft 方案（Plan）</strong>，议题详情与图片归档到 <code>.nezha/plans/&lt;planId&gt;/</code>；</li>
         <li>待办（或新建任务）转化为<strong>方案讨论任务</strong>并立即启动；按议题类别走 <code>grilling</code> 决策树（Bug 议题先用 <code>diagnosing-bugs</code> 定位根因）；</li>
-        <li>讨论阶段<strong>先不写代码</strong>，产出一份固定结构的方案文档 <code>plan.md</code>。</li>
+        <li>讨论阶段<strong>先不写代码</strong>，产出两份文件：方案文档 <code>plan.md</code>，以及机器可读的<strong>依赖清单 <code>deps.json</code></strong>。</li>
       </ol>
-      <p>方案定稿后，从任务头部「<strong>方案</strong>」按钮打开预览，点「<strong>生成待办</strong>」按议题拆成执行任务（一议题一任务，落成 <code>todo</code>、不自动启动，由人工把关后运行）：</p>
+      <p>若本项目已有其它<strong>已定稿方案</strong>，确认框里会多出「<strong>关联方案（作为子方案追加）</strong>」下拉：选一个主方案，这批议题就挂成它的<strong>子方案</strong>；不选则是独立方案。</p>
+      <p>方案定稿后，从任务头部「<strong>方案</strong>」按钮打开预览，右上角两个按钮：</p>
       <figure class="shot-md">
-        <img src="screenshots/yunxiao-launch-mode/07-plan-preview.png" alt="方案预览" />
-        <figcaption>方案预览与「生成待办」入口</figcaption>
+        <img src="screenshots/yunxiao-launch-mode/07-plan-preview.png" alt="方案预览、开始与生成待办入口" />
+        <figcaption>方案预览右上角：「开始」（生成并立即跑）与「生成待办」（只生成、不启动）</figcaption>
       </figure>
+      <ul>
+        <li>「<strong>开始</strong>」——生成待办并<strong>立即</strong>按 <code>deps.json</code> 的拓扑顺序串行跑起来（不弹确认页，沿用方案顺序与上次的 Agent / 权限）；</li>
+        <li>「<strong>生成待办</strong>」——只生成 <code>todo</code> 任务、<strong>不启动</strong>，由人工把关后再跑。</li>
+      </ul>
       <figure class="shot-md">
         <img src="screenshots/yunxiao-launch-mode/08-generate-todos.png" alt="从方案生成待办" />
         <figcaption>从方案生成待办：可调顺序、剔除议题，冲突议题自动排除</figcaption>
@@ -274,7 +279,61 @@
         取消「发起讨论」对话框会一并清理 draft 方案与已下载图片，不留残留。
       </div>
 
-      <h3><span class="subnum">1.5</span>直接开始：议题即 spec</h3>
+      <h3><span class="subnum">1.5</span>方案看板与依赖门禁</h3>
+      <p><strong>方案看板</strong>回答「这个项目有哪些方案、各自到哪一步了」：<code>Alt + K</code>（Windows）/ <code>⌘ + K</code>（macOS）打开看板浮层 → 切「<strong>方案</strong>」标签页（与任务看板共用浮层，不新增入口）。左栏按方案列出（含完成进度与状态筛选，支持「仅看进行中」），右栏是当前方案的<strong>依赖关系图</strong>（左 → 右 = 执行顺序）与按拓扑顺序排列的<strong>任务行</strong>。</p>
+      <figure>
+        <img src="screenshots/plan-board/01-board-dark.png" alt="方案看板（暗色）" />
+        <figcaption>方案看板：左栏方案列表 + 顶部筛选，右栏依赖图与任务行</figcaption>
+      </figure>
+      <p>方案生命周期操作在看板右上角：</p>
+      <table>
+        <thead><tr><th>操作</th><th>语义</th></tr></thead>
+        <tbody>
+          <tr><td><strong>标记完成</strong></td><td>由<strong>你</strong>决定方案算不算完成（可能还有验收或后续工作）。仅「执行中」的方案可标记。</td></tr>
+          <tr><td><strong>重新打开</strong></td><td>已完成方案的逆操作，回到执行态继续干活。</td></tr>
+          <tr><td><strong>取消方案</strong></td><td>取消是<strong>留存状态</strong>，记录仍在看板上，不会被删掉。</td></tr>
+          <tr><td><strong>归档 / 反归档</strong></td><td>把已完成方案移出主列，收进底部「已归档（N）」区；展示层标记，与状态正交。</td></tr>
+          <tr><td><strong>删除</strong></td><td>显式删除、二次确认；仍有任务引用该方案时后端会拒绝。</td></tr>
+        </tbody>
+      </table>
+      <p><strong>依赖门禁</strong>（<code>deps.json</code>）：讨论产出的 <code>deps.json</code> 声明议题间的先后关系，Nezha 解析它并做<strong>拓扑排序</strong>。</p>
+      <ul>
+        <li>前置未全部 <code>done</code> 的待办停在 <strong><code>waiting_deps</code></strong>（等待前置），完成后<strong>自动放行</strong>；等待中<strong>不创建 PTY</strong>。</li>
+        <li>前置<strong>失败 / 取消 / 中断 / 缺失</strong>时<strong>不静默跳过</strong>：任务继续等待、在看板<strong>标红</strong>、<strong>只通知一次</strong>，由你决定是否「<strong>忽略依赖，仍然开始</strong>」。</li>
+        <li>放行还受<strong>每项目并发上限</strong> <code>[plan] max_concurrent</code> 约束（<strong>默认 1 = 串行</strong>）。「忽略依赖」只绕过前置判断，<strong>不</strong>绕过并发上限；手动点 ▶ 也受同一串行闸门约束。</li>
+        <li>解析刻意宽松：文件损坏只是少一道护栏（告警降级），依赖成环时<strong>环上的边全部丢弃</strong>，门禁不会死锁。</li>
+      </ul>
+      <figure>
+        <img src="screenshots/plan-board/04-dep-chain.png" alt="依赖链：按拓扑顺序解锁" />
+        <figcaption>3 项串成一条链：TEST-101 → TEST-102 → TEST-103，任务行按执行顺序排列</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/plan-board/03-waiting-deps.png" alt="前置异常：等待前置并标红" />
+        <figcaption>前置 TEST-103 异常中断 → TEST-104 停在等待前置并标红提示</figcaption>
+      </figure>
+      <div class="callout warn">
+        <span class="label">作用范围</span>
+        该门禁<strong>只作用于方案待办</strong>；你自己新建的普通任务行为不变。串行约束统一收在<strong>唯一</strong>的启动入口上，与自动调度共用同一个「有没有空槽」判断，因此无论走「开始」一键启动还是手动点 ▶，都不会出现「绕过依赖门禁并发跑」的漏洞。
+      </div>
+
+      <h3><span class="subnum">1.6</span>追加议题：挂成子方案</h3>
+      <p>方案定稿并执行后，若又来了一批相关议题想<strong>接着挂到同一个主方案下</strong>，用「追加议题」——一次追加的一批议题合成一个<strong>子方案</strong>，挂在主方案下，有自己的 <code>plan.md</code> 与 <code>deps.json</code>。</p>
+      <p>入口就在「<strong>发起讨论</strong>」对话框里（见 1.4），<strong>不</strong>另设议题选择器：那个视图本来就有多选、筛选、分页与「已占用议题」置灰，追加只是在那里多一个可选字段。</p>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/10-append-parent-plans.png" alt="关联方案下拉：选择主方案" />
+        <figcaption>「关联方案（作为子方案追加）」下拉，候选为本项目已定稿的方案</figcaption>
+      </figure>
+      <ul>
+        <li>选一个<strong>已定稿</strong>的主方案 → 这批议题成为它的子方案；保持「<strong>不关联（独立方案）</strong>」→ 与以前一样是独立方案；</li>
+        <li>讨论会话会拿到主方案的<strong>议题清单与方案文档路径</strong>，由 Agent 按内容判定<strong>跨方案依赖</strong>；</li>
+        <li>看板上子方案<strong>缩进</strong>在父方案之下，且不独立筛选（筛选按子树语义，命中子方案会连带整条祖先链显示）；跨方案前置在依赖图里渲染为<strong>外部节点</strong>。</li>
+      </ul>
+      <div class="callout">
+        <span class="label">父方案被删了怎么办</span>
+        祖先链遍历遇到「断链」或「成环」会停下，降级为<strong>丢弃这条边</strong>而非抛错——子方案仍能正常打开和生成待办。
+      </div>
+
+      <h3><span class="subnum">1.7</span>直接开始：议题即 spec</h3>
       <figure class="shot-md">
         <img src="screenshots/yunxiao-launch-mode/02-direct-req-default.png" alt="直接开始对话框" />
         <figcaption>「直接开始」确认框：需求类默认「直接执行（implement）」</figcaption>
@@ -290,7 +349,7 @@
       </table>
       <p>直接执行<strong>不生成 <code>plan.md</code></strong>，同样要求提交信息带 <code>#议题编号</code>、同样支持完成后的「回写云效」。</p>
 
-      <h3><span class="subnum">1.6</span>补录议题（反向闭环）</h3>
+      <h3><span class="subnum">1.8</span>补录议题（反向闭环）</h3>
       <p>如果<strong>讨论 / 执行中途</strong>发现了需要立项的新问题，可以反向补录成正式议题（不打断当前会话）：</p>
       <ol>
         <li>在任务运行中，手动调用 <code>yunxiao-backfill-issue</code> 技能（该技能位于技能仓库，需已安装到项目）。</li>
@@ -301,10 +360,10 @@
       </ol>
       <div class="callout">
         <span class="label">注意</span>
-        新议题默认落成「待办」，<strong>不会自动启动</strong>；由人工把关后进入 1.4～1.7 的常规闭环。
+        新议题默认落成「待办」，<strong>不会自动启动</strong>；由人工把关后进入 1.4～1.9 的常规闭环。
       </div>
 
-      <h3><span class="subnum">1.7</span>方案回写云效（正向闭环收口）</h3>
+      <h3><span class="subnum">1.9</span>方案回写云效（正向闭环收口）</h3>
       <p>任务完成后（<code>done</code> 且云效绑定任务）：</p>
       <ol>
         <li>任务详情头部出现「<strong>回写云效</strong>」按钮；任务列表卡片显示「<strong>待回写</strong>」徽标。</li>
@@ -314,7 +373,7 @@
         <li>成功后按钮置「<strong>已回写</strong>」。任务记录 <code>yunxiaoWrittenBackAt</code> / <code>yunxiaoCommentId</code>，保证幂等，不重复回写。</li>
       </ol>
 
-      <h3><span class="subnum">1.8</span>议题闭环全景</h3>
+      <h3><span class="subnum">1.10</span>议题闭环全景</h3>
       <div class="flow">
         <div class="flow-stage">
           <div class="flow-head">
@@ -333,8 +392,9 @@
               <div class="flow-lane"><span class="dot"></span>发起讨论</div>
               <ul class="flow-steps">
                 <li>打开即建 draft 方案（占位）</li>
-                <li>讨论产出 <code>plan.md</code> 方案</li>
-                <li>方案定稿 →【生成待办】拆出执行任务</li>
+                <li>讨论产出 <code>plan.md</code> + <code>deps.json</code></li>
+                <li>方案定稿 →「开始」或「生成待办」拆出执行任务</li>
+                <li>依赖门禁按拓扑放行（默认串行）</li>
               </ul>
             </div>
           </div>
@@ -348,7 +408,7 @@
           <div class="flow-head">
             <span class="flow-num">2</span>
             <span class="flow-title">执行任务运行中</span>
-            <span class="flow-tag">两条链路在此汇合</span>
+            <span class="flow-tag">两条链路在此汇合 · 受依赖门禁与并发上限约束</span>
           </div>
           <div class="flow-cols">
             <div class="flow-col">
@@ -372,14 +432,14 @@
         </div>
       </div>
 
-      <h3><span class="subnum">1.9</span>直接开始 vs 发起讨论（怎么选）</h3>
+      <h3><span class="subnum">1.11</span>直接开始 vs 发起讨论（怎么选）</h3>
       <table>
         <thead><tr><th>你的处境</th><th>选择</th></tr></thead>
         <tbody>
           <tr><td>需求不清楚、影响面大、需要方案留痕 / 人工把关、或要跨多个议题统筹</td><td>发起讨论</td></tr>
           <tr><td>缺陷根因明确要直接修、一句话说得清的小改动</td><td>直接开始（不勾澄清）</td></tr>
           <tr><td>方向清楚，但验收标准 / 边界细节想和 Agent 对齐一下</td><td>直接开始 + 勾「先做需求澄清」</td></tr>
-          <tr><td>手里这条议题要拆成多个执行任务</td><td>发起讨论 → 生成待办</td></tr>
+          <tr><td>手里这条议题要拆成多个执行任务</td><td>发起讨论 → 生成待办（或直接「开始」串行跑）</td></tr>
         </tbody>
       </table>
       <div class="callout">
@@ -426,7 +486,7 @@
       </ul>
 
       <h3><span class="subnum">2.5</span>自动回写（可选）与人工审核</h3>
-      <p>在「应用设置 → 技能」中有一个开关「<strong>知识沉淀自动回写</strong>」（提交后经质量门自动写入技能库）：</p>
+      <p>在「应用设置 → 技能库」中有一个开关「<strong>知识沉淀自动回写</strong>」（提交后经质量门自动写入技能库）：</p>
       <ul>
         <li><strong>关闭（默认）</strong>：知识只到「创建审核议题」这一步，不入库图谱 <code>data/</code>。审核通过后由<strong>知识库负责人</strong>人工更新模块卡片并提交推送（图谱数据由 git 统一管理）。</li>
         <li><strong>开启</strong>：创建审核议题后，Nezha 立即对「已确认」且有依据的条目跑一次<strong>回写质量门</strong>；全部通过时把知识<strong>追加</strong>写入项目设置中选定的知识图谱模块卡片、推送技能库，并把该议题置为「已完成」。未通过的条目保留人工审核。</li>
@@ -492,6 +552,20 @@
 
       <h3><span class="subnum">3.7</span>SkillHub 任务视图</h3>
       <p>技能库作为特殊项目注册进 <code>projects.json</code>，你可以在普通任务/文件/终端视图里打开它，像编辑普通项目一样编辑技能内容。</p>
+
+      <h3><span class="subnum">3.8</span>应用级技能开关</h3>
+      <p>「应用设置 → 技能库」下有两个影响 Agent 行为的应用级开关：</p>
+      <table>
+        <thead><tr><th>开关</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><strong>知识沉淀自动回写</strong></td><td>见 2.5 节：创建审核议题后自动跑质量门并写入绑定图谱</td></tr>
+          <tr><td><strong>批量盘问</strong>（带「测试」徽标，实验性）</td><td>需求澄清 / 方案讨论从「一次一问」改为「一轮抛出当前前沿的全部问题（各附推荐答案）」，压往返次数。只改提示词风格；需先安装 <code>batch-grill-me</code> 技能；Bug 议题仍走一次一问的根因取证。</td></tr>
+        </tbody>
+      </table>
+      <figure class="shot-md">
+        <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="批量盘问开关" />
+        <figcaption>应用设置 → 技能库 →「批量盘问（测试）」开关</figcaption>
+      </figure>
     </section>
 
     <section id="sec4">
@@ -689,18 +763,24 @@
           <tr><td>「只看我负责的」不可用</td><td>当前用户未能自动识别，到连接设置补填「我的用户 ID / 用户名」后重试。</td></tr>
           <tr><td>议题行显示「已导入」，没有入口</td><td>该议题本地已有绑定任务（去重标记）。到对应项目「待办」列找它，或删除旧任务后重新发起。</td></tr>
           <tr><td>想把一条议题直接落成待办</td><td>没有单独的「导入」按钮；请用「发起讨论 → 生成待办」，或直接操刀已有任务。</td></tr>
+          <tr><td>方案在哪看全貌 / 怎么标记完成</td><td><code>Alt + K</code>（macOS <code>⌘ + K</code>）→「方案」标签页。生命周期操作（标记完成 / 重开 / 取消 / 归档 / 删除）在详情右上角，见 1.5。</td></tr>
+          <tr><td>任务一直停在「等待前置」</td><td>前置未全部 <code>done</code>。若前置失败/取消/中断/缺失会标红并只通知一次，可「忽略依赖，仍然开始」（不绕过并发上限）。</td></tr>
+          <tr><td>方案待办能不能并行跑</td><td>默认串行：受 <code>[plan] max_concurrent</code>（默认 1）约束，按 <code>deps.json</code> 拓扑顺序逐个放行；手动点 ▶ 同受此限。</td></tr>
+          <tr><td>取消方案是不是就删了</td><td>不是，取消是留存态；移出视野用「归档」（可反归档），真删要显式删除并二次确认。</td></tr>
+          <tr><td>怎么把新议题挂到已有方案下</td><td>「发起讨论」对话框里选「关联方案（作为子方案追加）」→ 挑一个已定稿主方案。</td></tr>
+          <tr><td>「批量盘问」开了没反应</td><td>需先在技能库安装 <code>batch-grill-me</code> 技能；该开关只改提示词风格，Bug 议题仍一次一问。</td></tr>
           <tr><td>发起讨论后 Agent 读不到议题图片</td><td>图片在发起时下载；若任务重跑/恢复，图片可能已随任务清理，可重新发起或用附件补图。</td></tr>
           <tr><td>提交信息不含 <code>#编号</code></td><td><code>git_commit</code> 会自动追加；<code>merge_task_worktree</code> 会校验并阻断缺失提交。</td></tr>
           <tr><td>「回写云效」后没有出现在议题</td><td>确认云效工作项「评论」权限；如价值评分字段写入失败，用「补写字段」。</td></tr>
           <tr><td>「沉淀知识」无候选</td><td>说明本次讨论没有图谱之外的、有依据的增量；可「重新生成」或换更聚焦的知识技能后再试。</td></tr>
-          <tr><td>知识沉淀后没人去改图谱</td><td>在「应用设置 → 技能」开启「知识沉淀自动回写」，确认过的知识会经质量门自动写入绑定图谱。</td></tr>
+          <tr><td>知识沉淀后没人去改图谱</td><td>在「应用设置 → 技能库」开启「知识沉淀自动回写」，确认过的知识会经质量门自动写入绑定图谱。</td></tr>
           <tr><td>技能库显示「同步失败，使用缓存技能」</td><td>网络/凭据问题。检查 URL/分支、网络，点「立即同步」重试。</td></tr>
           <tr><td>已安装技能健康标记 <code>broken</code>/<code>diverged</code></td><td>Hub 里技能被改名/删除，或路径被外部修改；手动卸载或清理失效安装。</td></tr>
           <tr><td>构建面板显示「未发现 git 仓库」</td><td>点面板「刷新」重新探测；确认项目根确是 git 仓库。</td></tr>
           <tr><td>构建报「找不到 hsp-build-order.ps1」</td><td>到「构建配置」填写 <code>script_path</code>，或确认技能仓库已配置且装了 <code>hsp-build-order</code> 技能。</td></tr>
           <tr><td>增量构建报「未检测到变更」/「请先建立基线」</td><td>先跑一次「全量构建」或点「刷新基线」建立基线；随后再增量。</td></tr>
           <tr><td>「扫描项目」按钮灰着</td><td>图谱未就绪或缺对应适配器脚本；确认图谱「已就绪」，并保证 <code>adapters/&lt;adapter&gt;.py</code> 存在。</td></tr>
-          <tr><td>「知识库」提示「技能库未配置」</td><td>先到「应用设置 → 技能」配置技能仓库来源。</td></tr>
+          <tr><td>「知识库」提示「技能库未配置」</td><td>先到「应用设置 → 技能库」配置技能仓库来源。</td></tr>
           <tr><td>「分支合并」点不动</td><td>需先对该 MR「拉取代码」。</td></tr>
           <tr><td>创建 PR 报分支重名</td><td>用「检测」后选「继续使用远端分支」或「改名」。</td></tr>
           <tr><td>审查报告「回写到评论」失败</td><td>确认云效令牌有合并请求评论权限；报告本身可先「复制」或「导出 .md」保底。</td></tr>

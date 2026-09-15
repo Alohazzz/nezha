@@ -23,6 +23,7 @@ const ENTRIES = [
   "yunxiao-launch-modes.html",
   "screenshots/module-guide",
   "screenshots/yunxiao-launch-mode",
+  "screenshots/plan-board",
 ];
 
 /** 文档里引用的截图目录，逐图校验可发现断链。 */
@@ -41,6 +42,12 @@ const REQUIRED_ASSETS = [
   "screenshots/yunxiao-launch-mode/07-plan-preview.png",
   "screenshots/yunxiao-launch-mode/08-generate-todos.png",
   "screenshots/yunxiao-launch-mode/09-skills.png",
+  "screenshots/yunxiao-launch-mode/10-append-parent-plans.png",
+  "screenshots/yunxiao-launch-mode/11-batch-grill-setting.png",
+  "screenshots/plan-board/01-board-dark.png",
+  "screenshots/plan-board/02-board-light.png",
+  "screenshots/plan-board/03-waiting-deps.png",
+  "screenshots/plan-board/04-dep-chain.png",
 ];
 
 async function sync() {
