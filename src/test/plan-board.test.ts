@@ -3,11 +3,11 @@ import type { Plan, PlanStatus, Task, TaskStatus } from "../types";
 import { parsePlanDeps } from "../utils/planDeps";
 import {
   buildTaskBySerial,
-  derivePlanProgress,
-  groupPlansForBoard,
+  derivePlanTaskRows,
+  groupPlansByProject,
   isPlanArchived,
-  planBoardColumn,
   planLifecycleActions,
+  satisfiedDependencies,
   tasksForPlan,
 } from "../utils/planBoard";
 
@@ -39,30 +39,24 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-describe("planBoardColumn / isPlanArchived", () => {
-  it("按 status 映射到对应列", () => {
-    const cases: Array<[PlanStatus, string]> = [
-      ["draft", "draft"],
-      ["finalized", "finalized"],
-      ["executing", "executing"],
-      ["completed", "completed"],
-      ["cancelled", "cancelled"],
-    ];
-    for (const [status, column] of cases) {
-      expect(planBoardColumn(makePlan({ status }))).toBe(column);
-    }
-  });
+/** A → B（B 依赖 A）的契约示例。 */
+const DEPS = parsePlanDeps(
+  JSON.stringify({
+    version: 1,
+    issues: [
+      { serialNumber: "QHDK-A", dependsOn: [] },
+      { serialNumber: "QHDK-B", dependsOn: ["QHDK-A"] },
+    ],
+    executionOrder: ["QHDK-A", "QHDK-B"],
+  }),
+  ["QHDK-A", "QHDK-B"],
+);
 
-  it("已归档的方案不落任何主列（AR1）", () => {
-    const plan = makePlan({ status: "completed", archivedAt: 123 });
-    expect(isPlanArchived(plan)).toBe(true);
-    expect(planBoardColumn(plan)).toBeNull();
-  });
-
-  it("archivedAt 为 0 也算归档（不是 falsy 判断）", () => {
-    const plan = makePlan({ archivedAt: 0 });
-    expect(isPlanArchived(plan)).toBe(true);
-    expect(planBoardColumn(plan)).toBeNull();
+describe("isPlanArchived", () => {
+  it("archivedAt 为数字即归档（0 也算，不是 falsy 判断）", () => {
+    expect(isPlanArchived({})).toBe(false);
+    expect(isPlanArchived({ archivedAt: 0 })).toBe(true);
+    expect(isPlanArchived({ archivedAt: 123 })).toBe(true);
   });
 });
 
@@ -74,7 +68,7 @@ describe("planLifecycleActions", () => {
     expect(planLifecycleActions(makePlan({ status: "executing" })).canReopen).toBe(false);
   });
 
-  it("讨论中 / 已定稿都不能标记完成——尚未开展或尚未生成待办，收尾应走取消", () => {
+  it("讨论中 / 已定稿都不能标记完成——尚未开展或尚未生成待办", () => {
     expect(planLifecycleActions(makePlan({ status: "draft" })).canComplete).toBe(false);
     expect(planLifecycleActions(makePlan({ status: "finalized" })).canComplete).toBe(false);
   });
@@ -84,16 +78,11 @@ describe("planLifecycleActions", () => {
     expect(planLifecycleActions(makePlan({ status: "cancelled" })).canCancel).toBe(false);
   });
 
-  it("归档只在已完成时可用；归档后可反归档", () => {
+  it("归档只在已完成时可用；归档后可反归档，且完成/重开/取消均不可用", () => {
     expect(planLifecycleActions(makePlan({ status: "executing" })).canArchive).toBe(false);
     expect(planLifecycleActions(makePlan({ status: "completed" })).canArchive).toBe(true);
-    const archived = planLifecycleActions(makePlan({ status: "completed", archivedAt: 9 }));
-    expect(archived.canArchive).toBe(false);
-    expect(archived.canUnarchive).toBe(true);
-  });
-
-  it("已归档方案的完成 / 重开 / 取消均不可用（先反归档）", () => {
     const archived = planLifecycleActions(makePlan({ status: "executing", archivedAt: 9 }));
+    expect(archived.canUnarchive).toBe(true);
     expect(archived.canComplete).toBe(false);
     expect(archived.canCancel).toBe(false);
     expect(archived.canReopen).toBe(false);
@@ -115,10 +104,9 @@ describe("tasksForPlan / buildTaskBySerial", () => {
     ];
     const map = tasksForPlan({ id: "p1" }, tasks);
     expect([...map.keys()]).toEqual(["QHDK-A"]);
-    expect(map.get("QHDK-A")?.id).toBe("t1");
   });
 
-  it("全局索引跨方案可查到（阶段三祖先引用的前置条件）", () => {
+  it("全局索引跨方案可查到（跨祖先方案引用的前置条件）", () => {
     const map = buildTaskBySerial([
       makeTask({ id: "t1", planId: "p1", yunxiaoSerialNumber: "QHDK-A" }),
       makeTask({ id: "t2", planId: "p2", yunxiaoSerialNumber: "QHDK-X" }),
@@ -127,162 +115,217 @@ describe("tasksForPlan / buildTaskBySerial", () => {
   });
 });
 
-describe("derivePlanProgress — 进度", () => {
-  it("按议题统计 done 数；未生成待办的议题算未完成", () => {
-    const plan = makePlan();
-    const tasks = [
+describe("derivePlanTaskRows — 任务行为主体", () => {
+  it("每个议题一行，未生成待办的议题 task 为 null", () => {
+    const rows = derivePlanTaskRows(makePlan(), [
       makeTask({ id: "t1", planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "done" }),
-    ];
-    const progress = derivePlanProgress(plan, tasks);
-    expect(progress.total).toBe(2);
-    expect(progress.done).toBe(1);
-    expect(progress.allDone).toBe(false);
-    expect(progress.issues.map((i) => i.done)).toEqual([true, false]);
-    expect(progress.issues[1].taskId).toBeNull();
-    expect(progress.issues[1].status).toBeNull();
-    expect(progress.noTasks).toBe(false);
-  });
-
-  it("全部议题 done → allDone；没有任何任务 → noTasks", () => {
-    const plan = makePlan();
-    const allDone = derivePlanProgress(plan, [
-      makeTask({ id: "t1", planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "done" }),
-      makeTask({ id: "t2", planId: "p1", yunxiaoSerialNumber: "QHDK-B", status: "done" }),
     ]);
-    expect(allDone.allDone).toBe(true);
-    expect(allDone.done).toBe(2);
-
-    expect(derivePlanProgress(plan, []).noTasks).toBe(true);
+    expect(rows.rows).toHaveLength(2);
+    const a = rows.rows.find((r) => r.serialNumber === "QHDK-A");
+    const b = rows.rows.find((r) => r.serialNumber === "QHDK-B");
+    expect(a?.task?.id).toBe("t1");
+    expect(a?.status).toBe("done");
+    expect(b?.task).toBeNull();
+    expect(b?.status).toBeNull();
+    expect(rows.done).toBe(1);
+    expect(rows.allDone).toBe(false);
   });
 
-  it("failed / cancelled 不算完成（仅 done 算）", () => {
+  it("按拓扑序排列行（前置在前），与接续顺序一致", () => {
+    const rows = derivePlanTaskRows(makePlan(), [], DEPS);
+    expect(rows.rows.map((r) => r.serialNumber)).toEqual(["QHDK-A", "QHDK-B"]);
+  });
+
+  it("无 deps 时按 plan.issues 给定顺序", () => {
+    const plan = makePlan({
+      issues: [
+        { workitemId: "w2", serialNumber: "QHDK-B", subject: "B" },
+        { workitemId: "w1", serialNumber: "QHDK-A", subject: "A" },
+      ],
+    });
+    const rows = derivePlanTaskRows(plan, []);
+    expect(rows.rows.map((r) => r.serialNumber)).toEqual(["QHDK-B", "QHDK-A"]);
+  });
+
+  it("failed / cancelled / interrupted 不算完成，只有 done 算", () => {
     const plan = makePlan({ issues: [{ workitemId: "w1", serialNumber: "QHDK-A", subject: "A" }] });
     for (const status of ["failed", "cancelled", "interrupted", "running", "todo"] as const) {
-      const progress = derivePlanProgress(
-        plan,
-        [makeTask({ planId: "p1", yunxiaoSerialNumber: "QHDK-A", status })],
-      );
-      expect(progress.done).toBe(0);
-      expect(progress.allDone).toBe(false);
+      const rows = derivePlanTaskRows(plan, [
+        makeTask({ planId: "p1", yunxiaoSerialNumber: "QHDK-A", status }),
+      ]);
+      expect(rows.done).toBe(0);
+      expect(rows.allDone).toBe(false);
     }
   });
 
   it("无议题的方案 allDone 为 false（避免空方案被当成已完成）", () => {
-    expect(derivePlanProgress(makePlan({ issues: [] }), []).allDone).toBe(false);
+    expect(derivePlanTaskRows(makePlan({ issues: [] }), []).allDone).toBe(false);
+  });
+
+  it("统计 runningCount（在跑的议题数，占并发槽）", () => {
+    const rows = derivePlanTaskRows(makePlan(), [
+      makeTask({ id: "t1", planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "running" }),
+      makeTask({ id: "t2", planId: "p1", yunxiaoSerialNumber: "QHDK-B", status: "todo" }),
+    ]);
+    expect(rows.runningCount).toBe(1);
+  });
+
+  it("行内携带 statusSince（updatedAt 优先，回落 createdAt）", () => {
+    const rows = derivePlanTaskRows(makePlan(), [
+      makeTask({
+        planId: "p1",
+        yunxiaoSerialNumber: "QHDK-A",
+        createdAt: 100,
+        updatedAt: 200,
+      }),
+    ]);
+    expect(rows.rows.find((r) => r.serialNumber === "QHDK-A")?.statusSince).toBe(200);
   });
 });
 
-describe("derivePlanProgress — 依赖摘要", () => {
-  const deps = parsePlanDeps(
-    JSON.stringify({
-      version: 1,
-      issues: [
-        { serialNumber: "QHDK-A", dependsOn: [] },
-        { serialNumber: "QHDK-B", dependsOn: ["QHDK-A"] },
-      ],
-      executionOrder: ["QHDK-A", "QHDK-B"],
-    }),
-    ["QHDK-A", "QHDK-B"],
-  );
-
-  it("无 deps 时视为无依赖，只算进度", () => {
-    const progress = derivePlanProgress(makePlan(), [], undefined);
-    expect(progress.unmetEdges).toBe(0);
-    expect(progress.blockedIssues).toBe(0);
-    expect(progress.issues[1].dependsOn).toEqual([]);
-  });
-
-  it("前置未 done → 计入 unmet；前置 done → 不计", () => {
+describe("derivePlanTaskRows — 前置约束", () => {
+  it("前置未 done → unmet；前置 done → 无约束", () => {
     const plan = makePlan();
-    const notDone = derivePlanProgress(plan, [], deps);
-    expect(notDone.issues[1].dependsOn).toEqual(["QHDK-A"]);
-    expect(notDone.issues[1].unmet).toEqual(["QHDK-A"]);
-    expect(notDone.unmetEdges).toBe(1);
-    expect(notDone.blockedIssues).toBe(1);
+    const blocked = derivePlanTaskRows(plan, [], DEPS);
+    const b = blocked.rows.find((r) => r.serialNumber === "QHDK-B");
+    expect(b?.dependsOn).toEqual(["QHDK-A"]);
+    expect(b?.unmet).toEqual(["QHDK-A"]);
+    // A 根本没有任务 → 属「缺失」，需人工越过（不是普通 pending）
+    expect(b?.needsOverride).toBe(true);
+    expect(blocked.unmetEdges).toBe(1);
 
-    const satisfied = derivePlanProgress(
+    const ok = derivePlanTaskRows(
       plan,
       [makeTask({ planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "done" })],
-      deps,
+      DEPS,
     );
-    expect(satisfied.issues[1].unmet).toEqual([]);
-    expect(satisfied.unmetEdges).toBe(0);
-    expect(satisfied.blockedIssues).toBe(0);
+    expect(ok.rows.find((r) => r.serialNumber === "QHDK-B")?.unmet).toEqual([]);
+    expect(ok.unmetEdges).toBe(0);
   });
 
-  it("前置任务缺失（未生成待办）计为 unmet，不静默放行", () => {
-    const progress = derivePlanProgress(makePlan(), [], deps);
-    expect(progress.issues[1].unmet).toEqual(["QHDK-A"]);
+  it("前置有任务但未 done → unmet 但 needsOverride 为 false（普通等待）", () => {
+    const rows = derivePlanTaskRows(
+      makePlan(),
+      [makeTask({ planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "running" })],
+      DEPS,
+    );
+    const b = rows.rows.find((r) => r.serialNumber === "QHDK-B");
+    expect(b?.unmet).toEqual(["QHDK-A"]);
+    expect(b?.needsOverride).toBe(false);
+  });
+
+  it("前置任务缺失 → needsOverride（不静默放行）", () => {
+    const b = derivePlanTaskRows(makePlan(), [], DEPS).rows.find(
+      (r) => r.serialNumber === "QHDK-B",
+    );
+    expect(b?.unmet).toEqual(["QHDK-A"]);
+    expect(b?.needsOverride).toBe(true);
+  });
+
+  it("前置异常（failed）→ needsOverride", () => {
+    const rows = derivePlanTaskRows(
+      makePlan(),
+      [makeTask({ planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "failed" })],
+      DEPS,
+    );
+    expect(rows.rows.find((r) => r.serialNumber === "QHDK-B")?.needsOverride).toBe(true);
   });
 
   it("依赖解析走全局任务表：前置任务属另一方案时同样能判定", () => {
-    const plan = makePlan({ id: "p2" });
-    const tasks = [
-      // 前置 QHDK-A 的任务挂在别的方案上（阶段三的跨方案依赖形态）
-      makeTask({ id: "tA", planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "done" }),
-    ];
-    const progress = derivePlanProgress(plan, tasks, deps);
-    expect(progress.issues[1].unmet).toEqual([]);
+    const rows = derivePlanTaskRows(
+      makePlan({ id: "p2" }),
+      [makeTask({ id: "tA", planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "done" })],
+      DEPS,
+    );
+    expect(rows.rows.find((r) => r.serialNumber === "QHDK-B")?.unmet).toEqual([]);
   });
 
-  it("前置异常（failed）仍算 unmet", () => {
-    const plan = makePlan();
-    const progress = derivePlanProgress(
-      plan,
-      [makeTask({ planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "failed" })],
-      deps,
-    );
-    expect(progress.issues[1].unmet).toEqual(["QHDK-A"]);
+  it("satisfiedDependencies 只列已满足且存在的编号", () => {
+    const doneTask = makeTask({
+      planId: "p1",
+      yunxiaoSerialNumber: "QHDK-A",
+      status: "done",
+    });
+    const rows = derivePlanTaskRows(makePlan(), [doneTask], DEPS);
+    const b = rows.rows.find((r) => r.serialNumber === "QHDK-B");
+    expect(b).toBeDefined();
+    expect(satisfiedDependencies(b!, [doneTask])).toEqual(["QHDK-A"]);
   });
 });
 
-describe("groupPlansForBoard", () => {
-  it("按项目分组、按生命周期入列，列内按 createdAt 升序", () => {
-    const groups = groupPlansForBoard([
-      makePlan({ id: "a", projectId: "p", status: "executing", createdAt: 3 }),
-      makePlan({ id: "b", projectId: "p", status: "executing", createdAt: 1 }),
-      makePlan({ id: "c", projectId: "p", status: "draft", createdAt: 2 }),
-      makePlan({ id: "d", projectId: "q", status: "completed", createdAt: 1 }),
-    ]);
+describe("groupPlansByProject", () => {
+  it("按项目分组；归档进 archived、不计入活跃方案", () => {
+    const groups = groupPlansByProject(
+      [
+        makePlan({ id: "a", projectId: "p", status: "executing" }),
+        makePlan({ id: "b", projectId: "p", status: "completed", archivedAt: 10 }),
+      ],
+      new Set(),
+    );
     const p = groups.find((g) => g.projectId === "p");
-    expect(p?.columns.executing.map((x) => x.id)).toEqual(["b", "a"]);
-    expect(p?.columns.draft.map((x) => x.id)).toEqual(["c"]);
-    expect(p?.activeCount).toBe(3);
-    expect(p?.totalCount).toBe(3);
-    const q = groups.find((g) => g.projectId === "q");
-    expect(q?.columns.completed.map((x) => x.id)).toEqual(["d"]);
+    expect(p?.plans.map((x) => x.id)).toEqual(["a"]);
+    expect(p?.archived.map((x) => x.id)).toEqual(["b"]);
+    expect(p?.activePlanCount).toBe(1);
   });
 
-  it("归档方案进 archived、不计入任何主列与 activeCount", () => {
-    const groups = groupPlansForBoard([
-      makePlan({ id: "a", projectId: "p", status: "completed" }),
-      makePlan({ id: "b", projectId: "p", status: "completed", archivedAt: 10 }),
-    ]);
-    const p = groups[0];
-    expect(p.columns.completed.map((x) => x.id)).toEqual(["a"]);
-    expect(p.archived.map((x) => x.id)).toEqual(["b"]);
-    expect(p.activeCount).toBe(1);
-    expect(p.totalCount).toBe(2);
+  it("已完成的方案不计入活跃；有任务在跑的方案计入", () => {
+    const groups = groupPlansByProject(
+      [
+        makePlan({ id: "done", projectId: "p", status: "completed" }),
+        makePlan({ id: "running", projectId: "p", status: "completed" }),
+      ],
+      new Set(["running"]),
+    );
+    expect(groups[0].activePlanCount).toBe(1);
+  });
+
+  it("组内：有任务在动的方案优先，其余按 createdAt 升序", () => {
+    const groups = groupPlansByProject(
+      [
+        makePlan({ id: "calm", projectId: "p", status: "draft", createdAt: 1 }),
+        makePlan({ id: "busy", projectId: "p", status: "executing", createdAt: 9 }),
+      ],
+      new Set(["busy"]),
+    );
+    expect(groups[0].plans.map((x) => x.id)).toEqual(["busy", "calm"]);
+  });
+
+  it("项目按活跃数倒序、其次 projectId（结果确定）", () => {
+    const groups = groupPlansByProject(
+      [
+        makePlan({ id: "a", projectId: "beta", status: "executing", createdAt: 5 }),
+        makePlan({ id: "b", projectId: "alpha", status: "executing", createdAt: 3 }),
+        makePlan({ id: "c", projectId: "alpha", status: "draft", createdAt: 1 }),
+      ],
+      new Set(),
+    );
+    expect(groups.map((g) => g.projectId)).toEqual(["alpha", "beta"]);
+    expect(groups[0].plans.map((x) => x.id)).toEqual(["c", "b"]);
   });
 
   it("归档列表按归档时间倒序", () => {
-    const groups = groupPlansForBoard([
-      makePlan({ id: "old", projectId: "p", archivedAt: 1 }),
-      makePlan({ id: "new", projectId: "p", archivedAt: 9 }),
-    ]);
+    const groups = groupPlansByProject(
+      [
+        makePlan({ id: "old", projectId: "p", archivedAt: 1 }),
+        makePlan({ id: "new", projectId: "p", archivedAt: 9 }),
+      ],
+      new Set(),
+    );
     expect(groups[0].archived.map((x) => x.id)).toEqual(["new", "old"]);
   });
 
-  it("项目顺序：主列方案数倒序，其次 projectId（结果确定）", () => {
-    const groups = groupPlansForBoard([
-      makePlan({ id: "a", projectId: "beta", status: "draft" }),
-      makePlan({ id: "b", projectId: "alpha", status: "draft" }),
-      makePlan({ id: "c", projectId: "alpha", status: "executing" }),
-    ]);
-    expect(groups.map((g) => g.projectId)).toEqual(["alpha", "beta"]);
+  it("空列表返回空数组", () => {
+    expect(groupPlansByProject([], new Set())).toEqual([]);
   });
+});
 
-  it("空方案列表返回空数组", () => {
-    expect(groupPlansForBoard([])).toEqual([]);
+describe("PlanStatus 覆盖", () => {
+  it("五种状态都能派生任务行且不崩", () => {
+    const statuses: PlanStatus[] = ["draft", "finalized", "executing", "completed", "cancelled"];
+    for (const status of statuses) {
+      const plan = makePlan({ status });
+      expect(derivePlanTaskRows(plan, []).rows).toHaveLength(2);
+      expect(planLifecycleActions(plan).canDelete).toBe(true);
+    }
   });
 });

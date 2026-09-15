@@ -22,6 +22,8 @@ pub enum NotifyCategory {
     Complete,
     /// failed —— 任务失败（附失败原因）。
     Failed,
+    /// 方案待办的前置依赖异常/缺失，等待中的任务需要人工判断是否越过。
+    Dependency,
 }
 
 static COOLDOWN: OnceLock<Mutex<HashMap<(String, NotifyCategory), Instant>>> = OnceLock::new();
@@ -98,6 +100,9 @@ pub fn notify_task_event(
                 format!("任务《{subject}》执行失败：{reason}")
             }
         }
+        NotifyCategory::Dependency => {
+            format!("任务《{subject}》的前置依赖已失败或被删除，请打开决定是否继续")
+        }
     };
 
     // macOS 首次使用需请求通知权限（幂等，已授权/已拒绝后直接返回现状）。
@@ -110,6 +115,39 @@ pub fn notify_task_event(
     #[cfg(not(target_os = "windows"))]
     {
         // 非 Windows：继续走官方插件；macOS / Linux 点击通知由系统原生激活应用。
+        let _ = app
+            .notification()
+            .builder()
+            .title("Nezha")
+            .body(body)
+            .sound("Default")
+            .show();
+    }
+}
+
+/// 与 `notify_task_event` 同一条过滤链，但任务名由前端直接传入——等待前置的任务
+/// 从未启动 PTY，`task_names` 里没有它（`run_task` 才会写入）。
+pub fn notify_task_attention(app: &AppHandle, task_id: &str, name: &str) {
+    if !load_settings_internal().system_notifications {
+        return;
+    }
+    if is_window_focused(app) {
+        return;
+    }
+    if check_and_mark(task_id, NotifyCategory::Dependency) {
+        return;
+    }
+    let subject = if name.trim().is_empty() { task_id } else { name.trim() };
+    let body = format!("任务《{subject}》的前置依赖已失败或被删除，请打开决定是否继续");
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.notification().request_permission();
+    }
+    #[cfg(target_os = "windows")]
+    show_windows_notification(app, body);
+    #[cfg(not(target_os = "windows"))]
+    {
         let _ = app
             .notification()
             .builder()

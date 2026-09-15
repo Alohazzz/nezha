@@ -149,6 +149,13 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub plan_id: Option<String>,
+    /// 用户对异常/缺失前置选择「忽略依赖，仍然开始」后置 true。
+    #[serde(
+        rename = "planDepsIgnored",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_deps_ignored: Option<bool>,
     /// 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree）。
     #[serde(
         rename = "yunxiaoPlanDiscussion",

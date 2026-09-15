@@ -25,6 +25,10 @@ interface KanbanGroup {
 export function columnForStatus(status: TaskStatus): ColumnKey | null {
   switch (status) {
     case "todo":
+    // 等待前置的任务尚未开展，归入「待办」列（卡片自带等待角标）；
+    // ⚠️ 不能落到 default（返回 null）：那会让等待中的任务在看板上直接消失。
+    // falls through
+    case "waiting_deps":
       return "todo";
     case "pending":
     case "running":

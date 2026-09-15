@@ -26,6 +26,7 @@ import { SidebarFooterActions } from "./SidebarFooterActions";
 import { BranchBar } from "./task-panel/BranchBar";
 import { RepoSelector } from "./task-panel/RepoSelector";
 import { TaskList } from "./task-panel/TaskList";
+import type { PlanWaitingBadge } from "../utils/planQueue";
 import { useI18n } from "../i18n";
 import s from "../styles";
 
@@ -46,6 +47,7 @@ export function TaskPanel({
   onToggleTaskStar,
   onRunTodo,
   batches,
+  waitingBadges,
   onCreateTaskInGroup,
   onBack,
   backTitle,
@@ -90,6 +92,8 @@ export function TaskPanel({
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
   batches: BranchBatch[];
+  /** 方案待办等待角标（taskId → 角标）；透传给 TaskList。 */
+  waitingBadges?: Map<string, PlanWaitingBadge>;
   onCreateTaskInGroup: (groupKey: string) => void;
   onBack: () => void;
   backTitle?: string;
@@ -245,6 +249,7 @@ export function TaskPanel({
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodo}
         batches={batches}
+        waitingBadges={waitingBadges}
         onCreateTaskInGroup={onCreateTaskInGroup}
       />
       <div style={s.taskPanelFooter}>

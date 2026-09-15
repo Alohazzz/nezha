@@ -68,6 +68,13 @@ import {
 import { parsePlanDeps, type PlanDeps } from "./utils/planDeps";
 import { planLifecycleActions } from "./utils/planBoard";
 import {
+  buildTaskBySerial,
+  buildWaitingBadges,
+  evaluateTaskGate,
+  selectAutoStart,
+  type PlanWaitingBadge,
+} from "./utils/planQueue";
+import {
   EMPTY_YUNXIAO_SETTINGS,
   type KnowledgeSettings,
   type YunxiaoSettings,
@@ -277,8 +284,10 @@ function shouldIgnoreTaskStatusTransition(current: TaskStatus, next: TaskStatus)
   );
 }
 
-function isLiveTerminalTaskStatus(status: TaskStatus): boolean {
-  return (
+/** 方案待办默认并发上限（project config `[plan] max_concurrent` 缺省时）：1 = 串行。 */
+const DEFAULT_PLAN_MAX_CONCURRENT = 1;
+
+function isLiveTerminalTaskStatus(status: TaskStatus): boolean {  return (
     status === "pending" ||
     status === "running" ||
     status === "input_required" ||
@@ -388,8 +397,10 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   // 多议题联合方案（全项目合并持有，按 projectId 过滤持久化，与 tasks 同构）。
   const [plans, setPlans] = useState<Plan[]>([]);
-  // 方案依赖（planId → 已解析 deps.json）：看板的依赖摘要用；缺省视为无依赖。
+  // 方案依赖（planId → 已解析 deps.json）：看板的依赖摘要 + 运行时门禁用；缺省视为无依赖。
   const [planDeps, setPlanDeps] = useState<Record<string, PlanDeps | undefined>>({});
+  // 项目级「方案待办并发上限」缓存（config.toml），缺省回退 DEFAULT_PLAN_MAX_CONCURRENT。
+  const planMaxConcurrentRef = useRef<Record<string, number>>({});
   // 待办「发起讨论」进行中标记（拉详情/图片/建方案期间锁定入口按钮）。
   const [todoDiscussionStarting, setTodoDiscussionStarting] = useState(false);
   const todoDiscussionStartingRef = useRef(false);
@@ -484,6 +495,32 @@ function App() {
       setPlanDeps((prev) => ({ ...prev, ...loaded }));
     },
     [],
+  );
+
+  /** 读项目级方案并发上限（config.toml），缓存进 ref 供调度器同步读取。 */
+  const refreshPlanMaxConcurrent = useCallback(async (projectList: Project[]) => {
+    await Promise.all(
+      projectList.map(async (project) => {
+        try {
+          const config = await invoke<{ plan?: { max_concurrent?: number } }>(
+            "read_project_config",
+            { projectPath: project.path },
+          );
+          const value = config.plan?.max_concurrent;
+          if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+            planMaxConcurrentRef.current[project.id] = Math.floor(value);
+          }
+        } catch {
+          // 读配置失败按默认并发处理
+        }
+      }),
+    );
+  }, []);
+
+  // 等待角标：由 tasks + deps 派生，稳定引用避免无谓重渲染。
+  const waitingBadges = useMemo<Map<string, PlanWaitingBadge>>(
+    () => buildWaitingBadges(tasks, planDeps),
+    [tasks, planDeps],
   );
 
   const updateProjectView = useCallback((projectId: string, patch: Partial<ProjectViewState>) => {
@@ -712,6 +749,7 @@ function App() {
       setPlans(loadedPlans);
       // 方案依赖随方案同批加载；失败不阻断（按无依赖处理）。
       void refreshPlanDeps(loadedPlans, loadedProjects);
+      void refreshPlanMaxConcurrent(loadedProjects);
     }
 
     init().catch(console.error);
@@ -1172,10 +1210,8 @@ function App() {
     invokeRunTask(worktreeTask, worktreePath, [], [], project.path);
   }
 
-  function handleRunTodoTask(task: Task) {
-    const project = projects.find((p) => p.id === task.projectId);
-    if (!project) return;
-
+  /** 真正启动一个待办（PTY + 视图切换）。依赖门禁已由调用方判定。 */
+  function beginTaskRun(task: Task, project: Project) {
     setTasks((prev) => {
       const next = prev.map((t) =>
         t.id === task.id
@@ -1193,6 +1229,81 @@ function App() {
     tm.resetTaskTerminal(task.id);
     updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
     invokeRunTask(task, task.worktreePath ?? project.path, [], [], project.path);
+  }
+
+  /** 把任务置为等待前置（不创建 PTY），用于启动拦截 / 队列。 */
+  function enterWaitingDeps(task: Task) {
+    setTasks((prev) => {
+      const next = prev.map((t) =>
+        t.id === task.id
+          ? {
+              ...t,
+              status: "waiting_deps" as TaskStatus,
+              updatedAt: Date.now(),
+              attentionRequestedAt: undefined,
+            }
+          : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
+  }
+
+  /**
+   * 任务启动的唯一收口点：方案待办有未完成硬依赖时改入 `waiting_deps`，
+   * 无依赖（或用户已忽略依赖）时立即启动——行为与门禁上线前完全一致。
+   */
+  function handleRunTodoTask(task: Task) {
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+
+    if (task.planId && task.yunxiaoSerialNumber && !task.planDepsIgnored) {
+      const deps = planDeps[task.planId];
+      if (deps) {
+        const gate = evaluateTaskGate(
+          task.yunxiaoSerialNumber,
+          deps.graph,
+          buildTaskBySerial(tasks),
+        );
+        if (gate.blocked) {
+          enterWaitingDeps(task);
+          showToast(t("plan.deps.waitingStarted", { count: gate.unmet.length }), "warning");
+          return;
+        }
+      }
+    }
+    beginTaskRun(task, project);
+  }
+
+  /** 「取消等待」：等待前置的任务退回 todo（不启动）。 */
+  function handleCancelWaitingDeps(taskId: string) {
+    setTasks((prev) => {
+      const task = prev.find((t) => t.id === taskId);
+      if (!task) return prev;
+      const next = prev.map((t) =>
+        t.id === taskId
+          ? { ...t, status: "todo" as TaskStatus, updatedAt: Date.now(), planDepsIgnored: undefined }
+          : t,
+      );
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+  }
+
+  /** 「忽略依赖，仍然开始」：记录忽略标记并立即启动（异常/缺失前置的人工越过）。 */
+  function handleIgnoreDepsAndRun(taskId: string) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    const marked: Task = { ...task, planDepsIgnored: true };
+    setTasks((prev) => {
+      const next = prev.map((t) => (t.id === taskId ? { ...t, planDepsIgnored: true } : t));
+      persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      return next;
+    });
+    beginTaskRun(marked, project);
   }
 
   function markTaskWorktreeDiscarded(taskId: string) {
@@ -2330,6 +2441,59 @@ function App() {
     });
   }, [tasks]);
 
+  // 等待队列的自动接续：完全由 tasks / deps 状态派生（零定时器）。前置全部 done 后，
+  // 按拓扑序 → executionOrder → createdAt 逐个放行；同一项目内默认串行（并发上限可配）。
+  // 用 ref 持有「真正启动」函数，避免将其（每次渲染都变化）纳入 deps 造成死循环。
+  const autoStartInFlightRef = useRef<Set<string>>(new Set());
+  const autoStartRunRef = useRef<(taskId: string) => void>(() => {});
+  autoStartRunRef.current = (taskId: string) => {
+    const task = tasks.find((t) => t.id === taskId);
+    const project = task && projects.find((p) => p.id === task.projectId);
+    if (task && project) beginTaskRun(task, project);
+  };
+  useEffect(() => {
+    const planById = new Map(plans.map((p) => [p.id, p]));
+    const startIds = selectAutoStart({
+      tasks,
+      depsByPlanId: planDeps,
+      planById,
+      maxConcurrentByProjectId: planMaxConcurrentRef.current,
+      defaultMaxConcurrent: DEFAULT_PLAN_MAX_CONCURRENT,
+    });
+    const started = new Set(startIds);
+    // 已不在候选中的 id 从在途集合里剔除，避免任务重新进入等待时被误判为「已启动」。
+    for (const id of [...autoStartInFlightRef.current]) {
+      if (!started.has(id)) autoStartInFlightRef.current.delete(id);
+    }
+    for (const id of startIds) {
+      if (autoStartInFlightRef.current.has(id)) continue;
+      autoStartInFlightRef.current.add(id);
+      autoStartRunRef.current(id);
+    }
+  }, [tasks, planDeps, plans]);
+
+  // 前置异常（失败/取消/中断/被删除）：等待任务保持等待 + 标红 + 只通知一次，
+  // 不自动放行（等于白做依赖分析），也不静默永久等待。
+  const depsAlertedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const taskBySerial = buildTaskBySerial(tasks);
+    for (const task of tasks) {
+      if (task.status !== "waiting_deps" || !task.planId) continue;
+      const deps = planDeps[task.planId];
+      if (!deps) continue;
+      const gate = evaluateTaskGate(task.yunxiaoSerialNumber ?? "", deps.graph, taskBySerial);
+      if (gate.needsOverride.length === 0) continue;
+      const signature = `${task.id}:${[...gate.needsOverride].sort().join(",")}`;
+      if (depsAlertedRef.current.has(signature)) continue;
+      depsAlertedRef.current.add(signature);
+      invoke("notify_task_attention", {
+        taskId: task.id,
+        name: task.name ?? "",
+      }).catch(() => {});
+      showToast(t("plan.deps.notifyAbnormal", { name: task.name ?? task.id }), "warning");
+    }
+  }, [tasks, planDeps, t, showToast]);
+
   function handleRenameTask(taskId: string, name: string) {
     setTasks((prev) => {
       const task = prev.find((t) => t.id === taskId);
@@ -3135,6 +3299,10 @@ function App() {
               onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
               onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
               plans={plans}
+              planDeps={planDeps}
+              waitingBadges={waitingBadges}
+              onCancelWaitingDeps={handleCancelWaitingDeps}
+              onIgnoreDepsAndRun={handleIgnoreDepsAndRun}
               onGeneratePlanTodos={handleGeneratePlanTodos}
               onRebindTaskPlan={handleRebindTaskPlan}
               onDeletePlan={handleDeletePlan}

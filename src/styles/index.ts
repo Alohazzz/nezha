@@ -9,6 +9,7 @@ import { kanban } from "./kanban";
 import { layout } from "./layout";
 import { panels } from "./panels";
 import { planBoard } from "./plan-board";
+import { planDeps } from "./plan-deps";
 import { reviewComments } from "./review-comments";
 import { skillHub } from "./skill-hub";
 import { task } from "./task";
@@ -36,6 +37,7 @@ const s = {
   ...branchBatch,
   ...update,
   ...planBoard,
+  ...planDeps,
 } satisfies Record<string, React.CSSProperties>;
 
 export default s;
@@ -50,6 +52,7 @@ export {
   layout,
   panels,
   planBoard,
+  planDeps,
   reviewComments,
   skillHub,
   task,

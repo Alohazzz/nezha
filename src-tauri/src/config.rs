@@ -4,6 +4,8 @@ use std::path::Path;
 use crate::storage::atomic_write;
 
 const DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS: u64 = 15;
+/// 方案待办默认并发上限：1 = 同项目串行（共享工作区下并行编辑不安全）。
+const DEFAULT_PLAN_MAX_CONCURRENT: u32 = 1;
 
 const DEFAULT_CONFIG: &str = r#"# Nezha project configuration
 # https://github.com/Alohazzz/nezha
@@ -25,6 +27,12 @@ commit_message_timeout_secs = 15
 [knowledge]
 # Stable knowledge graph identity under the configured SkillHub. Empty disables knowledge sedimentation.
 graph_id = ""
+
+[plan]
+# Max concurrent agent tasks per project for joint-plan todos.
+# 1 (default) runs plan todos strictly one at a time — a shared workspace makes
+# parallel edits unsafe. Dependency gates still apply regardless of this value.
+max_concurrent = 1
 "#;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -59,6 +67,26 @@ pub struct KnowledgeConfig {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct PlanConfig {
+    /// 方案待办的项目级并发上限：同项目内至多同时运行多少个 agent 任务。
+    /// 缺失 / 0 / 非法值统一回退 default_plan_max_concurrent（1 = 串行）。
+    #[serde(default = "default_plan_max_concurrent")]
+    pub max_concurrent: u32,
+}
+
+fn default_plan_max_concurrent() -> u32 {
+    DEFAULT_PLAN_MAX_CONCURRENT
+}
+
+impl Default for PlanConfig {
+    fn default() -> Self {
+        PlanConfig {
+            max_concurrent: DEFAULT_PLAN_MAX_CONCURRENT,
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct WorktreeConfig {
     /// worktree 基路径。为空时使用默认 `<项目根>/.nezha/worktrees`。
     /// 对 HIS 这类「相对路径引用共享 hub」的仓库，设为共享 hub 的父目录
@@ -86,6 +114,8 @@ pub struct ProjectConfig {
     pub worktree: WorktreeConfig,
     #[serde(default)]
     pub knowledge: KnowledgeConfig,
+    #[serde(default)]
+    pub plan: PlanConfig,
 }
 
 impl Default for ProjectConfig {
@@ -103,6 +133,7 @@ impl Default for ProjectConfig {
             build: crate::build::BuildConfig::default(),
             worktree: WorktreeConfig::default(),
             knowledge: KnowledgeConfig::default(),
+            plan: PlanConfig::default(),
         }
     }
 }

@@ -553,6 +553,7 @@ pub fn run() {
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,
+            notification::notify_task_attention,
             update::check_for_update,
             update::download_update,
             update::launch_update_installer,

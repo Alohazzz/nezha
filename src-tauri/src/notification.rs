@@ -386,6 +386,18 @@ pub async fn mark_all_notifications_read() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// 方案待办的前置依赖异常/缺失时发一条系统通知（前端同时会给应用内提示）。
+/// 等待前置的任务从未启动 PTY，任务名由前端传入。
+#[tauri::command]
+pub async fn notify_task_attention(
+    app: tauri::AppHandle,
+    task_id: String,
+    name: String,
+) -> Result<(), String> {
+    crate::system_notify::notify_task_attention(&app, &task_id, &name);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -108,6 +108,8 @@ export function isAutoDefaultMonoFont(value: string): boolean {
 export type TaskStatus =
   | "todo"
   | "pending"
+  /** 方案待办的前置依赖未完成（或已满足但在并发队列排队）——不创建 PTY，非活跃态。 */
+  | "waiting_deps"
   | "running"
   | "input_required"
   | "awaiting_review"
@@ -280,6 +282,8 @@ export interface Task {
   derivedFromWorkitemId?: string;
   /** 多议题联合方案 id：执行任务与临时讨论任务通过它关联 Plan */
   planId?: string;
+  /** 用户对异常/缺失前置选择「忽略依赖，仍然开始」后置 true：本次等待不再被硬依赖拦下 */
+  planDepsIgnored?: boolean;
   /** 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree） */
   yunxiaoPlanDiscussion?: boolean;
 }
@@ -547,6 +551,7 @@ export function cycleEnabledAgent(
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: "Todo",
   pending: "Pending",
+  waiting_deps: "Waiting dependencies",
   running: "Running...",
   input_required: "Needs confirmation",
   awaiting_review: "Awaiting review",
@@ -567,6 +572,8 @@ export function taskStatusI18nKey(status: TaskStatus): string {
       return "todo";
     case "pending":
       return "pending";
+    case "waiting_deps":
+      return "waitingDeps";
     case "running":
       return "running";
     case "input_required":
@@ -586,6 +593,10 @@ export function taskStatusI18nKey(status: TaskStatus): string {
   }
 }
 
+/**
+ * 是否占用「活跃任务」语义：会创建/持有 PTY、参与启动恢复、占用项目并发槽位。
+ * `waiting_deps` 刻意**不**包含在内——等待前置的任务没有 PTY，纳入会误触发恢复逻辑。
+ */
 export function isActiveTaskStatus(status: TaskStatus): boolean {
   return (
     status === "pending" ||

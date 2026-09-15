@@ -55,6 +55,14 @@ import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
 import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
 import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
+import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
+import {
+  buildTaskBySerial,
+  evaluateTaskGate,
+  planIssueSubjects,
+  type PlanWaitingBadge,
+} from "../utils/planQueue";
+import type { PlanDeps } from "../utils/planDeps";
 import { issueTag } from "../utils/yunxiao";
 import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTerminalPanel";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -107,6 +115,10 @@ export function ProjectPage({
   onDeletePlan,
   initialPlanPreviewId,
   onInitialPlanPreviewConsumed,
+  planDeps,
+  waitingBadges,
+  onCancelWaitingDeps,
+  onIgnoreDepsAndRun,
   onCancelTask,
   onResumeTask,
   onResumeTaskAndSend,
@@ -227,6 +239,14 @@ export function ProjectPage({
   /** 由看板发起的方案预览请求；打开后通过 onInitialPlanPreviewConsumed 通知外层清空。 */
   initialPlanPreviewId?: string | null;
   onInitialPlanPreviewConsumed?: () => void;
+  /** 方案依赖（planId → 已解析 deps.json）；等待任务门禁与 Checklist 用。 */
+  planDeps?: Record<string, PlanDeps | undefined>;
+  /** 方案待办等待角标（taskId → 角标）；透传给任务列表行。 */
+  waitingBadges?: Map<string, PlanWaitingBadge>;
+  /** 取消等待：等待前置的任务退回 todo。 */
+  onCancelWaitingDeps?: (taskId: string) => void;
+  /** 忽略依赖、立即开始（异常/缺失前置时的人工越过）。 */
+  onIgnoreDepsAndRun?: (taskId: string) => void;
   onCancelTask: (id: string) => void;
   onResumeTask: (id: string) => void;
   /** 任务已结束时：恢复其会话，待 PTY 就绪后自动把 data 写入（决策 9） */
@@ -404,6 +424,23 @@ export function ProjectPage({
   );
   const selectedTask = projectTasks.find((t) => t.id === selectedTaskId) ?? null;
 
+  // 等待任务的依赖 Checklist：从项目任务 + 已解析的 deps.json 派生（纯计算，无 IO）。
+  const selectedTaskGate = useMemo(() => {
+    const empty = { entries: [], unmet: [], needsOverride: [], blocked: false };
+    if (!selectedTask || selectedTask.status !== "waiting_deps") return empty;
+    const deps = selectedTask.planId ? planDeps?.[selectedTask.planId] : undefined;
+    if (!deps) return empty;
+    return evaluateTaskGate(
+      selectedTask.yunxiaoSerialNumber ?? "",
+      deps.graph,
+      buildTaskBySerial(projectTasks),
+    );
+  }, [selectedTask, planDeps, projectTasks]);
+  const selectedTaskSubjects = useMemo(
+    () => planIssueSubjects(plans.find((p) => p.id === selectedTask?.planId) ?? null),
+    [plans, selectedTask?.planId],
+  );
+
   // 渲染任务 PTY 层（在 partition 左列与 fullscreen 背景共用）。
   // ptyVisible 由调用方决定：partition 常显；fullscreen 仅在未被文件/diff 覆盖时显示。
   const renderPty = (ptyVisible: boolean) => {
@@ -411,7 +448,7 @@ export function ProjectPage({
       <>
         {projectTasks
           .filter((t) => mountedTaskIds.has(t.id))
-          .filter((t) => t.id === selectedTaskId && t.status !== "todo")
+          .filter((t) => t.id === selectedTaskId && t.status !== "todo" && t.status !== "waiting_deps")
           .map((task) => {
             const worktreePath =
               task.worktreePath && !task.worktreeDiscarded ? task.worktreePath : null;
@@ -458,7 +495,11 @@ export function ProjectPage({
             );
           })}
         {!projectTasks.some(
-          (t) => t.id === selectedTaskId && t.status !== "todo" && mountedTaskIds.has(t.id),
+          (t) =>
+            t.id === selectedTaskId &&
+            t.status !== "todo" &&
+            t.status !== "waiting_deps" &&
+            mountedTaskIds.has(t.id),
         ) && (
           isNewTask || !selectedTask ? (
             <NewTaskView
@@ -501,6 +542,16 @@ export function ProjectPage({
                 onUpdateTodo={onUpdateTodo}
               />
             )
+          ) : selectedTask.status === ("waiting_deps" as TaskStatus) ? (
+            <WaitingDepsView
+              task={selectedTask}
+              plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
+              entries={selectedTaskGate.entries}
+              subjects={selectedTaskSubjects}
+              onJump={onSelectTask}
+              onCancelWait={onCancelWaitingDeps ?? (() => {})}
+              onIgnoreRun={onIgnoreDepsAndRun ?? (() => {})}
+            />
           ) : (
             <div style={s.mainStagePtyEmpty}>选择左侧任务以查看终端输出，或新建任务</div>
           )
@@ -1222,6 +1273,7 @@ export function ProjectPage({
         onToggleTaskStar={onToggleTaskStar}
         onRunTodo={onRunTodoTask}
         batches={batches}
+        waitingBadges={waitingBadges}
         onCreateTaskInGroup={handleCreateTaskInGroup}
         onBack={hubMode ? (onExitSkillHub ?? onBack) : onBack}
         backTitle={hubMode ? t("skill.taskView.back") : undefined}
