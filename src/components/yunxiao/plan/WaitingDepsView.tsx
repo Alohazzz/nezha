@@ -52,8 +52,12 @@ export function WaitingDepsView({
 
       <div style={s.yunxiaoDetailBody}>
         <section style={s.yunxiaoDetailSection}>
-          <div style={s.yunxiaoDetailSectionTitle}>{t("plan.deps.checklistTitle")}</div>
-          <div style={s.depsHint}>{t("plan.deps.checklistHint")}</div>
+          <div style={s.yunxiaoDetailSectionTitle}>
+            {entries.length === 0 ? t("plan.deps.queueTitle") : t("plan.deps.checklistTitle")}
+          </div>
+          <div style={s.depsHint}>
+            {entries.length === 0 ? t("plan.deps.queuedHint") : t("plan.deps.checklistHint")}
+          </div>
           <div style={s.depsList}>
             {entries.map((entry) => {
               const subject = subjects.get(entry.serialNumber);

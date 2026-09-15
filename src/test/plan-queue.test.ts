@@ -6,9 +6,11 @@ import {
   buildWaitingBadges,
   countOccupiedSlots,
   evaluateTaskGate,
+  hasFreeSlot,
   isDependencyAbnormal,
   isDependencySatisfied,
   orderWaitingQueue,
+  resolveMaxConcurrent,
   selectAutoStart,
 } from "../utils/planQueue";
 
@@ -293,6 +295,121 @@ describe("selectAutoStart", () => {
     });
     // p 已被 runP 占满，q 空闲 → 只放行 wQ
     expect(startIds).toEqual(["wQ"]);
+  });
+});
+
+describe("「开始」一键启动：新待办一律 waiting_deps，由调度逐个放行", () => {
+  const planById = new Map([["p1", makePlan()]]);
+
+  /** 预览页「开始」的产物：A→B→C 三个议题，无前置者即可开工，其余等待。 */
+  function createdWaiting(): Task[] {
+    return ["QHDK-A", "QHDK-B", "QHDK-C"].map((serial, i) =>
+      makeTask({
+        id: `auto-${i}`,
+        planId: "p1",
+        yunxiaoSerialNumber: serial,
+        status: "waiting_deps",
+        createdAt: 100 + i,
+      }),
+    );
+  }
+
+  it("首轮只放行无前置的 A（同项目串行，B/C 仍等待）", () => {
+    const startIds = selectAutoStart({
+      tasks: createdWaiting(),
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(startIds).toEqual(["auto-0"]);
+  });
+
+  it("A 完成后接续放行 B，C 继续等待", () => {
+    const tasks = createdWaiting().map((task) =>
+      task.id === "auto-0" ? { ...task, status: "done" as TaskStatus } : task,
+    );
+    const startIds = selectAutoStart({
+      tasks,
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(startIds).toEqual(["auto-1"]);
+  });
+
+  it("项目已有活跃任务时不抢跑（全部等待，等槽位）", () => {
+    const startIds = selectAutoStart({
+      tasks: [
+        makeTask({ id: "busy", projectId: "proj", status: "running" }),
+        ...createdWaiting(),
+      ],
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(startIds).toEqual([]);
+  });
+
+  it("依赖缺失（deps.json 未解析）时视为无依赖，仅按串行逐个放行", () => {
+    const startIds = selectAutoStart({
+      tasks: createdWaiting(),
+      depsByPlanId: {},
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    // 无依赖图 → A 可开工；串行上限 1 只放一个
+    expect(startIds).toEqual(["auto-0"]);
+  });
+});
+
+describe("hasFreeSlot（手动启动与自动接续共用的串行守卫，L1）", () => {
+  it("并发上限 1：项目已有活跃任务时无空闲槽位", () => {
+    expect(
+      hasFreeSlot(
+        [makeTask({ id: "busy", projectId: "p", status: "running" })],
+        "p",
+        undefined,
+        1,
+      ),
+    ).toBe(false);
+  });
+
+  it("等待态 / 终态任务不占槽位，仍有空闲槽位", () => {
+    expect(
+      hasFreeSlot(
+        [
+          makeTask({ id: "w", projectId: "p", status: "waiting_deps" }),
+          makeTask({ id: "d", projectId: "p", status: "done" }),
+        ],
+        "p",
+        undefined,
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("只看本项目：别的项目在跑不影响本项目的槽位", () => {
+    expect(
+      hasFreeSlot([makeTask({ id: "busy", projectId: "q", status: "running" })], "p", undefined, 1),
+    ).toBe(true);
+  });
+
+  it("并发上限放开到 2 时，已有 1 个活跃任务仍可启动", () => {
+    const tasks = [makeTask({ id: "busy", projectId: "p", status: "running" })];
+    expect(hasFreeSlot(tasks, "p", 2, 1)).toBe(true);
+    expect(hasFreeSlot(tasks, "p", 1, 1)).toBe(false);
+  });
+
+  it("配置值非法（0 / 负数 / NaN）时回落默认上限", () => {
+    expect(resolveMaxConcurrent(undefined, 1)).toBe(1);
+    expect(resolveMaxConcurrent(0, 1)).toBe(1);
+    expect(resolveMaxConcurrent(-3, 1)).toBe(1);
+    expect(resolveMaxConcurrent(Number.NaN, 1)).toBe(1);
+    expect(resolveMaxConcurrent(3, 1)).toBe(3);
   });
 });
 

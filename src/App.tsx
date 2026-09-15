@@ -71,6 +71,7 @@ import {
   buildTaskBySerial,
   buildWaitingBadges,
   evaluateTaskGate,
+  hasFreeSlot,
   selectAutoStart,
   type PlanWaitingBadge,
 } from "./utils/planQueue";
@@ -1253,6 +1254,10 @@ function App() {
   /**
    * 任务启动的唯一收口点：方案待办有未完成硬依赖时改入 `waiting_deps`，
    * 无依赖（或用户已忽略依赖）时立即启动——行为与门禁上线前完全一致。
+   *
+   * 方案待办另受**同项目串行守卫**（决策 L1）：自动接续已按并发上限放行，手动 ▶
+   * 若不守同一上限就能绕过串行、在同一工作区并发跑两个 agent。守卫只约束方案待办，
+   * 普通任务（用户手动建的）保持原行为。
    */
   function handleRunTodoTask(task: Task) {
     const project = projects.find((p) => p.id === task.projectId);
@@ -1273,7 +1278,22 @@ function App() {
         }
       }
     }
+    if (task.planId && !hasFreeScheduledSlot(task)) {
+      enterWaitingDeps(task);
+      showToast(t("plan.deps.queuedStarted"), "warning");
+      return;
+    }
     beginTaskRun(task, project);
+  }
+
+  /** 该方案待办所在项目是否还有空闲并发槽位（与自动接续共用同一上限）。 */
+  function hasFreeScheduledSlot(task: Task): boolean {
+    return hasFreeSlot(
+      tasks,
+      task.projectId,
+      planMaxConcurrentRef.current[task.projectId],
+      DEFAULT_PLAN_MAX_CONCURRENT,
+    );
   }
 
   /** 「取消等待」：等待前置的任务退回 todo（不启动）。 */
@@ -1291,7 +1311,11 @@ function App() {
     });
   }
 
-  /** 「忽略依赖，仍然开始」：记录忽略标记并立即启动（异常/缺失前置的人工越过）。 */
+  /**
+   * 「忽略依赖，仍然开始」：记录忽略标记并启动（异常/缺失前置的人工越过）。
+   * 越过的是**前置依赖**，不是同项目串行——项目已有任务在跑时仍排队，等槽位空出后
+   * 由 `selectAutoStart` 放行（`planDepsIgnored` 使其不再受前置约束）。
+   */
   function handleIgnoreDepsAndRun(taskId: string) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
@@ -1303,6 +1327,11 @@ function App() {
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
       return next;
     });
+    if (!hasFreeScheduledSlot(task)) {
+      enterWaitingDeps(marked);
+      showToast(t("plan.deps.queuedStarted"), "warning");
+      return;
+    }
     beginTaskRun(marked, project);
   }
 
@@ -2211,6 +2240,10 @@ function App() {
   /**
    * 方案定稿后的「生成待办」：按确认页顺序直接生成 N 个执行待办（一议题一任务，
    * 任务↔议题 1:1），不自动建批——任务跑在当前工作区，是否归批由用户后续手动决定。
+   *
+   * `autoStart`（预览页「开始」）不弹确认页：生成的待办一律进 `waiting_deps`，
+   * 交给 `selectAutoStart` 按拓扑序逐个放行——这样「开始」既不绕过依赖门禁，
+   * 也不会无视项目并发上限一起起跑。
    */
   async function handleGeneratePlanTodos(input: {
     planId: string;
@@ -2218,12 +2251,32 @@ function App() {
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
+    /** 预览页「开始」：生成待办后立即交给串行调度启动（无需确认页）。 */
+    autoStart?: boolean;
   }): Promise<boolean> {
     const plan = plans.find((p) => p.id === input.planId);
     if (!plan) return false;
     const project = projects.find((p) => p.id === plan.projectId);
     if (!project) return false;
-    if (input.issues.length === 0) return false;
+
+    // 「一键开始」没有确认页，冲突议题（该议题已有任务）在此剔除，避免同议题重复建待办。
+    const issues = input.autoStart
+      ? input.issues.filter(
+          (issue) => !tasks.some((task) => task.yunxiaoWorkitemId === issue.workitemId),
+        )
+      : input.issues;
+    if (issues.length === 0) {
+      if (input.autoStart) showToast(t("plan.start.noNewIssues"), "warning");
+      return false;
+    }
+
+    // 「一键开始」由串行调度放行，门禁判定必须基于最新 deps.json：先刷新缓存，
+    // 否则新方案的依赖未知会被当成无依赖，按创建顺序直接起跑。
+    let freshDeps: PlanDeps | undefined;
+    if (input.autoStart) {
+      freshDeps = await readPlanDepsFor(plan, project.path);
+      setPlanDeps((prev) => ({ ...prev, [plan.id]: freshDeps }));
+    }
 
     // 1) 读方案文档，按议题切片（执行提示词内联统筹节与本议题节）。
     // 统筹节仅多议题硬性要求（跨议题顺序与公共改动归属）；单议题缺失不阻断。
@@ -2239,7 +2292,7 @@ function App() {
     }
     const { overview, missing } = extractPlanOverviewForIssues(
       planMarkdown,
-      input.issues.length,
+      issues.length,
     );
     if (missing) {
       showToast(t("plan.overviewMissing"), "error");
@@ -2256,7 +2309,7 @@ function App() {
     }
     const imagePathsByIssue: Record<string, string[]> = {};
     await Promise.all(
-      input.issues.map(async (issue) => {
+      issues.map(async (issue) => {
         try {
           const entries = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>(
             "read_dir_entries",
@@ -2276,7 +2329,7 @@ function App() {
 
     // 3) 预生成任务 id + 每任务的执行指令（drafts 目录按任务 id 区分）。
     const now = Date.now();
-    const taskIds = input.issues.map((_, i) => `${now + i}`);
+    const taskIds = issues.map((_, i) => `${now + i}`);
     const instructionsByTaskId: Record<string, string> = {};
     await Promise.all(
       taskIds.map(async (taskId) => {
@@ -2292,9 +2345,11 @@ function App() {
       }),
     );
 
+    // autoStart 的待办先入 waiting_deps，由串行调度按依赖顺序放行；其余保持 todo 待用户手动开始。
+    const initialStatus: TaskStatus = input.autoStart ? "waiting_deps" : "todo";
     const tasksToCreate: Task[] = [];
-    for (let i = 0; i < input.issues.length; i++) {
-      const issue = input.issues[i];
+    for (let i = 0; i < issues.length; i++) {
+      const issue = issues[i];
       const section = extractPlanIssueSection(planMarkdown, issue.serialNumber);
       if (!section) {
         showToast(t("plan.sectionMissing", { serial: issue.serialNumber }), "error");
@@ -2323,7 +2378,7 @@ function App() {
         prompt,
         agent: input.agent,
         permissionMode: input.permissionMode,
-        status: "todo",
+        status: initialStatus,
         createdAt: stamp,
         updatedAt: stamp,
         yunxiaoWorkitemId: issue.workitemId,
@@ -2332,7 +2387,7 @@ function App() {
       });
     }
 
-    // 4) 生成待办（普通 todo，跑在当前工作区；不带批/worktree 字段）+ 方案转执行中。
+    // 4) 生成待办（跑在当前工作区；不带批/worktree 字段）+ 方案转执行中。
     setTasks((prev) => {
       const next = [...tasksToCreate, ...prev];
       persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2341,7 +2396,7 @@ function App() {
     setPlans((prev) => {
       const next = prev.map((p) =>
         p.id === plan.id
-          ? { ...p, status: "executing" as PlanStatus, issues: input.issues }
+          ? { ...p, status: "executing" as PlanStatus, issues }
           : p,
       );
       persistProjectPlans(plan.projectId, next);
@@ -2349,8 +2404,27 @@ function App() {
     });
     setActiveProject(project);
     mountProject(project.id);
-    updateProjectView(project.id, { selectedTaskId: taskIds[0], isNewTask: false });
-    showToast(t("plan.todosCreated", { count: tasksToCreate.length }), "success");
+
+    // 选中「刚建好即可开工」的那个议题（无未满足前置），让用户直接看到第一个跑起来的任务。
+    const bySerialAfterCreate = buildTaskBySerial([...tasksToCreate, ...tasks]);
+    const firstStartable = input.autoStart
+      ? tasksToCreate.find(
+          (task) =>
+            !freshDeps ||
+            !evaluateTaskGate(task.yunxiaoSerialNumber ?? "", freshDeps.graph, bySerialAfterCreate)
+              .blocked,
+        )
+      : undefined;
+    updateProjectView(project.id, {
+      selectedTaskId: firstStartable?.id ?? taskIds[0],
+      isNewTask: false,
+    });
+    showToast(
+      input.autoStart
+        ? t("plan.start.created", { count: tasksToCreate.length })
+        : t("plan.todosCreated", { count: tasksToCreate.length }),
+      "success",
+    );
     return true;
   }
 

@@ -232,6 +232,8 @@ export function ProjectPage({
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
+    /** 预览页「开始」：生成待办后交给串行调度立即执行。 */
+    autoStart?: boolean;
   }) => Promise<boolean>;
   onRebindTaskPlan: (taskId: string, planId: string | null) => void | Promise<void>;
   /** 显式删除方案（后端会拒绝仍有任务引用的方案） */

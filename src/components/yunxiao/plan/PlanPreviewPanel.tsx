@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { marked } from "marked";
-import { FileText, Loader2, Trash2, X } from "lucide-react";
-import type { AgentType, PermissionMode, Plan, PlanIssue, Task } from "../../../types";
+import { FileText, Loader2, Play, Trash2, X } from "lucide-react";
+import type {
+  AgentEnabledState,
+  AgentType,
+  PermissionMode,
+  Plan,
+  PlanIssue,
+  Task,
+} from "../../../types";
+import { firstEnabledAgent, isAgentEnabled } from "../../../types";
+import { getLastYunxiaoAgent, getLastYunxiaoPermission } from "../../../utils/yunxiao";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
 import { useI18n } from "../../../i18n";
@@ -42,6 +51,7 @@ export function PlanPreviewPanel({
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
+    autoStart?: boolean;
   }) => Promise<boolean>;
   onDeletePlan: (planId: string) => void | Promise<void>;
   onClose: () => void;
@@ -53,6 +63,8 @@ export function PlanPreviewPanel({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [images, setImages] = useState<PlanImage[]>([]);
   const [showGenerate, setShowGenerate] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
 
   const linkedTasks = useMemo(
     () => tasks.filter((task) => task.planId === plan.id),
@@ -65,6 +77,39 @@ export function PlanPreviewPanel({
   // 「生成待办」在讨论定稿后的任何状态都可用（执行中/已完成的方案可重新生成待办，
   // 例如旧待办被取消删除后想重跑）；仅「讨论中」锁定——plan.md 仍在被会话覆盖更新。
   const canGenerate = plan.status !== "draft" && markdown.trim().length > 0;
+  // 「开始」= 生成待办 + 立即执行：同样要求方案已定稿且文档就绪。
+  const canStart = canGenerate && !starting;
+
+  useEffect(() => {
+    invoke<AgentEnabledState>("load_app_settings")
+      .then(setAgentSettings)
+      .catch(() => undefined);
+  }, []);
+
+  /**
+   * 「开始」不弹确认页：沿用方案议题顺序与 `deps.json` 既有依赖，Agent/权限取该项目
+   * 上次选择。任务创建后交给串行调度依前置依赖顺序放行（具体分配在 App 侧）。
+   */
+  const handleStart = useCallback(async () => {
+    if (!canStart) return;
+    setStarting(true);
+    const preferred = getLastYunxiaoAgent(plan.projectId) ?? "codex";
+    try {
+      const ok = await onCreateTodos({
+        planId: plan.id,
+        issues: plan.issues,
+        agent: isAgentEnabled(agentSettings, preferred)
+          ? preferred
+          : firstEnabledAgent(agentSettings),
+        permissionMode: getLastYunxiaoPermission(plan.projectId) ?? "ask",
+        autoStart: true,
+      });
+      // 开始后关闭预览：任务已在跑，用户应看到工作区/终端而不是方案正文。
+      if (ok) onClose();
+    } finally {
+      setStarting(false);
+    }
+  }, [canStart, plan, agentSettings, onCreateTodos, onClose]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,6 +211,20 @@ export function PlanPreviewPanel({
             </div>
           </div>
           <div style={s.planPreviewHeadSide}>
+            <button
+              type="button"
+              style={canStart ? s.bbBtnPrimary : s.bbBtnPrimaryDisabled}
+              disabled={!canStart}
+              title={t("plan.start.hint")}
+              onClick={() => void handleStart()}
+            >
+              {starting ? (
+                <Loader2 size={12} className="spin" />
+              ) : (
+                <Play size={12} strokeWidth={2.4} />
+              )}
+              {starting ? t("plan.start.creating") : t("plan.start")}
+            </button>
             <button
               type="button"
               style={canGenerate ? s.knowledgePrimaryBtn : s.knowledgePrimaryBtnDisabled}

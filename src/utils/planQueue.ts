@@ -111,6 +111,32 @@ export function countOccupiedSlots(tasks: readonly Task[], projectId: string): n
   return count;
 }
 
+/** 生效的并发上限：配置值非法（缺失 / 非正 / 非有限）时回落默认值。 */
+export function resolveMaxConcurrent(
+  configured: number | undefined,
+  defaultMaxConcurrent: number,
+): number {
+  return typeof configured === "number" && Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : defaultMaxConcurrent;
+}
+
+/**
+ * 该项目当前是否还有空闲并发槽位。
+ *
+ * 手动启动路径（`handleRunTodoTask`）与自动接续共用同一判定，否则「同项目串行」
+ * 会被手动 ▶ / 「忽略依赖仍开始」绕过（决策 L1：守卫须放在启动收口处）。
+ */
+export function hasFreeSlot(
+  tasks: readonly Task[],
+  projectId: string,
+  configured: number | undefined,
+  defaultMaxConcurrent: number,
+): boolean {
+  const max = resolveMaxConcurrent(configured, defaultMaxConcurrent);
+  return countOccupiedSlots(tasks, projectId) < max;
+}
+
 /** 列出本项目仍占用槽位的任务（供「排队原因」展示：谁在跑）。 */
 export function activeTasksInProject(tasks: readonly Task[], projectId: string): Task[] {
   return tasks.filter((task) => task.projectId === projectId && isActiveTaskStatus(task.status));
@@ -186,11 +212,10 @@ export function selectAutoStart(input: AutoStartInput): string[] {
 
   const started: string[] = [];
   for (const [projectId, waiting] of waitingByProject) {
-    const configured = maxConcurrentByProjectId[projectId];
-    const maxConcurrent =
-      typeof configured === "number" && Number.isFinite(configured) && configured > 0
-        ? Math.floor(configured)
-        : defaultMaxConcurrent;
+    const maxConcurrent = resolveMaxConcurrent(
+      maxConcurrentByProjectId[projectId],
+      defaultMaxConcurrent,
+    );
     const slots = Math.max(0, maxConcurrent - countOccupiedSlots(tasks, projectId));
     if (slots === 0) continue;
 
