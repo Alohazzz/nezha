@@ -1,0 +1,62 @@
+[
+  {
+    "index": 0,
+    "module": "Nto.His.Register",
+    "section": "业务规则 / 已知坑",
+    "content": "锁号逻辑：SchedulId 可选——为空则遍历排班锁定，非空则直接锁定指定排班",
+    "evidence": "来源：Register.Bll\\Controller\\LockNumController.cs",
+    "confidence": "confirmed",
+    "suggestedTitle": "锁号逻辑",
+    "kind": "dup_verbatim_minus_source"
+  },
+  {
+    "index": 1,
+    "module": "Nto.His.Register",
+    "section": "业务规则/已知坑",
+    "content": "锁号逻辑： `SchedulId` 可选——为空则遍历排班锁定，非空 则直接锁定指定排班（来源：Register.Bll\\Controller\\LockNumController.cs）",
+    "evidence": "Register.Bll\\Controller\\LockNumController.cs",
+    "confidence": "confirmed",
+    "suggestedTitle": "锁号逻辑",
+    "kind": "dup_whitespace_reshuffled"
+  },
+  {
+    "index": 2,
+    "module": "Nto.His.Register",
+    "section": "关键实体 / 数据表",
+    "content": "门诊结算相关的表有：F_OP_BALANCEHEAD（结算头）、F_OP_BALANCEPAY（支付）、F_OP_BALANCELIST（清单）、F_OP_FEEDETAIL（费用明细）",
+    "evidence": "Nto.His.Register.SqlManager",
+    "confidence": "confirmed",
+    "suggestedTitle": "门诊结算表清单",
+    "kind": "dup_paraphrase"
+  },
+  {
+    "index": 3,
+    "module": "Nto.His.Register",
+    "section": "UI界面与入口",
+    "content": "挂号登记主入口是 ucRegisterNew，另有 frmSetOpPatientInfo、frmRegInfoModify、frmChooseScheduDetail 等窗体",
+    "evidence": "Nto.His.Register.UI",
+    "confidence": "confirmed",
+    "suggestedTitle": "挂号登记入口",
+    "kind": "dup_paraphrase"
+  },
+  {
+    "index": 4,
+    "module": "Nto.His.Register",
+    "section": "业务规则 / 已知坑",
+    "content": "挂号成功后 30 天内不允许跨院区重挂同一医生，重挂需先到退号窗口做院区解绑（来源：Register.Bll\\Controller\\LockNumController.cs）",
+    "evidence": "Register.Bll\\Controller\\LockNumController.cs",
+    "confidence": "confirmed",
+    "suggestedTitle": "跨院区重挂限制",
+    "kind": "fabricated_no_such_code"
+  },
+  {
+    "index": 5,
+    "module": "Nto.His.Register",
+    "section": "业务规则 / 已知坑",
+    "content": "锁号逻辑：SchedulId 必须非空，为空时直接报错——不存在遍历排班的兜底路径",
+    "evidence": "Register.Bll\\Controller\\LockNumController.cs",
+    "confidence": "confirmed",
+    "suggestedTitle": "锁号逻辑修正",
+    "kind": "conflict_with_existing"
+  }
+]

@@ -21,6 +21,7 @@ mod git;
 mod hooks;
 mod http;
 mod knowledge;
+mod knowledge_gate;
 mod notification;
 mod platform;
 mod pty;

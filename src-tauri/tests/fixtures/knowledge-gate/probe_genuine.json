@@ -1,0 +1,22 @@
+[
+  {
+    "index": 20,
+    "module": "Nto.His.Register",
+    "section": "角色与职责",
+    "content": "登记卡接口 `RegistrationCardController` 实际承载的是**住院证**业务（获取入院证表主键 ID 等），不是门诊就诊卡——命名有误导性，按「住院证」检索才找得到。",
+    "evidence": "Nto.His.Register/Nto.His.Register.Bll/Controller/RegistrationCardController.cs:38-48",
+    "confidence": "confirmed",
+    "suggestedTitle": "RegistrationCardController 实为住院证",
+    "kind": "genuine_new_knowledge_wrong_section"
+  },
+  {
+    "index": 21,
+    "module": "Nto.His.Register",
+    "section": "业务规则 / 已知坑",
+    "content": "`OutFeeController` 的房间缴费前置校验走 `OutFeeService.RoomPayBefore(...)`，参数需先用 `RegisterUtils.CvEsbToHis` 转换后再连同 `recipeStr`、`SiSettle` 一起传入；`AppUserCode` 必须显式赋值否则服务端取不到操作人。",
+    "evidence": "Nto.His.Register/Nto.His.Register.Bll/Controller/OutFeeController.cs:90-109",
+    "confidence": "confirmed",
+    "suggestedTitle": "房间缴费前置校验调用方式",
+    "kind": "genuine_new_knowledge"
+  }
+]

@@ -274,7 +274,7 @@ pub(crate) async fn run_headless_agent_with_timeout(
             stderr_task.abort();
             let _ = stdout_task.await;
             let _ = stderr_task.await;
-            return Err(format!("生成任务名称超时（{} 秒）", timeout_dur.as_secs()));
+            return Err(format!("agent 调用超时（{} 秒）", timeout_dur.as_secs()));
         }
     };
 

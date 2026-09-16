@@ -348,6 +348,8 @@ export interface KnowledgeWritebackItem {
   passed: boolean;
   written: boolean;
   reason: string;
+  /** 判定发生的层次：`L0` 结构 / `L1` 依据 / `L2` 去重 / `L3` 语义 / `write` 写入。 */
+  layer: string;
 }
 
 /** 知识自动回写整体结果。 */
