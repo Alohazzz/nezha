@@ -81,6 +81,14 @@ export function getGitStatusLabel(status: string): string {
   }
 }
 
+// ── 文件类型判定 ──────────────────────────────────────────────────────────────
+
+/** `.html` / `.htm` 文件走可渲染预览，而非当作纯文本代码编辑。 */
+export function isHtmlFileName(fileName: string): boolean {
+  const ext = fileName.split(".").pop()?.toLowerCase();
+  return ext === "html" || ext === "htm";
+}
+
 // ── 文件颜色工具 ──────────────────────────────────────────────────────────────
 
 export function getFileColor(name: string, ext?: string): string {
