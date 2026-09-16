@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } fr
 import { invoke } from "@tauri-apps/api/core";
 import * as Popover from "@radix-ui/react-popover";
 import { X, AlertCircle, Eye, PencilLine, MoreHorizontal, List } from "lucide-react";
-import { getFileColor } from "../utils";
+import { getFileColor, isHtmlFileName } from "../utils";
 import { EditorView } from "@uiw/react-codemirror";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
 import { solarizedLight } from "@uiw/codemirror-theme-solarized";
@@ -12,6 +12,7 @@ import {
   type TocEntry,
 } from "../utils/markdown";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
+import { HtmlPreviewPane } from "./file-viewer/HtmlPreviewPane";
 import { useLanguageExtension } from "./file-viewer/languageExtensions";
 import { CommentableEditor } from "./file-viewer/CommentableEditor";
 import { CommentDrawer } from "./file-viewer/CommentDrawer";
@@ -25,6 +26,11 @@ import { useI18n } from "../i18n";
 function isPreviewableImageFile(fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase();
   return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "webp" || ext === "bmp" || ext === "svg";
+}
+
+/** 打开时默认进入渲染预览（而非代码编辑）的文件类型。 */
+function defaultsToPreview(fileName: string): boolean {
+  return isMarkdownFile(fileName) || isHtmlFileName(fileName);
 }
 
 const editorBaseTheme = EditorView.theme({
@@ -187,11 +193,13 @@ function FilePreviewPane({
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const isMarkdown = isMarkdownFile(fileName);
   const isPreviewableImage = isPreviewableImageFile(fileName);
+  const isHtml = isHtmlFileName(fileName);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const showMarkdownPreview = isMarkdown && previewMode && content !== null;
+  const showHtmlPreview = isHtml && previewMode && content !== null;
   const { html: markdownHtml, toc } = useMemo(
     () => (isMarkdown && content !== null ? renderMarkdownWithToc(content) : { html: "", toc: [] }),
     [isMarkdown, content],
@@ -392,6 +400,8 @@ function FilePreviewPane({
                   <MarkdownToc toc={toc} activeId={activeHeadingId} onJump={jumpToHeading} />
                 )}
               </div>
+            ) : showHtmlPreview ? (
+              <HtmlPreviewPane html={content} fileName={fileName} />
             ) : (
               <div className="code-outline-pane">
                 <div className="code-outline-editor">
@@ -543,8 +553,8 @@ export function FileViewer({
         if (tab.path in prev) {
           // 已经初始化过的 tab：保留之前的状态（包括用户主动切到编辑模式）
           next[tab.path] = prev[tab.path];
-        } else if (isMarkdownFile(tab.name)) {
-          // 新打开的 markdown 文件默认进入预览模式
+        } else if (defaultsToPreview(tab.name)) {
+          // 新打开的 markdown / html 文件默认进入预览模式
           next[tab.path] = true;
         }
       }
@@ -583,10 +593,10 @@ export function FileViewer({
 
   if (!activeTab) return null;
 
-  // 新打开的 markdown 文件 useEffect 同步 previewMode 前会有一帧 undefined，
+  // 新打开的 markdown / html 文件 useEffect 同步 previewMode 前会有一帧 undefined，
   // 直接根据文件名兜底默认值，避免闪一帧编辑器
-  const activePreviewMode = previewModes[activeTab.path] ?? isMarkdownFile(activeTab.name);
-  const activeIsMarkdown = isMarkdownFile(activeTab.name);
+  const activePreviewMode = previewModes[activeTab.path] ?? defaultsToPreview(activeTab.name);
+  const activeCanPreview = isMarkdownFile(activeTab.name) || isHtmlFileName(activeTab.name);
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);
   const canCloseTabsToRight = activeTabIndex !== -1 && activeTabIndex < tabs.length - 1;
@@ -725,7 +735,7 @@ export function FileViewer({
             flexShrink: 0,
           }}
         >
-          {activeIsMarkdown && (
+          {activeCanPreview && (
             <button
               onClick={() =>
                 setPreviewModes((prev) => ({
@@ -860,7 +870,7 @@ export function FileViewer({
                 fileName={tab.name}
                 projectPath={projectPath}
                 themeVariant={themeVariant}
-                previewMode={previewModes[tab.path] ?? isMarkdownFile(tab.name)}
+                previewMode={previewModes[tab.path] ?? defaultsToPreview(tab.name)}
                 knowledge={tab.kind === "knowledge"}
                 module={tab.module}
                 knowledgeGraphId={tab.graphId}

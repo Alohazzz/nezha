@@ -588,6 +588,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "file.closeTabsToLeft": "Close Tabs to the Left",
     "file.closeAllTabs": "Close All Tabs",
     "file.imagePreviewUnavailable": "Image preview unavailable",
+    "file.htmlPreview": "HTML preview: {name}",
+    "file.htmlPreviewExternalHint":
+      "Preview loads inline content only — relative paths and CDN resources are not loaded.",
     "reviewComments.title": "Comments",
     "reviewComments.add": "Add comment",
     "reviewComments.placeholder": "Write a comment…",
@@ -1685,6 +1688,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "file.closeTabsToLeft": "关闭左侧标签页",
     "file.closeAllTabs": "关闭所有标签页",
     "file.imagePreviewUnavailable": "图片预览不可用",
+    "file.htmlPreview": "HTML 预览：{name}",
+    "file.htmlPreviewExternalHint": "预览仅加载内联内容，相对路径与 CDN 资源不会加载。",
     "reviewComments.title": "评论",
     "reviewComments.add": "添加评论",
     "reviewComments.placeholder": "写下评论…",

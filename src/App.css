@@ -10,6 +10,7 @@
 @import "./styles/file-explorer.css";
 @import "./styles/help.css";
 @import "./styles/plan-board.css";
+@import "./styles/html-preview.css";
 
 /* ── Reset ─────────────────────────────────────────────────────── */
 *,
