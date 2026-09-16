@@ -84,7 +84,7 @@
 | 依赖 / feature | **零**。不改 `Cargo.toml`。 |
 | CSP 改动 | 需放开 `script-src`（若被预览页面要加载外部脚本）与 `img-src`（`asset.localhost` 不在 `img-src` 白名单）。srcdoc 文档继承父文档 CSP，因此**内联脚本**靠现有的 `'unsafe-inline'` 可跑。 |
 | 隔离性 | `sandbox` 属性给 iframe **不透明源**（opaque origin），脚本无法触达父窗口 DOM/`localStorage`。这是浏览器级硬隔离，强于任何 JS 方案。 |
-| 相对资源 | **主要短板。** srcdoc 的 base URL 是 `about:srcdoc`，页面里的 `<img src="./x.png">`、`<link href="style.css">` 全部失效。需要注入 `<base href="…">` 或用 `asset:` URL 重写。 |
+| 相对资源 | **主要短板，但可绕过。** srcdoc 的 base URL 是 `about:srcdoc`，页面里的 `<img src="./x.png">`、`<link href="style.css">` 全部失效。后续实现改为**在渲染前把项目内的相对资源读出来内联**（见第 7 节第 2 条），不需要 base/asset 重写。 |
 | 文件大小 | 受 `read_file_content` 的 **2 MB** 上限约束；AI 生成的单文件 HTML 通常远小于此，但含内联 base64 图片的会超。 |
 | 与现有架构契合度 | **最高。** 纯粹的 React DOM 节点，天然落在 `partition` 右列 / `fullscreen` 前景里，随布局自动伸缩。 |
 
@@ -118,7 +118,7 @@
 
 ## 4. 推荐
 
-**推荐 B-1（sandboxed iframe + `srcdoc`），并把 B-2 的相对资源配置问题作为已知限制标注。**
+**推荐 B-1（sandboxed iframe + `srcdoc`）；相对资源由前端内联解决（见第 7 节第 2 条），残余的远程资源作为已知限制标注。**
 
 理由：
 
@@ -131,7 +131,7 @@
 
 - 落点：`src/components/file-viewer/HtmlPreviewPane.tsx` 新增预览组件（该目录已有 `ImagePreviewPane.tsx` 先例）；`FileViewer.tsx` 的类型分流处加 `html` 分支；`previewModes` 默认开预览与 `.md` 一致。
 - iframe 用 `sandbox="allow-scripts"`，**不含** `allow-same-origin`（实测：加上即让子文档可读写宿主 `document` 与 `localStorage`）。
-- 相对资源与远程 CDN 均不加载，由预览内一行提示告知（组件按 `src`/`href` 启发式检测）。
+- 相对资源在渲染前内联（`src/utils/htmlPreview.ts`）；仍未加载的引用（远程 CDN、超限、缺失）由预览内提示告知。
 - **无需改 CSP**（与本节第 1 条的实测结论一致）。
 
 ---
@@ -178,8 +178,10 @@ Tauri 在生产构建会做 **CSP nonce 注入**（`tauri/src/manager/mod.rs::se
 ## 7. 已知限制
 
 1. **2 MB 上限**：`read_file_content` 硬限 2 MB（`fs.rs:542`）。含内联 base64 大图的 HTML 会超限报错。
-2. **相对资源不加载**：srcdoc 的 base URL 为 `about:srcdoc`，`./x.png`、`./style.css` 无从解析；同时远程 CDN 被应用 CSP 拦截。两者都由预览内的一行提示告知用户（组件按 `src`/`href` 启发式检测是否存在这类引用）。
-3. **不可导航**：`allow-scripts` 不含 `allow-top-navigation`，页面内链接不会劫持宿主窗口（符合预期）。
+2. **相对资源已内联（2026-09 后续实现）**：早期实现里 srcdoc 的 base URL 为 `about:srcdoc`，`./x.css`、`../assets/q.js` 一律不加载，结果是「HTML 渲染出来了但完全没有样式」。现由 `src/utils/htmlPreview.ts` 在渲染前把项目内的相对资源读出来内联（`<link>` → `<style>`、`<script src>` → `<script>`、`<img src>` → data URL、CSS `url()` / `@import` → 内联），**不需要开 asset 协议、不需要改 CSP**；解析后仍用项目根做包含校验，`../../` 逃逸引用不会被读取。
+   - 仍未覆盖：远程 CDN 引用（被应用 CSP 拦下）、单个资源超 2 MB、文件缺失、正文含 `</script` / `</style`（无法安全内联）。这些计入「未加载」并各出一行提示。
+   - 内联总量上限 8 MB、`@import` 递归深度上限 4 层（`HtmlPreviewPane.tsx`）。
+3. **不可导航**：`allow-scripts` 不含 `allow-top-navigation`，页面内链接不会劫持宿主窗口（符合预期）。页间链接（`href="./0002-….html"`）因此仍跳不动。
 4. **nonce 残留风险**：见 5.1。
 
 
