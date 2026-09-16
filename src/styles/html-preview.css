@@ -10,7 +10,8 @@
   background: var(--bg-panel);
 }
 
-/* 仅在文档引用了外部资源时出现（相对路径与 CDN 在 srcdoc 下都不加载）。 */
+/* 仅在仍有资源没能加载时出现：远程 CDN 被应用 CSP 拦下、
+   项目内资源缺失、超出大小上限或位于项目外。 */
 .html-preview-notice {
   display: flex;
   align-items: center;
@@ -26,6 +27,16 @@
 
 .html-preview-notice svg {
   flex-shrink: 0;
+}
+
+/* 内联项目内资源期间（通常几十毫秒）的过渡态。 */
+.html-preview-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-hint);
+  font-size: 12px;
 }
 
 .html-preview-frame {

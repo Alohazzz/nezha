@@ -401,7 +401,12 @@ function FilePreviewPane({
                 )}
               </div>
             ) : showHtmlPreview ? (
-              <HtmlPreviewPane html={content} fileName={fileName} />
+              <HtmlPreviewPane
+                html={content}
+                fileName={fileName}
+                filePath={filePath}
+                projectPath={projectPath}
+              />
             ) : (
               <div className="code-outline-pane">
                 <div className="code-outline-editor">
