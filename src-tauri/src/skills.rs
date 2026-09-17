@@ -1282,6 +1282,19 @@ pub struct SkillSourceWatcher {
     watched_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
+/// 该事件路径是否位于仓库内部的 `.git` 目录下（即「不是技能内容变了」）。
+///
+/// **必要性（实测）**：`git status` 会刷新 index，产生 `.git/index.lock` 的创建/删除
+/// 事件——520 个文件的 hub 仓库每次必现（小仓库不一定，故此前长期未暴露）。而递归 watch
+/// 挂在 hub 根上，把 `.git` 一并监听了，于是：
+/// 面板读取 → `list_modified_knowledge_cards` 跑 `git status` → watcher 触发 →
+/// emit `skill-hub-changed` → 面板再读取，形成自维持循环，刷新指示器永不停止
+/// （知识库面板一直转圈即为该循环）。`.git` 内部变动不是内容变更，git 源的唯一真信号
+/// 是 [`periodic_sync_loop`] 里 commit 比对产生的那次 emit，过滤掉这里不损失任何功能。
+fn is_ignorable_hub_event_path(path: &Path) -> bool {
+    path.components().any(|component| component.as_os_str() == ".git")
+}
+
 /// 在 Tauri setup 阶段调用：注册托管状态 + 启动防抖 emit 线程 + 挂上现有 hub 路径。
 pub fn init_skill_source_watcher(app: &tauri::App) {
     let (tx, rx) = mpsc::channel::<()>();
@@ -1289,6 +1302,16 @@ pub fn init_skill_source_watcher(app: &tauri::App) {
         move |result: notify::Result<notify::Event>| {
             let Ok(event) = result else { return };
             if matches!(event.kind, notify::EventKind::Access(_)) {
+                return;
+            }
+            // `.git` 内部变动不算内容变更（否则与面板读取形成自维持刷新循环，
+            // 见 is_ignorable_hub_event_path）。无路径的事件不在此列，照常放行。
+            if !event.paths.is_empty()
+                && event
+                    .paths
+                    .iter()
+                    .all(|path| is_ignorable_hub_event_path(path))
+            {
                 return;
             }
             let _ = tx.send(());
@@ -2430,6 +2453,27 @@ mod tests {
     fn sync_interval_is_fifteen_minutes() {
         // 提案 §7.3 明确 15 分钟；实现若改动，这里会失败提醒同步更新文档。
         assert_eq!(HUB_SYNC_INTERVAL, Duration::from_secs(15 * 60));
+    }
+
+    /// `.git` 内部变动必须被忽略：否则面板读取（`git status` 产生 `index.lock`）
+    /// 会经 watcher 触发 `skill-hub-changed`，面板再读取，形成永不停止的刷新循环。
+    #[test]
+    fn ignores_git_internals_but_not_content_changes() {
+        let hub = Path::new("C:/Users/SuYi/.nezha/skill_repos/HSP-SkillHub.git");
+        // hub 目录名本身以 .git 结尾，但组件不等于 `.git`，不应被误判。
+        assert!(!is_ignorable_hub_event_path(hub));
+        // `git status` / 提交写入的 .git 内部路径。
+        assert!(is_ignorable_hub_event_path(&hub.join(".git").join("index.lock")));
+        assert!(is_ignorable_hub_event_path(&hub.join(".git").join("objects").join("ab").join("cd")));
+        assert!(is_ignorable_hub_event_path(&hub.join(".git").join("refs").join("heads").join("master")));
+        // 嵌套仓库同样覆盖（组件匹配与层级无关）。
+        assert!(is_ignorable_hub_event_path(&hub.join("sub").join(".git").join("HEAD")));
+
+        // 反向护栏：真正的内容变动必须放行，否则面板收不到后台同步/沉淀的更新。
+        assert!(!is_ignorable_hub_event_path(
+            &hub.join("knowledge-graphs").join("HIS").join("data").join("modules").join("Nto.His.Register.md")
+        ));
+        assert!(!is_ignorable_hub_event_path(&hub.join("knowledge-graph").join("SKILL.md")));
     }
 
     #[test]
