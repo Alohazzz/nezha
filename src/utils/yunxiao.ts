@@ -265,6 +265,20 @@ export function isYunxiaoWorkitemImported(
   return collectOccupiedYunxiaoWorkitemIds(tasks, plans).has(workitemId);
 }
 
+/**
+ * 该任务启动时是否要求产出知识沉淀产物。
+ *
+ * 只有**云效议题的执行类任务**（方案执行 / 直接执行）为真：它们有议题上下文、改动
+ * 落在真实代码上，收尾时才有值得沉淀的知识。方案讨论任务（`yunxiaoPlanDiscussion`）
+ * 产出的是方案文档而非知识；普通任务没有议题绑定。这两类若被要求产出，一旦没写
+ * `knowledge.json` 就会被判漏产出、误报并自动建云效议题——所以必须排除。
+ */
+export function requiresSedimentation(
+  task: Pick<Task, "yunxiaoWorkitemId" | "yunxiaoPlanDiscussion">,
+): boolean {
+  return !!task.yunxiaoWorkitemId && !task.yunxiaoPlanDiscussion;
+}
+
 /** 议题编号 → Git 提交关联 tag（如 QHDK-29312 → "#QHDK-29312"）。 */
 export function issueTag(serialNumber: string): string {
   const serial = serialNumber.trim();

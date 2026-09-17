@@ -6,6 +6,7 @@ import {
   isYunxiaoWorkitemImported,
   issueTag,
   messageHasIssueTag,
+  requiresSedimentation,
   splitValueScoreSection,
 } from "../utils/yunxiao";
 
@@ -263,6 +264,33 @@ describe("buildYunxiaoConditions", () => {
         value: ["v-1"],
       },
     ]);
+  });
+});
+
+describe("requiresSedimentation", () => {
+  it("云效执行类任务（有议题、非讨论）要求沉淀", () => {
+    expect(
+      requiresSedimentation({
+        yunxiaoWorkitemId: "741d91e70b392b65ef95604c1f",
+        yunxiaoPlanDiscussion: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("方案讨论任务不要求沉淀（产出的是方案而非知识）", () => {
+    expect(
+      requiresSedimentation({
+        yunxiaoWorkitemId: "741d91e70b392b65ef95604c1f",
+        yunxiaoPlanDiscussion: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("普通任务（无议题绑定，含空提示词启动终端）不要求沉淀", () => {
+    expect(requiresSedimentation({})).toBe(false);
+    expect(
+      requiresSedimentation({ yunxiaoWorkitemId: "", yunxiaoPlanDiscussion: false }),
+    ).toBe(false);
   });
 });
 

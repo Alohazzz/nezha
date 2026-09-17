@@ -505,36 +505,62 @@ const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论�
 const BACKFILL_SKILL_INSTRUCTION: &str = "此外，在讨论/执行过程中，如果发现一个不属于当前议题、需要单独新立项的问题，可以提示用户手工调用 yunxiao-backfill-issue 技能补录议题：它会总结上下文、判定缺陷/需求、按模板盘问并生成预览，确认后由 Nezha 创建云效议题并自动生成绑定待办。不要未经用户确认就自动立项。\n写补录请求文件 backfill-issue.json 时，目录名必须是你当前任务 id（读取环境变量 $NEZHA_TASK_ID，禁止自造 task_id），即 `.nezha/drafts/{NEZHA_TASK_ID}/backfill-issue.json`，与 discussion.md / knowledge.json 放同一目录；否则 Nezha 的补录侦测匹配不到本任务，不会创建议题与待办。只需写入一次；Nezha 消费后会自动清理该文件，若你随后发现文件消失属正常，不要重复写入或重新落盘。";
 
 /// 技能里承载沉淀契约的参考文件（相对技能目录）。
-const SEDIMENTATION_CONTRACT_REFERENCE: &str = "references/sedimentation.md";
+pub(crate) const SEDIMENTATION_CONTRACT_REFERENCE: &str = "references/sedimentation.md";
 /// 承载契约的技能名。
-const SEDIMENTATION_CONTRACT_SKILL: &str = "knowledge-graph";
+pub(crate) const SEDIMENTATION_CONTRACT_SKILL: &str = "knowledge-graph";
+/// 承载契约文件路径的环境变量名（由 `knowledge::knowledge_env_for_project` 注入）。
+pub(crate) const SEDIMENTATION_CONTRACT_ENV: &str = "NEZHA_KNOWLEDGE_SEDIMENTATION_CONTRACT";
 
-/// 取知识沉淀契约文本（已把 `{TASK_ID}` 换成真实 task id）。
+/// 取知识沉淀产出契约块（供拼进任务提示词）。
 ///
-/// **单一事实源在 SkillHub 技能**（`knowledge-graph/references/sedimentation.md`）：
-/// 改技能即可热更新沉淀规则、无需发版 Nezha；技能库未配置或读不到时回退内嵌常量，
-/// 避免离线 / 未同步场景下沉淀彻底不可用。
-pub fn session_sedimentation_contract(task_id: &str) -> String {
-    let text = crate::skills::read_skill_reference(
+/// 首选**技能指针**：契约正文的唯一事实源是 SkillHub 的
+/// `knowledge-graph/references/sedimentation.md`，任务提示词只说明「按技能契约产出」
+/// 并给出该文件的绝对路径，由 agent 自行按需读取——省下每任务约 1.9KB 的 prompt
+/// 体积，且读到的永远是 hub 当前版本（改技能即可热更新、无需发版 Nezha）。
+///
+/// 技能库未配置 / 该文件读不到时回退到内嵌常量 [`SESSION_SEDIMENTATION_CONTRACT_FALLBACK`]，
+/// 避免离线或 hub 未同步时沉淀彻底不可用。
+pub fn sedimentation_contract_block() -> String {
+    if crate::skills::read_skill_reference_path(
         SEDIMENTATION_CONTRACT_SKILL,
         SEDIMENTATION_CONTRACT_REFERENCE,
     )
-    .unwrap_or_else(|| SESSION_SEDIMENTATION_CONTRACT_FALLBACK.to_string());
-    text.replace("{TASK_ID}", task_id)
+    .is_some()
+    {
+        SEDIMENTATION_CONTRACT_POINTER.to_string()
+    } else {
+        SESSION_SEDIMENTATION_CONTRACT_FALLBACK.to_string()
+    }
 }
+
+/// 技能指针块：只点明「按哪份契约、契约文件在哪、产物落在哪」，不复述 schema。
+///
+/// 正文（字段表、section 清单、提取标准）刻意不内联——两处维护必然漂移；schema 由
+/// 契约文件承载，读它就够。产物路径仍在此写死一份，因为「写到哪」是 Nezha 侧的
+/// 硬约定（`knowledge.rs` 按 `$NEZHA_TASK_ID` 读回），说清楚能省掉一次误写。
+const SEDIMENTATION_CONTRACT_POINTER: &str = r#"知识沉淀产出（必做）：任务收尾时，按 `knowledge-graph` 技能的沉淀契约产出本次会话中确认的、
+长期有效的项目知识——契约正文（产出物 schema、提取标准、可写 section 清单、如何表态「本次无新知识」）
+在文件 `$NEZHA_KNOWLEDGE_SEDIMENTATION_CONTRACT` 里，动手前先读它。
+
+产物写到 `.nezha/drafts/$NEZHA_TASK_ID/knowledge.json`（与该任务的其它草稿同目录；
+不要写到别处、不要用其它文件名）。确实没有新知识时**也必须写这个文件**并显式表态
+（`{"version":1,"skipped":true,"skipReason":"…"}`），不要留空、不要省略——文件缺失会被判为漏产出。
+只需写入一次；Nezha 消费后可能清理该文件，若随后发现文件消失属正常，不要重复落盘。"#;
 
 /// 会话内知识沉淀**产出契约**：主 agent 在任务收尾时按此写
 /// `.nezha/drafts/$NEZHA_TASK_ID/knowledge.json`，随后由 Nezha 侧四层质量门判定并写入图谱。
 ///
 /// 描述**产出物格式与提取标准**（写什么文件、什么字段、什么值得提、如何表态「本次无新知识」）。
 ///
-/// **这是回退文本**：首选来源是 SkillHub `knowledge-graph/references/sedimentation.md`
-/// （见 [`session_sedimentation_contract`]），改技能即可热更新、无需发版；
-/// 本常量仅在技能库未配置 / 读不到该文件时兜底，避免沉淀彻底不可用。
+/// **这是回退文本**：首选是「技能指针 + 契约文件路径」（见 [`sedimentation_contract_block`]），
+/// 改技能即可热更新、无需发版；本常量仅在技能库未配置 / 读不到该文件时兜底，
+/// 避免沉淀彻底不可用。因此它必须**自带完整正文**（不能只写指针，否则回退后 agent
+/// 拿不到 schema）。
 ///
-/// 使用 `{TASK_ID}` 占位符，注入时替换为真实 task id（禁止让 agent 自造目录名）。
+/// 任务 id 一律取环境变量 `$NEZHA_TASK_ID`（由 Nezha 注入），不让 agent 自造目录名。
 pub const SESSION_SEDIMENTATION_CONTRACT_FALLBACK: &str = r#"知识沉淀产出（必做）：任务收尾时，按下面的格式把本次会话中确认的、长期有效的项目知识写入
-`.nezha/drafts/{TASK_ID}/knowledge.json`（与该任务的其它草稿同目录；不要写到别处、不要用其它文件名）。
+`.nezha/drafts/$NEZHA_TASK_ID/knowledge.json`（`$NEZHA_TASK_ID` 是本次任务 id，由 Nezha 注入环境变量，
+不要自造目录名；与该任务的其它草稿同目录，不要写到别处、不要用其它文件名）。
 
 - 有知识要沉淀时：
 {
@@ -1995,19 +2021,58 @@ mod tests {
         assert!(parse_knowledge_draft("42", "HIS").is_err());
     }
 
-    /// 契约取文本：技能可读时用技能文本，读不到时回退内嵌常量——两条路都必须替换
-    /// `{TASK_ID}`，否则 agent 会拿到字面占位符、写错目录。
+    /// 契约块：技能文件可读时给**指针**（不复述 schema，正文交给 agent 按路径读）；
+    /// 读不到时回退内嵌常量——两条路都必须让 agent 知道写哪、以及「无新知识也要显式表态」。
     #[test]
-    fn contract_always_substitutes_task_id() {
-        let rendered = session_sedimentation_contract("task-xyz");
-        assert!(!rendered.contains("{TASK_ID}"), "占位符必须被替换");
-        assert!(rendered.contains("task-xyz"), "应含真实 task id");
-        // 无论来源是技能还是回退文本，都要覆盖这两个关键约定。
-        assert!(rendered.contains("skipped"), "应要求显式表态无新知识");
-        assert!(rendered.contains("knowledge.json"), "应指明产物文件");
+    fn contract_block_is_pointer_or_full_fallback() {
+        let block = sedimentation_contract_block();
+        // 两条路共同的可执行约定：产物文件名、显式 skipped 表态、任务 id 取环境变量。
+        assert!(block.contains("knowledge.json"), "应指明产物文件");
+        assert!(block.contains("skipped"), "应要求显式表态无新知识");
+        assert!(block.contains("$NEZHA_TASK_ID"), "任务 id 应由环境变量给出");
+        // 不得残留任何未被替换的占位符。
+        assert!(!block.contains("{TASK_ID}"), "不应残留字面占位符");
+        // 指针或正文二选一：指针必须指明契约文件路径；回退必须自带 schema。
+        if block == SEDIMENTATION_CONTRACT_POINTER {
+            assert!(block.contains(SEDIMENTATION_CONTRACT_ENV));
+        } else {
+            assert_eq!(block, SESSION_SEDIMENTATION_CONTRACT_FALLBACK);
+            assert!(block.contains("confidence"), "回退需自带字段说明");
+        }
     }
 
-    /// 回退文本必须与技能文本承载同样的**可执行约束**：回退只应在读不到技能时兜底，
+    /// 技能文件真的可读时，必须走**指针**分支、而不是悄悄回退——否则「省 prompt 体积」
+    /// 这个目的会在没人察觉的情况下失效（回退正文照常工作，只是又变长了）。
+    /// 未配置 hub / 未装该技能时跳过：那时回退是正确行为（见上一测试）。
+    #[test]
+    fn contract_block_prefers_pointer_when_hub_available() {
+        let Some(_) = crate::skills::read_skill_reference_path(
+            SEDIMENTATION_CONTRACT_SKILL,
+            SEDIMENTATION_CONTRACT_REFERENCE,
+        ) else {
+            return; // 本机没有 hub / 该技能：回退分支，跳过
+        };
+        assert_eq!(
+            sedimentation_contract_block(),
+            SEDIMENTATION_CONTRACT_POINTER,
+            "技能文件可读时必须用指针块"
+        );
+    }
+
+    /// 指针块本身不能省掉「无新知识也必须显式表态」——这是区分「忘了」与「确实没有」
+    /// 的唯一依据，漏了就会把正常任务判成漏产出。
+    #[test]
+    fn pointer_block_keeps_skip_marker_and_path() {
+        let p = SEDIMENTATION_CONTRACT_POINTER;
+        assert!(p.contains("skipReason"));
+        assert!(p.contains("$NEZHA_TASK_ID"));
+        assert!(p.contains(SEDIMENTATION_CONTRACT_ENV));
+        assert!(p.contains(SEDIMENTATION_CONTRACT_SKILL));
+        // 刻意不内联 schema：两处维护必然漂移。
+        assert!(!p.contains("\"candidates\""), "指针不应复述 schema");
+    }
+
+    /// 回退文本必须与技能文本承载同样的**可执行约束**：回退只应在读不到契约文件时兜底，
     /// 若它比技能少几条硬约束，agent 会产出注定被门拒掉的候选（白费一次模型调用）。
     /// 这里逐条钉住「门会强制、且 agent 能事先遵守」的那些约束。
     #[test]
@@ -2017,7 +2082,7 @@ mod tests {
             ("跳过表态", "skipped"),
             ("跳过理由", "skipReason"),
             ("产物文件名", "knowledge.json"),
-            ("任务级目录", "{TASK_ID}"),
+            ("任务 id 环境变量", "$NEZHA_TASK_ID"),
             ("单行要求", "单行"),
             ("冲突不提", "不要提取"),
             ("可写段样例", "业务规则与已知坑"),
@@ -2034,12 +2099,9 @@ mod tests {
     #[test]
     fn contract_requires_task_scoped_path_and_skip_marker() {
         // 契约文本必须含任务级路径与显式 skipped 表态，否则「忘了」与「确实没有」无法区分。
-        assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("{TASK_ID}"));
+        assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("$NEZHA_TASK_ID"));
         assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("skipped"));
         assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("skipReason"));
-        let rendered = session_sedimentation_contract("abc-123");
-        assert!(!rendered.contains("{TASK_ID}"), "占位符应被替换");
-        assert!(rendered.contains("abc-123"));
     }
 
 

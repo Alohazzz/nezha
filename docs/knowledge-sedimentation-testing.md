@@ -11,16 +11,24 @@
 
 ## 0. 前置条件核对
 
-三步都在本机跑，先确认这三条：
+先确认这四条：
 
 | 项 | 本机当前值 | 怎么查 |
 |---|---|---|
 | 总开关开启 | `true` | `~/.nezha/settings.json` → `knowledge.enabled` |
 | 项目绑定图谱 | HIS → `graph_id = "HIS"` | `<项目>/.nezha/config.toml` → `[knowledge] graph_id` |
 | 图谱 hub 就绪 | 4 个图谱，HIS 有 101 张卡片 | `~/.nezha/skill_hub.json` → `hubPath` 下的 `knowledge-graphs/` |
+| **任务类型匹配** | 仅云效的**方案执行 / 直接执行**任务 | 任务须有 `yunxiaoWorkitemId` 且非 `yunxiaoPlanDiscussion` |
 
-三条**全部成立**时沉淀才会触发。缺任一条：未绑定图谱的项目连产出契约都不注入（agent 不会被要求写
-`knowledge.json`），总开关关闭时直接跳过且不记指标。所以「没沉淀」先查这三条，别先怀疑门。
+四条**全部成立**时沉淀才会触发。缺任一条的原因各不相同：未绑定图谱的项目连产出要求都不注入
+（agent 不会被要求写 `knowledge.json`）；总开关关闭时直接跳过且不记指标；**任务类型不匹配**
+（普通任务、方案讨论任务）既不注入产出要求、收尾时也不跑沉淀——所以它们没有沉淀结果属预期，
+不是漏读。「没沉淀」先查这四条，别先怀疑门。
+
+> 任务提示词只注入**技能指针**（不再内联契约正文），并把契约文件路径放进环境变量
+> `$NEZHA_KNOWLEDGE_SEDIMENTATION_CONTRACT`，由 agent 自己读 SkillHub 的
+> `knowledge-graph/references/sedimentation.md`；hub 里读不到该文件时退回 Nezha 内嵌正文。
+
 
 ---
 

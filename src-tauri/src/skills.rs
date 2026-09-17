@@ -922,11 +922,13 @@ fn resolve_skill_reference(skill_dir: &Path, relative: &str) -> Option<PathBuf> 
     Some(out)
 }
 
-/// 读取技能目录下某个参考文件的正文（如 `knowledge-graph` 的 `references/sedimentation.md`）。
+/// 取技能目录下某个参考文件的**绝对路径**（不读正文）。
 ///
-/// 用于让「随 hub 热更新的契约文本」成为唯一事实源：调用方读不到时自行回退内嵌文本，
-/// 因此本函数失败一律返回 `None`（不报错、不 panic）。
-pub(crate) fn read_skill_reference(skill_name: &str, relative: &str) -> Option<String> {
+/// 让「随 hub 热更新的契约文本」成为唯一事实源，同时把正文交给 agent 自己按需读取
+/// （省下每次注入的 prompt 体积，且读到的永远是 hub 当前版本）；调用方拿不到路径时
+/// 自行回退内嵌文本，因此本函数失败一律返回 `None`（不报错、不 panic）。
+/// 只接受技能目录内的相对路径。
+pub(crate) fn read_skill_reference_path(skill_name: &str, relative: &str) -> Option<String> {
     if validate_skill_name(skill_name).is_err() {
         return None;
     }
@@ -936,11 +938,10 @@ pub(crate) fn read_skill_reference(skill_name: &str, relative: &str) -> Option<S
         return None;
     }
     let path = resolve_skill_reference(&skill_dir, relative)?;
-    let content = std::fs::read_to_string(path).ok()?;
-    if content.trim().is_empty() {
+    if !path.is_file() {
         return None;
     }
-    Some(content)
+    Some(path.to_string_lossy().into_owned())
 }
 
 /// git 源同步：缓存缺失则完整 clone，存在则 fetch 探测、有变更才 --ff-only pull。

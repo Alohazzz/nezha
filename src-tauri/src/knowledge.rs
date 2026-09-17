@@ -614,13 +614,26 @@ pub(crate) fn knowledge_env_for_project(real_project_path: &str) -> Vec<(String,
     let data_dir = knowledge_graphs_root(Path::new(&hub))
         .join(graph_id)
         .join("data");
-    vec![
+    let mut vars = vec![
         ("NEZHA_KNOWLEDGE_GRAPH_ID".to_string(), graph_id.to_string()),
         (
             "NEZHA_KNOWLEDGE_GRAPH_DIR".to_string(),
             data_dir.to_string_lossy().into_owned(),
         ),
-    ]
+    ];
+    // 沉淀产出契约的**文件路径**（不是正文）：任务提示词只做技能指针，正文由 agent
+    // 按此路径自行读取，从而省下每任务约 1.9KB 的 prompt、且读到的永远是 hub 当前版本。
+    // 文件不在（hub 未同步 / 技能被删）时不注入，提示词侧会自动回退到内嵌契约正文。
+    if let Some(path) = crate::skills::read_skill_reference_path(
+        crate::agent_assist::SEDIMENTATION_CONTRACT_SKILL,
+        crate::agent_assist::SEDIMENTATION_CONTRACT_REFERENCE,
+    ) {
+        vars.push((
+            crate::agent_assist::SEDIMENTATION_CONTRACT_ENV.to_string(),
+            path,
+        ));
+    }
+    vars
 }
 
 /// 读取项目配置中的知识库目标。未配置或目标不存在时报错，不回退 HIS。
@@ -1926,6 +1939,16 @@ commit_prompt = \"x\"
                 data_dir.replace('\\', "/").ends_with("knowledge-graphs/HIS/data"),
                 "数据目录应以 knowledge-graphs/<id>/data 结尾：{data_dir}"
             );
+            // 沉淀契约的绝对路径同样下发（指针式注入依赖它；文件缺失时该项可不注入，
+            // 由 `sedimentation_contract_block` 回退内嵌正文）。
+            if let Some(contract) = map.get("NEZHA_KNOWLEDGE_SEDIMENTATION_CONTRACT") {
+                assert!(
+                    contract.replace('\\', "/").ends_with(
+                        "knowledge-graph/references/sedimentation.md"
+                    ),
+                    "契约路径应指向技能参考文件：{contract}"
+                );
+            }
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

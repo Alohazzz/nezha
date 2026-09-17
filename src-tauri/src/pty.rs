@@ -155,6 +155,14 @@ fn finalize_task_exit(
             manually_completed.remove(task_id),
         )
     };
+    // 本次启动是否要求产出沉淀产物。**在函数入口就取走并移除**，这样 cancel /
+    // 手动完成等提前 return 的路径也不会把它留在集合里（同一 task_id 重复启动
+    // 会在 run_task / resume_task 里按当次标记覆写，不存在残留脏值）。
+    let sediment_expected = {
+        let tm = app.state::<TaskManager>();
+        let mut expected = tm.sediment_expected.lock();
+        expected.remove(task_id)
+    };
 
     let had_agent_session;
     {
@@ -226,12 +234,19 @@ fn finalize_task_exit(
             let _ = crate::drafts::gather_task_drafts(project_path, &real_path, task_id);
             // 知识沉淀自动处理：任务完成后读会话内产出的候选 → 四层门 → 写入图谱。
             // 放在 gather 之后（否则 worktree 里写的 knowledge.json 还没收拢到项目根）。
-            crate::knowledge::spawn_auto_sedimentation(
-                app.clone(),
-                task_id.to_string(),
-                real_path,
-                agent.to_string(),
-            );
+            //
+            // 只有被要求产出的任务（云效议题的方案执行 / 直接执行）才跑：沉淀侧把
+            // 「产物缺失」判为漏产出并报错、前端据此建云效议题，所以未要求产出的任务
+            // 一旦跑进去就是必然误报。门槛放在这里而不是 `run_auto_sedimentation` 内部，
+            // 是为了让「要不要产出」与「产出在哪校验」各归其位。
+            if sediment_expected {
+                crate::knowledge::spawn_auto_sedimentation(
+                    app.clone(),
+                    task_id.to_string(),
+                    real_path,
+                    agent.to_string(),
+                );
+            }
         }
         crate::system_notify::notify_task_event(
             app,
@@ -367,13 +382,37 @@ fn setup_env(cmd: &mut CommandBuilder) {
 ///   agent 与轮询会话发现并行重复上报（见 run_task / resume_task / fork 注释）。
 ///   hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作，缺 EVENT_DIR 时
 ///   脚本内部校验直接 exit 0，不会重复上报。
-/// 是否把知识沉淀产出契约注入任务提示词。
+/// 是否把知识沉淀产出要求注入任务提示词。
 ///
-/// 两个条件**都要**满足：
+/// 三个条件**都要**满足：
 /// - 项目绑定了图谱（未绑定 ⇒ 没有可沉淀目标，强求只会逼出无意义的 skipped）
 /// - 知识沉淀总开关开启（关闭 ⇒ 连产出都不该要求，与设置项文档语义一致）
-fn should_inject_sediment_contract(graph_id: &str, sedimentation_enabled: bool) -> bool {
-    !graph_id.trim().is_empty() && sedimentation_enabled
+/// - **本任务要求产出**（`require_sediment`，由前端按任务类型判定）：只有云效议题的
+///   方案执行 / 直接执行任务为真。普通任务与方案讨论任务不要求——它们要么没有可沉淀的
+///   议题上下文，要么产出的是方案而非知识；一律要求只会把「漏产出」的告警和云效议题
+///   灌到无关任务上（空提示词启动的「启动终端」也算普通任务）。
+fn should_inject_sediment_contract(
+    graph_id: &str,
+    sedimentation_enabled: bool,
+    sediment_required: bool,
+) -> bool {
+    !graph_id.trim().is_empty() && sedimentation_enabled && sediment_required
+}
+
+/// 按 `inject` 决定是否把知识沉淀产出要求追加到提示词末尾。
+///
+/// **`prompt` 为空时一律原样返回**：点「启动终端」只开一个交互式 REPL，此时
+/// `run_task` 靠 `final_prompt.is_empty()` 才不传 positional arg（见下方注入点）。
+/// 若在这里追加了内容，CLI 会把契约当成首条消息发给 agent 并在终端回显。
+fn append_sediment_requirement(prompt: String, inject: bool) -> String {
+    if prompt.is_empty() || !inject {
+        return prompt;
+    }
+    format!(
+        "{}\n\n---\n{}",
+        prompt,
+        crate::agent_assist::sedimentation_contract_block()
+    )
 }
 
 fn setup_nezha_env(
@@ -960,18 +999,39 @@ graph_id = \"HIS\"
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 产出契约的注入条件：绑定图谱 **且** 总开关开启（任一不满足都不注入）。
+    /// 产出要求的注入条件：绑定图谱 **且** 总开关开启 **且** 本任务被要求产出
+    /// （任一不满足都不注入）。
     #[test]
-    fn sediment_contract_requires_graph_and_master_switch() {
-        // 绑定 + 开关开 ⇒ 注入
-        assert!(should_inject_sediment_contract("HIS", true));
+    fn sediment_contract_requires_graph_master_switch_and_task_scope() {
+        // 三条齐备 ⇒ 注入
+        assert!(should_inject_sediment_contract("HIS", true, true));
         // 总开关关闭 ⇒ 不注入（关闭后连产出都不该要求）
-        assert!(!should_inject_sediment_contract("HIS", false));
+        assert!(!should_inject_sediment_contract("HIS", false, true));
         // 未绑定图谱 ⇒ 不注入
-        assert!(!should_inject_sediment_contract("", true));
-        assert!(!should_inject_sediment_contract("   ", true));
-        // 两者都不满足 ⇒ 不注入
-        assert!(!should_inject_sediment_contract("", false));
+        assert!(!should_inject_sediment_contract("", true, true));
+        assert!(!should_inject_sediment_contract("   ", true, true));
+        // 普通任务 / 方案讨论任务（未要求产出）⇒ 不注入，即使前两条都满足
+        assert!(!should_inject_sediment_contract("HIS", true, false));
+        // 全不满足 ⇒ 不注入
+        assert!(!should_inject_sediment_contract("", false, false));
+    }
+
+    /// 空提示词（点「启动终端」只开交互式 REPL）不得因为注入产出要求而被填成非空——
+    /// 否则 `final_prompt.is_empty()` 的「空 ⇒ 进 REPL」判断失效，契约会被当首条消息发出。
+    #[test]
+    fn sediment_contract_never_fills_empty_prompt() {
+        // 输入侧为空 ⇒ 即使门通过也原样返回空串
+        assert_eq!(append_sediment_requirement(String::new(), true), "");
+        // 输入侧为空且门不通过 ⇒ 同样为空
+        assert_eq!(append_sediment_requirement(String::new(), false), "");
+        // 有真实任务内容时：门不通过不追加，门通过才追加
+        assert_eq!(
+            append_sediment_requirement("写个需求".to_string(), false),
+            "写个需求"
+        );
+        let injected = append_sediment_requirement("写个需求".to_string(), true);
+        assert!(injected.starts_with("写个需求\n\n---\n"));
+        assert!(!injected.contains("{TASK_ID}"), "占位符不应泄漏给 agent");
     }
 
     #[test]
@@ -1198,6 +1258,9 @@ pub async fn run_task(
     texts: Option<Vec<String>>,
     cols: Option<u16>,
     rows: Option<u16>,
+    // 本次启动是否要求产出知识沉淀产物（前端按任务类型判定：云效议题的方案执行 /
+    // 直接执行任务为真）。决定是否注入产出要求，以及任务收尾时是否跑沉淀。
+    require_sediment: Option<bool>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1206,11 +1269,21 @@ pub async fn run_task(
         "Reasoning effort",
         MAX_REASONING_EFFORT_BYTES,
     )?;
+    let sediment_required = require_sediment.unwrap_or(false);
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    // 与下面的 `task_real_paths` 一样按 task_id 无条件覆写：同一任务重复启动时以本次为准。
+    if sediment_required {
+        task_manager
+            .sediment_expected
+            .lock()
+            .insert(task_id.clone());
+    } else {
+        task_manager.sediment_expected.lock().remove(&task_id);
+    }
     task_manager
         .task_names
         .lock()
@@ -1282,20 +1355,17 @@ pub async fn run_task(
         )
     };
 
-    // 知识沉淀产出契约：仅对**绑定了知识图谱**的项目注入（未绑定的项目没有可沉淀目标，
-    // 强求只会逼出无意义的 skipped）。图谱身份取自项目配置，已在上面读出。
-    let final_prompt = if !should_inject_sediment_contract(
-        &config.knowledge.graph_id,
-        crate::app_settings::load_settings_internal().knowledge.enabled,
-    ) {
-        with_text_paths
-    } else {
-        format!(
-            "{}\n\n---\n{}",
-            with_text_paths,
-            crate::agent_assist::session_sedimentation_contract(&task_id)
-        )
-    };
+    // 知识沉淀产出要求：仅对「绑定图谱的项目 × 总开关开启 × 本任务要求产出」注入
+    // （未绑定图谱没有可沉淀目标；普通任务 / 方案讨论任务不该被要求，见 gate 注释）。
+    // 图谱身份取自项目配置，已在上面读出。空提示词的守卫在 helper 内部。
+    let final_prompt = append_sediment_requirement(
+        with_text_paths,
+        should_inject_sediment_contract(
+            &config.knowledge.graph_id,
+            crate::app_settings::load_settings_internal().knowledge.enabled,
+            sediment_required,
+        ),
+    );
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
     let agent_bin = launch.program.clone();
@@ -1623,6 +1693,8 @@ pub async fn resume_task(
     reasoning_effort: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
+    // 见 `run_task`：恢复后的任务同样会在收尾时走沉淀，故也要带着这个标记。
+    require_sediment: Option<bool>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1631,6 +1703,7 @@ pub async fn resume_task(
         "Reasoning effort",
         MAX_REASONING_EFFORT_BYTES,
     )?;
+    let sediment_required = require_sediment.unwrap_or(false);
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1648,6 +1721,15 @@ pub async fn resume_task(
         .task_real_paths
         .lock()
         .insert(task_id.clone(), real_project_path.clone());
+    // 与 `task_real_paths` 同处写入：恢复后的任务收尾时同样要按本次标记决定是否跑沉淀。
+    if sediment_required {
+        task_manager
+            .sediment_expected
+            .lock()
+            .insert(task_id.clone());
+    } else {
+        task_manager.sediment_expected.lock().remove(&task_id);
+    }
 
     let pair = pty_system()
         .openpty(PtySize {

@@ -45,6 +45,7 @@ import {
   buildYunxiaoIssueLink,
   issueTag,
   isYunxiaoWorkitemImported,
+  requiresSedimentation,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
 import type { DirectLaunchOptions } from "./components/yunxiao/DirectLaunchDialog";
@@ -1019,6 +1020,8 @@ function App() {
       texts,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
+      // 只有云效执行类任务要求产出知识沉淀产物（后端据此注入产出要求并跑沉淀）。
+      requireSediment: requiresSedimentation(task),
       onOutput: tm.createOutputChannel(task.id),
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1504,6 +1507,8 @@ function App() {
       permissionMode: task.permissionMode,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
+      // 见 invokeRunTask：恢复后的任务同样会在收尾时走沉淀，标记要一并带上。
+      requireSediment: requiresSedimentation(task),
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),

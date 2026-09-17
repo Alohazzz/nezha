@@ -453,7 +453,12 @@
       <p>知识沉淀解决「<strong>Agent 讨论中确认的知识随会话流失</strong>」的问题：把讨论里确认的、且有依据的增量知识，提取出来并格式化成<strong>云效审核议题</strong>，交给知识库负责人审核后更新图谱数据。</p>
       <div class="callout">
         <span class="label">前置条件</span>
-        任务为云效绑定任务，状态 <code>done</code>，且项目内已安装 / 可读取 <code>knowledge-sedimentation</code> 技能（知识提取规则所在）。
+        任务为<strong>云效议题的方案执行 / 直接执行任务</strong>（须有 <code>yunxiaoWorkitemId</code> 且非方案讨论任务），
+        状态 <code>done</code>，且项目已绑定知识图谱、「知识沉淀」总开关开启。契约正文的唯一事实源是 SkillHub 的
+        <code>knowledge-graph/references/sedimentation.md</code>：任务提示词只注入<strong>技能指针</strong>（并把它放进环境变量
+        <code>$NEZHA_KNOWLEDGE_SEDIMENTATION_CONTRACT</code>），agent 收尾时按契约写
+        <code>.nezha/drafts/&lt;taskId&gt;/knowledge.json</code>，随后由 Nezha 侧四层门复核并写入图谱。
+        普通任务与方案讨论任务不要求产出，也不做检查。
       </div>
 
       <h3><span class="subnum">2.1</span>入口</h3>
