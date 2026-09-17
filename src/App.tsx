@@ -41,7 +41,12 @@ import {
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
 import type { FontFamily, KnowledgeSedimentationEvent } from "./types";
 import { quoteFontName } from "./utils/fonts";
-import { buildYunxiaoIssueLink, issueTag, isYunxiaoWorkitemImported } from "./utils/yunxiao";
+import {
+  buildYunxiaoIssueLink,
+  issueTag,
+  isYunxiaoWorkitemImported,
+  YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
+} from "./utils/yunxiao";
 import type { DirectLaunchOptions } from "./components/yunxiao/DirectLaunchDialog";
 import {
   buildPlanDiscussionPrompt,
@@ -856,6 +861,42 @@ function App() {
       },
     );
     // 自动沉淀结果：任务完成后由后端上报（成功含逐条判定，失败含原因）。
+    // 失败时建一条云效议题作为**唯一人工入口**（成功路径完全不碰云效）。
+    const raiseSedimentationIssue = async (
+      payload: KnowledgeSedimentationEvent,
+      taskLabel: string,
+    ) => {
+      try {
+        const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+        const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+        if (!yunxiao.token || !yunxiao.organizationId) return;
+        const kbProjectId = yunxiao.knowledgeBaseProjectId ?? YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID;
+        const failed = (payload.items ?? []).filter((item) => !item.passed);
+        const lines = failed.map(
+          (item) => `- [${item.layer}] ${item.module} / ${item.section}：${item.reason}`,
+        );
+        const description = [
+          `来源任务：${taskLabel}`,
+          `任务 ID：${payload.taskId}`,
+          "",
+          payload.error ? `失败原因：${payload.error}` : "部分候选未通过质量门：",
+          ...(lines.length ? [lines.join("\n")] : []),
+          "",
+          "处理建议：确认后手动更新对应模块卡片，或将结论回填到任务提示词后重跑。",
+        ].join("\n");
+        await invoke("yunxiao_create_knowledge_issue", {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          projectId: kbProjectId,
+          subject: `【知识沉淀未完成】${taskLabel}`,
+          description,
+        });
+      } catch (e) {
+        // 议题创建失败不再抛出：沉淀失败本身已通过 toast 提示，避免二次打扰。
+        console.warn("创建知识沉淀失败议题失败", e);
+      }
+    };
+
     const p3 = listen<KnowledgeSedimentationEvent>("knowledge-sedimentation", (e) => {
       const payload = e.payload;
       setSedimentingTasks((prev) => {
@@ -872,6 +913,8 @@ function App() {
       }
       if (payload.status === "failed") {
         showToast(`知识沉淀未完成：${payload.error ?? ""}`, "warning");
+        const label = knowledgeTaskLabel(payload.taskId);
+        void raiseSedimentationIssue(payload, label);
       }
     });
     return () => {
@@ -881,6 +924,13 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 取任务展示名（供失败议题标题用）；用 ref 读取，避免事件回调闭包过期。 */
+  function knowledgeTaskLabel(taskId: string): string {
+    const task = tasksRef.current.find((candidate) => candidate.id === taskId);
+    const label = task?.name ?? task?.prompt.slice(0, 60) ?? taskId;
+    return label;
+  }
 
   async function handleOpen() {
     const selected = await openDialog({ directory: true, multiple: false });
@@ -2791,7 +2841,6 @@ function App() {
     });
   }
 
-  /** 生成知识沉淀候选：优先读取会话收尾时落盘的知识草稿，无草稿时内置规则 headless 提取。 */
   /**
    * 知识沉淀结果（按任务）：自动沉淀完成后由 `knowledge-sedimentation` 事件填充。
    * 同时用 `sedimentingTasks` 标记「进行中」，供按钮显示状态。

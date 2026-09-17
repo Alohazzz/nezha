@@ -517,6 +517,30 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.50 实施进度：第 6 步（失败议题 + 指标埋点 + 面板刷新）已完成 → 六步走完
+
+| 项 | 实现 |
+|---|---|
+| 失败议题 | 前端监听 `knowledge-sedimentation` 的 `failed` 分支 → 复用 `yunxiao_create_knowledge_issue` 建一条【知识沉淀未完成】议题（含逐条拒绝理由与「失败原因」）。**成功路径完全不碰云效** |
+| 指标埋点 | 新增 `KnowledgeMetricRecord` 追加写 `~/.nezha/knowledge-metrics.jsonl`；`read_knowledge_metrics(days)` 返回汇总（总/成功/跳过/失败运行数、写入总数、**按层拒绝数**、补推次数） |
+| 面板刷新 | `KnowledgePanel` 新增监听 `skill-hub-changed` → 重新读卡片（此前只有 `SkillHubView` 监听，打开着的面板会一直显示旧卡片） |
+
+**失败议题为何放在前端**：`yunxiao_create_knowledge_issue` 的 token 由**前端**传入
+（`~/.nezha/settings.json` 的 `yunxiao` 段，后端不持有）。因此后端只负责上报事件，
+建议题由前端在 `failed` 分支发起。这与「agent 不拿 token」的既有约定一致。
+
+**指标为什么用追加式 JSONL**：不在卡片里塞统计、不引入新受管文件；单行 JSON 追加写，
+无迁移成本，失败/成功都记，使 §9.2 的**自动指标**（拒绝率、产物缺失率、补推次数、
+按层拒绝分布）都有数据源。`read_knowledge_metrics` 已验证可在真实 IPC 上调用。
+
+**验证**：应用实际启动，`read_knowledge_metrics` 经真实 IPC 返回预期的空汇总
+（无任务完成时无记录）；`running` 事件在未绑定图谱时确实不发（无误报）。
+另外给面板刷新加了回归测试（mock `listen` 后手动触发事件，断言再次读取卡片），
+连跑 5 次稳定。
+
+**至此提案 §11 的六步全部完成。** 剩余未做项：第 4 步的「规则文本迁到 SkillHub 技能」
+（当前仍为 Rust 内嵌，已在 §11.6 记录）、以及 §12 的已知限制。
+
 ## 11.51 实施进度：第 5 步前端（退役按钮与弹窗 + 只读结果 + 开关改版）已完成
 
 | 项 | 实现 |

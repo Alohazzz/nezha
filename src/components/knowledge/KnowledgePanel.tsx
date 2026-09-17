@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Loader2, RefreshCw, Search } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { rpRootStyle } from "../../styles/right-panel";
@@ -83,6 +84,18 @@ export function KnowledgePanel({
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)));
+  }, [refresh]);
+
+  // 技能仓库（图谱数据所在）被后台同步或写入后自动刷新：
+  // 后端在定时拉取 / 提交推送后会 emit `skill-hub-changed`，此前只有 SkillHubView 监听，
+  // 导致打开着的知识面板会一直显示旧卡片（读到「最新图谱」在 UI 上落空）。
+  useEffect(() => {
+    const unlisten = listen("skill-hub-changed", () => {
+      refresh().catch((e) => setError(String(e)));
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [refresh]);
 
   const publish = useCallback(async () => {
