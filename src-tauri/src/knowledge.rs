@@ -341,9 +341,43 @@ pub fn spawn_auto_sedimentation(
         return; // 总开关关闭：不跑沉淀，也不要求产出
     }
     tauri::async_runtime::spawn(async move {
+        // 前置条件（总开关 / 绑定图谱 / 产物存在）通过后才发 running，前端据此准确显示
+        // 「沉淀中」，不必也不应在前端猜（前端读不到项目是否绑定图谱）。
+        let resolved_graph_id = resolve_knowledge_target(real_project_path.clone())
+            .await
+            .ok()
+            .map(|target| {
+                let _ = app.emit(
+                    "knowledge-sedimentation",
+                    serde_json::json!({ "taskId": task_id, "status": "running", "graph": target.id }),
+                );
+                target.id
+            });
         let result = run_auto_sedimentation(&task_id, &real_project_path, &agent).await;
+        // 指标记录（best-effort）：无论成败都记，使拒绝率 / 缺失率 / 补推可统计（§9.2）。
+        // 未绑定图谱的项目**不记**：它本就不该沉淀，记进去只会给分母灌水
+        // （skipped 会同时混入「未绑定 / 显式跳过 / 无候选」三种成因）。
+        let graph_for_metric = resolved_graph_id.unwrap_or_default();
+        let record_metrics = !graph_for_metric.is_empty();
         match result {
             Ok(outcome) => {
+                if record_metrics {
+                    let record = KnowledgeMetricRecord {
+                    at: chrono::Utc::now().timestamp_millis(),
+                    task_id: task_id.clone(),
+                    graph_id: graph_for_metric.clone(),
+                    status: if outcome.items.is_empty() {
+                        "skipped".to_string()
+                    } else {
+                        "ok".to_string()
+                    },
+                    written: outcome.written_count,
+                    rejected_by_layer: rejected_by_layer(&outcome.items),
+                    pushed_pending: outcome.pushed_pending,
+                    error: None,
+                    };
+                    let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
+                }
                 let _ = app.emit(
                     "knowledge-sedimentation",
                     serde_json::json!({
@@ -357,6 +391,19 @@ pub fn spawn_auto_sedimentation(
                 );
             }
             Err(error) => {
+                if record_metrics {
+                    let record = KnowledgeMetricRecord {
+                        at: chrono::Utc::now().timestamp_millis(),
+                        task_id: task_id.clone(),
+                        graph_id: graph_for_metric.clone(),
+                        status: "failed".to_string(),
+                        written: 0,
+                        rejected_by_layer: HashMap::new(),
+                        pushed_pending: false,
+                        error: Some(error.clone()),
+                    };
+                    let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
+                }
                 eprintln!("[knowledge] 自动沉淀未完成：{error}");
                 let _ = app.emit(
                     "knowledge-sedimentation",
@@ -369,6 +416,120 @@ pub fn spawn_auto_sedimentation(
             }
         }
     });
+}
+
+/// 一次沉淀运行的指标记录（提案 §9.2 的自动指标数据源）。
+///
+/// 以 JSONL 追加到 `~/.nezha/knowledge-metrics.jsonl`：单文件、追加写、无需迁移，
+/// 且失败/成功都记录，使「拒绝率、产物缺失率、退避与补推」都能被统计。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeMetricRecord {
+    /// 记录时间（Unix 毫秒）。
+    pub at: i64,
+    pub task_id: String,
+    pub graph_id: String,
+    /// `ok` 已完成 / `failed` 未完成（含产物缺失）。
+    pub status: String,
+    pub written: usize,
+    /// 各层拒绝条数（L0 / L1 / L2 / L3 / write）。
+    pub rejected_by_layer: HashMap<String, usize>,
+    /// 本次是否补推了此前失败留下的本地提交。
+    pub pushed_pending: bool,
+    /// 失败原因（status=failed 时）。
+    pub error: Option<String>,
+}
+
+fn knowledge_metrics_path() -> Result<PathBuf, String> {
+    let home = crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    Ok(home.join(".nezha").join("knowledge-metrics.jsonl"))
+}
+
+/// 追加一条指标记录（best-effort：指标写失败绝不影响沉淀本身）。
+fn append_metric_record(record: &KnowledgeMetricRecord) {
+    let Ok(path) = knowledge_metrics_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(line) = serde_json::to_string(record) else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// 汇总指标：读取最近 `days` 天的记录（`days <= 0` 表示全部）。
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeMetricsSummary {
+    pub total_runs: usize,
+    pub ok_runs: usize,
+    pub failed_runs: usize,
+    pub skipped_runs: usize,
+    pub written_total: usize,
+    pub rejected_by_layer: HashMap<String, usize>,
+    pub pushed_pending_runs: usize,
+}
+
+pub(crate) fn summarize_metrics(records: &[KnowledgeMetricRecord]) -> KnowledgeMetricsSummary {
+    let mut summary = KnowledgeMetricsSummary::default();
+    for record in records {
+        summary.total_runs += 1;
+        match record.status.as_str() {
+            "ok" => summary.ok_runs += 1,
+            "failed" => summary.failed_runs += 1,
+            "skipped" => summary.skipped_runs += 1,
+            _ => {}
+        }
+        summary.written_total += record.written;
+        if record.pushed_pending {
+            summary.pushed_pending_runs += 1;
+        }
+        for (layer, count) in &record.rejected_by_layer {
+            *summary.rejected_by_layer.entry(layer.clone()).or_insert(0) += count;
+        }
+    }
+    summary
+}
+
+/// 读取最近 `days` 天的沉淀指标汇总（供设置页/排查使用）。
+#[tauri::command]
+pub async fn read_knowledge_metrics(days: Option<i64>) -> Result<KnowledgeMetricsSummary, String> {
+    tokio::task::spawn_blocking(move || -> Result<KnowledgeMetricsSummary, String> {
+        let path = knowledge_metrics_path()?;
+        if !path.is_file() {
+            return Ok(KnowledgeMetricsSummary::default());
+        }
+        let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取指标失败: {e}"))?;
+        let cutoff = days
+            .filter(|d| *d > 0)
+            .map(|d| chrono::Utc::now().timestamp_millis() - d * 24 * 60 * 60 * 1000);
+        let records: Vec<KnowledgeMetricRecord> = raw
+            .lines()
+            .filter_map(|line| serde_json::from_str::<KnowledgeMetricRecord>(line).ok())
+            .filter(|record| cutoff.map(|c| record.at >= c).unwrap_or(true))
+            .collect();
+        Ok(summarize_metrics(&records))
+    })
+    .await
+    .map_err(|e| format!("读取指标线程错误: {e}"))?
+}
+
+/// 从逐条结果统计各层拒绝数。
+fn rejected_by_layer(items: &[KnowledgeWritebackItem]) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for item in items.iter().filter(|item| !item.passed) {
+        *counts.entry(item.layer.clone()).or_insert(0) += 1;
+    }
+    counts
 }
 
 /// 跑一次自动沉淀：读会话内候选 → 分层门 → 写入 + 提交推送。
@@ -1939,6 +2100,96 @@ commit_prompt = \"x\"
         assert_eq!(result.written_count, 0);
         assert!(result.commit.is_none());
         assert!(!result.pushed_pending);
+    }
+
+    fn item(layer: &str, passed: bool) -> KnowledgeWritebackItem {
+        KnowledgeWritebackItem {
+            index: 0,
+            module: "M".into(),
+            section: "职责".into(),
+            passed,
+            written: passed,
+            reason: String::new(),
+            layer: layer.to_string(),
+        }
+    }
+
+    #[test]
+    fn rejected_by_layer_counts_only_failures() {
+        let items = vec![
+            item("L1", false),
+            item("L1", false),
+            item("L3", false),
+            item("write", true),
+        ];
+        let counts = rejected_by_layer(&items);
+        assert_eq!(counts.get("L1"), Some(&2));
+        assert_eq!(counts.get("L3"), Some(&1));
+        assert_eq!(counts.get("write"), None, "通过的条目不应计入拒绝");
+    }
+
+    #[test]
+    fn metrics_summary_aggregates_runs_and_layers() {
+        let records = vec![
+            KnowledgeMetricRecord {
+                at: 1,
+                task_id: "t1".into(),
+                graph_id: "HIS".into(),
+                status: "ok".into(),
+                written: 2,
+                rejected_by_layer: HashMap::from([("L2".to_string(), 1)]),
+                pushed_pending: true,
+                error: None,
+            },
+            KnowledgeMetricRecord {
+                at: 2,
+                task_id: "t2".into(),
+                graph_id: "HIS".into(),
+                status: "skipped".into(),
+                written: 0,
+                rejected_by_layer: HashMap::new(),
+                pushed_pending: false,
+                error: None,
+            },
+            KnowledgeMetricRecord {
+                at: 3,
+                task_id: "t3".into(),
+                graph_id: "HIS".into(),
+                status: "failed".into(),
+                written: 0,
+                rejected_by_layer: HashMap::new(),
+                pushed_pending: false,
+                error: Some("未产出知识沉淀产物".into()),
+            },
+        ];
+        let summary = summarize_metrics(&records);
+        assert_eq!(summary.total_runs, 3);
+        assert_eq!(summary.ok_runs, 1);
+        assert_eq!(summary.skipped_runs, 1);
+        assert_eq!(summary.failed_runs, 1);
+        assert_eq!(summary.written_total, 2);
+        assert_eq!(summary.rejected_by_layer.get("L2"), Some(&1));
+        assert_eq!(summary.pushed_pending_runs, 1);
+    }
+
+    #[test]
+    fn metrics_record_roundtrips_through_json() {
+        let record = KnowledgeMetricRecord {
+            at: 42,
+            task_id: "t".into(),
+            graph_id: "HIS".into(),
+            status: "ok".into(),
+            written: 1,
+            rejected_by_layer: HashMap::from([("L3".to_string(), 2)]),
+            pushed_pending: false,
+            error: None,
+        };
+        let line = serde_json::to_string(&record).unwrap();
+        // 单行 JSONL：不得含换行，否则追加写会破坏逐行解析。
+        assert!(!line.contains('\n'));
+        let back: KnowledgeMetricRecord = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.task_id, "t");
+        assert_eq!(back.rejected_by_layer.get("L3"), Some(&2));
     }
 
     #[test]

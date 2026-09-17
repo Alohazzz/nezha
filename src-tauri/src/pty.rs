@@ -367,6 +367,15 @@ fn setup_env(cmd: &mut CommandBuilder) {
 ///   agent 与轮询会话发现并行重复上报（见 run_task / resume_task / fork 注释）。
 ///   hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作，缺 EVENT_DIR 时
 ///   脚本内部校验直接 exit 0，不会重复上报。
+/// 是否把知识沉淀产出契约注入任务提示词。
+///
+/// 两个条件**都要**满足：
+/// - 项目绑定了图谱（未绑定 ⇒ 没有可沉淀目标，强求只会逼出无意义的 skipped）
+/// - 知识沉淀总开关开启（关闭 ⇒ 连产出都不该要求，与设置项文档语义一致）
+fn should_inject_sediment_contract(graph_id: &str, sedimentation_enabled: bool) -> bool {
+    !graph_id.trim().is_empty() && sedimentation_enabled
+}
+
 fn setup_nezha_env(
     cmd: &mut CommandBuilder,
     task_id: &str,
@@ -839,6 +848,20 @@ mod fork_command_tests {
     use super::*;
     use std::ffi::OsStr;
 
+    /// 产出契约的注入条件：绑定图谱 **且** 总开关开启（任一不满足都不注入）。
+    #[test]
+    fn sediment_contract_requires_graph_and_master_switch() {
+        // 绑定 + 开关开 ⇒ 注入
+        assert!(should_inject_sediment_contract("HIS", true));
+        // 总开关关闭 ⇒ 不注入（关闭后连产出都不该要求）
+        assert!(!should_inject_sediment_contract("HIS", false));
+        // 未绑定图谱 ⇒ 不注入
+        assert!(!should_inject_sediment_contract("", true));
+        assert!(!should_inject_sediment_contract("   ", true));
+        // 两者都不满足 ⇒ 不注入
+        assert!(!should_inject_sediment_contract("", false));
+    }
+
     #[test]
     fn builds_codex_fork_arguments() {
         let mut command = CommandBuilder::new("codex");
@@ -1058,7 +1081,10 @@ pub async fn run_task(
 
     // 知识沉淀产出契约：仅对**绑定了知识图谱**的项目注入（未绑定的项目没有可沉淀目标，
     // 强求只会逼出无意义的 skipped）。图谱身份取自项目配置，已在上面读出。
-    let final_prompt = if config.knowledge.graph_id.trim().is_empty() {
+    let final_prompt = if !should_inject_sediment_contract(
+        &config.knowledge.graph_id,
+        crate::app_settings::load_settings_internal().knowledge.enabled,
+    ) {
         with_text_paths
     } else {
         format!(

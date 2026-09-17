@@ -544,6 +544,7 @@ pub fn run() {
             drafts::clear_backfill_draft,
             agent_assist::generate_yunxiao_writeback_summary,
             knowledge::knowledge_auto_writeback,
+            knowledge::read_knowledge_metrics,
             knowledge::list_knowledge_targets,
             knowledge::list_knowledge_graph_adapters,
             knowledge::bind_knowledge_graph,
