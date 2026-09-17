@@ -326,25 +326,6 @@ export interface Plan {
   archivedAt?: number;
 }
 
-/** 知识沉淀候选：一条对应一个云效审核议题。 */
-export interface KnowledgeSuggestion {
-  module: string;
-  section: string;
-  content: string;
-  evidence: string;
-  confidence: "confirmed" | "pending";
-  suggestedTitle: string;
-  /** 生成候选时绑定的知识图谱 SkillHub 目录名，用于防止跨项目知识库回写。 */
-  knowledgeGraphId?: string;
-}
-
-/** 创建知识沉淀审核议题的结果。 */
-export interface CreateKnowledgeIssueResult {
-  created: boolean;
-  duplicated: boolean;
-  workitemId: string;
-}
-
 /** 知识自动回写单条结果。 */
 export interface KnowledgeWritebackItem {
   index: number;
@@ -370,16 +351,6 @@ export interface KnowledgeSedimentationEvent {
   commit?: string | null;
   /** status=failed：失败原因（如「未产出知识沉淀产物」）。 */
   error?: string;
-}
-
-/** 知识自动回写整体结果。 */
-export interface KnowledgeWritebackResult {
-  items: KnowledgeWritebackItem[];
-  allPassed: boolean;
-  writtenCount: number;
-  commit: string | null;
-  /** 本次是否补推了此前失败留下的本地提交。 */
-  pushedPending: boolean;
 }
 
 // ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────

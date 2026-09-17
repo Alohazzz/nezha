@@ -280,7 +280,8 @@ function shouldIgnoreTaskStatusTransition(current: TaskStatus, next: TaskStatus)
 /** 方案待办默认并发上限（project config `[plan] max_concurrent` 缺省时）：1 = 串行。 */
 const DEFAULT_PLAN_MAX_CONCURRENT = 1;
 
-function isLiveTerminalTaskStatus(status: TaskStatus): boolean {  return (
+function isLiveTerminalTaskStatus(status: TaskStatus): boolean {
+  return (
     status === "pending" ||
     status === "running" ||
     status === "input_required" ||
@@ -423,10 +424,7 @@ function App() {
   const pendingResumeInputRef = useRef<Record<string, string>>({});
   // 由「合并审核」发起的 codeup 审查/冲突任务，任务结束后需清理临时 worktree。
   const codeupTaskCleanupRef = useRef<
-    Record<
-      string,
-      { repository: string; mrId: number; repositoryId?: string; kind?: string }
-    >
+    Record<string, { repository: string; mrId: number; repositoryId?: string; kind?: string }>
   >({});
 
   const formatSaveProjectsError = useCallback(
@@ -871,16 +869,13 @@ function App() {
         const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
         if (!yunxiao.token || !yunxiao.organizationId) return;
         const kbProjectId = yunxiao.knowledgeBaseProjectId ?? YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID;
-        const failed = (payload.items ?? []).filter((item) => !item.passed);
-        const lines = failed.map(
-          (item) => `- [${item.layer}] ${item.module} / ${item.section}：${item.reason}`,
-        );
+        // 后端只在「整轮未完成」时发 failed（不带 items；逐条拒绝属于 ok 分支的
+        // 只读结果），因此这里只描述失败原因与处理建议。
         const description = [
           `来源任务：${taskLabel}`,
           `任务 ID：${payload.taskId}`,
           "",
-          payload.error ? `失败原因：${payload.error}` : "部分候选未通过质量门：",
-          ...(lines.length ? [lines.join("\n")] : []),
+          `失败原因：${payload.error ?? "未知"}`,
           "",
           "处理建议：确认后手动更新对应模块卡片，或将结论回填到任务提示词后重跑。",
         ].join("\n");
@@ -888,7 +883,9 @@ function App() {
           token: yunxiao.token,
           organizationId: yunxiao.organizationId,
           projectId: kbProjectId,
-          subject: `【知识沉淀未完成】${taskLabel}`,
+          // 带上 taskId：`yunxiao_create_knowledge_issue` 按标题精确去重，
+          // 同名任务若只靠标签会撞车 ⇒ 第二个失败静默不建议题。
+          subject: `【知识沉淀未完成】${taskLabel}（${payload.taskId.slice(0, 8)}）`,
           description,
         });
       } catch (e) {
@@ -905,12 +902,28 @@ function App() {
         delete next[payload.taskId];
         return next;
       });
-      setKnowledgeResults((prev) => ({ ...prev, [payload.taskId]: payload }));
       if (payload.status === "running") {
         // 后端在前置条件都成立时才发 running，因此这里的状态是准确的（前端不猜）。
+        // running **不写入 knowledgeResults**：它没有 items，若被存下来会让已打开的
+        // 结果弹窗显示「写入 0 / 拒绝 0」这类假结果（只应有终态结果）。
         setSedimentingTasks((prev) => ({ ...prev, [payload.taskId]: true }));
+        // 兜底超时：后端正常总会发终态事件，但进程崩溃 / emit 失败 / 等待 hub 写锁
+        // （最长 10 分钟）时按钮会永远停在「正在沉淀」，这里给一条自愈路径。
+        window.clearTimeout(sedimentingTimeoutsRef.current[payload.taskId]);
+        sedimentingTimeoutsRef.current[payload.taskId] = window.setTimeout(() => {
+          setSedimentingTasks((prev) => {
+            if (!prev[payload.taskId]) return prev;
+            const next = { ...prev };
+            delete next[payload.taskId];
+            return next;
+          });
+        }, SEDIMENTING_TIMEOUT_MS);
         return;
       }
+      // 终态：清掉兜底定时器。
+      window.clearTimeout(sedimentingTimeoutsRef.current[payload.taskId]);
+      delete sedimentingTimeoutsRef.current[payload.taskId];
+      setKnowledgeResults((prev) => ({ ...prev, [payload.taskId]: payload }));
       if (payload.status === "failed") {
         showToast(`知识沉淀未完成：${payload.error ?? ""}`, "warning");
         const label = knowledgeTaskLabel(payload.taskId);
@@ -1242,10 +1255,7 @@ function App() {
     // 4) 后台创建该 MR 的代码文件夹（fetch 源/目标分支 + checkout 源分支）。
     // 对 HIS 这类大仓库首次可能是全量 clone，耗时较长；立即写一行进度到终端，
     // 避免任务停在 RunningView 却长时间「无反应」，让用户误以为没点成功。
-    tm.writeErrorToTerminal(
-      taskId,
-      `\r\n正在准备代码文件夹（拉取源/目标分支并切到源分支）…\r\n`,
-    );
+    tm.writeErrorToTerminal(taskId, `\r\n正在准备代码文件夹（拉取源/目标分支并切到源分支）…\r\n`);
     let worktreePath: string;
     try {
       worktreePath = await invoke<string>("codeup_pull_code", {
@@ -1375,7 +1385,12 @@ function App() {
       if (!task) return prev;
       const next = prev.map((t) =>
         t.id === taskId
-          ? { ...t, status: "todo" as TaskStatus, updatedAt: Date.now(), planDepsIgnored: undefined }
+          ? {
+              ...t,
+              status: "todo" as TaskStatus,
+              updatedAt: Date.now(),
+              planDepsIgnored: undefined,
+            }
           : t,
       );
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
@@ -1429,9 +1444,7 @@ function App() {
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
         baseBranch: task.baseBranch,
-        expectedIssueTag: task.yunxiaoSerialNumber
-          ? issueTag(task.yunxiaoSerialNumber)
-          : undefined,
+        expectedIssueTag: task.yunxiaoSerialNumber ? issueTag(task.yunxiaoSerialNumber) : undefined,
       });
       // 合并成功后顺手把 worktree 与分支清掉，避免遗留残留
       await invoke("remove_task_worktree", {
@@ -1997,21 +2010,15 @@ function App() {
       // 3) 议题图片：全部失败阻断（与发起对话框一致），失败清理 draft 方案。
       let imagePaths: string[] = [];
       try {
-        const images = await invoke<YunxiaoIssueImagesPrepared>(
-          "yunxiao_prepare_issue_images",
-          {
-            token: yunxiao.token,
-            organizationId: yunxiao.organizationId,
-            workitemId: detail.id,
-            projectPath: project.path,
-            planId: plan.id,
-          },
-        );
+        const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          workitemId: detail.id,
+          projectPath: project.path,
+          planId: plan.id,
+        });
         if (images.total > 0 && images.failed === images.total) {
-          showToast(
-            t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }),
-            "error",
-          );
+          showToast(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }), "error");
           await handleRemovePlanRecord(plan.id);
           return;
         }
@@ -2040,9 +2047,7 @@ function App() {
         planId: plan.id,
         hasBug,
       });
-      const link = yunxiao.projectId
-        ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id)
-        : "";
+      const link = yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "";
       const prompt = buildPlanDiscussionPrompt({
         issues: [detail],
         imagePathsByIssue: { [detail.id]: imagePaths },
@@ -2072,9 +2077,7 @@ function App() {
         return next;
       });
       setPlans((prev) => {
-        const next = prev.map((p) =>
-          p.id === plan.id ? { ...p, discussionTaskId: task.id } : p,
-        );
+        const next = prev.map((p) => (p.id === plan.id ? { ...p, discussionTaskId: task.id } : p));
         persistProjectPlans(plan.projectId, next);
         return next;
       });
@@ -2154,16 +2157,13 @@ function App() {
         workitemId: issue.id,
       });
       // 图片走 prepare 的 task_id 分支归档 `.nezha/attachments/<taskId>/`（任务结束自动清理）。
-      const images = await invoke<YunxiaoIssueImagesPrepared>(
-        "yunxiao_prepare_issue_images",
-        {
-          token: yunxiao.token,
-          organizationId: yunxiao.organizationId,
-          workitemId: issue.id,
-          projectPath: project.path,
-          taskId,
-        },
-      );
+      const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: issue.id,
+        projectPath: project.path,
+        taskId,
+      });
       if (images.total > 0 && images.failed === images.total) {
         throw new Error(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }));
       }
@@ -2249,16 +2249,13 @@ function App() {
       });
 
       // 2) 议题图片归档任务附件目录（任务结束自动清理）；全部失败阻断，部分失败放行。
-      const images = await invoke<YunxiaoIssueImagesPrepared>(
-        "yunxiao_prepare_issue_images",
-        {
-          token: yunxiao.token,
-          organizationId: yunxiao.organizationId,
-          workitemId: detail.id,
-          projectPath: project.path,
-          taskId: task.id,
-        },
-      );
+      const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: detail.id,
+        projectPath: project.path,
+        taskId: task.id,
+      });
       if (images.total > 0 && images.failed === images.total) {
         showToast(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }), "error");
         return;
@@ -2372,10 +2369,7 @@ function App() {
       showToast(t("plan.mdMissing", { error: String(e) }), "error");
       return false;
     }
-    const { overview, missing } = extractPlanOverviewForIssues(
-      planMarkdown,
-      issues.length,
-    );
+    const { overview, missing } = extractPlanOverviewForIssues(planMarkdown, issues.length);
     if (missing) {
       showToast(t("plan.overviewMissing"), "error");
       return false;
@@ -2416,10 +2410,10 @@ function App() {
     await Promise.all(
       taskIds.map(async (taskId) => {
         try {
-          instructionsByTaskId[taskId] = await invoke<string>(
-            "get_plan_execution_instructions",
-            { projectPath: project.path, taskId },
-          );
+          instructionsByTaskId[taskId] = await invoke<string>("get_plan_execution_instructions", {
+            projectPath: project.path,
+            taskId,
+          });
         } catch (e) {
           console.error("[plan] execution instructions failed:", e);
           instructionsByTaskId[taskId] = "";
@@ -2431,7 +2425,7 @@ function App() {
     const initialStatus: TaskStatus = input.autoStart ? "waiting_deps" : "todo";
     // 追加子方案：执行 prompt 附上游方案文档路径，让执行者能查证统筹节里引用的上游议题。
     const upstreamPlan = plan.parentPlanId
-      ? plans.find((p) => p.id === plan.parentPlanId) ?? null
+      ? (plans.find((p) => p.id === plan.parentPlanId) ?? null)
       : null;
     const tasksToCreate: Task[] = [];
     for (let i = 0; i < issues.length; i++) {
@@ -2447,9 +2441,7 @@ function App() {
           subject: issue.subject,
           categoryId: issue.category,
         },
-        link: issueLinkProjectId
-          ? buildYunxiaoIssueLink(issueLinkProjectId, issue.workitemId)
-          : "",
+        link: issueLinkProjectId ? buildYunxiaoIssueLink(issueLinkProjectId, issue.workitemId) : "",
         planOverview: overview,
         issueSection: section,
         planMdAbsolutePath: planMdPath(project.path, plan.id),
@@ -2484,9 +2476,7 @@ function App() {
     });
     setPlans((prev) => {
       const next = prev.map((p) =>
-        p.id === plan.id
-          ? { ...p, status: "executing" as PlanStatus, issues }
-          : p,
+        p.id === plan.id ? { ...p, status: "executing" as PlanStatus, issues } : p,
       );
       persistProjectPlans(plan.projectId, next);
       return next;
@@ -2820,10 +2810,7 @@ function App() {
   }
 
   /** 补写云效议题「价值评分」字段（评论已发布但字段写入失败时的重试入口，不重复发评论）。 */
-  async function handleRetryWritebackScoreField(
-    taskId: string,
-    value: number,
-  ): Promise<void> {
+  async function handleRetryWritebackScoreField(taskId: string, value: number): Promise<void> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
     const project = projects.find((candidate) => candidate.id === task.projectId);
@@ -2841,6 +2828,9 @@ function App() {
     });
   }
 
+  /** 「沉淀中」状态的兜底时限（毫秒）。见事件处理器里的说明。 */
+  const SEDIMENTING_TIMEOUT_MS = 15 * 60 * 1000;
+
   /**
    * 知识沉淀结果（按任务）：自动沉淀完成后由 `knowledge-sedimentation` 事件填充。
    * 同时用 `sedimentingTasks` 标记「进行中」，供按钮显示状态。
@@ -2849,7 +2839,8 @@ function App() {
     Record<string, KnowledgeSedimentationEvent>
   >({});
   const [sedimentingTasks, setSedimentingTasks] = useState<Record<string, boolean>>({});
-
+  /** 每个任务的「沉淀中」兜底定时器（见事件处理器里的说明）。 */
+  const sedimentingTimeoutsRef = useRef<Record<string, number>>({});
 
   function buildBackfillTask(
     sourceTask: Task,
@@ -3028,8 +3019,7 @@ function App() {
     const id = window.setInterval(() => {
       const handler = backfillHandlerRef.current;
       if (!handler) return;
-      handler()
-        .catch(() => {});
+      handler().catch(() => {});
     }, BACKFILL_POLL_MS);
     return () => window.clearInterval(id);
   }, []);
@@ -3163,8 +3153,7 @@ function App() {
           changed = true;
           return { ...task, claudeSessionId: sessionId, claudeSessionPath: sessionPath };
         } else if (task.agent === "dsh") {
-          if (task.dshSessionId === sessionId && task.dshSessionPath === sessionPath)
-            return task;
+          if (task.dshSessionId === sessionId && task.dshSessionPath === sessionPath) return task;
           changed = true;
           return { ...task, dshSessionId: sessionId, dshSessionPath: sessionPath };
         } else {

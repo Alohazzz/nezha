@@ -56,9 +56,9 @@ export function KnowledgeSedimentationResultDialog({
                 <div key={item.index} style={s.knowledgeCard}>
                   <div style={s.knowledgeCardHeader}>
                     {item.written ? (
-                      <CheckCircle2 size={13} strokeWidth={2.5} color="var(--accent-green, #16a34a)" />
+                      <CheckCircle2 size={13} strokeWidth={2.5} color="var(--success)" />
                     ) : (
-                      <XCircle size={13} strokeWidth={2.5} color="var(--accent-red, #dc2626)" />
+                      <XCircle size={13} strokeWidth={2.5} color="var(--danger)" />
                     )}
                     <span style={s.knowledgeModule}>{item.module}</span>
                     <span style={s.knowledgeSection}>{item.section}</span>

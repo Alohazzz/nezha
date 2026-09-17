@@ -517,6 +517,35 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.49 第 6 步的 code-review 修复项
+
+独立审查发现 **1 个由本轮引入的 blocker** 与若干 should-fix，均已修：
+
+1. **[blocker] `KnowledgePanel` 的 `listen` 产生未处理 rejection**：单测里未 mock
+   `@tauri-apps/api/event` 时 `listen()` 会 reject（`build-theme.test.tsx`），Vitest 报
+   Unhandled Rejection。已复现（确认该测试在改动前不失败）并修：`listen(...).catch(() => null)`
+   ——刷新只是锦上添花，拿不到事件不应影响面板可用性，更不该产生未处理 rejection。
+2. **总开关关闭时仍在注入产出契约**：`pty.rs` 只看了「是否绑定图谱」，与设置项文档语义
+   （关 = 不要求产出）不符。抽出 `should_inject_sediment_contract(graph_id, enabled)` 并配测试。
+3. **`running` 事件被当结果存下**：它没有 `items`，会让已打开的结果弹窗显示
+   「写入 0 / 拒绝 0」这类**假结果**。改为 `running` 只驱动「进行中」状态、不写结果。
+4. **主题变量用错**：`--accent-green` / `--accent-red` 并不存在（真实变量是 `--success` /
+   `--danger`），硬编码 fallback 恒生效、`midnight` 下对比度差。已改用真实变量。
+5. **未绑定图谱也记 `skipped` 指标**：给 §9.2 的分母灌水（`skipped` 会混入三种成因）。
+   改为未绑定图谱不记。
+6. **`sedimenting` 可能永久卡住**：进程崩溃 / `emit` 失败 / 等待 hub 写锁（最长 10 分钟）时
+   按钮会永远停在「正在沉淀」。加了前端兜底超时自愈。
+7. **失败议题标题会撞车**：`yunxiao_create_knowledge_issue` 按标题精确去重，同名任务只靠
+   标签会让第二个失败**静默不建议题**。标题补 taskId 前 8 位；并删掉一个不可达分支
+   （后端 `failed` 事件从不带 `items`）。
+8. 杂项：删除失去引用的导出类型与 i18n 键；指标写入移到 `spawn_blocking`（AGENTS.md 要求）。
+
+**审查也确认了几处「看着可疑但其实对」**：`tasksRef` 在 render 内赋值故空依赖闭包不会读到旧值；
+`running` 分支两次 `setState` 会被 React 批处理、无中间态闪烁；`items.is_empty() ⇒ skipped`
+不会误判「全被拒」的轮次（那仍带 `items` 故记为 ok + 写入 0）；旧键迁移正确（显式
+`autoWriteback:false` 会读成关闭——因此**老用户保持关闭**而不是套用新的「默认开」，
+属保守行为，已在文档注明）。
+
 ## 11.50 实施进度：第 6 步（失败议题 + 指标埋点 + 面板刷新）已完成 → 六步走完
 
 | 项 | 实现 |
