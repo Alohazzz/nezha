@@ -327,7 +327,7 @@ pub(crate) fn list_knowledge_targets_internal() -> Result<Vec<KnowledgeTarget>, 
 /// 决策（提案 §8.1）：任务完成即自动处理，无手动按钮。前置条件是三条**都已成立**：
 /// - 总开关开启（`settings.knowledge.enabled`，默认开）
 /// - 项目绑定了图谱（`graph_id` 非空；未绑定项目连产出契约都不注入）
-/// - 该任务的会话内产物存在（缺失 = 「漏了」，由 `generate_knowledge_sedimentation` 报错）
+/// - 该任务的会话内产物存在（缺失 = 「漏了」，由 `run_auto_sedimentation` 报错）
 ///
 /// 本函数**立即返回**，实际工作在后台任务里跑（一次沉淀含最多两次模型调用，
 /// 不能拖住 PTY 退出收尾路径）。结果通过 `knowledge-sedimentation` 事件上报。
