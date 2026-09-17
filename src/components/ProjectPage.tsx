@@ -16,7 +16,7 @@ import type {
   TerminalScrollback,
   TaskDisplayWindow,
   FontFamily,
-  KnowledgeSuggestion,
+  KnowledgeSedimentationEvent,
   YunxiaoWritebackDraft,
   YunxiaoWritebackResult,
 } from "../types";
@@ -52,7 +52,7 @@ import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoTodoDiscussionView } from "./yunxiao/YunxiaoTodoDiscussionView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
-import { KnowledgeSedimentationDialog } from "./yunxiao/KnowledgeSedimentationDialog";
+import { KnowledgeSedimentationResultDialog } from "./yunxiao/KnowledgeSedimentationResultDialog";
 import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
 import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
@@ -108,8 +108,8 @@ export function ProjectPage({
   onGenerateWritebackSummary,
   onWritebackYunxiao,
   onRetryWritebackScoreField,
-  onGenerateKnowledgeSedimentation,
-  onCreateKnowledgeIssues,
+  knowledgeResults,
+  sedimentingTasks,
   plans,
   onGeneratePlanTodos,
   onRebindTaskPlan,
@@ -219,14 +219,11 @@ export function ProjectPage({
     testContent: string,
   ) => Promise<YunxiaoWritebackResult>;
   onRetryWritebackScoreField: (taskId: string, value: number) => Promise<void>;
-  onGenerateKnowledgeSedimentation: (
-    taskId: string,
-    force?: boolean,
-  ) => Promise<KnowledgeSuggestion[]>;
-  onCreateKnowledgeIssues: (
-    taskId: string,
-    suggestions: KnowledgeSuggestion[],
-  ) => Promise<string[]>;
+  /** 各任务的自动沉淀结果（任务完成时由事件填充）。 */
+  knowledgeResults: Record<string, KnowledgeSedimentationEvent>;
+  /** 各任务是否正在自动沉淀。 */
+  sedimentingTasks: Record<string, boolean>;
+
   plans: Plan[];
   onGeneratePlanTodos: (input: {
     planId: string;
@@ -505,7 +502,9 @@ export function ProjectPage({
                 onMergeWorktree={() => onMergeWorktree(task.id)}
                 onDiscardWorktree={() => onDiscardWorktree(task.id)}
                 onOpenWriteback={() => openWriteback(task.id)}
-                onOpenKnowledgeSedimentation={() => openKnowledgeSedimentation(task.id)}
+                onOpenKnowledgeResult={() => setKnowledgeResultDialog(task.id)}
+                sedimenting={Boolean(sedimentingTasks[task.id])}
+                knowledgeResult={Boolean(knowledgeResults[task.id])}
                 onOpenPlanPreview={
                   task.planId
                     ? () => {
@@ -1040,77 +1039,8 @@ export function ProjectPage({
     }
   }, [writebackDialog, onRetryWritebackScoreField, showToast, t]);
 
-  // ── 知识沉淀弹窗：headless 提取候选 → 逐条编辑/勾选 → 批量创建云效审核议题 ──
-  const [knowledgeDialog, setKnowledgeDialog] = useState<{
-    taskId: string;
-    suggestions: KnowledgeSuggestion[];
-    generating: boolean;
-    creating: boolean;
-    error: string | null;
-    selected: Set<number>;
-  } | null>(null);
-
-  const openKnowledgeSedimentation = useCallback(
-    (taskId: string, force = false) => {
-      setKnowledgeDialog({
-        taskId,
-        suggestions: [],
-        generating: true,
-        creating: false,
-        error: null,
-        selected: new Set(),
-      });
-      onGenerateKnowledgeSedimentation(taskId, force)
-        .then((suggestions) => {
-          setKnowledgeDialog((prev) =>
-            prev && prev.taskId === taskId
-              ? {
-                  ...prev,
-                  suggestions,
-                  generating: false,
-                  selected: new Set(suggestions.map((_, i) => i)),
-                }
-              : prev,
-          );
-        })
-        .catch((err) => {
-          setKnowledgeDialog((prev) =>
-            prev && prev.taskId === taskId
-              ? { ...prev, generating: false, error: String(err) }
-              : prev,
-          );
-        });
-    },
-    [onGenerateKnowledgeSedimentation],
-  );
-
-  const createKnowledgeIssues = useCallback(async () => {
-    if (!knowledgeDialog || knowledgeDialog.creating || knowledgeDialog.generating) return;
-    const selected = [...knowledgeDialog.selected]
-      .map((i) => knowledgeDialog.suggestions[i])
-      .filter((s): s is KnowledgeSuggestion => Boolean(s));
-    if (selected.length === 0) {
-      setKnowledgeDialog((prev) =>
-        prev ? { ...prev, error: t("yunxiao.knowledge.empty") } : prev,
-      );
-      return;
-    }
-    setKnowledgeDialog((prev) =>
-      prev ? { ...prev, creating: true, error: null } : prev,
-    );
-    try {
-      const created = await onCreateKnowledgeIssues(knowledgeDialog.taskId, selected);
-      showToast(
-        t("yunxiao.knowledge.created", { created: created.length, total: selected.length }),
-        "success",
-      );
-      setKnowledgeDialog(null);
-    } catch (err) {
-      setKnowledgeDialog((prev) =>
-        prev ? { ...prev, creating: false, error: String(err) } : prev,
-      );
-    }
-  }, [knowledgeDialog, onCreateKnowledgeIssues, showToast, t]);
+  // ── 知识沉淀：任务完成后自动处理（无手动触发）；此处只提供只读结果入口 ──
+  const [knowledgeResultDialog, setKnowledgeResultDialog] = useState<string | null>(null);
 
   // ── 行级 Review 评论（纯前端内存态，决策 6：不持久化） ─────────────────
   const [reviewComments, setReviewComments] = useState<ReviewComment[]>([]);
@@ -1283,6 +1213,14 @@ export function ProjectPage({
     },
     [sendDialog, projectTasks, onInput, onResumeTaskAndSend, onSubmitTask, subRepoPath, showToast, t],
   );
+
+  const knowledgeResultDialogNode =
+    knowledgeResultDialog && knowledgeResults[knowledgeResultDialog] ? (
+      <KnowledgeSedimentationResultDialog
+        result={knowledgeResults[knowledgeResultDialog]}
+        onClose={() => setKnowledgeResultDialog(null)}
+      />
+    ) : null;
 
   return (
     <div style={visible ? s.projectBodyVisible : s.projectBodyHidden}>
@@ -1632,42 +1570,7 @@ export function ProjectPage({
           );
         })()}
 
-      {knowledgeDialog &&
-        (() => {
-          const knowledgeTask = projectTasks.find((c) => c.id === knowledgeDialog.taskId);
-          return (
-            <KnowledgeSedimentationDialog
-              serialNumber={knowledgeTask?.yunxiaoSerialNumber ?? ""}
-              title={knowledgeTask?.name ?? knowledgeTask?.prompt.slice(0, 80) ?? ""}
-              suggestions={knowledgeDialog.suggestions}
-              generating={knowledgeDialog.generating}
-              creating={knowledgeDialog.creating}
-              error={knowledgeDialog.error}
-              selected={knowledgeDialog.selected}
-              onToggle={(index) =>
-                setKnowledgeDialog((prev) => {
-                  if (!prev) return prev;
-                  const next = new Set(prev.selected);
-                  if (next.has(index)) next.delete(index);
-                  else next.add(index);
-                  return { ...prev, selected: next };
-                })
-              }
-              onSuggestionChange={(index, patch) =>
-                setKnowledgeDialog((prev) => {
-                  if (!prev) return prev;
-                  const suggestions = prev.suggestions.map((s, i) =>
-                    i === index ? { ...s, ...patch } : s,
-                  );
-                  return { ...prev, suggestions };
-                })
-              }
-              onRegenerate={() => openKnowledgeSedimentation(knowledgeDialog.taskId, true)}
-              onCreate={() => void createKnowledgeIssues()}
-              onClose={() => setKnowledgeDialog(null)}
-            />
-          );
-        })()}
+      {knowledgeResultDialogNode}
     </div>
   );
 }

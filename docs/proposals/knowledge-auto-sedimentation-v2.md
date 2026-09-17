@@ -517,6 +517,24 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.51 实施进度：第 5 步前端（退役按钮与弹窗 + 只读结果 + 开关改版）已完成
+
+| 项 | 实现 |
+|---|---|
+| 退役手动触发 | 删除 `KnowledgeSedimentationDialog`（逐条编辑 / 勾选 / 「创建 N 条」）与 `handleGenerateKnowledgeSedimentation` / `handleCreateKnowledgeIssues` |
+| 只读结果入口 | 新增 `KnowledgeSedimentationResultDialog`：展示写入 / 拒绝条数、逐条 `层 + 理由`、失败原因与「补推了本地提交」提示；无任何操作能力 |
+| 状态来源 | 监听 `knowledge-sedimentation` 事件（`running` / `ok` / `failed`）；**前端不猜**是否绑定图谱——后端在前置条件成立时才发 `running` |
+| 总开关 UI | 文案由「知识沉淀自动回写 / 提交后经质量门自动写入技能库」改为「知识沉淀 / 任务完成后自动写入知识图谱」，提示说明改为新语义（关闭则不沉淀、也不要求产出） |
+| 清理 | 删除 13 个失去引用的 i18n 键 + 8 个失去引用的样式块 |
+| 截图 | `docs/screenshots/kg-sedimentation-step5/`：暗色/亮色 × 开关开/关四张 + 状态对比图 |
+
+**验证不只截图**：开关点击后确认 `~/.nezha/settings.json` 实际写入 `{"enabled": false}`，再切回
+`{"enabled": true}`——即截图反映的是真实持久化行为，不是静态外观。
+
+**一处刻意的取舍**：前端曾试图「任务 done 时先显示沉淀中」，但前端**读不到项目是否绑定图谱**
+（那在 `.nezha/config.toml`），只能猜。改为由后端在三条前置条件都成立后才发 `running` 事件，
+前端据此显示——状态因此是准确的。
+
 ## 11.52 实施进度：第 5 步后端（自动触发 + 总开关）已完成
 
 | 项 | 实现 |

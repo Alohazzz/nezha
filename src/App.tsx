@@ -39,19 +39,9 @@ import {
   type AgentEnabledState,
 } from "./types";
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
-import type {
-  CreateKnowledgeIssueResult,
-  FontFamily,
-  KnowledgeSuggestion,
-  KnowledgeWritebackResult,
-} from "./types";
+import type { FontFamily, KnowledgeSedimentationEvent } from "./types";
 import { quoteFontName } from "./utils/fonts";
-import {
-  buildYunxiaoIssueLink,
-  issueTag,
-  isYunxiaoWorkitemImported,
-  YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
-} from "./utils/yunxiao";
+import { buildYunxiaoIssueLink, issueTag, isYunxiaoWorkitemImported } from "./utils/yunxiao";
 import type { DirectLaunchOptions } from "./components/yunxiao/DirectLaunchDialog";
 import {
   buildPlanDiscussionPrompt,
@@ -76,11 +66,7 @@ import {
   selectAutoStart,
   type PlanWaitingBadge,
 } from "./utils/planQueue";
-import {
-  EMPTY_YUNXIAO_SETTINGS,
-  type KnowledgeSettings,
-  type YunxiaoSettings,
-} from "./components/app-settings/types";
+import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "./components/app-settings/types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -869,9 +855,29 @@ function App() {
         updateTaskSession(task_id, session_id, session_path);
       },
     );
+    // 自动沉淀结果：任务完成后由后端上报（成功含逐条判定，失败含原因）。
+    const p3 = listen<KnowledgeSedimentationEvent>("knowledge-sedimentation", (e) => {
+      const payload = e.payload;
+      setSedimentingTasks((prev) => {
+        if (!prev[payload.taskId]) return prev;
+        const next = { ...prev };
+        delete next[payload.taskId];
+        return next;
+      });
+      setKnowledgeResults((prev) => ({ ...prev, [payload.taskId]: payload }));
+      if (payload.status === "running") {
+        // 后端在前置条件都成立时才发 running，因此这里的状态是准确的（前端不猜）。
+        setSedimentingTasks((prev) => ({ ...prev, [payload.taskId]: true }));
+        return;
+      }
+      if (payload.status === "failed") {
+        showToast(`知识沉淀未完成：${payload.error ?? ""}`, "warning");
+      }
+    });
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
+      p3.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2786,170 +2792,16 @@ function App() {
   }
 
   /** 生成知识沉淀候选：优先读取会话收尾时落盘的知识草稿，无草稿时内置规则 headless 提取。 */
-  async function handleGenerateKnowledgeSedimentation(
-    taskId: string,
-    force = false,
-  ): Promise<KnowledgeSuggestion[]> {
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error("Task not found");
-    const project = projects.find((candidate) => candidate.id === task.projectId);
-    if (!project) throw new Error("Project not found");
-    const sessionPath =
-      task.agent === "codex"
-        ? task.codexSessionPath
-        : task.agent === "claude"
-          ? task.claudeSessionPath
-          : undefined;
-    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
-    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
-    const link =
-      yunxiao.projectId && task.yunxiaoWorkitemId
-        ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
-        : "";
-    return invoke<KnowledgeSuggestion[]>("generate_knowledge_sedimentation", {
-      projectPath: project.path,
-      taskId,
-      serialNumber: task.yunxiaoSerialNumber ?? "",
-      taskName: task.name ?? task.prompt.slice(0, 80),
-      link,
-      sessionPath,
-      agent: task.agent === "codex" ? "codex" : "claude",
-      force,
-    });
-  }
+  /**
+   * 知识沉淀结果（按任务）：自动沉淀完成后由 `knowledge-sedimentation` 事件填充。
+   * 同时用 `sedimentingTasks` 标记「进行中」，供按钮显示状态。
+   */
+  const [knowledgeResults, setKnowledgeResults] = useState<
+    Record<string, KnowledgeSedimentationEvent>
+  >({});
+  const [sedimentingTasks, setSedimentingTasks] = useState<Record<string, boolean>>({});
 
-  /** 批量创建知识沉淀审核议题（去重命中不重复建），返回新创建/去重命中的议题 ID。 */
-  async function handleCreateKnowledgeIssues(
-    taskId: string,
-    suggestions: KnowledgeSuggestion[],
-  ): Promise<string[]> {
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
-    const project = projects.find((candidate) => candidate.id === task.projectId);
-    if (!project) throw new Error("Project not found");
-    const appSettings = await invoke<{
-      yunxiao?: YunxiaoSettings;
-      knowledge?: KnowledgeSettings;
-    }>("load_app_settings");
-    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
-    const autoWriteback = appSettings.knowledge?.autoWriteback ?? false;
-    if (!yunxiao.token || !yunxiao.organizationId) {
-      throw new Error(t("yunxiao.notConnected"));
-    }
-    const kbProjectId =
-      yunxiao.knowledgeBaseProjectId ?? YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID;
-    const link =
-      yunxiao.projectId && task.yunxiaoWorkitemId
-        ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
-        : "";
-    // 一次提交合并成一条云效知识议题（所有候选进同一描述，不再每条一个议题）。
-    const serial = task.yunxiaoSerialNumber ?? "";
-    const taskLabel = (task.name ?? task.prompt).slice(0, 60);
-    const graphLabel = suggestions[0]?.knowledgeGraphId ?? "未绑定";
-    const title = `【知识沉淀】【${graphLabel}】${serial ? `${serial} ` : ""}${taskLabel}（${suggestions.length} 条）`;
-    const candidateSections = suggestions
-      .map(
-        (s, i) =>
-          [
-            `### ${i + 1}. ${s.module} / ${s.section}`,
-            `目标模块卡片：${s.module}（data/modules/${s.module}.md）`,
-            `目标知识库：${s.knowledgeGraphId || "未绑定"}`,
-            "",
-            s.content,
-            "",
-            `依据：${s.evidence}`,
-            `置信度：${s.confidence === "confirmed" ? "已确认" : "待验证"}`,
-          ].join("\n"),
-      )
-      .join("\n\n");
-    const description = [
-      `来源议题：${serial} ${link}`,
-      `候选数量：${suggestions.length}`,
-      "",
-      candidateSections,
-      "",
-      autoWriteback
-        ? "自动回写已开启：质量门通过的条目将自动写入模块卡片并 git 提交推送；全部通过时本议题自动置为已完成，未通过条目保留人工审核。"
-        : "审核指引：审核通过后由知识库负责人更新对应 data/modules/<module>.md 并提交（git 统一管理）。",
-    ].join("\n");
-    const result = await invoke<CreateKnowledgeIssueResult>(
-      "yunxiao_create_knowledge_issue",
-      {
-        token: yunxiao.token,
-        organizationId: yunxiao.organizationId,
-        projectId: kbProjectId,
-        subject: title,
-        description,
-      },
-    );
-    const createdIds = result.created ? [result.workitemId] : [];
-    if (createdIds.length > 0) {
-      setTasks((prev) => {
-        const next = prev.map((candidate) =>
-          candidate.id === taskId
-            ? {
-                ...candidate,
-                knowledgeIssueIds: [
-                  ...(candidate.knowledgeIssueIds ?? []),
-                  ...createdIds,
-                ],
-              }
-            : candidate,
-        );
-        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-        return next;
-      });
-    }
-    // 自动回写：仅在新建议题时执行一次（duplicated 命中说明此前已提交过，幂等跳过）。
-    if (autoWriteback && result.created) {
-      const agent = task.agent === "codex" ? "codex" : "claude";
-      try {
-        const writeback = await invoke<KnowledgeWritebackResult>(
-          "knowledge_auto_writeback",
-          { projectPath: project.path, suggestions, agent },
-        );
-        if (writeback.allPassed && writeback.writtenCount > 0) {
-          await invoke("yunxiao_complete_workitem", {
-            token: yunxiao.token,
-            organizationId: yunxiao.organizationId,
-            workitemId: result.workitemId,
-          });
-          showToast(
-            `知识已自动写入技能库（${writeback.writtenCount} 条）并推送，议题已置为已完成`,
-            "success",
-          );
-        } else {
-          const writtenLines = writeback.items
-            .filter((item) => item.written)
-            .map((item) => `- ${item.module} / ${item.section}：已自动写入模块卡片`);
-          const failedLines = writeback.items
-            .filter((item) => !item.passed)
-            .map((item) => `- ${item.module} / ${item.section}：${item.reason || "质量门未通过"}`);
-          const comment = [
-            `自动回写结果：通过 ${writeback.writtenCount} / 共 ${suggestions.length} 条。`,
-            "",
-            ...(writtenLines.length > 0 ? ["已自动写入：", ...writtenLines, ""] : []),
-            ...(failedLines.length > 0 ? ["待人工审核：", ...failedLines] : []),
-          ].join("\n");
-          await invoke("yunxiao_create_workitem_comment", {
-            token: yunxiao.token,
-            organizationId: yunxiao.organizationId,
-            workitemId: result.workitemId,
-            content: comment,
-          }).catch(() => {});
-          showToast(
-            `质量门通过 ${writeback.writtenCount}/${suggestions.length} 条，未通过条目保留人工审核`,
-            "warning",
-          );
-        }
-      } catch (e) {
-        showToast(`知识自动回写失败：${String(e)}（议题保留人工审核）`, "error");
-      }
-    }
-    return createdIds;
-  }
 
-  /** 构建补录绑定待办任务对象（议题 Y ↔ 本地任务，`derivedFrom*` 溯源）。 */
   function buildBackfillTask(
     sourceTask: Task,
     draft: BackfillIssueRequest,
@@ -3403,8 +3255,8 @@ function App() {
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
               onRetryWritebackScoreField={handleRetryWritebackScoreField}
-              onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
-              onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
+              knowledgeResults={knowledgeResults}
+              sedimentingTasks={sedimentingTasks}
               plans={plans}
               planDeps={planDeps}
               waitingBadges={waitingBadges}
