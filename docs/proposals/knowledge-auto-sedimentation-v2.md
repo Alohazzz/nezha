@@ -517,6 +517,66 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.55 实施进度：第 3 步（hub 定时拉取）已完成
+
+按 §11 的实施顺序，第 3 步（可达性与新鲜度）已落地：
+
+| 项 | 实现 |
+|---|---|
+| 每 15 分钟后台拉取 | `skills.rs::periodic_sync_loop`，在 `lib.rs` setup 注册；复用既有 `sync_skill_source_persist`（fetch + `--no-rebase --ff-only` pull） |
+| 护栏 1 不阻塞 UI | 走 `tauri::async_runtime::spawn` + 既有 `run_process_with_env`（git 子进程有 120 s kill-safe 超时） |
+| 护栏 2 失败静默沿用缓存 | 只写 `lastSyncError` + `eprintln`，不弹错、不打断 |
+| 护栏 3 写入期间跳过 | 新增 `knowledge::knowledge_write_in_progress()`（原子计数），沉淀写图谱/提交推送期间跳过本轮 |
+| 护栏 4 失败退避 | `next_sync_backoff` 翻倍递增，上限 1 小时，成功即复位 |
+| 护栏 5 仅真实变化才通知 | 比对 `last_synced_commit` 变化才 `emit("skill-hub-changed")` |
+| 单轮兜底超时 | `HUB_SYNC_ROUND_TIMEOUT` = **10 min**（必须显著大于内层 git 超时之和，否则外层先杀掉正在跑的 git，可能留下 `.git/index.lock` 残骸影响后续提交） |
+| 完整 clone | `clone_args` **不再带 `--depth`** |
+| **存量浅克隆补救** | 新增 `is_shallow_clone` 检测 + `git fetch --unshallow`（每进程只尝试一次，失败不阻断同步） |
+
+**实测数字（替换此前引用的「2.6 MB」——那是浅克隆的体积）**：本机 hub 补全为完整历史
+耗时 **2.06 s、体积无增长**（`.git` 仍 2.6 MB，可达 commit 仍 79）。说明该仓库的
+`.git/shallow` 标记早已失效（历史其实已在本地），补全几乎无代价；但**标记存在仍会让
+`git revert` 复核历史**，所以保留补救逻辑。
+
+**code-review 修复项**（本轮，均由独立审查发现）：
+
+1. **TOCTOU → 真互斥**：原实现只用一个原子计数「观测」写入是否进行中，而读取与真正执行
+   之间有数秒窗口（`fetch`/`pull` 要跑几秒），写入可能恰好插入——图谱数据就在 hub 检出里，
+   两者操作的是**同一个仓库**。改为 `skills::lock_hub_git()` 真锁：同步方持锁跑完整轮、
+   写入方围绕自己的 git 窗口持锁，二者不构成环（同步方不取图谱写锁）故无死锁。
+2. **单卡点覆盖全部同步入口**：锁取在 `sync_git_repo` 里，于是 `startup_sync`（启动）、
+   `sync_skill_source`（手动）、`set_skill_hub_path`（改配置）、`periodic_sync_loop`（定时）
+   四个路径自动都被覆盖，而不是只有定时那一条。
+3. **失败恢复也要通知前端**：原先只在 commit 变化时 emit，导致「离线失败 → 恢复成功但无变更」
+   时 `lastSyncError` 已被清而前端不刷新，面板会一直显示已经恢复的旧错误。
+4. **退避用 `saturating_mul`**：原先 `current * 2` 在极端输入下会 panic，与本函数「全函数」的
+   意图不符。
+5. **`publish_knowledge_changes` 先校验参数再取锁**：原先空参数调用也会排队等一次分钟级写入。
+6. **测试加固**：`graph_write_guard_tracks_in_progress` 原先只断言「最终归零」，**钉不住**
+   「计数必须在拿到锁之后才 +1」这条性质（把 `fetch_add` 提到 lock 之前，原断言依然全过）。
+   改为断言精确值（排队者不得计入），并**用变异测试验证过**：注入该 bug 后断言失败（`left: 2`）。
+   另新增测试专用访问器 `graph_write_active_count()`（`#[cfg(test)]`）。
+7. **用户文档同步**：`docs/operation-manual.md` / `.html` 里「首次自动 `git clone --depth 1`」
+   已改为完整 clone，并补「启动后每 15 分钟后台自动拉取」，已跑 `pnpm help:sync`。
+
+**实测验证（启动即验证，不止编译）**：按项目既有流程启动桌面应用，确认 ① 应用正常渲染
+（WebView2 CDP：`#root` 有子节点、正文 1817 字符）② 启动同步成功
+（`lastSyncedAt` 已刷新、`lastSyncedCommit = ff940cd`、`lastSyncError = None`）
+③ 日志无同步报错——确认新增的定时任务没有破坏启动路径。
+
+**为什么补了「存量浅克隆补救」**：只改 clone 参数仅对新装生效，而本机 hub **已经是**浅克隆
+（`.git/shallow` 存在）⇒ `git revert` 仍会因历史不足失败，**承诺的回滚能力在这台机器上并不成立**。
+故在既有仓库同步分支补 `--unshallow`，让承诺对存量安装也成立。
+
+**顺带修正**：`lock_graph` 的返回值由 `OwnedMutexGuard<()>` 改为 `GraphWriteGuard`（Drop 时递减
+原子计数），两个调用点语义不变；计数在**拿到锁之后**才递增，避免排队者被误判为「正在写入」
+而使 hub 同步空转等待。
+
+**测试**：`clone_is_full_not_shallow`、`clone_args_includes_branch_only_when_set`、
+`sync_backoff_doubles_then_caps`、`sync_interval_is_fifteen_minutes`、
+`detects_shallow_clone_by_git_shallow_file`、`graph_write_guard_tracks_in_progress`
+（后者合并了两个观测同一全局计数的用例，避免并行抖动）。
+
 ## 11.6 内容组织口径（规则文本修订）
 
 **问题**：知识组织规则散落三处且互相矛盾——`agent_assist.rs:512` 的 `KNOWLEDGE_SEDIMENTATION_RULES`、SkillHub `knowledge-graph/SKILL.md`（含**已失效**的「回写质量门」六条）、以及 `knowledge.rs:919` 的写入格式。最严重的是：提取规则要求 agent「把与图谱冲突的结论标注出来供复核」，而四层门按产品决策**一律拒绝冲突**，失败出口又未落地（ticket 08）⇒ **冲突知识被提出、被拒、无任何出口**。

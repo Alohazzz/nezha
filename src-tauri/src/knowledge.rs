@@ -21,6 +21,7 @@ use crate::knowledge_gate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
@@ -131,7 +132,35 @@ pub async fn list_knowledge_graph_adapters() -> Result<Vec<KnowledgeGraphAdapter
 static GRAPH_WRITE_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
-async fn lock_graph(graph_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+/// 当前**正在**执行知识图谱写入（含 git 提交 / 推送）的数量。
+/// hub 定时同步据此避让：写入期间拉取可能与本地提交互相干扰。
+static GRAPH_WRITE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// 是否有知识图谱写入正在进行。供 hub 定时同步避让，不阻塞调用方。
+pub(crate) fn knowledge_write_in_progress() -> bool {
+    GRAPH_WRITE_ACTIVE.load(Ordering::SeqCst) > 0
+}
+
+/// 当前写入计数。仅供测试断言精确值（生产代码请用 [`knowledge_write_in_progress`]）。
+#[cfg(test)]
+pub(crate) fn graph_write_active_count() -> usize {
+    GRAPH_WRITE_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// 持锁守卫：计数在获取后 +1、释放时 -1，供 [`knowledge_write_in_progress`] 观测。
+pub(crate) struct GraphWriteGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for GraphWriteGuard {
+    fn drop(&mut self) {
+        GRAPH_WRITE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 取得某图谱的写锁。同一图谱的写入被串行化；不同图谱可并发。
+/// 计数在**拿到锁之后**才 +1，因此排队等待的调用方不会被算作「正在写入」。
+pub(crate) async fn lock_graph(graph_id: &str) -> GraphWriteGuard {
     let locks = GRAPH_WRITE_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let lock = locks
         .lock()
@@ -139,7 +168,9 @@ async fn lock_graph(graph_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
         .entry(graph_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone();
-    lock.lock_owned().await
+    let guard = lock.lock_owned().await;
+    GRAPH_WRITE_ACTIVE.fetch_add(1, Ordering::SeqCst);
+    GraphWriteGuard { _guard: guard }
 }
 
 /// 一次性取出「哪些待写模块卡片有未提交人工修改」。整批一次 `git status`，
@@ -623,11 +654,12 @@ pub async fn publish_knowledge_changes(
     paths: Vec<String>,
     message: String,
 ) -> Result<String, String> {
-    let graph = graph_by_id_async(graph_id.clone()).await?;
-    let _guard = lock_graph(&graph.id).await;
     if message.trim().is_empty() || paths.is_empty() {
         return Err("提交内容和路径不能为空".into());
     }
+    let graph = graph_by_id_async(graph_id.clone()).await?;
+    let _guard = lock_graph(&graph.id).await;
+    let _hub_git_guard = crate::skills::lock_hub_git().await;
     let graph_dir = PathBuf::from(&graph.graph_dir);
     let mut absolute = Vec::new();
     for path_text in paths {
@@ -1095,6 +1127,9 @@ pub async fn knowledge_auto_writeback(
     }
     let target = resolve_knowledge_target(project_path.clone()).await?;
     let _write_guard = lock_graph(&target.id).await;
+    // 与 hub 后台同步互斥：图谱数据就在 hub 检出里，同步的 fetch/pull 与本次
+    // add/commit/push 操作同一仓库，必须真互斥而非观测（见 skills::lock_hub_git）。
+    let _hub_git_guard = crate::skills::lock_hub_git().await;
     let project_root = PathBuf::from(&project_path);
 
     // L0 结构层：逐条结构校验，不通过直接出局（不进后续层）。
@@ -1426,6 +1461,39 @@ mod tests {
         candidate.section = "职责".into();
         let other = validate_candidate(&target, &candidate).unwrap_err();
         assert!(!other.contains("由扫描生成"), "{other}");
+    }
+
+    /// `GRAPH_WRITE_ACTIVE` 是全局计数：本例是**唯一**使用它的用例，
+    /// 把「计数随持锁增减」与「排队等待者不计入」合并在一处，
+    /// 避免两个并行用例互相观测到对方持有的锁而抖动。
+    #[tokio::test]
+    async fn graph_write_guard_tracks_in_progress() {
+        assert!(!knowledge_write_in_progress(), "初始应为空闲");
+
+        let first = lock_graph("test-graph-a").await;
+        assert!(knowledge_write_in_progress(), "持锁期间应报告写入中");
+        // 不同图谱可以并发持有，计数累加。
+        let second = lock_graph("test-graph-b").await;
+        assert!(knowledge_write_in_progress());
+        drop(second);
+        assert!(knowledge_write_in_progress(), "仍有持有者时不应复位");
+
+        // 同图谱的排队者：计数必须在**拿到锁之后**才 +1，否则 hub 同步会因为
+        // 排队者而空转等待。这里断言**精确值**——若把 fetch_add 提到 lock 之前，
+        // 排队者会让计数变成 2，本断言即失败（只看「最终归零」是钉不住这个性质的）。
+        let waiter = tokio::spawn(async move {
+            let _guard = lock_graph("test-graph-a").await;
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(
+            graph_write_active_count(),
+            1,
+            "持有者 1 个；排队的 waiter 不应计入"
+        );
+        drop(first);
+        let _ = waiter.await;
+        assert_eq!(graph_write_active_count(), 0, "全部释放后应归零");
     }
 
     #[test]
