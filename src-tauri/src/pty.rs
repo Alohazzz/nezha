@@ -848,6 +848,49 @@ mod fork_command_tests {
     use super::*;
     use std::ffi::OsStr;
 
+    /// 配置必须从**主项目**路径读：worktree 里没有 `.nezha/config.toml`，
+    /// 若从 agent 的 cwd（worktree）读会静默退回默认值 ⇒ 任务拿不到图谱绑定、
+    /// 也就不注入知识沉淀契约（也会丢 prompt_prefix）。用一个「主项目有绑定、worktree 无配置」
+    /// 的真实目录结构钉住这个区分。
+    #[test]
+    fn config_must_come_from_main_project_not_worktree() {
+        let root = std::env::temp_dir().join(format!("nezha-pty-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let main = root.join("main");
+        let worktree = root.join("main").join(".nezha").join("worktrees").join("t1");
+        std::fs::create_dir_all(main.join(".nezha")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        // 主项目：完整配置（agent/git 段是必填，缺了会静默回退默认值）
+        std::fs::write(
+            main.join(".nezha").join("config.toml"),
+            "[agent]
+default = \"claude\"
+prompt_prefix = \"PREFIX\"
+
+[git]
+commit_prompt = \"x\"
+
+[knowledge]
+graph_id = \"HIS\"
+",
+        )
+        .unwrap();
+
+        let from_main =
+            crate::config::read_project_config(main.to_string_lossy().into_owned()).unwrap();
+        let from_worktree =
+            crate::config::read_project_config(worktree.to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(from_main.knowledge.graph_id, "HIS", "主项目应读到图谱绑定");
+        assert!(
+            from_worktree.knowledge.graph_id.is_empty(),
+            "worktree 里没有配置 ⇒ 读不到图谱绑定（这正是必须用主项目路径的原因）"
+        );
+        assert_eq!(from_main.agent.prompt_prefix, "PREFIX");
+        assert!(from_worktree.agent.prompt_prefix.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// 产出契约的注入条件：绑定图谱 **且** 总开关开启（任一不满足都不注入）。
     #[test]
     fn sediment_contract_requires_graph_and_master_switch() {
@@ -1049,8 +1092,11 @@ pub async fn run_task(
             .map_err(|e| e.to_string())??
     };
 
-    // 若配置了项目级 prompt_prefix，则拼接到提示词前
-    let config = crate::config::read_project_config(project_path.clone()).unwrap_or_default();
+    // 项目配置一律从**主项目**路径读（`real_project_path`），而不是 agent 的 cwd：
+    // worktree 里没有 `.nezha/config.toml`（`.nezha` 被 gitignore），从 worktree 读会静默
+    // 退回默认值 ⇒ 该任务既拿不到 `prompt_prefix`，也拿不到图谱绑定，因而**不会注入知识沉淀契约**。
+    let config =
+        crate::config::read_project_config(real_project_path.clone()).unwrap_or_default();
     let base_prompt = if config.agent.prompt_prefix.is_empty() {
         prompt.clone()
     } else {
