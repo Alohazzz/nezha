@@ -217,33 +217,35 @@ export function AgentPermSelector({
           </Select.Portal>
         </Select.Root>
 
-        {agent !== "dsh" && (
-          <Select.Root value={permMode} onValueChange={(v) => onSetPermMode(v as PermissionMode)}>
-            <Select.Trigger style={s.toolbarBtn} aria-label={t("settings.defaultPermissionMode")}>
-              <Hand size={14} strokeWidth={2} color="var(--text-muted)" />
-              <Select.Value />
-              <Select.Icon>
-                <ChevronDown size={12} strokeWidth={2.5} style={s.toolbarChevron} />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
-                <Select.Viewport>
-                  {PERMS.map((perm) => (
-                    <Select.Item
-                      key={perm}
-                      value={perm}
-                      className="branch-popover-item"
-                      style={s.toolbarMenuItem}
-                    >
-                      <Select.ItemText>{permissionModeLabel(perm, agent)}</Select.ItemText>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
-        )}
+        {/* DSH 也显示权限选择器：三档经 DSH_PERMISSION_MODE 一一映射到 DSH 的
+            read-only / workspace-write / danger-full-access（见 pty.rs
+            dsh_permission_mode）。此前隐藏是因为 DSH 侧不解析任何权限参数、
+            选了也不生效；tui-runner 的启动参数族落地后这个前提不再成立。 */}
+        <Select.Root value={permMode} onValueChange={(v) => onSetPermMode(v as PermissionMode)}>
+          <Select.Trigger style={s.toolbarBtn} aria-label={t("settings.defaultPermissionMode")}>
+            <Hand size={14} strokeWidth={2} color="var(--text-muted)" />
+            <Select.Value />
+            <Select.Icon>
+              <ChevronDown size={12} strokeWidth={2.5} style={s.toolbarChevron} />
+            </Select.Icon>
+          </Select.Trigger>
+          <Select.Portal>
+            <Select.Content position="popper" sideOffset={6} style={s.toolbarMenuContent}>
+              <Select.Viewport>
+                {PERMS.map((perm) => (
+                  <Select.Item
+                    key={perm}
+                    value={perm}
+                    className="branch-popover-item"
+                    style={s.toolbarMenuItem}
+                  >
+                    <Select.ItemText>{permissionModeLabel(perm, agent)}</Select.ItemText>
+                  </Select.Item>
+                ))}
+              </Select.Viewport>
+            </Select.Content>
+          </Select.Portal>
+        </Select.Root>
       </div>
 
       <div style={s.toolbarSpacer} />

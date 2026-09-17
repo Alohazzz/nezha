@@ -715,15 +715,78 @@ fn append_fork_session_args(command: &mut CommandBuilder, is_codex: bool, source
     }
 }
 
+/// DSH 权限模式映射：DSH 把沙箱模式与审批策略**耦合**在单个 `DSH_PERMISSION_MODE`
+/// 上（见 `dsh-base/cordis.patch.yml`：`sandbox-policy.mode` 直接取该值，
+/// `approval.policy` 仅在其为 `danger-full-access` 时为 `never`，否则 `ask`），
+/// 因此每个取值都是「沙箱 + 审批」的一个完整档位，没有 Claude 那种独立的
+/// permission-mode/acceptEdits 开关。三档与 Nezha 三模式一一对应：
+///
+/// | Nezha        | DSH                | 语义                                   |
+/// |--------------|--------------------|----------------------------------------|
+/// | `ask`        | `read-only`        | 沙箱只读，任何写入都经 approval 询问      |
+/// | `auto_edit`  | `workspace-write`  | 工作区内自动写，越界经 approval 询问      |
+/// | `full_access`| `danger-full-access`| 无沙箱、审批恒 `never`                  |
+///
+/// 未知/空取值保守落回 `read-only`：宁可多问一次，也不静默放大写权限。
+fn dsh_permission_mode(permission_mode: &str) -> &'static str {
+    match permission_mode {
+        "auto_edit" => "workspace-write",
+        "full_access" => "danger-full-access",
+        _ => "read-only",
+    }
+}
+
 /// 为 DSH 命令构建 CommandBuilder。profile 来自应用设置（默认 `cc-tui`）。
-/// dsh 启动器只解析自己的 launcher 旗标（`--profile` / `--patch` / dump），
-/// 其余参数原样透传给 profile 树；cc-tui（tianshu-tui）不解析任何透传参数，
-/// 因此这里不传 prompt / permission / model / effort / resume 旗标。
-fn build_dsh_cmd(agent_bin: &str, profile: &str) -> CommandBuilder {
+///
+/// dsh 启动器只解析自己的 launcher 旗标（`--profile` / `--patch` / dump），其余
+/// 参数原样经 `ctx.cmdlineArgs` 透传给 profile 树，由 tui-runner 的 startup 解析
+/// （见 DSH-tui 仓 `src/startup.ts`）。
+///
+/// **`--profile` 必须排在所有旗标之前**：launcher 开了 commander 的
+/// `passThroughOptions`，遇到第一个不认识的旗标后就把剩余参数整体当透传，落其后的
+/// launcher 旗标会变成 app 参数并报 `unknown option`（实测 `dsh web --port 0 --patch x.yml`
+/// 即因此报错，`--patch` 前置才通过）。
+///
+/// 权限不走旗标：DSH 只从 `DSH_PERMISSION_MODE` 环境变量派生沙箱与审批旋钮
+/// （见 [`dsh_permission_mode`] 与 [`apply_dsh_permission_env`]）。
+fn build_dsh_cmd(
+    agent_bin: &str,
+    profile: &str,
+    prompt: Option<&str>,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    resume_session_id: Option<&str>,
+) -> CommandBuilder {
     let mut c = CommandBuilder::new(agent_bin);
     c.arg("--profile");
     c.arg(profile);
+    // 空 prompt 时不传，让 TUI 停在输入框等用户输入（与 Claude/Codex 的
+    // 「空 prompt 进交互式 REPL」一致）。
+    if let Some(prompt) = prompt.filter(|p| !p.is_empty()) {
+        c.arg("--prompt");
+        c.arg(prompt);
+    }
+    if let Some(model) = model {
+        c.arg("--model");
+        c.arg(model);
+    }
+    if let Some(reasoning_effort) = reasoning_effort {
+        c.arg("--effort");
+        c.arg(reasoning_effort);
+    }
+    if let Some(session_id) = resume_session_id {
+        c.arg("--resume");
+        c.arg(session_id);
+    }
     c
+}
+
+/// 注入 DSH 的权限环境变量。
+///
+/// 单独成函数而非并入 `setup_env`：`setup_env` 是所有 agent 共用的登录环境拷贝，
+/// 这里只对 DSH 生效，混进去会给 Claude/Codex 也带上一个无意义的环境变量。
+fn apply_dsh_permission_env(cmd: &mut CommandBuilder, permission_mode: &str) {
+    cmd.env("DSH_PERMISSION_MODE", dsh_permission_mode(permission_mode));
 }
 
 /// dsh 会话发现用「任务启动时刻」基准（含 5s 容差），避免把启动前遗留的旧会话
@@ -776,7 +839,10 @@ fn spawn_fork_task_process(
 
     let mut command = if is_dsh {
         let profile = crate::app_settings::load_settings_internal().dsh_profile;
-        build_dsh_cmd(&agent_bin, &profile)
+        // fork 不传 --resume：DSH 侧的 fork 是 TUI 内的交互动作（`SessionStore.fork`
+        // 复制历史到新 child session），启动旗标族里没有对应项。传 --resume 会变成
+        // 「接到源会话上」而不是分叉，语义相反。
+        build_dsh_cmd(&agent_bin, &profile, None, model, reasoning_effort, None)
     } else if is_codex {
         let mut command = build_codex_cmd(&agent_bin, permission_mode, model, reasoning_effort);
         if use_hooks {
@@ -800,6 +866,9 @@ fn spawn_fork_task_process(
     command.cwd(project_path);
     setup_env(&mut command);
     setup_nezha_env(&mut command, task_id, agent, use_hooks, real_project_path);
+    if is_dsh {
+        apply_dsh_permission_env(&mut command, permission_mode);
+    }
     for (key, value) in &launch.extra_env {
         command.env(key, value);
     }
@@ -983,6 +1052,94 @@ graph_id = \"HIS\"
             MAX_MODEL_ID_BYTES,
         )
         .is_err());
+    }
+
+    fn dsh_argv(
+        prompt: Option<&str>,
+        model: Option<&str>,
+        effort: Option<&str>,
+        resume: Option<&str>,
+    ) -> Vec<String> {
+        build_dsh_cmd("dsh", "cc-tui", prompt, model, effort, resume)
+            .get_argv()
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn dsh_profile_precedes_every_app_flag() {
+        // launcher 开了 passThroughOptions：遇到第一个不认识的旗标后剩余参数整体
+        // 当透传。`--profile` 落在 app 旗标之后会被当成 app 参数而报错，因此顺序是
+        // 契约的一部分，不是风格问题。
+        let argv = dsh_argv(Some("做点事"), Some("deepseek-v4"), Some("high"), Some("s1"));
+        assert_eq!(argv[0], "dsh");
+        assert_eq!(&argv[1..3], &["--profile", "cc-tui"]);
+    }
+
+    #[test]
+    fn dsh_forwards_prompt_model_effort_and_resume() {
+        let argv = dsh_argv(Some("实现登录"), Some("deepseek-v4"), Some("high"), Some("sess-1"));
+        assert_eq!(
+            &argv[3..],
+            &[
+                "--prompt",
+                "实现登录",
+                "--model",
+                "deepseek-v4",
+                "--effort",
+                "high",
+                "--resume",
+                "sess-1",
+            ]
+        );
+    }
+
+    #[test]
+    fn dsh_empty_prompt_stays_interactive() {
+        // 空 prompt 必须不传 `--prompt`：否则 TUI 会提交一条空消息。
+        let argv = dsh_argv(Some(""), None, None, None);
+        assert_eq!(argv, vec!["dsh", "--profile", "cc-tui"]);
+    }
+
+    #[test]
+    fn dsh_omits_absent_options() {
+        // 未给出的模型 / effort / resume 不产生空旗标（`--model ""` 会被 DSH 当成
+        // 「给了个空模型名」而拒绝）。
+        let argv = dsh_argv(Some("hi"), None, None, None);
+        assert_eq!(argv, vec!["dsh", "--profile", "cc-tui", "--prompt", "hi"]);
+    }
+
+    #[test]
+    fn dsh_permission_mode_matches_nezha_three_levels() {
+        // 三档一一对应：ask→只读+询问、auto_edit→工作区写+越界询问、
+        // full_access→无沙箱+免询问。三档两两不同，显示选择器才有意义。
+        assert_eq!(dsh_permission_mode("ask"), "read-only");
+        assert_eq!(dsh_permission_mode("auto_edit"), "workspace-write");
+        assert_eq!(dsh_permission_mode("full_access"), "danger-full-access");
+        // 未知取值保守落回最受限档，不静默升级成完全访问。
+        assert_eq!(dsh_permission_mode(""), "read-only");
+        assert_eq!(dsh_permission_mode("nonsense"), "read-only");
+    }
+
+    #[test]
+    fn dsh_permission_levels_are_distinct() {
+        // 回归防护：三档若塌成两档，UI 上就会出现两个选项行为相同。
+        let levels = ["ask", "auto_edit", "full_access"].map(dsh_permission_mode);
+        assert_eq!(
+            levels.iter().collect::<std::collections::HashSet<_>>().len(),
+            3,
+        );
+    }
+
+    #[test]
+    fn dsh_permission_env_is_injected() {
+        let mut command = CommandBuilder::new("dsh");
+        apply_dsh_permission_env(&mut command, "full_access");
+        assert_eq!(
+            command.get_env("DSH_PERMISSION_MODE"),
+            Some(OsStr::new("danger-full-access")),
+        );
     }
 }
 
@@ -1190,7 +1347,17 @@ pub async fn run_task(
 
     let mut cmd = if is_dsh {
         let profile = crate::app_settings::load_settings_internal().dsh_profile;
-        build_dsh_cmd(&agent_bin, &profile)
+        // DSH 的 prompt 不走 positional arg，而走 tui-runner 的 `--prompt`：attach
+        // 完成后自动提交一次，复用 slash 命令 / $skill / @mention 展开路径（与用户
+        // 手输同路）。任务提示词里的知识沉淀契约与附件路径因此也一并生效。
+        build_dsh_cmd(
+            &agent_bin,
+            &profile,
+            Some(&final_prompt),
+            model.as_deref(),
+            reasoning_effort.as_deref(),
+            None,
+        )
     } else if is_codex {
         let mut c = build_codex_cmd(
             &agent_bin,
@@ -1242,6 +1409,9 @@ pub async fn run_task(
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
     setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks, &real_project_path);
+    if is_dsh {
+        apply_dsh_permission_env(&mut cmd, &permission_mode);
+    }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -1516,7 +1686,17 @@ pub async fn resume_task(
 
     let mut cmd = if is_dsh {
         let profile = crate::app_settings::load_settings_internal().dsh_profile;
-        build_dsh_cmd(&agent_bin, &profile)
+        // 恢复既有会话：DSH 侧 tui-runner 的 `--resume` 直接切到该会话
+        // （TuiApp.attach → switchSession → agents.resume），比依赖
+        // `discover_session` 的 mtime 启发式更确定——显式 id 不会认错会话。
+        build_dsh_cmd(
+            &agent_bin,
+            &profile,
+            None,
+            model.as_deref(),
+            reasoning_effort.as_deref(),
+            Some(&session_id),
+        )
     } else if agent == "codex" {
         let mut c = build_codex_cmd(
             &agent_bin,
@@ -1555,6 +1735,9 @@ pub async fn resume_task(
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
     setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks, &real_project_path);
+    if is_dsh {
+        apply_dsh_permission_env(&mut cmd, &permission_mode);
+    }
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
