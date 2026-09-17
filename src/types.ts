@@ -358,6 +358,8 @@ export interface KnowledgeWritebackResult {
   allPassed: boolean;
   writtenCount: number;
   commit: string | null;
+  /** 本次是否补推了此前失败留下的本地提交。 */
+  pushedPending: boolean;
 }
 
 // ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────

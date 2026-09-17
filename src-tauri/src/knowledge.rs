@@ -66,6 +66,8 @@ pub struct KnowledgeWritebackResult {
     pub all_passed: bool,
     pub written_count: usize,
     pub commit: Option<String>,
+    /// 本次是否补推了此前失败留下的本地提交（重试语义的可见性，§8.4）。
+    pub pushed_pending: bool,
 }
 
 /// 项目可选的一个知识图谱目标。目录名是稳定 ID；展示名优先取 SKILL.md 后的首个 H1。
@@ -967,6 +969,114 @@ fn evidence_note(kind: &EvidenceKind) -> String {
     }
 }
 
+/// 写前把本地未推送的提交补推上去，并在落后远端时先做 `--ff-only` 拉取。
+///
+/// 返回「是否发生了补推」。任何一步失败都**不阻断**本次沉淀：
+/// 本次写入仍会照常提交，推送失败由调用方按可重试错误处理（本地提交保留）。
+async fn push_pending_commits(target: &KnowledgeTarget) -> Result<bool, String> {
+    // 先 fetch：`@{u}` 是**本地**的远端跟踪引用，不 fetch 就无法知道远端已前进
+    // （实测：上游有别人的新提交时，本地不 fetch 看到的仍是 ahead=1 / behind=0）。
+    // fetch 很便宜（实测一次约 2 s），且这一步的失败不阻断——后续 pull/push 会照实报错。
+    let fetched = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec!["fetch".into(), "origin".into()],
+        std::time::Duration::from_secs(120),
+    )
+    .await?;
+    if !fetched.status.success() {
+        eprintln!(
+            "[knowledge] 写前 fetch 失败（继续尝试提交推送）: {}",
+            String::from_utf8_lossy(&fetched.stderr).trim()
+        );
+    }
+
+    // 落后远端就先 ff-only 拉，降低非快进 push 的概率。
+    // 分叉（既领先又落后）时 pull 会失败——那是需要人工处理的状态，此时**不硬写**。
+    let behind = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec![
+            "rev-list".into(),
+            "--count".into(),
+            "HEAD..@{u}".into(),
+        ],
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    if behind.status.success() {
+        let count = String::from_utf8_lossy(&behind.stdout).trim().to_string();
+        if count != "0" {
+            let pull = crate::git::run_git_with_timeout(
+                target.graph_dir.clone(),
+                vec![
+                    "pull".into(),
+                    "--no-rebase".into(),
+                    "--ff-only".into(),
+                ],
+                std::time::Duration::from_secs(120),
+            )
+            .await?;
+            if !pull.status.success() {
+                return Err(format!(
+                    "图谱仓库落后远端且无法快进（可能有本地改动或已分叉），已停止写入以避免损坏仓库：{}",
+                    String::from_utf8_lossy(&pull.stderr).trim()
+                ));
+            }
+        }
+    }
+
+    // 补推本地未推送的提交（上一次 push 失败留下的）。
+    let ahead = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec!["rev-list".into(), "--count".into(), "@{u}..HEAD".into()],
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    if !ahead.status.success() {
+        return Ok(false); // 没有 upstream 等：交给后续 push 报错，不在这里拦截
+    }
+    let pending = String::from_utf8_lossy(&ahead.stdout).trim().to_string();
+    if pending == "0" {
+        return Ok(false);
+    }
+    let push = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec!["push".into()],
+        std::time::Duration::from_secs(120),
+    )
+    .await?;
+    if !push.status.success() {
+        return Err(format!(
+            "补推未推送的本地提交失败: {}",
+            String::from_utf8_lossy(&push.stderr).trim()
+        ));
+    }
+    Ok(true)
+}
+
+/// 生成本次沉淀的溯源标记：`<图谱>@<UTC 时间戳>.<短随机段>`。
+/// 与提交信息里的 `kg=<token>` 对应，二者可在 `git log -S` / `git log --grep` 中互相定位。
+///
+/// 带上随机后缀：毫秒级时间戳在同一毫秒内调用会撞车（实测两次连续调用相同），
+/// 而 token 的用途正是区分**不同批次**，撞 token 会让回滚按批定位失效。
+fn sediment_trace_token(graph_id: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    format!(
+        "{}@{}.{}",
+        graph_id,
+        chrono::DateTime::from_timestamp(
+            (nanos / 1_000_000_000) as i64,
+            (nanos % 1_000_000_000) as u32
+        )
+        .unwrap_or_else(chrono::Utc::now)
+        .format("%Y%m%dT%H%M%S%.3fZ"),
+        &suffix[..8]
+    )
+}
+
 /// 在 section 末尾追加一条结构化知识块（只增不改），返回新文件内容。
 ///
 /// section 在 L0 已校验过，但校验与写入之间隔着 L1~L3（可能数分钟、两次模型调用）；
@@ -976,6 +1086,7 @@ fn append_entry(
     content: &str,
     section: &str,
     candidate: &KnowledgeCandidate,
+    trace: &str,
 ) -> Result<String, String> {
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
@@ -998,6 +1109,10 @@ fn append_entry(
     }
     block.push(format!("- {date} · {}", candidate.content.trim()));
     block.push(format!("  - 依据：{}", candidate.evidence.trim()));
+    // 可追溯标记：不打扰阅读，且让「自动写入」的条目可被识别（回滚/审计依赖它）。
+    if !trace.is_empty() {
+        block.push(format!("  <!-- kg:{trace} -->"));
+    }
     if end < lines.len() && lines[end].starts_with("## ") {
         block.push(String::new());
     }
@@ -1302,6 +1417,8 @@ pub async fn knowledge_auto_writeback(
             .collect();
         dirty_module_cards(&target, &modules).await?
     };
+    // 本次沉淀的溯源标记：同一个 token 写进所有条目，便于按批追溯与回滚。
+    let trace_token = sediment_trace_token(&target.id);
     let mut changed_docs: Vec<PathBuf> = Vec::new();
     for index in writable {
         let candidate = &suggestions[index];
@@ -1326,7 +1443,7 @@ pub async fn knowledge_auto_writeback(
         let doc = module_doc_path(&target, &candidate.module);
         let current = std::fs::read_to_string(&doc)
             .map_err(|e| format!("写入前读取 {} 失败: {e}", candidate.module))?;
-        let next = append_entry(&current, &candidate.section, candidate)
+        let next = append_entry(&current, &candidate.section, candidate, &trace_token)
             .map_err(|e| format!("{}: {e}", candidate.module))?;
         std::fs::write(&doc, next).map_err(|e| format!("写入 {} 失败: {e}", candidate.module))?;
         if !changed_docs.contains(&doc) {
@@ -1344,7 +1461,11 @@ pub async fn knowledge_auto_writeback(
         }
     }
 
-    // 4) git 提交推送（有写入才提交）。
+    // 4) git：先补推未推送的本地提交，再提交本次写入，最后推送。
+    //    「补推」是必须的：push 失败后重跑时，卡片里已有那些条目 ⇒ 会被去重层判为重复
+    //    ⇒ 本次没有新写入 ⇒ 若只依赖「有写入才提交」，那些本地提交会**永远推不上去**。
+    let pushed_before = push_pending_commits(&target).await?;
+
     let written_count = items.iter().filter(|i| i.written).count();
     let mut commit: Option<String> = None;
     if written_count > 0 {
@@ -1368,7 +1489,11 @@ pub async fn knowledge_auto_writeback(
                 String::from_utf8_lossy(&add.stderr).trim()
             ));
         }
-        let message = format!("docs(knowledge): auto sediment {written_count} entries via Nezha");
+        let message = format!(
+            "docs(knowledge): auto sediment {written_count} entries via Nezha
+
+kg={trace_token}"
+        );
         let commit_out = crate::git::run_git_with_timeout(
             target.graph_dir.clone(),
             vec!["commit".into(), "-m".into(), message.clone()],
@@ -1402,6 +1527,7 @@ pub async fn knowledge_auto_writeback(
         all_passed,
         written_count,
         commit,
+        pushed_pending: pushed_before,
     })
 }
 
@@ -1554,6 +1680,108 @@ commit_prompt = \"x\"
     }
 
     #[test]
+    fn append_without_trace_omits_marker() {
+        // 无 token 时不留空标记（避免产生无信息的残留注释）。
+        let candidate = KnowledgeCandidate {
+            module: "M".into(),
+            section: "职责".into(),
+            content: "某职责".into(),
+            evidence: "X.cs".into(),
+            confidence: "confirmed".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "ICUCIS".into(),
+        };
+        let next = append_entry(&sample_doc(), "职责", &candidate, "").expect("追加成功");
+        assert!(next.contains("某职责"));
+        assert!(!next.contains("<!-- kg:"), "无 token 不应写标记：{next}");
+    }
+
+    #[test]
+    fn trace_token_is_graph_scoped_and_unique() {
+        let a = sediment_trace_token("HIS");
+        assert!(a.starts_with("HIS@"), "{a}");
+        // 结构：`<图谱>@<UTC 时间戳 Z>.<8 位随机段>`
+        let (stamp, suffix) = a.split_once('Z').expect("应含时间戳终止符 Z");
+        assert!(stamp.contains('T'), "时间戳应含 T：{a}");
+        assert_eq!(suffix.strip_prefix('.').map(str::len), Some(8), "随机段长度：{a}");
+        // 连续两次必须不同：同毫秒内调用不会撞 token（实测毫秒时间戳会撞）。
+        let b = sediment_trace_token("HIS");
+        assert_ne!(a, b, "同图谱两次调用应生成不同 token");
+    }
+
+    /// 真实 git 仓库上的集成检查：`push_pending_commits` 的行为不变量。
+    ///
+    /// 需要 `NEZHA_KG_E2E_REPO` 指向一个图谱写操作仓库。按仓库实际状态断言两种之一：
+    /// - **仅领先**（本地有未推送提交）：必须补推成功，且推完后 `@{u}..HEAD` 为 0；
+    /// - **已分叉**（同时领先与落后）：必须**拒绝**，且**不得**留下 merge / rebase 半成品状态。
+    ///
+    /// 夹具建立方式：`git init --bare origin.git` → clone → 提交并 push → 再本地提交一次
+    /// 即得「仅领先」；在此基础上让另一个 clone 抢先 push 一次即得「已分叉」。
+    #[tokio::test]
+    #[ignore = "需要本机临时 git 仓库（NEZHA_KG_E2E_REPO）"]
+    async fn acceptance_push_pending_commits() {
+        let Ok(repo) = std::env::var("NEZHA_KG_E2E_REPO") else {
+            eprintln!("SKIP: 未设置 NEZHA_KG_E2E_REPO");
+            return;
+        };
+        let target = KnowledgeTarget {
+            id: "T".into(),
+            name: "T".into(),
+            adapter: "dotnet".into(),
+            graph_dir: repo.clone(),
+            skill_dir: repo.clone(),
+            data_dir: repo.clone(),
+            ready: true,
+            scan_available: false,
+        };
+        let count = |spec: &str| {
+            let repo = repo.clone();
+            let spec = spec.to_string();
+            async move {
+                let out = crate::git::run_git_with_timeout(
+                    repo,
+                    vec!["rev-list".into(), "--count".into(), spec],
+                    std::time::Duration::from_secs(15),
+                )
+                .await
+                .expect("读取提交计数");
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+        };
+
+        // 先 fetch 一次，让后面的 ahead/behind 判定基于最新远端状态。
+        let _ = crate::git::run_git_with_timeout(
+            repo.clone(),
+            vec!["fetch".into(), "origin".into()],
+            std::time::Duration::from_secs(120),
+        )
+        .await;
+        let ahead0 = count("@{u}..HEAD").await;
+        let behind0 = count("HEAD..@{u}").await;
+        println!("初始 ahead={ahead0} behind={behind0}");
+
+        let result = push_pending_commits(&target).await;
+
+        if behind0 == "0" {
+            // 仅领先：应补推成功。
+            assert!(result.is_ok(), "仅领先时应补推成功：{result:?}");
+            assert_eq!(count("@{u}..HEAD").await, "0", "补推后应无未推送提交");
+        } else {
+            // 已分叉：必须拒绝，且不留下 merge/rebase 状态。
+            assert!(result.is_err(), "分叉时应拒绝写入：{result:?}");
+            let msg = result.unwrap_err();
+            assert!(msg.contains("无法快进") || msg.contains("分叉"), "{msg}");
+            for marker in [".git/MERGE_HEAD", ".git/rebase-merge", ".git/rebase-apply"] {
+                assert!(
+                    !std::path::Path::new(&repo).join(marker).exists(),
+                    "拒绝后不应留下半成品状态：{marker}"
+                );
+            }
+            assert_eq!(count("@{u}..HEAD").await, ahead0, "本地提交应保留");
+        }
+    }
+
+    #[test]
     fn rejects_scan_generated_section() {
         let target = sample_target();
         let mut candidate = KnowledgeCandidate {
@@ -1633,7 +1861,8 @@ commit_prompt = \"x\"
             suggested_title: String::new(),
             knowledge_graph_id: "HIS".into(),
         };
-        let next = append_entry(&sample_doc(), &candidate.section, &candidate).expect("追加成功");
+        let next = append_entry(&sample_doc(), &candidate.section, &candidate, "ICUCIS@20260917T000000.000Z")
+            .expect("追加成功");
         let in_section = next
             .split("## 业务规则 / 已知坑")
             .nth(1)
@@ -1641,6 +1870,11 @@ commit_prompt = \"x\"
             .unwrap_or_default();
         assert!(in_section.contains("缓存键必须带租户前缀"));
         assert!(in_section.contains("依据：Hsp.BaseData.Cache.Bll/CacheService.cs:42"));
+        // 可追溯标记：自动写入的条目可被识别，回滚/审计依赖它。
+        assert!(
+            in_section.contains("<!-- kg:ICUCIS@20260917T000000.000Z -->"),
+            "应带溯源标记：{in_section}"
+        );
         // 条目格式：`- <日期> · <内容>`，不再写入恒定的「已确认」（只有 confirmed 能过门）。
         assert!(!in_section.contains("已确认"), "{in_section}");
         assert!(in_section.contains("· 缓存键必须带租户前缀") || in_section.contains("缓存键必须带租户前缀"));
@@ -1660,7 +1894,7 @@ commit_prompt = \"x\"
             suggested_title: String::new(),
             knowledge_graph_id: "HIS".into(),
         };
-        let err = append_entry(&sample_doc(), "不存在的 section", &candidate).unwrap_err();
+        let err = append_entry(&sample_doc(), "不存在的 section", &candidate, "").unwrap_err();
         assert!(err.contains("已在判定期间变更"), "{err}");
     }
 
