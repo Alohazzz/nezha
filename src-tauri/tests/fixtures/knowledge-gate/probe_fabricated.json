@@ -1,0 +1,42 @@
+[
+  {
+    "index": 10,
+    "module": "Nto.His.Register",
+    "section": "关键实体 / 数据表",
+    "content": "`MZ_GHRL` —— 门诊挂号记录主表（来源：HspSQL\table 目录）",
+    "evidence": "HspSQL\table 目录",
+    "confidence": "confirmed",
+    "suggestedTitle": "门诊挂号主表",
+    "kind": "fabricated_table_name"
+  },
+  {
+    "index": 11,
+    "module": "Nto.His.Register",
+    "section": "业务规则 / 已知坑",
+    "content": "退号时限与费用联动，跨天退号需走退费流程（来源：用户确认，2026-09-16）",
+    "evidence": "用户确认，2026-09-16",
+    "confidence": "confirmed",
+    "suggestedTitle": "跨天退号规则",
+    "kind": "fabricated_copied_example"
+  },
+  {
+    "index": 12,
+    "module": "Nto.His.Register",
+    "section": "关键实体 / 数据表",
+    "content": "`O_REGISTER_BAK` —— 挂号记录每日归档备份表（来源：Nto.His.Register.SqlManager）",
+    "evidence": "Nto.His.Register.SqlManager",
+    "confidence": "confirmed",
+    "suggestedTitle": "挂号归档表",
+    "kind": "fabricated_backup_table"
+  },
+  {
+    "index": 13,
+    "module": "Nto.His.Register",
+    "section": "依赖与相关模块",
+    "content": "挂号模块在患者建档时同步调用院区主数据服务 `Nto.MasterData`，失败则回滚建档（来源：Register.Bll\\Controller\\PatientController.cs）",
+    "evidence": "Register.Bll\\Controller\\PatientController.cs",
+    "confidence": "confirmed",
+    "suggestedTitle": "建档依赖主数据",
+    "kind": "fabricated_controller_file"
+  }
+]

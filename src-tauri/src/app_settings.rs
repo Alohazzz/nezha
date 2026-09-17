@@ -169,17 +169,31 @@ pub struct CodeupSettings {
 /// 知识沉淀自动回写配置。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeSettings {
-    /// 提交知识沉淀后经质量门校验自动写入技能库知识图谱，并 git 提交推送。
-    /// 前端读的是 camelCase `autoWriteback`；alias 兼容早期版本写入的 `auto_writeback` 键。
-    #[serde(rename = "autoWriteback", alias = "auto_writeback", default)]
-    pub auto_writeback: bool,
+    /// 知识沉淀**总开关**（默认开）。
+    ///
+    /// 语义（提案 §8.4）：开 = 任务收尾后自动处理会话内产出的知识候选；关 = 完全不跑沉淀，
+    /// 且该项目的 agent 不再被要求产出候选（产出契约随之豁免）。
+    ///
+    /// 历史键名迁移：早期版本用 `autoWriteback` / `auto_writeback` 表示「自动回写开关」，
+    /// 二者作为 alias 继续可读，因此**旧 settings.json 无需手工迁移**。
+    /// 默认值由「关」改为「开」，与本字段的新语义一致。
+    #[serde(
+        rename = "enabled",
+        alias = "autoWriteback",
+        alias = "auto_writeback",
+        default = "default_knowledge_enabled"
+    )]
+    pub enabled: bool,
+}
+
+/// 知识沉淀总开关默认开启（`serde(default)` 对 bool 会给 false，故需显式函数）。
+fn default_knowledge_enabled() -> bool {
+    true
 }
 
 impl Default for KnowledgeSettings {
     fn default() -> Self {
-        Self {
-            auto_writeback: false,
-        }
+        Self { enabled: true }
     }
 }
 
@@ -1463,11 +1477,11 @@ pub async fn save_system_notifications(enabled: bool) -> Result<AppSettings, Str
 }
 
 #[tauri::command]
-pub async fn save_knowledge_auto_writeback(enabled: bool) -> Result<AppSettings, String> {
+pub async fn save_knowledge_enabled(enabled: bool) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
-        settings.knowledge.auto_writeback = enabled;
+        settings.knowledge.enabled = enabled;
 
         let dir = nezha_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1479,6 +1493,15 @@ pub async fn save_knowledge_auto_writeback(enabled: bool) -> Result<AppSettings,
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 已废弃的旧命令名（等价于 [`save_knowledge_enabled`]）。
+///
+/// 保留是为了让尚未升级的前端继续可用：总开关换了语义与键名，但**命令名不变**，
+/// 前端无需同时改动即可生效。新代码请用 `save_knowledge_enabled`。
+#[tauri::command]
+pub async fn save_knowledge_auto_writeback(enabled: bool) -> Result<AppSettings, String> {
+    save_knowledge_enabled(enabled).await
 }
 
 /// 测试技能开关：切换后，云效议题讨论链路（「直接开始（先澄清）」与「方案讨论」）
@@ -1870,22 +1893,35 @@ mod model_catalog_tests {
         assert!(!ids.contains(&"removed-model"));
     }
 
-    // 前端读 settings.knowledge.autoWriteback；这里锁定 JSON 键名契约 + 旧键 alias。
+    /// 总开关的键名契约 + 历史键迁移。
+    ///
+    /// 语义变更：字段从 `autoWriteback`（自动回写）改为 `enabled`（知识沉淀总开关），
+    /// 默认值由 false 改为 **true**；旧键作为 alias 继续可读，故旧 settings.json 无需手工迁移。
     #[test]
-    fn knowledge_auto_writeback_serializes_camel_case_and_reads_legacy_key() {
+    fn knowledge_enabled_serializes_and_reads_legacy_keys() {
         let mut settings = AppSettings::default();
-        settings.knowledge.auto_writeback = true;
+        settings.knowledge.enabled = true;
         let raw = serde_json::to_string(&settings).unwrap();
         let value: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(value["knowledge"]["autoWriteback"], Value::Bool(true));
+        assert_eq!(value["knowledge"]["enabled"], Value::Bool(true));
+        assert!(value["knowledge"].get("autoWriteback").is_none());
         assert!(value["knowledge"].get("auto_writeback").is_none());
 
-        let legacy: AppSettings =
+        // 旧键（两种写法）都要能读出来 —— 这是「无需迁移」的依据。
+        let legacy_camel: AppSettings =
+            serde_json::from_str(r#"{"knowledge":{"autoWriteback":true}}"#).unwrap();
+        assert!(legacy_camel.knowledge.enabled);
+        let legacy_snake: AppSettings =
             serde_json::from_str(r#"{"knowledge":{"auto_writeback":true}}"#).unwrap();
-        assert!(legacy.knowledge.auto_writeback);
+        assert!(legacy_snake.knowledge.enabled);
+        let legacy_off: AppSettings =
+            serde_json::from_str(r#"{"knowledge":{"autoWriteback":false}}"#).unwrap();
+        assert!(!legacy_off.knowledge.enabled, "显式 false 应被尊重");
 
+        // 缺省为**开**（总开关语义）。
         let absent: AppSettings = serde_json::from_str(r#"{"knowledge":{}}"#).unwrap();
-        assert!(!absent.knowledge.auto_writeback);
+        assert!(absent.knowledge.enabled, "总开关默认应为开");
+        assert!(AppSettings::default().knowledge.enabled);
     }
 
     // 前端读 settings.batch_grill_enabled（snake_case，无重命名）；缺省为关闭。

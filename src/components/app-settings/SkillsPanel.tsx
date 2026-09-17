@@ -22,7 +22,7 @@ export function SkillsPanel() {
   const [branchText, setBranchText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoWriteback, setAutoWriteback] = useState<boolean | null>(null);
+  const [knowledgeEnabled, setKnowledgeEnabled] = useState<boolean | null>(null);
   const [writebackBusy, setWritebackBusy] = useState(true);
   const [batchGrill, setBatchGrill] = useState<boolean | null>(null);
   const [batchGrillBusy, setBatchGrillBusy] = useState(true);
@@ -32,13 +32,13 @@ export function SkillsPanel() {
     invoke<AppSettings>("load_app_settings")
       .then((settings) => {
         if (!cancelled) {
-          setAutoWriteback(settings.knowledge?.autoWriteback ?? false);
+          setKnowledgeEnabled(settings.knowledge?.enabled ?? true);
           setBatchGrill(settings.batch_grill_enabled ?? false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setAutoWriteback(false);
+          setKnowledgeEnabled(true);
           setBatchGrill(false);
         }
       })
@@ -152,20 +152,20 @@ export function SkillsPanel() {
     }
   }, []);
 
-  const handleWritebackToggle = useCallback(async () => {
-    if (writebackBusy || autoWriteback === null) return;
-    const enabled = !autoWriteback;
+  const handleKnowledgeToggle = useCallback(async () => {
+    if (writebackBusy || knowledgeEnabled === null) return;
+    const enabled = !knowledgeEnabled;
     setWritebackBusy(true);
     setError(null);
     try {
-      const next = await invoke<AppSettings>("save_knowledge_auto_writeback", { enabled });
-      setAutoWriteback(next.knowledge?.autoWriteback ?? enabled);
+      const next = await invoke<AppSettings>("save_knowledge_enabled", { enabled });
+      setKnowledgeEnabled(next.knowledge?.enabled ?? enabled);
     } catch (e) {
       setError(String(e));
     } finally {
       setWritebackBusy(false);
     }
-  }, [writebackBusy, autoWriteback]);
+  }, [writebackBusy, knowledgeEnabled]);
 
   const handleBatchGrillToggle = useCallback(async () => {
     if (batchGrillBusy || batchGrill === null) return;
@@ -318,26 +318,26 @@ export function SkillsPanel() {
       ) : null}
 
       <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.knowledgeAutoWriteback")}</label>
+        <label style={s.settingFieldLabel}>{t("appSettings.knowledgeEnabled")}</label>
         <button
           type="button"
           role="switch"
-          aria-checked={autoWriteback === true}
-          aria-label={t("appSettings.knowledgeAutoWriteback")}
+          aria-checked={knowledgeEnabled === true}
+          aria-label={t("appSettings.knowledgeEnabled")}
           disabled={writebackBusy}
-          data-checked={autoWriteback === true}
+          data-checked={knowledgeEnabled === true}
           data-disabled={writebackBusy}
-          onClick={() => void handleWritebackToggle()}
+          onClick={() => void handleKnowledgeToggle()}
           className="app-settings-toggle"
         >
           <span className="app-settings-toggle-label">
-            {t("appSettings.knowledgeAutoWritebackToggle")}
+            {t("appSettings.knowledgeEnabledToggle")}
           </span>
           <span className="app-settings-toggle-track">
             <span className="app-settings-toggle-knob" />
           </span>
         </button>
-        <span style={s.settingFieldHint}>{t("appSettings.knowledgeAutoWritebackHint")}</span>
+        <span style={s.settingFieldHint}>{t("appSettings.knowledgeEnabledHint")}</span>
       </div>
 
       <div style={s.settingFieldSpaced}>

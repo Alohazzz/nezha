@@ -21,6 +21,7 @@ mod git;
 mod hooks;
 mod http;
 mod knowledge;
+mod knowledge_gate;
 mod notification;
 mod platform;
 mod pty;
@@ -309,6 +310,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 crate::skills::startup_sync(startup_handle).await;
             });
+            // 技能仓库（知识图谱数据所在）定时拉取：每 15 分钟后台 fetch + ff-only pull，
+            // 让消费侧读到的图谱尽可能新；失败静默沿用缓存并退避。见提案 §7.3。
+            let periodic_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::skills::periodic_sync_loop(periodic_handle).await;
+            });
             // 后台轻量同步 codex 模型目录（只读 model_catalog_json 配置文件，
             // 不 spawn codex 进程；未配置文件时静默跳过）。
             std::thread::spawn(|| {
@@ -508,6 +515,7 @@ pub fn run() {
             app_settings::save_terminal_scrollback,
             app_settings::save_terminal_copy_on_select,
             app_settings::save_system_notifications,
+            app_settings::save_knowledge_enabled,
             app_settings::save_knowledge_auto_writeback,
             app_settings::save_batch_grill_enabled,
             app_settings::save_yunxiao_settings,
@@ -536,6 +544,7 @@ pub fn run() {
             drafts::clear_backfill_draft,
             agent_assist::generate_yunxiao_writeback_summary,
             knowledge::knowledge_auto_writeback,
+            knowledge::read_knowledge_metrics,
             knowledge::list_knowledge_targets,
             knowledge::list_knowledge_graph_adapters,
             knowledge::bind_knowledge_graph,
@@ -550,7 +559,6 @@ pub fn run() {
             knowledge::rename_knowledge_card,
             knowledge::delete_knowledge_card,
             knowledge::publish_knowledge_changes,
-            agent_assist::generate_knowledge_sedimentation,
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,

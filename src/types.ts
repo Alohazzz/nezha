@@ -275,6 +275,11 @@ export interface Task {
   /** 回写成功后云效返回的评论 ID（审计/追查用） */
   yunxiaoCommentId?: string;
   /** 知识沉淀创建的云效审核议题 ID 列表（幂等标记：非空即已沉淀） */
+  /**
+   * 历史幂等标记（云效知识沉淀议题 ID）。
+   * 自动沉淀已改为「任务完成即处理、不建议题」，该字段不再用于幂等判定，
+   * 仅保留以兼容既有 `tasks.json`（不删除，避免破坏用户数据）。
+   */
   knowledgeIssueIds?: string[];
   /** 起源任务 ID：本任务由哪个任务的讨论/执行中发现的问题补录而来（来源追溯） */
   derivedFromTaskId?: string;
@@ -321,25 +326,6 @@ export interface Plan {
   archivedAt?: number;
 }
 
-/** 知识沉淀候选：一条对应一个云效审核议题。 */
-export interface KnowledgeSuggestion {
-  module: string;
-  section: string;
-  content: string;
-  evidence: string;
-  confidence: "confirmed" | "pending";
-  suggestedTitle: string;
-  /** 生成候选时绑定的知识图谱 SkillHub 目录名，用于防止跨项目知识库回写。 */
-  knowledgeGraphId?: string;
-}
-
-/** 创建知识沉淀审核议题的结果。 */
-export interface CreateKnowledgeIssueResult {
-  created: boolean;
-  duplicated: boolean;
-  workitemId: string;
-}
-
 /** 知识自动回写单条结果。 */
 export interface KnowledgeWritebackItem {
   index: number;
@@ -348,14 +334,23 @@ export interface KnowledgeWritebackItem {
   passed: boolean;
   written: boolean;
   reason: string;
+  /** 判定发生的层次：`L0` 结构 / `L1` 依据 / `L2` 去重 / `L3` 语义 / `write` 写入。 */
+  layer: string;
 }
 
-/** 知识自动回写整体结果。 */
-export interface KnowledgeWritebackResult {
-  items: KnowledgeWritebackItem[];
-  allPassed: boolean;
-  writtenCount: number;
-  commit: string | null;
+/** 任务完成后自动沉淀的上报事件（`knowledge-sedimentation`）。 */
+export interface KnowledgeSedimentationEvent {
+  taskId: string;
+  status: "running" | "ok" | "failed";
+  /** status=ok：实际写入条数。 */
+  written?: number;
+  /** status=ok：本次是否补推了此前失败留下的本地提交。 */
+  pushedPending?: boolean;
+  /** status=ok：逐条判定结果（含未通过的理由）。 */
+  items?: KnowledgeWritebackItem[];
+  commit?: string | null;
+  /** status=failed：失败原因（如「未产出知识沉淀产物」）。 */
+  error?: string;
 }
 
 // ── 云效 (Aliyun DevOps / Projex) ───────────────────────────────────────────

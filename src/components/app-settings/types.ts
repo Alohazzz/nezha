@@ -90,12 +90,16 @@ export const EMPTY_CODEUP_SETTINGS: CodeupSettings = {
 
 /** 知识沉淀自动回写配置 */
 export interface KnowledgeSettings {
-  /** 提交知识沉淀后经质量门校验自动写入技能库知识图谱并 git 提交推送 */
-  autoWriteback: boolean;
+  /**
+   * 知识沉淀**总开关**（后端默认开）。
+   * 开 = 任务完成后自动处理会话内产出的知识候选；关 = 完全不跑沉淀，
+   * 且该项目的 agent 不再被要求产出候选。
+   */
+  enabled: boolean;
 }
 
 export const EMPTY_KNOWLEDGE_SETTINGS: KnowledgeSettings = {
-  autoWriteback: false,
+  enabled: true,
 };
 
 export interface AppSettings {

@@ -39,12 +39,7 @@ import {
   type AgentEnabledState,
 } from "./types";
 import { DEFAULT_UI_FONT, getDefaultMonoFont, isAutoDefaultMonoFont } from "./types";
-import type {
-  CreateKnowledgeIssueResult,
-  FontFamily,
-  KnowledgeSuggestion,
-  KnowledgeWritebackResult,
-} from "./types";
+import type { FontFamily, KnowledgeSedimentationEvent } from "./types";
 import { quoteFontName } from "./utils/fonts";
 import {
   buildYunxiaoIssueLink,
@@ -76,11 +71,7 @@ import {
   selectAutoStart,
   type PlanWaitingBadge,
 } from "./utils/planQueue";
-import {
-  EMPTY_YUNXIAO_SETTINGS,
-  type KnowledgeSettings,
-  type YunxiaoSettings,
-} from "./components/app-settings/types";
+import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "./components/app-settings/types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -289,7 +280,8 @@ function shouldIgnoreTaskStatusTransition(current: TaskStatus, next: TaskStatus)
 /** 方案待办默认并发上限（project config `[plan] max_concurrent` 缺省时）：1 = 串行。 */
 const DEFAULT_PLAN_MAX_CONCURRENT = 1;
 
-function isLiveTerminalTaskStatus(status: TaskStatus): boolean {  return (
+function isLiveTerminalTaskStatus(status: TaskStatus): boolean {
+  return (
     status === "pending" ||
     status === "running" ||
     status === "input_required" ||
@@ -432,10 +424,7 @@ function App() {
   const pendingResumeInputRef = useRef<Record<string, string>>({});
   // 由「合并审核」发起的 codeup 审查/冲突任务，任务结束后需清理临时 worktree。
   const codeupTaskCleanupRef = useRef<
-    Record<
-      string,
-      { repository: string; mrId: number; repositoryId?: string; kind?: string }
-    >
+    Record<string, { repository: string; mrId: number; repositoryId?: string; kind?: string }>
   >({});
 
   const formatSaveProjectsError = useCallback(
@@ -869,12 +858,92 @@ function App() {
         updateTaskSession(task_id, session_id, session_path);
       },
     );
+    // 自动沉淀结果：任务完成后由后端上报（成功含逐条判定，失败含原因）。
+    // 失败时建一条云效议题作为**唯一人工入口**（成功路径完全不碰云效）。
+    const raiseSedimentationIssue = async (
+      payload: KnowledgeSedimentationEvent,
+      taskLabel: string,
+    ) => {
+      try {
+        const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+        const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+        if (!yunxiao.token || !yunxiao.organizationId) return;
+        const kbProjectId = yunxiao.knowledgeBaseProjectId ?? YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID;
+        // 后端只在「整轮未完成」时发 failed（不带 items；逐条拒绝属于 ok 分支的
+        // 只读结果），因此这里只描述失败原因与处理建议。
+        const description = [
+          `来源任务：${taskLabel}`,
+          `任务 ID：${payload.taskId}`,
+          "",
+          `失败原因：${payload.error ?? "未知"}`,
+          "",
+          "处理建议：确认后手动更新对应模块卡片，或将结论回填到任务提示词后重跑。",
+        ].join("\n");
+        await invoke("yunxiao_create_knowledge_issue", {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          projectId: kbProjectId,
+          // 带上 taskId：`yunxiao_create_knowledge_issue` 按标题精确去重，
+          // 同名任务若只靠标签会撞车 ⇒ 第二个失败静默不建议题。
+          subject: `【知识沉淀未完成】${taskLabel}（${payload.taskId.slice(0, 8)}）`,
+          description,
+        });
+      } catch (e) {
+        // 议题创建失败不再抛出：沉淀失败本身已通过 toast 提示，避免二次打扰。
+        console.warn("创建知识沉淀失败议题失败", e);
+      }
+    };
+
+    const p3 = listen<KnowledgeSedimentationEvent>("knowledge-sedimentation", (e) => {
+      const payload = e.payload;
+      setSedimentingTasks((prev) => {
+        if (!prev[payload.taskId]) return prev;
+        const next = { ...prev };
+        delete next[payload.taskId];
+        return next;
+      });
+      if (payload.status === "running") {
+        // 后端在前置条件都成立时才发 running，因此这里的状态是准确的（前端不猜）。
+        // running **不写入 knowledgeResults**：它没有 items，若被存下来会让已打开的
+        // 结果弹窗显示「写入 0 / 拒绝 0」这类假结果（只应有终态结果）。
+        setSedimentingTasks((prev) => ({ ...prev, [payload.taskId]: true }));
+        // 兜底超时：后端正常总会发终态事件，但进程崩溃 / emit 失败 / 等待 hub 写锁
+        // （最长 10 分钟）时按钮会永远停在「正在沉淀」，这里给一条自愈路径。
+        window.clearTimeout(sedimentingTimeoutsRef.current[payload.taskId]);
+        sedimentingTimeoutsRef.current[payload.taskId] = window.setTimeout(() => {
+          setSedimentingTasks((prev) => {
+            if (!prev[payload.taskId]) return prev;
+            const next = { ...prev };
+            delete next[payload.taskId];
+            return next;
+          });
+        }, SEDIMENTING_TIMEOUT_MS);
+        return;
+      }
+      // 终态：清掉兜底定时器。
+      window.clearTimeout(sedimentingTimeoutsRef.current[payload.taskId]);
+      delete sedimentingTimeoutsRef.current[payload.taskId];
+      setKnowledgeResults((prev) => ({ ...prev, [payload.taskId]: payload }));
+      if (payload.status === "failed") {
+        showToast(`知识沉淀未完成：${payload.error ?? ""}`, "warning");
+        const label = knowledgeTaskLabel(payload.taskId);
+        void raiseSedimentationIssue(payload, label);
+      }
+    });
     return () => {
       p1.then((fn) => fn());
       p2.then((fn) => fn());
+      p3.then((fn) => fn());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 取任务展示名（供失败议题标题用）；用 ref 读取，避免事件回调闭包过期。 */
+  function knowledgeTaskLabel(taskId: string): string {
+    const task = tasksRef.current.find((candidate) => candidate.id === taskId);
+    const label = task?.name ?? task?.prompt.slice(0, 60) ?? taskId;
+    return label;
+  }
 
   async function handleOpen() {
     const selected = await openDialog({ directory: true, multiple: false });
@@ -1186,10 +1255,7 @@ function App() {
     // 4) 后台创建该 MR 的代码文件夹（fetch 源/目标分支 + checkout 源分支）。
     // 对 HIS 这类大仓库首次可能是全量 clone，耗时较长；立即写一行进度到终端，
     // 避免任务停在 RunningView 却长时间「无反应」，让用户误以为没点成功。
-    tm.writeErrorToTerminal(
-      taskId,
-      `\r\n正在准备代码文件夹（拉取源/目标分支并切到源分支）…\r\n`,
-    );
+    tm.writeErrorToTerminal(taskId, `\r\n正在准备代码文件夹（拉取源/目标分支并切到源分支）…\r\n`);
     let worktreePath: string;
     try {
       worktreePath = await invoke<string>("codeup_pull_code", {
@@ -1319,7 +1385,12 @@ function App() {
       if (!task) return prev;
       const next = prev.map((t) =>
         t.id === taskId
-          ? { ...t, status: "todo" as TaskStatus, updatedAt: Date.now(), planDepsIgnored: undefined }
+          ? {
+              ...t,
+              status: "todo" as TaskStatus,
+              updatedAt: Date.now(),
+              planDepsIgnored: undefined,
+            }
           : t,
       );
       persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
@@ -1373,9 +1444,7 @@ function App() {
         worktreePath: task.worktreePath,
         branch: task.worktreeBranch,
         baseBranch: task.baseBranch,
-        expectedIssueTag: task.yunxiaoSerialNumber
-          ? issueTag(task.yunxiaoSerialNumber)
-          : undefined,
+        expectedIssueTag: task.yunxiaoSerialNumber ? issueTag(task.yunxiaoSerialNumber) : undefined,
       });
       // 合并成功后顺手把 worktree 与分支清掉，避免遗留残留
       await invoke("remove_task_worktree", {
@@ -1941,21 +2010,15 @@ function App() {
       // 3) 议题图片：全部失败阻断（与发起对话框一致），失败清理 draft 方案。
       let imagePaths: string[] = [];
       try {
-        const images = await invoke<YunxiaoIssueImagesPrepared>(
-          "yunxiao_prepare_issue_images",
-          {
-            token: yunxiao.token,
-            organizationId: yunxiao.organizationId,
-            workitemId: detail.id,
-            projectPath: project.path,
-            planId: plan.id,
-          },
-        );
+        const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+          token: yunxiao.token,
+          organizationId: yunxiao.organizationId,
+          workitemId: detail.id,
+          projectPath: project.path,
+          planId: plan.id,
+        });
         if (images.total > 0 && images.failed === images.total) {
-          showToast(
-            t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }),
-            "error",
-          );
+          showToast(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }), "error");
           await handleRemovePlanRecord(plan.id);
           return;
         }
@@ -1984,9 +2047,7 @@ function App() {
         planId: plan.id,
         hasBug,
       });
-      const link = yunxiao.projectId
-        ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id)
-        : "";
+      const link = yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "";
       const prompt = buildPlanDiscussionPrompt({
         issues: [detail],
         imagePathsByIssue: { [detail.id]: imagePaths },
@@ -2016,9 +2077,7 @@ function App() {
         return next;
       });
       setPlans((prev) => {
-        const next = prev.map((p) =>
-          p.id === plan.id ? { ...p, discussionTaskId: task.id } : p,
-        );
+        const next = prev.map((p) => (p.id === plan.id ? { ...p, discussionTaskId: task.id } : p));
         persistProjectPlans(plan.projectId, next);
         return next;
       });
@@ -2098,16 +2157,13 @@ function App() {
         workitemId: issue.id,
       });
       // 图片走 prepare 的 task_id 分支归档 `.nezha/attachments/<taskId>/`（任务结束自动清理）。
-      const images = await invoke<YunxiaoIssueImagesPrepared>(
-        "yunxiao_prepare_issue_images",
-        {
-          token: yunxiao.token,
-          organizationId: yunxiao.organizationId,
-          workitemId: issue.id,
-          projectPath: project.path,
-          taskId,
-        },
-      );
+      const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: issue.id,
+        projectPath: project.path,
+        taskId,
+      });
       if (images.total > 0 && images.failed === images.total) {
         throw new Error(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }));
       }
@@ -2122,7 +2178,6 @@ function App() {
       }
       const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
       const instructions = await invoke<string>("get_direct_execution_instructions", {
-        projectPath: project.path,
         taskId,
         hasBug,
         clarifyFirst: hasBug ? false : options.clarifyFirst,
@@ -2193,16 +2248,13 @@ function App() {
       });
 
       // 2) 议题图片归档任务附件目录（任务结束自动清理）；全部失败阻断，部分失败放行。
-      const images = await invoke<YunxiaoIssueImagesPrepared>(
-        "yunxiao_prepare_issue_images",
-        {
-          token: yunxiao.token,
-          organizationId: yunxiao.organizationId,
-          workitemId: detail.id,
-          projectPath: project.path,
-          taskId: task.id,
-        },
-      );
+      const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: detail.id,
+        projectPath: project.path,
+        taskId: task.id,
+      });
       if (images.total > 0 && images.failed === images.total) {
         showToast(t("yunxiao.images.allFailed", { error: images.errors[0] ?? "" }), "error");
         return;
@@ -2220,7 +2272,6 @@ function App() {
       // 3) 直接执行指令 + prompt 组装（议题即 spec，补充说明优先于议题描述）。
       const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
       const instructions = await invoke<string>("get_direct_execution_instructions", {
-        projectPath: project.path,
         taskId: task.id,
         hasBug,
         clarifyFirst: hasBug ? false : clarifyFirst,
@@ -2316,10 +2367,7 @@ function App() {
       showToast(t("plan.mdMissing", { error: String(e) }), "error");
       return false;
     }
-    const { overview, missing } = extractPlanOverviewForIssues(
-      planMarkdown,
-      issues.length,
-    );
+    const { overview, missing } = extractPlanOverviewForIssues(planMarkdown, issues.length);
     if (missing) {
       showToast(t("plan.overviewMissing"), "error");
       return false;
@@ -2360,10 +2408,9 @@ function App() {
     await Promise.all(
       taskIds.map(async (taskId) => {
         try {
-          instructionsByTaskId[taskId] = await invoke<string>(
-            "get_plan_execution_instructions",
-            { projectPath: project.path, taskId },
-          );
+          instructionsByTaskId[taskId] = await invoke<string>("get_plan_execution_instructions", {
+            taskId,
+          });
         } catch (e) {
           console.error("[plan] execution instructions failed:", e);
           instructionsByTaskId[taskId] = "";
@@ -2375,7 +2422,7 @@ function App() {
     const initialStatus: TaskStatus = input.autoStart ? "waiting_deps" : "todo";
     // 追加子方案：执行 prompt 附上游方案文档路径，让执行者能查证统筹节里引用的上游议题。
     const upstreamPlan = plan.parentPlanId
-      ? plans.find((p) => p.id === plan.parentPlanId) ?? null
+      ? (plans.find((p) => p.id === plan.parentPlanId) ?? null)
       : null;
     const tasksToCreate: Task[] = [];
     for (let i = 0; i < issues.length; i++) {
@@ -2391,9 +2438,7 @@ function App() {
           subject: issue.subject,
           categoryId: issue.category,
         },
-        link: issueLinkProjectId
-          ? buildYunxiaoIssueLink(issueLinkProjectId, issue.workitemId)
-          : "",
+        link: issueLinkProjectId ? buildYunxiaoIssueLink(issueLinkProjectId, issue.workitemId) : "",
         planOverview: overview,
         issueSection: section,
         planMdAbsolutePath: planMdPath(project.path, plan.id),
@@ -2428,9 +2473,7 @@ function App() {
     });
     setPlans((prev) => {
       const next = prev.map((p) =>
-        p.id === plan.id
-          ? { ...p, status: "executing" as PlanStatus, issues }
-          : p,
+        p.id === plan.id ? { ...p, status: "executing" as PlanStatus, issues } : p,
       );
       persistProjectPlans(plan.projectId, next);
       return next;
@@ -2484,7 +2527,6 @@ function App() {
           return;
         }
         const instructions = await invoke<string>("get_plan_execution_instructions", {
-          projectPath: project.path,
           taskId,
         });
         let link = "";
@@ -2764,10 +2806,7 @@ function App() {
   }
 
   /** 补写云效议题「价值评分」字段（评论已发布但字段写入失败时的重试入口，不重复发评论）。 */
-  async function handleRetryWritebackScoreField(
-    taskId: string,
-    value: number,
-  ): Promise<void> {
+  async function handleRetryWritebackScoreField(taskId: string, value: number): Promise<void> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
     const project = projects.find((candidate) => candidate.id === task.projectId);
@@ -2785,171 +2824,20 @@ function App() {
     });
   }
 
-  /** 生成知识沉淀候选：优先读取会话收尾时落盘的知识草稿，无草稿时内置规则 headless 提取。 */
-  async function handleGenerateKnowledgeSedimentation(
-    taskId: string,
-    force = false,
-  ): Promise<KnowledgeSuggestion[]> {
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task) throw new Error("Task not found");
-    const project = projects.find((candidate) => candidate.id === task.projectId);
-    if (!project) throw new Error("Project not found");
-    const sessionPath =
-      task.agent === "codex"
-        ? task.codexSessionPath
-        : task.agent === "claude"
-          ? task.claudeSessionPath
-          : undefined;
-    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
-    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
-    const link =
-      yunxiao.projectId && task.yunxiaoWorkitemId
-        ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
-        : "";
-    return invoke<KnowledgeSuggestion[]>("generate_knowledge_sedimentation", {
-      projectPath: project.path,
-      taskId,
-      serialNumber: task.yunxiaoSerialNumber ?? "",
-      taskName: task.name ?? task.prompt.slice(0, 80),
-      link,
-      sessionPath,
-      agent: task.agent === "codex" ? "codex" : "claude",
-      force,
-    });
-  }
+  /** 「沉淀中」状态的兜底时限（毫秒）。见事件处理器里的说明。 */
+  const SEDIMENTING_TIMEOUT_MS = 15 * 60 * 1000;
 
-  /** 批量创建知识沉淀审核议题（去重命中不重复建），返回新创建/去重命中的议题 ID。 */
-  async function handleCreateKnowledgeIssues(
-    taskId: string,
-    suggestions: KnowledgeSuggestion[],
-  ): Promise<string[]> {
-    const task = tasks.find((candidate) => candidate.id === taskId);
-    if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
-    const project = projects.find((candidate) => candidate.id === task.projectId);
-    if (!project) throw new Error("Project not found");
-    const appSettings = await invoke<{
-      yunxiao?: YunxiaoSettings;
-      knowledge?: KnowledgeSettings;
-    }>("load_app_settings");
-    const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
-    const autoWriteback = appSettings.knowledge?.autoWriteback ?? false;
-    if (!yunxiao.token || !yunxiao.organizationId) {
-      throw new Error(t("yunxiao.notConnected"));
-    }
-    const kbProjectId =
-      yunxiao.knowledgeBaseProjectId ?? YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID;
-    const link =
-      yunxiao.projectId && task.yunxiaoWorkitemId
-        ? buildYunxiaoIssueLink(yunxiao.projectId, task.yunxiaoWorkitemId)
-        : "";
-    // 一次提交合并成一条云效知识议题（所有候选进同一描述，不再每条一个议题）。
-    const serial = task.yunxiaoSerialNumber ?? "";
-    const taskLabel = (task.name ?? task.prompt).slice(0, 60);
-    const graphLabel = suggestions[0]?.knowledgeGraphId ?? "未绑定";
-    const title = `【知识沉淀】【${graphLabel}】${serial ? `${serial} ` : ""}${taskLabel}（${suggestions.length} 条）`;
-    const candidateSections = suggestions
-      .map(
-        (s, i) =>
-          [
-            `### ${i + 1}. ${s.module} / ${s.section}`,
-            `目标模块卡片：${s.module}（data/modules/${s.module}.md）`,
-            `目标知识库：${s.knowledgeGraphId || "未绑定"}`,
-            "",
-            s.content,
-            "",
-            `依据：${s.evidence}`,
-            `置信度：${s.confidence === "confirmed" ? "已确认" : "待验证"}`,
-          ].join("\n"),
-      )
-      .join("\n\n");
-    const description = [
-      `来源议题：${serial} ${link}`,
-      `候选数量：${suggestions.length}`,
-      "",
-      candidateSections,
-      "",
-      autoWriteback
-        ? "自动回写已开启：质量门通过的条目将自动写入模块卡片并 git 提交推送；全部通过时本议题自动置为已完成，未通过条目保留人工审核。"
-        : "审核指引：审核通过后由知识库负责人更新对应 data/modules/<module>.md 并提交（git 统一管理）。",
-    ].join("\n");
-    const result = await invoke<CreateKnowledgeIssueResult>(
-      "yunxiao_create_knowledge_issue",
-      {
-        token: yunxiao.token,
-        organizationId: yunxiao.organizationId,
-        projectId: kbProjectId,
-        subject: title,
-        description,
-      },
-    );
-    const createdIds = result.created ? [result.workitemId] : [];
-    if (createdIds.length > 0) {
-      setTasks((prev) => {
-        const next = prev.map((candidate) =>
-          candidate.id === taskId
-            ? {
-                ...candidate,
-                knowledgeIssueIds: [
-                  ...(candidate.knowledgeIssueIds ?? []),
-                  ...createdIds,
-                ],
-              }
-            : candidate,
-        );
-        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-        return next;
-      });
-    }
-    // 自动回写：仅在新建议题时执行一次（duplicated 命中说明此前已提交过，幂等跳过）。
-    if (autoWriteback && result.created) {
-      const agent = task.agent === "codex" ? "codex" : "claude";
-      try {
-        const writeback = await invoke<KnowledgeWritebackResult>(
-          "knowledge_auto_writeback",
-          { projectPath: project.path, suggestions, agent },
-        );
-        if (writeback.allPassed && writeback.writtenCount > 0) {
-          await invoke("yunxiao_complete_workitem", {
-            token: yunxiao.token,
-            organizationId: yunxiao.organizationId,
-            workitemId: result.workitemId,
-          });
-          showToast(
-            `知识已自动写入技能库（${writeback.writtenCount} 条）并推送，议题已置为已完成`,
-            "success",
-          );
-        } else {
-          const writtenLines = writeback.items
-            .filter((item) => item.written)
-            .map((item) => `- ${item.module} / ${item.section}：已自动写入模块卡片`);
-          const failedLines = writeback.items
-            .filter((item) => !item.passed)
-            .map((item) => `- ${item.module} / ${item.section}：${item.reason || "质量门未通过"}`);
-          const comment = [
-            `自动回写结果：通过 ${writeback.writtenCount} / 共 ${suggestions.length} 条。`,
-            "",
-            ...(writtenLines.length > 0 ? ["已自动写入：", ...writtenLines, ""] : []),
-            ...(failedLines.length > 0 ? ["待人工审核：", ...failedLines] : []),
-          ].join("\n");
-          await invoke("yunxiao_create_workitem_comment", {
-            token: yunxiao.token,
-            organizationId: yunxiao.organizationId,
-            workitemId: result.workitemId,
-            content: comment,
-          }).catch(() => {});
-          showToast(
-            `质量门通过 ${writeback.writtenCount}/${suggestions.length} 条，未通过条目保留人工审核`,
-            "warning",
-          );
-        }
-      } catch (e) {
-        showToast(`知识自动回写失败：${String(e)}（议题保留人工审核）`, "error");
-      }
-    }
-    return createdIds;
-  }
+  /**
+   * 知识沉淀结果（按任务）：自动沉淀完成后由 `knowledge-sedimentation` 事件填充。
+   * 同时用 `sedimentingTasks` 标记「进行中」，供按钮显示状态。
+   */
+  const [knowledgeResults, setKnowledgeResults] = useState<
+    Record<string, KnowledgeSedimentationEvent>
+  >({});
+  const [sedimentingTasks, setSedimentingTasks] = useState<Record<string, boolean>>({});
+  /** 每个任务的「沉淀中」兜底定时器（见事件处理器里的说明）。 */
+  const sedimentingTimeoutsRef = useRef<Record<string, number>>({});
 
-  /** 构建补录绑定待办任务对象（议题 Y ↔ 本地任务，`derivedFrom*` 溯源）。 */
   function buildBackfillTask(
     sourceTask: Task,
     draft: BackfillIssueRequest,
@@ -3127,8 +3015,7 @@ function App() {
     const id = window.setInterval(() => {
       const handler = backfillHandlerRef.current;
       if (!handler) return;
-      handler()
-        .catch(() => {});
+      handler().catch(() => {});
     }, BACKFILL_POLL_MS);
     return () => window.clearInterval(id);
   }, []);
@@ -3262,8 +3149,7 @@ function App() {
           changed = true;
           return { ...task, claudeSessionId: sessionId, claudeSessionPath: sessionPath };
         } else if (task.agent === "dsh") {
-          if (task.dshSessionId === sessionId && task.dshSessionPath === sessionPath)
-            return task;
+          if (task.dshSessionId === sessionId && task.dshSessionPath === sessionPath) return task;
           changed = true;
           return { ...task, dshSessionId: sessionId, dshSessionPath: sessionPath };
         } else {
@@ -3403,8 +3289,8 @@ function App() {
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
               onRetryWritebackScoreField={handleRetryWritebackScoreField}
-              onGenerateKnowledgeSedimentation={handleGenerateKnowledgeSedimentation}
-              onCreateKnowledgeIssues={handleCreateKnowledgeIssues}
+              knowledgeResults={knowledgeResults}
+              sedimentingTasks={sedimentingTasks}
               plans={plans}
               planDeps={planDeps}
               waitingBadges={waitingBadges}

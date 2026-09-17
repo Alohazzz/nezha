@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use notify::Watcher;
@@ -873,9 +875,80 @@ async fn ff_only_update(repo_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// git 源同步：缓存缺失则 shallow clone，存在则 fetch 探测、有变更才 --ff-only pull。
+/// 是否为浅克隆：`.git/shallow` 存在表示历史被裁剪。
+/// 浅历史会让知识图谱的 `git revert` 回滚失败，因此存量浅克隆需要 `--unshallow` 补救。
+fn is_shallow_clone(repo_dir: &Path) -> bool {
+    repo_dir.join(".git").join("shallow").is_file()
+}
+
+/// 本进程是否已尝试过把浅克隆补全为完整历史（避免每轮重复拉全历史）。
+static UNSHALLOW_ATTEMPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// 构造 `git clone` 参数。
+///
+/// **刻意不做浅克隆**（不带 `--depth`）：浅历史会让知识图谱的 `git revert` 回滚因
+/// 「历史不足」而失败，而仓库本身很小（实测 `.git` 约 2.6 MB），全量代价可忽略。
+fn clone_args(branch: Option<&str>, url: &str, repo_dir: &str) -> Vec<String> {
+    let mut args = vec!["clone".to_string()];
+    if let Some(b) = branch.map(str::trim).filter(|b| !b.is_empty()) {
+        args.push("--branch".to_string());
+        args.push(b.to_string());
+    }
+    args.push(url.to_string());
+    args.push(repo_dir.to_string());
+    args
+}
+
+/// 在技能目录内解析一个相对引用路径，并校验它**没有越界**。
+///
+/// 只接受技能目录内的相对路径：绝对路径、`..`、空段一律拒绝；
+/// 返回的路径仅用于读取，不做任何写入。
+fn resolve_skill_reference(skill_dir: &Path, relative: &str) -> Option<PathBuf> {
+    if relative.trim().is_empty() {
+        return None;
+    }
+    let rel = Path::new(relative);
+    if rel.is_absolute() {
+        return None;
+    }
+    let mut out = skill_dir.to_path_buf();
+    for segment in relative.split(['/', '\\']) {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return None;
+        }
+        out.push(segment);
+    }
+    Some(out)
+}
+
+/// 读取技能目录下某个参考文件的正文（如 `knowledge-graph` 的 `references/sedimentation.md`）。
+///
+/// 用于让「随 hub 热更新的契约文本」成为唯一事实源：调用方读不到时自行回退内嵌文本，
+/// 因此本函数失败一律返回 `None`（不报错、不 panic）。
+pub(crate) fn read_skill_reference(skill_name: &str, relative: &str) -> Option<String> {
+    if validate_skill_name(skill_name).is_err() {
+        return None;
+    }
+    let hub = configured_hub_path()?;
+    let skill_dir = Path::new(&hub).join(skill_name);
+    if !skill_dir.is_dir() {
+        return None;
+    }
+    let path = resolve_skill_reference(&skill_dir, relative)?;
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(content)
+}
+
+/// git 源同步：缓存缺失则完整 clone，存在则 fetch 探测、有变更才 --ff-only pull。
 /// 返回 (hub 目录绝对路径, 当前 commit)。
 async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String> {
+    // 与知识写入的 git 窗口互斥（见 HUB_GIT_LOCK）。所有 git 同步入口都经过本函数，
+    // 因此这一个卡点即可覆盖启动同步 / 手动同步 / 设置变更 / 定时同步四个路径。
+    let _hub_git_guard = lock_hub_git().await;
     let url = validate_git_url(source.url.as_deref().unwrap_or(""))?;
     let branch = source
         .branch
@@ -927,13 +1000,7 @@ async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String>
     }
 
     if missing {
-        let mut args = vec!["clone".to_string(), "--depth".to_string(), "1".to_string()];
-        if let Some(b) = &branch {
-            args.push("--branch".to_string());
-            args.push(b.clone());
-        }
-        args.push(url.clone());
-        args.push(repo_dir_str.clone());
+        let args = clone_args(branch.as_deref(), &url, &repo_dir_str);
         let (ok, _out, err) = run_git(args, None).await?;
         if !ok {
             // 清理半成品，允许下次重试
@@ -987,6 +1054,35 @@ async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String>
         }
         if head.trim() != fetched.trim() {
             ff_only_update(&repo_dir).await?;
+        }
+
+        // 存量浅克隆补救：完整 clone 只对新装生效，已存在的浅克隆需要显式 unshallow，
+        // 否则 `git revert` 会因历史不足失败。尽力而为：失败不阻断同步。
+        // 每个进程只尝试一次——若远端确实无法补全（或已是完整仓库但仍留 shallow 标记），
+        // 每轮重试都会白拉一次全历史并刷日志；实测补全本身很便宜（约 2 s、体积不增）。
+        let shallow_dir = repo_dir.clone();
+        let is_shallow = tokio::task::spawn_blocking(move || is_shallow_clone(&shallow_dir))
+            .await
+            .map_err(|e| e.to_string())?;
+        let already_attempted = UNSHALLOW_ATTEMPTED.swap(true, Ordering::SeqCst);
+        if is_shallow && !already_attempted {
+            let (ok, _out, err) = run_git(
+                vec![
+                    "-C".to_string(),
+                    repo_dir_str.clone(),
+                    "fetch".to_string(),
+                    "--unshallow".to_string(),
+                    "origin".to_string(),
+                ],
+                None,
+            )
+            .await?;
+            if !ok {
+                eprintln!(
+                    "[skills] 浅克隆补全为完整历史失败（不影响本次同步）: {}",
+                    truncate_git_error(&err)
+                );
+            }
         }
     }
 
@@ -1068,6 +1164,101 @@ async fn sync_skill_source_persist(cfg: SkillHubConfig) -> Result<SkillHubConfig
         },
         "path" => sync_path_source(cfg).await,
         other => Err(format!("Unsupported source type: {other}")),
+    }
+}
+
+/// hub 仓库上所有 git 操作的互斥锁。
+///
+/// 图谱数据就在 hub 检出里（`<hub>/knowledge-graphs/<id>`），所以「后台拉取」与
+/// 「知识写入的 add/commit/push」操作的是**同一个仓库**。只靠一个计数器观测是
+/// TOCTOU——读取与真正执行之间有数秒窗口，写入可能恰好插入。这里用真锁做互斥：
+/// 同步方持锁跑完整轮，写入方围绕自己的 git 窗口持锁。二者不会形成环路
+/// （同步方不取图谱写锁），故无死锁。
+static HUB_GIT_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
+
+/// 取得 hub 仓库的 git 操作锁。
+pub(crate) async fn lock_hub_git() -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = HUB_GIT_LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))).clone();
+    lock.lock_owned().await
+}
+
+/// hub 定时同步周期（提案 §7.3：每 15 分钟后台拉取，自动、有更新则提示）。
+const HUB_SYNC_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// 单轮同步的兜底超时。一轮会依次跑 `status` / `fetch` / `rev-parse` ×2 / `pull`
+/// （浅克隆还多一次 `--unshallow`），内层每条 git 命令各有 120 s 的 kill-safe 超时
+/// （`GIT_TIMEOUT`）。**外层必须显著大于内层之和**，否则外层超时会先杀掉正在执行的
+/// git，可能在 `.git/index.lock` 留下残骸而影响后续提交。
+const HUB_SYNC_ROUND_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 连续失败后的退避上限（断网时不要每 15 分钟撞一次）。
+const HUB_SYNC_BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
+
+/// 连续失败后的下一次等待时长：翻倍递增，上限 [`HUB_SYNC_BACKOFF_MAX`]。
+/// 成功或「跳过本轮」时由调用方复位为 [`HUB_SYNC_INTERVAL`]。
+fn next_sync_backoff(current: Duration) -> Duration {
+    // saturating_mul：`current * 2` 在极端输入下会 panic，而本函数应当是全函数。
+    current.saturating_mul(2).min(HUB_SYNC_BACKOFF_MAX)
+}
+
+/// 后台定时同步技能仓库（仅 git 源）。
+///
+/// 护栏（提案 §7.3）：
+/// 1. 全程异步，不阻塞 UI 线程；
+/// 2. 单轮有超时，失败**静默沿用上次缓存**（只记录 `lastSyncError`）；
+/// 3. 知识图谱写入进行中则跳过本轮（避免与本地提交互相干扰）；
+/// 4. 连续失败按 2 倍退避，上限 [`HUB_SYNC_BACKOFF_MAX`]，成功后复位；
+/// 5. 仅当 commit 真的变化时才广播 `skill-hub-changed`，避免每轮都刷新前端。
+pub async fn periodic_sync_loop(app: AppHandle) {
+    let mut backoff = HUB_SYNC_INTERVAL;
+    loop {
+        tokio::time::sleep(backoff).await;
+
+        // 路径源由文件 watcher 负责，这里只管 git 源。
+        let Ok(cfg) = load_hub_config_async().await else {
+            backoff = HUB_SYNC_INTERVAL;
+            continue;
+        };
+        if cfg.source.as_ref().map(|s| s.source_type.as_str()) != Some("git") {
+            backoff = HUB_SYNC_INTERVAL;
+            continue;
+        }
+        // 护栏 3：知识沉淀正在写图谱 / 提交推送时，跳过本轮。
+        if crate::knowledge::knowledge_write_in_progress() {
+            backoff = HUB_SYNC_INTERVAL;
+            continue;
+        }
+
+        let previous_commit = cfg.last_synced_commit.clone();
+        let previous_error = cfg.last_sync_error.clone();
+        let round = tokio::time::timeout(
+            HUB_SYNC_ROUND_TIMEOUT,
+            sync_skill_source_persist(cfg),
+        )
+        .await;
+
+        match round {
+            Ok(Ok(next)) => {
+                backoff = HUB_SYNC_INTERVAL;
+                // 护栏 5：内容真的变了，**或**从失败恢复到正常（清掉了 lastSyncError）
+                // 才通知前端——后者不通知的话，面板会一直显示已经恢复的旧错误。
+                let content_changed = next.last_synced_commit != previous_commit;
+                let recovered = previous_error.is_some() && next.last_sync_error.is_none();
+                if content_changed || recovered {
+                    let _ = app.emit("skill-hub-changed", serde_json::json!({}));
+                }
+            }
+            Ok(Err(error)) => {
+                // 护栏 2：失败静默沿用缓存，只退避；不打扰用户。
+                eprintln!("[skills] 后台同步失败（沿用缓存）: {error}");
+                backoff = next_sync_backoff(backoff);
+            }
+            Err(_) => {
+                eprintln!(
+                    "[skills] 后台同步超时（{} 秒），沿用缓存",
+                    HUB_SYNC_ROUND_TIMEOUT.as_secs()
+                );
+                backoff = next_sync_backoff(backoff);
+            }
+        }
     }
 }
 
@@ -2183,6 +2374,63 @@ fn upsert_installation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── hub 定时同步（提案 §7.3）────────────────────────────────────
+
+    #[test]
+    fn clone_is_full_not_shallow() {
+        // 浅克隆会让知识图谱的 git revert 因历史不足失败，必须保持完整克隆。
+        let args = clone_args(None, "https://example.com/x.git", "C:/cache/x");
+        assert_eq!(args[0], "clone");
+        assert!(
+            !args.iter().any(|a| a == "--depth"),
+            "不应带 --depth：{args:?}"
+        );
+        assert!(!args.iter().any(|a| a == "1"), "不应带 depth 值：{args:?}");
+        assert_eq!(args.last().unwrap(), "C:/cache/x");
+    }
+
+    #[test]
+    fn clone_args_includes_branch_only_when_set() {
+        let no_branch = clone_args(None, "u", "d");
+        assert!(!no_branch.iter().any(|a| a == "--branch"));
+        // 空白分支名视为未设置（与 sync_git_repo 的 trim/filter 语义一致）。
+        let blank = clone_args(Some("   "), "u", "d");
+        assert!(!blank.iter().any(|a| a == "--branch"), "{blank:?}");
+        let with_branch = clone_args(Some(" master "), "u", "d");
+        let idx = with_branch.iter().position(|a| a == "--branch").expect("--branch");
+        assert_eq!(with_branch[idx + 1], "master", "分支名应被 trim");
+    }
+
+    #[test]
+    fn sync_backoff_doubles_then_caps() {
+        assert_eq!(next_sync_backoff(HUB_SYNC_INTERVAL), Duration::from_secs(30 * 60));
+        assert_eq!(next_sync_backoff(Duration::from_secs(30 * 60)), HUB_SYNC_BACKOFF_MAX);
+        // 已达上限后不再增长。
+        assert_eq!(next_sync_backoff(HUB_SYNC_BACKOFF_MAX), HUB_SYNC_BACKOFF_MAX);
+        // 即便传入超大值也不会溢出 panic。
+        assert_eq!(next_sync_backoff(Duration::from_secs(u64::MAX / 2)), HUB_SYNC_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn detects_shallow_clone_by_git_shallow_file() {
+        let dir = std::env::temp_dir().join(format!("nezha-shallow-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        assert!(!is_shallow_clone(&dir), "无 .git/shallow 应判为非浅克隆");
+        std::fs::write(dir.join(".git").join("shallow"), "abc123
+").unwrap();
+        assert!(is_shallow_clone(&dir), "存在 .git/shallow 应判为浅克隆");
+        // 目录不存在时也不应 panic。
+        assert!(!is_shallow_clone(&dir.join("nope")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_interval_is_fifteen_minutes() {
+        // 提案 §7.3 明确 15 分钟；实现若改动，这里会失败提醒同步更新文档。
+        assert_eq!(HUB_SYNC_INTERVAL, Duration::from_secs(15 * 60));
+    }
 
     #[test]
     fn parse_single_line_description() {

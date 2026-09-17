@@ -141,6 +141,7 @@ fn finalize_task_exit(
     app: &AppHandle,
     task_id: &str,
     project_path: &str,
+    agent: &str,
     is_codex: bool,
     exit_ok: bool,
     exit_code: Option<u32>,
@@ -223,6 +224,14 @@ fn finalize_task_exit(
         };
         if let Some(real_path) = real_path {
             let _ = crate::drafts::gather_task_drafts(project_path, &real_path, task_id);
+            // 知识沉淀自动处理：任务完成后读会话内产出的候选 → 四层门 → 写入图谱。
+            // 放在 gather 之后（否则 worktree 里写的 knowledge.json 还没收拢到项目根）。
+            crate::knowledge::spawn_auto_sedimentation(
+                app.clone(),
+                task_id.to_string(),
+                real_path,
+                agent.to_string(),
+            );
         }
         crate::system_notify::notify_task_event(
             app,
@@ -358,13 +367,33 @@ fn setup_env(cmd: &mut CommandBuilder) {
 ///   agent 与轮询会话发现并行重复上报（见 run_task / resume_task / fork 注释）。
 ///   hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作，缺 EVENT_DIR 时
 ///   脚本内部校验直接 exit 0，不会重复上报。
-fn setup_nezha_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, use_hooks: bool) {
+/// 是否把知识沉淀产出契约注入任务提示词。
+///
+/// 两个条件**都要**满足：
+/// - 项目绑定了图谱（未绑定 ⇒ 没有可沉淀目标，强求只会逼出无意义的 skipped）
+/// - 知识沉淀总开关开启（关闭 ⇒ 连产出都不该要求，与设置项文档语义一致）
+fn should_inject_sediment_contract(graph_id: &str, sedimentation_enabled: bool) -> bool {
+    !graph_id.trim().is_empty() && sedimentation_enabled
+}
+
+fn setup_nezha_env(
+    cmd: &mut CommandBuilder,
+    task_id: &str,
+    agent: &str,
+    use_hooks: bool,
+    real_project_path: &str,
+) {
     cmd.env("NEZHA_TASK_ID", task_id);
     cmd.env("NEZHA_AGENT", agent);
     if use_hooks {
         if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
             cmd.env("NEZHA_EVENT_DIR", dir.to_string_lossy().as_ref());
         }
+    }
+    // 图谱位置注入：用**主项目**路径解析（worktree 里没有 .nezha/config.toml）。
+    // best-effort：未绑定图谱或读配置失败时不注入，不影响任务启动。
+    for (key, value) in crate::knowledge::knowledge_env_for_project(real_project_path) {
+        cmd.env(key, value);
     }
 }
 
@@ -536,7 +565,13 @@ fn spawn_pty_reader(
 }
 
 /// 在后台线程中轮询子进程退出状态，退出后调用 finalize_task_exit。
-fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_codex: bool) {
+fn spawn_exit_monitor(
+    app: AppHandle,
+    task_id: String,
+    project_path: String,
+    agent: String,
+    is_codex: bool,
+) {
     tokio::task::spawn_blocking(move || loop {
         let exit_status = {
             let tm = app.state::<TaskManager>();
@@ -557,7 +592,15 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
             };
             // 等待会话注册完成
             wait_for_session(&app, &task_id, is_codex);
-            finalize_task_exit(&app, &task_id, &project_path, is_codex, exit_ok, exit_code);
+            finalize_task_exit(
+                &app,
+                &task_id,
+                &project_path,
+                &agent,
+                is_codex,
+                exit_ok,
+                exit_code,
+            );
             return;
         }
 
@@ -706,6 +749,7 @@ struct SpawnedForkTask {
 /// 必须整体运行在 blocking 线程，避免占用 Tauri 的 Tokio worker。
 fn spawn_fork_task_process(
     project_path: &str,
+    real_project_path: &str,
     task_id: &str,
     agent: &str,
     source_session_id: &str,
@@ -755,7 +799,7 @@ fn spawn_fork_task_process(
     };
     command.cwd(project_path);
     setup_env(&mut command);
-    setup_nezha_env(&mut command, task_id, agent, use_hooks);
+    setup_nezha_env(&mut command, task_id, agent, use_hooks, real_project_path);
     for (key, value) in &launch.extra_env {
         command.env(key, value);
     }
@@ -803,6 +847,20 @@ fn spawn_fork_task_process(
 mod fork_command_tests {
     use super::*;
     use std::ffi::OsStr;
+
+    /// 产出契约的注入条件：绑定图谱 **且** 总开关开启（任一不满足都不注入）。
+    #[test]
+    fn sediment_contract_requires_graph_and_master_switch() {
+        // 绑定 + 开关开 ⇒ 注入
+        assert!(should_inject_sediment_contract("HIS", true));
+        // 总开关关闭 ⇒ 不注入（关闭后连产出都不该要求）
+        assert!(!should_inject_sediment_contract("HIS", false));
+        // 未绑定图谱 ⇒ 不注入
+        assert!(!should_inject_sediment_contract("", true));
+        assert!(!should_inject_sediment_contract("   ", true));
+        // 两者都不满足 ⇒ 不注入
+        assert!(!should_inject_sediment_contract("", false));
+    }
 
     #[test]
     fn builds_codex_fork_arguments() {
@@ -966,7 +1024,7 @@ pub async fn run_task(
     task_manager
         .task_real_paths
         .lock()
-        .insert(task_id.clone(), real_project_path);
+        .insert(task_id.clone(), real_project_path.clone());
 
     let pair = pty_system()
         .openpty(PtySize {
@@ -1011,13 +1069,28 @@ pub async fn run_task(
     };
 
     // 将文本附件路径追加到提示词
-    let final_prompt = if text_paths.is_empty() {
+    let with_text_paths = if text_paths.is_empty() {
         prompt_with_images
     } else {
         format!(
             "{}\n\n[Attached text files — read these for full context]\n{}",
             prompt_with_images,
             text_paths.join("\n")
+        )
+    };
+
+    // 知识沉淀产出契约：仅对**绑定了知识图谱**的项目注入（未绑定的项目没有可沉淀目标，
+    // 强求只会逼出无意义的 skipped）。图谱身份取自项目配置，已在上面读出。
+    let final_prompt = if !should_inject_sediment_contract(
+        &config.knowledge.graph_id,
+        crate::app_settings::load_settings_internal().knowledge.enabled,
+    ) {
+        with_text_paths
+    } else {
+        format!(
+            "{}\n\n---\n{}",
+            with_text_paths,
+            crate::agent_assist::session_sedimentation_contract(&task_id)
         )
     };
 
@@ -1122,7 +1195,7 @@ pub async fn run_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks);
+    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks, &real_project_path);
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -1187,7 +1260,8 @@ pub async fn run_task(
         session_tx,
         None,
     );
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    let agent_for_monitor = agent.clone();
+    spawn_exit_monitor(app, task_id, project_path, agent_for_monitor, is_codex);
 
     Ok(())
 }
@@ -1357,7 +1431,7 @@ pub async fn resume_task(
     task_manager
         .task_real_paths
         .lock()
-        .insert(task_id.clone(), real_project_path);
+        .insert(task_id.clone(), real_project_path.clone());
 
     let pair = pty_system()
         .openpty(PtySize {
@@ -1434,7 +1508,7 @@ pub async fn resume_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks);
+    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks, &real_project_path);
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -1481,7 +1555,8 @@ pub async fn resume_task(
         None,
         None,
     );
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    let agent_for_monitor = agent.clone();
+    spawn_exit_monitor(app, task_id, project_path, agent_for_monitor, is_codex);
 
     Ok(())
 }
@@ -1508,6 +1583,9 @@ pub async fn fork_task(
         MAX_REASONING_EFFORT_BYTES,
     )?;
     let launch_project_path = project_path.clone();
+    // fork_task 收到的 project_path 已是主项目路径（前端传 project.path，不含 worktree），
+    // 故直接作为图谱解析来源。
+    let launch_real_project_path = project_path.clone();
     let launch_task_id = task_id.clone();
     let launch_agent = agent.clone();
     // 终端就绪握手：与 run_task 同理，spawn 前等前端 xterm 挂载（issue #74）。
@@ -1524,6 +1602,7 @@ pub async fn fork_task(
     let spawned = tokio::task::spawn_blocking(move || {
         spawn_fork_task_process(
             &launch_project_path,
+            &launch_real_project_path,
             &launch_task_id,
             &launch_agent,
             &source_session_id,
@@ -1596,7 +1675,8 @@ pub async fn fork_task(
         session_tx,
         None,
     );
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    let agent_for_monitor = agent.clone();
+    spawn_exit_monitor(app, task_id, project_path, agent_for_monitor, is_codex);
 
     Ok(())
 }

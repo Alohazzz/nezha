@@ -1,17 +1,28 @@
-//! 知识沉淀自动回写：把通过「规则 + Agent」两层质量门的知识候选写入
-//! 项目配置绑定的知识图谱模块卡片，并 git 提交推送，
-//! 替代「知识库负责人手工更新模块卡片」这最后一公里。
+//! 知识沉淀自动回写：把通过**四层质量门**的知识候选写入项目配置绑定的知识图谱
+//! 模块卡片，并 git 提交推送，替代「知识库负责人手工更新模块卡片」这最后一公里。
 //!
-//! 设计要点（与产品决策一致）：
-//! - 规则层（不调 LLM）：evidence 非空、confidence=confirmed、模块/section 合法、
-//!   目标文件存在、内容未重复。挡掉明显不合格的候选，零成本、确定性。
-//! - Agent 层：一次 headless 调用批量语义质检（去重 / 冲突 / 依据相关性），
-//!   技能规则由 SkillHub 的 `knowledge-quality-gate` 统一维护。
-//! - 只增不改：在对应 section 末尾追加「日期 + 置信度 + 内容 + 依据」，保留既有内容。
+//! 设计依据：`docs/proposals/knowledge-auto-sedimentation-v2.md` §5。
+//! 核心原则是**确定性的事不交给 LLM**：
+//! - L0 结构（不调 LLM）：字段完整、confidence=confirmed、模块/section 合法、目标卡片存在。
+//! - L1 依据核验（不调 LLM）：evidence 声称的文件必须真实存在，行号在范围内，
+//!   内容里反引号标注的符号能在依据中定位。见 [`crate::knowledge_gate::verify_evidence`]。
+//! - L2 去重（不调 LLM）：规范化后相等即判重（击穿反引号 / 空白 / 日期 / 来源标注差异）；
+//!   字符 bigram 只用于检索可疑条目，不单独裁定重复。
+//! - L3 语义（一次 LLM 调用 × 2）：内联相关既有条目与 section 清单，
+//!   判定 duplicate/conflict/distinct，**两次独立运行一致才放行**。
+//!
+//! 取向是「宁缺毋滥」：任一层不确定都倒向拒绝，拒绝理由分层可见（`item.layer`）。
+//! 门本身的失败（超时 / 输出不可解析）按**逐条降级**处理，不再整批报错丢弃知识。
+//! 只增不改：在对应 section 末尾追加「日期 + 置信度 + 内容 + 依据」，保留既有内容。
 
+use crate::knowledge_gate::{
+    self, EvidenceKind, ExistingEntry, GateContext, GateInput, GateVerdict,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use tauri::Emitter;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
@@ -24,7 +35,10 @@ pub struct KnowledgeCandidate {
     pub content: String,
     pub evidence: String,
     pub confidence: String,
+    /// 候选的标题建议。写入格式不使用它、去重判定也不依赖它（提案 §6.5），
+    /// 但产出契约允许 agent 携带，故保留字段以免反序列化失败。
     #[serde(default)]
+    #[allow(dead_code)]
     pub suggested_title: String,
     #[serde(default)]
     pub knowledge_graph_id: String,
@@ -40,6 +54,9 @@ pub struct KnowledgeWritebackItem {
     pub passed: bool,
     pub written: bool,
     pub reason: String,
+    /// 判定发生的层次：`L0` 结构 / `L1` 依据 / `L2` 去重 / `L3` 语义 / `write` 写入。
+    /// 供拒因分层统计（提案 §9.2）。
+    pub layer: String,
 }
 
 /// 一次提交的整体回写结果。
@@ -50,6 +67,8 @@ pub struct KnowledgeWritebackResult {
     pub all_passed: bool,
     pub written_count: usize,
     pub commit: Option<String>,
+    /// 本次是否补推了此前失败留下的本地提交（重试语义的可见性，§8.4）。
+    pub pushed_pending: bool,
 }
 
 /// 项目可选的一个知识图谱目标。目录名是稳定 ID；展示名优先取 SKILL.md 后的首个 H1。
@@ -116,7 +135,35 @@ pub async fn list_knowledge_graph_adapters() -> Result<Vec<KnowledgeGraphAdapter
 static GRAPH_WRITE_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
-async fn lock_graph(graph_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+/// 当前**正在**执行知识图谱写入（含 git 提交 / 推送）的数量。
+/// hub 定时同步据此避让：写入期间拉取可能与本地提交互相干扰。
+static GRAPH_WRITE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// 是否有知识图谱写入正在进行。供 hub 定时同步避让，不阻塞调用方。
+pub(crate) fn knowledge_write_in_progress() -> bool {
+    GRAPH_WRITE_ACTIVE.load(Ordering::SeqCst) > 0
+}
+
+/// 当前写入计数。仅供测试断言精确值（生产代码请用 [`knowledge_write_in_progress`]）。
+#[cfg(test)]
+pub(crate) fn graph_write_active_count() -> usize {
+    GRAPH_WRITE_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// 持锁守卫：计数在获取后 +1、释放时 -1，供 [`knowledge_write_in_progress`] 观测。
+pub(crate) struct GraphWriteGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for GraphWriteGuard {
+    fn drop(&mut self) {
+        GRAPH_WRITE_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 取得某图谱的写锁。同一图谱的写入被串行化；不同图谱可并发。
+/// 计数在**拿到锁之后**才 +1，因此排队等待的调用方不会被算作「正在写入」。
+pub(crate) async fn lock_graph(graph_id: &str) -> GraphWriteGuard {
     let locks = GRAPH_WRITE_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let lock = locks
         .lock()
@@ -124,28 +171,91 @@ async fn lock_graph(graph_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
         .entry(graph_id.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone();
-    lock.lock_owned().await
+    let guard = lock.lock_owned().await;
+    GRAPH_WRITE_ACTIVE.fetch_add(1, Ordering::SeqCst);
+    GraphWriteGuard { _guard: guard }
 }
 
-async fn module_card_has_uncommitted_changes(
+/// 一次性取出「哪些待写模块卡片有未提交人工修改」。整批一次 `git status`，
+/// 避免按候选逐条调用产生 N 个子进程。命令失败时**保守地视为全部脏**（逐条降级为不写入），
+/// 而不是整批报错——否则已经付出的模型判定会被白费掉。
+async fn dirty_module_cards(
     graph: &KnowledgeTarget,
-    module: &str,
-) -> Result<bool, String> {
-    let path = module_card_path(graph, module)?;
-    let rel = path
-        .strip_prefix(&graph.graph_dir)
-        .map_err(|_| "模块卡片路径越界".to_string())?;
-    let rel = rel.to_string_lossy().replace('\\', "/");
+    modules: &[String],
+) -> Result<HashSet<String>, String> {
+    let mut pathspecs: Vec<String> = Vec::new();
+    for module in modules {
+        let path = module_card_path(graph, module)?;
+        let rel = path
+            .strip_prefix(&graph.graph_dir)
+            .map_err(|_| "模块卡片路径越界".to_string())?;
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if !pathspecs.contains(&rel) {
+            pathspecs.push(rel);
+        }
+    }
+    if pathspecs.is_empty() {
+        return Ok(HashSet::new());
+    }
+    // `core.quotepath` 默认会对非 ASCII 路径做 C 转义（`"data/modules/æ.md"`），
+    // 那样解析出的模块名是垃圾、dirty 判定落空，卡片会被**静默覆盖**——正是本层要防的事。
+    let mut args: Vec<String> = vec![
+        "-c".into(),
+        "core.quotepath=false".into(),
+        "status".into(),
+        "--porcelain".into(),
+        "--".into(),
+    ];
+    args.extend(pathspecs);
     let result = crate::git::run_git_with_timeout(
         graph.graph_dir.clone(),
-        vec!["status".into(), "--porcelain".into(), "--".into(), rel],
-        std::time::Duration::from_secs(10),
+        args,
+        std::time::Duration::from_secs(15),
     )
     .await?;
-    Ok(!String::from_utf8_lossy(&result.stdout).trim().is_empty())
+    if !result.status.success() {
+        eprintln!(
+            "[knowledge] git status 失败，按全部未提交处理：{}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        );
+        return Ok(modules.iter().cloned().collect());
+    }
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let mut dirty: HashSet<String> = HashSet::new();
+    for line in stdout.lines() {
+        // porcelain 行：`XY path`（path 可能含空格，取状态字段之后的整段）。
+        let Some(rest) = line.get(3..) else { continue };
+        let norm = rest.trim().trim_matches('"').replace('\\', "/");
+        if let Some(name) = norm.rsplit('/').next() {
+            if let Some(module) = name.strip_suffix(".md") {
+                dirty.insert(module.to_string());
+            }
+        }
+    }
+    Ok(dirty)
 }
 
-const QUALITY_GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+/// L3 语义判定单次调用的超时。内联上下文后实测 5–20 s，120 s 留足余量。
+/// 超时按**逐条降级**处理（不整批报错），见 [`knowledge_auto_writeback`]。
+const QUALITY_GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// 单次质量门提示词的字数上限。Windows `CreateProcess` 的命令行上限是 32767 字符，
+/// 而提示词走 argv，因此必须显式分批，避免多余候选静默落入 fail-closed。
+const MAX_GATE_PROMPT_CHARS: usize = 20_000;
+
+/// 内联进质量门的既有条目条数上限（按 bigram 覆盖率取最相近的若干条）。
+const RELATED_ENTRY_K: usize = 8;
+/// 内联既有条目的相关度下限：低于该值的条目不值得占用提示词预算。
+const RELATED_ENTRY_FLOOR: f64 = 0.30;
+/// 内联条目总数硬上限，防止 related 集合本身撑爆每个分块的预算。
+const RELATED_ENTRY_MAX: usize = 40;
+/// 单条内联既有条目的字数上限（含截断符）。实测卡片条目最长约 480 字符，
+/// 取 400 既保留语义又给 argv 上限留出余量。
+const RELATED_ENTRY_MAX_CHARS: usize = 400;
+/// 送入质量门的单字段长度上限，避免超长候选把提示词撑爆。
+const GATE_FIELD_MAX_CHARS: usize = 4000;
+/// 参与 L2 比对的条目的最短归一化长度；过短片段不参与比对。
+const MIN_COMPARABLE_CHARS: usize = 6;
 
 pub(crate) fn knowledge_graphs_root(hub_path: &Path) -> PathBuf {
     hub_path.join("knowledge-graphs")
@@ -210,6 +320,307 @@ pub(crate) fn list_knowledge_targets_internal() -> Result<Vec<KnowledgeTarget>, 
     }
     targets.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(targets)
+}
+
+/// 任务完成后自动处理知识沉淀（best-effort，superseded 由日志与事件体现）。
+///
+/// 决策（提案 §8.1）：任务完成即自动处理，无手动按钮。前置条件是三条**都已成立**：
+/// - 总开关开启（`settings.knowledge.enabled`，默认开）
+/// - 项目绑定了图谱（`graph_id` 非空；未绑定项目连产出契约都不注入）
+/// - 该任务的会话内产物存在（缺失 = 「漏了」，由 `run_auto_sedimentation` 报错）
+///
+/// 本函数**立即返回**，实际工作在后台任务里跑（一次沉淀含最多两次模型调用，
+/// 不能拖住 PTY 退出收尾路径）。结果通过 `knowledge-sedimentation` 事件上报。
+pub fn spawn_auto_sedimentation(
+    app: tauri::AppHandle,
+    task_id: String,
+    real_project_path: String,
+    agent: String,
+) {
+    if !crate::app_settings::load_settings_internal().knowledge.enabled {
+        return; // 总开关关闭：不跑沉淀，也不要求产出
+    }
+    tauri::async_runtime::spawn(async move {
+        // 前置条件（总开关 / 绑定图谱 / 产物存在）通过后才发 running，前端据此准确显示
+        // 「沉淀中」，不必也不应在前端猜（前端读不到项目是否绑定图谱）。
+        let resolved_graph_id = resolve_knowledge_target(real_project_path.clone())
+            .await
+            .ok()
+            .map(|target| {
+                let _ = app.emit(
+                    "knowledge-sedimentation",
+                    serde_json::json!({ "taskId": task_id, "status": "running", "graph": target.id }),
+                );
+                target.id
+            });
+        let result = run_auto_sedimentation(&task_id, &real_project_path, &agent).await;
+        // 指标记录（best-effort）：无论成败都记，使拒绝率 / 缺失率 / 补推可统计（§9.2）。
+        // 未绑定图谱的项目**不记**：它本就不该沉淀，记进去只会给分母灌水
+        // （skipped 会同时混入「未绑定 / 显式跳过 / 无候选」三种成因）。
+        let graph_for_metric = resolved_graph_id.unwrap_or_default();
+        let record_metrics = !graph_for_metric.is_empty();
+        match result {
+            Ok(outcome) => {
+                if record_metrics {
+                    let record = KnowledgeMetricRecord {
+                    at: chrono::Utc::now().timestamp_millis(),
+                    task_id: task_id.clone(),
+                    graph_id: graph_for_metric.clone(),
+                    status: if outcome.items.is_empty() {
+                        "skipped".to_string()
+                    } else {
+                        "ok".to_string()
+                    },
+                    written: outcome.written_count,
+                    rejected_by_layer: rejected_by_layer(&outcome.items),
+                    pushed_pending: outcome.pushed_pending,
+                    error: None,
+                    };
+                    let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
+                }
+                let _ = app.emit(
+                    "knowledge-sedimentation",
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "status": "ok",
+                        "written": outcome.written_count,
+                        "pushedPending": outcome.pushed_pending,
+                        "items": outcome.items,
+                        "commit": outcome.commit,
+                    }),
+                );
+            }
+            Err(error) => {
+                if record_metrics {
+                    let record = KnowledgeMetricRecord {
+                        at: chrono::Utc::now().timestamp_millis(),
+                        task_id: task_id.clone(),
+                        graph_id: graph_for_metric.clone(),
+                        status: "failed".to_string(),
+                        written: 0,
+                        rejected_by_layer: HashMap::new(),
+                        pushed_pending: false,
+                        error: Some(error.clone()),
+                    };
+                    let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
+                }
+                eprintln!("[knowledge] 自动沉淀未完成：{error}");
+                let _ = app.emit(
+                    "knowledge-sedimentation",
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "status": "failed",
+                        "error": error,
+                    }),
+                );
+            }
+        }
+    });
+}
+
+/// 一次沉淀运行的指标记录（提案 §9.2 的自动指标数据源）。
+///
+/// 以 JSONL 追加到 `~/.nezha/knowledge-metrics.jsonl`：单文件、追加写、无需迁移，
+/// 且失败/成功都记录，使「拒绝率、产物缺失率、退避与补推」都能被统计。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeMetricRecord {
+    /// 记录时间（Unix 毫秒）。
+    pub at: i64,
+    pub task_id: String,
+    pub graph_id: String,
+    /// `ok` 已完成 / `failed` 未完成（含产物缺失）。
+    pub status: String,
+    pub written: usize,
+    /// 各层拒绝条数（L0 / L1 / L2 / L3 / write）。
+    pub rejected_by_layer: HashMap<String, usize>,
+    /// 本次是否补推了此前失败留下的本地提交。
+    pub pushed_pending: bool,
+    /// 失败原因（status=failed 时）。
+    pub error: Option<String>,
+}
+
+fn knowledge_metrics_path() -> Result<PathBuf, String> {
+    let home = crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
+    Ok(home.join(".nezha").join("knowledge-metrics.jsonl"))
+}
+
+/// 追加一条指标记录（best-effort：指标写失败绝不影响沉淀本身）。
+fn append_metric_record(record: &KnowledgeMetricRecord) {
+    let Ok(path) = knowledge_metrics_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(line) = serde_json::to_string(record) else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// 汇总指标：读取最近 `days` 天的记录（`days <= 0` 表示全部）。
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeMetricsSummary {
+    pub total_runs: usize,
+    pub ok_runs: usize,
+    pub failed_runs: usize,
+    pub skipped_runs: usize,
+    pub written_total: usize,
+    pub rejected_by_layer: HashMap<String, usize>,
+    pub pushed_pending_runs: usize,
+}
+
+pub(crate) fn summarize_metrics(records: &[KnowledgeMetricRecord]) -> KnowledgeMetricsSummary {
+    let mut summary = KnowledgeMetricsSummary::default();
+    for record in records {
+        summary.total_runs += 1;
+        match record.status.as_str() {
+            "ok" => summary.ok_runs += 1,
+            "failed" => summary.failed_runs += 1,
+            "skipped" => summary.skipped_runs += 1,
+            _ => {}
+        }
+        summary.written_total += record.written;
+        if record.pushed_pending {
+            summary.pushed_pending_runs += 1;
+        }
+        for (layer, count) in &record.rejected_by_layer {
+            *summary.rejected_by_layer.entry(layer.clone()).or_insert(0) += count;
+        }
+    }
+    summary
+}
+
+/// 读取最近 `days` 天的沉淀指标汇总（供设置页/排查使用）。
+#[tauri::command]
+pub async fn read_knowledge_metrics(days: Option<i64>) -> Result<KnowledgeMetricsSummary, String> {
+    tokio::task::spawn_blocking(move || -> Result<KnowledgeMetricsSummary, String> {
+        let path = knowledge_metrics_path()?;
+        if !path.is_file() {
+            return Ok(KnowledgeMetricsSummary::default());
+        }
+        let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取指标失败: {e}"))?;
+        let cutoff = days
+            .filter(|d| *d > 0)
+            .map(|d| chrono::Utc::now().timestamp_millis() - d * 24 * 60 * 60 * 1000);
+        let records: Vec<KnowledgeMetricRecord> = raw
+            .lines()
+            .filter_map(|line| serde_json::from_str::<KnowledgeMetricRecord>(line).ok())
+            .filter(|record| cutoff.map(|c| record.at >= c).unwrap_or(true))
+            .collect();
+        Ok(summarize_metrics(&records))
+    })
+    .await
+    .map_err(|e| format!("读取指标线程错误: {e}"))?
+}
+
+/// 从逐条结果统计各层拒绝数。
+fn rejected_by_layer(items: &[KnowledgeWritebackItem]) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for item in items.iter().filter(|item| !item.passed) {
+        *counts.entry(item.layer.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// 跑一次自动沉淀：读会话内候选 → 分层门 → 写入 + 提交推送。
+async fn run_auto_sedimentation(
+    task_id: &str,
+    real_project_path: &str,
+    agent: &str,
+) -> Result<KnowledgeWritebackResult, String> {
+    // 未绑定图谱的项目直接跳过（不是错误——产出契约本就没注入）。
+    let target = match resolve_knowledge_target(real_project_path.to_string()).await {
+        Ok(target) => target,
+        Err(_) => return Ok(empty_writeback_result()),
+    };
+    // 复用同一套产出契约解析（含 skipped / 图谱兜底 / 缺失判定）。
+    let draft = crate::drafts::read_draft_file(real_project_path, task_id, "knowledge.json")
+        .map_err(|e| format!("读取知识沉淀产物失败: {e}"))?
+        .filter(|raw| !raw.trim().is_empty());
+    let Some(raw) = draft else {
+        // 缺失 = 「漏了」：如实报错，不静默（这是「忘了」与「确实没有」的区分点）。
+        return Err(format!(
+            "本次任务未产出知识沉淀产物（.nezha/drafts/{task_id}/knowledge.json）"
+        ));
+    };
+    let parsed = crate::agent_assist::parse_knowledge_draft(&raw, &target.id)?;
+    if parsed.is_skipped() {
+        return Ok(empty_writeback_result());
+    }
+    let candidates: Vec<KnowledgeCandidate> = parsed
+        .candidates()
+        .iter()
+        .map(|s| KnowledgeCandidate {
+            module: s.module.clone(),
+            section: s.section.clone(),
+            content: s.content.clone(),
+            evidence: s.evidence.clone(),
+            confidence: s.confidence.clone(),
+            suggested_title: s.suggested_title.clone(),
+            knowledge_graph_id: s.knowledge_graph_id.clone(),
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(empty_writeback_result());
+    }
+    // agent 取自该任务本身的 agent（不是「默认 agent」——任务可能用非默认的那个）。
+    let agent = if agent == "claude" || agent == "codex" {
+        agent.to_string()
+    } else {
+        "claude".to_string()
+    };
+    knowledge_auto_writeback(real_project_path.to_string(), candidates, agent).await
+}
+
+fn empty_writeback_result() -> KnowledgeWritebackResult {
+    KnowledgeWritebackResult {
+        items: Vec::new(),
+        all_passed: true,
+        written_count: 0,
+        commit: None,
+        pushed_pending: false,
+    }
+}
+
+/// 供 PTY 启动时注入给 agent 的图谱环境变量（best-effort，失败返回空）。
+///
+/// 图谱身份由 Nezha 从**主项目**配置解析后下发，因此在 worktree 中
+/// （`.nezha/config.toml` 被 gitignore、那里没有该文件）agent 也能拿到图谱位置。
+/// 见设计规格 ticket 10。
+///
+/// 只读两个小配置文件（项目配置 + hub 配置）并做路径拼接，**不扫描图谱目录**，
+/// 因此可以在 spawn 路径上直接调用。
+pub(crate) fn knowledge_env_for_project(real_project_path: &str) -> Vec<(String, String)> {
+    let Ok(config) = crate::config::read_project_config(real_project_path.to_string()) else {
+        return Vec::new();
+    };
+    let graph_id = config.knowledge.graph_id.trim();
+    if graph_id.is_empty() {
+        return Vec::new(); // 未绑定图谱：不注入，agent 行为与原来一致
+    }
+    let Some(hub) = crate::skills::configured_hub_path() else {
+        return Vec::new();
+    };
+    let data_dir = knowledge_graphs_root(Path::new(&hub))
+        .join(graph_id)
+        .join("data");
+    vec![
+        ("NEZHA_KNOWLEDGE_GRAPH_ID".to_string(), graph_id.to_string()),
+        (
+            "NEZHA_KNOWLEDGE_GRAPH_DIR".to_string(),
+            data_dir.to_string_lossy().into_owned(),
+        ),
+    ]
 }
 
 /// 读取项目配置中的知识库目标。未配置或目标不存在时报错，不回退 HIS。
@@ -547,11 +958,12 @@ pub async fn publish_knowledge_changes(
     paths: Vec<String>,
     message: String,
 ) -> Result<String, String> {
-    let graph = graph_by_id_async(graph_id.clone()).await?;
-    let _guard = lock_graph(&graph.id).await;
     if message.trim().is_empty() || paths.is_empty() {
         return Err("提交内容和路径不能为空".into());
     }
+    let graph = graph_by_id_async(graph_id.clone()).await?;
+    let _guard = lock_graph(&graph.id).await;
+    let _hub_git_guard = crate::skills::lock_hub_git().await;
     let graph_dir = PathBuf::from(&graph.graph_dir);
     let mut absolute = Vec::new();
     for path_text in paths {
@@ -636,11 +1048,22 @@ fn module_is_safe(module: &str) -> bool {
 }
 
 /// 候选对应的模块卡片路径；调用方需先确认目标知识库可用。
+/// 走 `data_dir`，与 [`module_card_path`] 保持同一来源，避免硬编码 `data`。
 fn module_doc_path(target: &KnowledgeTarget, module: &str) -> PathBuf {
-    Path::new(&target.graph_dir)
-        .join("data")
+    Path::new(&target.data_dir)
         .join("modules")
         .join(format!("{module}.md"))
+}
+
+/// 不接受自动沉淀的 section：`定位` 由扫描生成（业务领域 / 代码路径 / 工程数），
+/// 属结构性字段，写入会造成结构性漂移。见 docs/proposals/knowledge-sedimentation-contract-v2.md §3。
+const NON_WRITABLE_SECTIONS: &[&str] = &["定位"];
+
+fn is_non_writable_section(section: &str) -> bool {
+    let target = normalize_section(section);
+    NON_WRITABLE_SECTIONS
+        .iter()
+        .any(|blocked| normalize_section(blocked) == target)
 }
 
 /// 在模块文档中定位 section 标题行号（`## <标题>`），按归一化标题匹配。
@@ -652,11 +1075,9 @@ fn find_section_heading(lines: &[&str], section: &str) -> Option<usize> {
     })
 }
 
-/// 校验单个候选的结构合法性（规则层）。返回 Ok(文件内容) 或 拒绝原因。
-fn validate_candidate(
-    target: &KnowledgeTarget,
-    candidate: &KnowledgeCandidate,
-) -> Result<String, String> {
+/// 校验单个候选的结构合法性（L0 层，不调 LLM）。
+/// 返回 `Ok(())` 或拒绝原因。内容重复与依据真伪分别由 L2 / L1 负责，不在这里判断。
+fn validate_candidate(target: &KnowledgeTarget, candidate: &KnowledgeCandidate) -> Result<(), String> {
     if candidate.content.trim().is_empty() {
         return Err("内容为空".to_string());
     }
@@ -674,6 +1095,12 @@ fn validate_candidate(
     }
     if candidate.section.trim().is_empty() {
         return Err("section 为空".to_string());
+    }
+    if is_non_writable_section(&candidate.section) {
+        return Err(format!(
+            "section「{}」由扫描生成，不接受自动沉淀；请改投 职责 / 业务规则与已知坑 等可写段",
+            candidate.section.trim()
+        ));
     }
     if candidate.knowledge_graph_id != target.id {
         return Err(format!(
@@ -693,85 +1120,254 @@ fn validate_candidate(
     if find_section_heading(&lines, &candidate.section).is_none() {
         return Err(format!("模块卡片中找不到 section：{}", candidate.section));
     }
-    // 规则层兜底去重：内容已逐字存在时直接拒绝（语义去重交给 Agent 层）。
-    if content.contains(candidate.content.trim()) {
-        return Err("内容已存在于模块卡片（重复沉淀）".to_string());
+    Ok(())
+}
+
+/// 读取目标图谱全部模块卡片的知识条目，作为 L2 去重语料。
+/// 图谱规模很小（实测 126 张卡片 / 289 KB），整图读取在毫秒级。
+fn load_graph_entries(target: &KnowledgeTarget) -> Result<Vec<ExistingEntry>, String> {
+    let dir = Path::new(&target.data_dir).join("modules");
+    if !dir.is_dir() {
+        return Ok(Vec::new());
     }
-    Ok(content)
-}
-
-/// Agent 质量门的单项判定。
-#[derive(Deserialize, Clone, Debug)]
-struct GateVerdict {
-    index: usize,
-    passed: bool,
-    #[serde(default)]
-    reason: String,
-}
-
-/// 从 headless 输出中解析 <GATE> JSON 数组；缺失时返回 None（调用方按全不过处理）。
-fn parse_gate_verdicts(stdout: &str) -> Option<Vec<GateVerdict>> {
-    const OPEN: &str = "<GATE>";
-    const CLOSE: &str = "</GATE>";
-    let close_pos = stdout.rfind(CLOSE)?;
-    let prefix = &stdout[..close_pos];
-    let open_pos = prefix.rfind(OPEN)?;
-    let inner = &prefix[open_pos + OPEN.len()..];
-    let trimmed = inner.trim();
-    if trimmed.is_empty() {
-        return None;
+    let mut entries = Vec::new();
+    for item in std::fs::read_dir(&dir)
+        .map_err(|e| format!("读取图谱模块目录失败: {e}"))?
+        .flatten()
+    {
+        let path = item.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(module) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !module_is_safe(module) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in knowledge_gate::extract_card_entries(&text) {
+            let entry = ExistingEntry::new(module, line);
+            // 过短的片段（表头残留、单字列表项）不参与比对，避免噪声误判。
+            if entry.normalized.chars().count() < MIN_COMPARABLE_CHARS {
+                continue;
+            }
+            entries.push(entry);
+        }
     }
-    serde_json::from_str(trimmed).ok()
+    Ok(entries)
 }
 
-/// 构造质量门提示词：候选数组 + 技能路径 + 输出格式。
-fn build_gate_prompt(
-    target: &KnowledgeTarget,
+/// 一条候选在确定性层（L1 + L2）的结论。
+struct DeterministicVerdict {
+    /// `None` 表示通过，进入 L3；`Some((layer, reason))` 表示拒绝。
+    rejection: Option<(String, String)>,
+    /// 依据核验的结论说明（即使通过也保留，便于追溯）。
+    note: String,
+}
+
+/// L1 依据核验 + L2 去重（含批内去重）。纯文件 I/O，由 `spawn_blocking` 调用。
+fn run_deterministic_layers(
+    project_root: &Path,
+    candidates: &[KnowledgeCandidate],
     indices: &[usize],
-    all: &[KnowledgeCandidate],
-) -> String {
-    let payload: Vec<serde_json::Value> = indices
-        .iter()
-        .map(|&i| {
-            let c = &all[i];
-            serde_json::json!({
-                "index": i,
-                "module": c.module,
-                "section": c.section,
-                "content": c.content,
-                "evidence": c.evidence,
-                "confidence": c.confidence,
-                "suggestedTitle": c.suggested_title,
-            })
-        })
-        .collect();
+    entries: &[ExistingEntry],
+) -> Vec<(usize, DeterministicVerdict)> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    // 一个解析器复用一个（懒构建的）项目文件索引，避免逐条重建。
+    let resolver = knowledge_gate::EvidenceResolver::new(project_root);
+    let mut out = Vec::with_capacity(indices.len());
+    for &index in indices {
+        let candidate = &candidates[index];
+        let verdict = match resolver.verify(&candidate.evidence, &candidate.content) {
+            Err(reason) => DeterministicVerdict {
+                rejection: Some(("L1".to_string(), reason)),
+                note: String::new(),
+            },
+            Ok(kind) => {
+                let note = evidence_note(&kind);
+                let normalized = knowledge_gate::normalize_knowledge_text(&candidate.content);
+                if normalized.is_empty() {
+                    // 纯标点 / 纯格式字符：规范化后无实质内容，既无法与既有条目比对，
+                    // 也没有知识价值（否则会绕过 L2 直接写入卡片）。
+                    DeterministicVerdict {
+                        rejection: Some((
+                            "L2".to_string(),
+                            "内容规范化后为空，无可比对的知识实质".to_string(),
+                        )),
+                        note,
+                    }
+                } else if let Some(duplicate) = knowledge_gate::find_exact_duplicate(entries, &normalized) {
+                    DeterministicVerdict {
+                        rejection: Some((
+                            "L2".to_string(),
+                            format!(
+                                "内容已存在于模块 {}（规范化后与既有条目相同，重复沉淀）",
+                                duplicate.module
+                            ),
+                        )),
+                        note,
+                    }
+                } else if let Some(previous) = seen.get(&normalized) {
+                    DeterministicVerdict {
+                        rejection: Some((
+                            "L2".to_string(),
+                            format!("与本批第 {previous} 条重复（规范化后相同）"),
+                        )),
+                        note,
+                    }
+                } else {
+                    seen.insert(normalized, index);
+                    DeterministicVerdict {
+                        rejection: None,
+                        note,
+                    }
+                }
+            }
+        };
+        out.push((index, verdict));
+    }
+    out
+}
+
+fn evidence_note(kind: &EvidenceKind) -> String {
+    match kind {
+        EvidenceKind::File { path } => format!("依据文件已核验：{path}"),
+        EvidenceKind::Location { detail } => format!("依据位置无法逐文件核验：{detail}"),
+        EvidenceKind::UserConfirmed => "依据为用户确认，无法机器核验".to_string(),
+    }
+}
+
+/// 写前把本地未推送的提交补推上去，并在落后远端时先做 `--ff-only` 拉取。
+///
+/// 返回「是否发生了补推」。任何一步失败都**不阻断**本次沉淀：
+/// 本次写入仍会照常提交，推送失败由调用方按可重试错误处理（本地提交保留）。
+async fn push_pending_commits(target: &KnowledgeTarget) -> Result<bool, String> {
+    // 先 fetch：`@{u}` 是**本地**的远端跟踪引用，不 fetch 就无法知道远端已前进
+    // （实测：上游有别人的新提交时，本地不 fetch 看到的仍是 ahead=1 / behind=0）。
+    // fetch 很便宜（实测一次约 2 s），且这一步的失败不阻断——后续 pull/push 会照实报错。
+    let fetched = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec!["fetch".into(), "origin".into()],
+        std::time::Duration::from_secs(120),
+    )
+    .await?;
+    if !fetched.status.success() {
+        eprintln!(
+            "[knowledge] 写前 fetch 失败（继续尝试提交推送）: {}",
+            String::from_utf8_lossy(&fetched.stderr).trim()
+        );
+    }
+
+    // 落后远端就先 ff-only 拉，降低非快进 push 的概率。
+    // 分叉（既领先又落后）时 pull 会失败——那是需要人工处理的状态，此时**不硬写**。
+    let behind = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec![
+            "rev-list".into(),
+            "--count".into(),
+            "HEAD..@{u}".into(),
+        ],
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    if behind.status.success() {
+        let count = String::from_utf8_lossy(&behind.stdout).trim().to_string();
+        if count != "0" {
+            let pull = crate::git::run_git_with_timeout(
+                target.graph_dir.clone(),
+                vec![
+                    "pull".into(),
+                    "--no-rebase".into(),
+                    "--ff-only".into(),
+                ],
+                std::time::Duration::from_secs(120),
+            )
+            .await?;
+            if !pull.status.success() {
+                return Err(format!(
+                    "图谱仓库落后远端且无法快进（可能有本地改动或已分叉），已停止写入以避免损坏仓库：{}",
+                    String::from_utf8_lossy(&pull.stderr).trim()
+                ));
+            }
+        }
+    }
+
+    // 补推本地未推送的提交（上一次 push 失败留下的）。
+    let ahead = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec!["rev-list".into(), "--count".into(), "@{u}..HEAD".into()],
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    if !ahead.status.success() {
+        return Ok(false); // 没有 upstream 等：交给后续 push 报错，不在这里拦截
+    }
+    let pending = String::from_utf8_lossy(&ahead.stdout).trim().to_string();
+    if pending == "0" {
+        return Ok(false);
+    }
+    let push = crate::git::run_git_with_timeout(
+        target.graph_dir.clone(),
+        vec!["push".into()],
+        std::time::Duration::from_secs(120),
+    )
+    .await?;
+    if !push.status.success() {
+        return Err(format!(
+            "补推未推送的本地提交失败: {}",
+            String::from_utf8_lossy(&push.stderr).trim()
+        ));
+    }
+    Ok(true)
+}
+
+/// 生成本次沉淀的溯源标记：`<图谱>@<UTC 时间戳>.<短随机段>`。
+/// 与提交信息里的 `kg=<token>` 对应，二者可在 `git log -S` / `git log --grep` 中互相定位。
+///
+/// 带上随机后缀：毫秒级时间戳在同一毫秒内调用会撞车（实测两次连续调用相同），
+/// 而 token 的用途正是区分**不同批次**，撞 token 会让回滚按批定位失效。
+fn sediment_trace_token(graph_id: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
     format!(
-        r#"你是知识质量门。请先读取并严格遵循 `{skill_dir}/SKILL.md` 中的「回写质量门」规则。
-当前工作目录是通用知识图谱技能目录：{skill_dir}
-
-待校验候选（index 为原始序号，务必原样带回）：
-{payload}
-
-请对照 `{target_id}/data/modules/<module>.md` 的现有内容逐条校验，只输出：
-<GATE>
-[{{"index":0,"passed":true,"reason":"ok"}}]
-</GATE>
-标签外不要输出任何内容。passed=false 时 reason 必须给出具体依据（重复 / 冲突 / 依据不足等）。"#,
-        skill_dir = target.skill_dir,
-        target_id = target.id,
-        payload = serde_json::to_string_pretty(&payload).unwrap_or_default(),
+        "{}@{}.{}",
+        graph_id,
+        chrono::DateTime::from_timestamp(
+            (nanos / 1_000_000_000) as i64,
+            (nanos % 1_000_000_000) as u32
+        )
+        .unwrap_or_else(chrono::Utc::now)
+        .format("%Y%m%dT%H%M%S%.3fZ"),
+        &suffix[..8]
     )
 }
 
 /// 在 section 末尾追加一条结构化知识块（只增不改），返回新文件内容。
-fn append_entry(content: &str, section: &str, candidate: &KnowledgeCandidate) -> String {
+///
+/// section 在 L0 已校验过，但校验与写入之间隔着 L1~L3（可能数分钟、两次模型调用）；
+/// 期间卡片可能被 hub 拉取或人工编辑改动，因此这里必须**重新定位并优雅失败**，
+/// 不能靠 `expect` 在 async 命令里崩溃。
+fn append_entry(
+    content: &str,
+    section: &str,
+    candidate: &KnowledgeCandidate,
+    trace: &str,
+) -> Result<String, String> {
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
     if !content.ends_with('\n') {
         lines.push(String::new());
     }
     let borrowed: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-    let heading = find_section_heading(&borrowed, section).expect("validated section heading");
+    let heading = find_section_heading(&borrowed, section).ok_or_else(|| {
+        format!("模块卡片已在判定期间变更，找不到 section：{section}（请重试）")
+    })?;
     // section 结束位置：下一个 `## ` 标题；没有则文件末尾。
     let end = borrowed[heading + 1..]
         .iter()
@@ -782,8 +1378,12 @@ fn append_entry(content: &str, section: &str, candidate: &KnowledgeCandidate) ->
     if end == 0 || !lines[end - 1].trim().is_empty() {
         block.push(String::new());
     }
-    block.push(format!("- {date} · 已确认 · {}", candidate.content.trim()));
+    block.push(format!("- {date} · {}", candidate.content.trim()));
     block.push(format!("  - 依据：{}", candidate.evidence.trim()));
+    // 可追溯标记：不打扰阅读，且让「自动写入」的条目可被识别（回滚/审计依赖它）。
+    if !trace.is_empty() {
+        block.push(format!("  <!-- kg:{trace} -->"));
+    }
     if end < lines.len() && lines[end].starts_with("## ") {
         block.push(String::new());
     }
@@ -792,11 +1392,144 @@ fn append_entry(content: &str, section: &str, candidate: &KnowledgeCandidate) ->
     if !out.ends_with('\n') {
         out.push('\n');
     }
+    Ok(out)
+}
+
+/// 把候选整理成质量门输入（含字段截断，避免超长候选撑爆提示词 / argv）。
+fn gate_inputs(candidates: &[KnowledgeCandidate], indices: &[usize]) -> Vec<GateInput> {
+    indices
+        .iter()
+        .map(|&index| {
+            let candidate = &candidates[index];
+            GateInput {
+                index,
+                module: candidate.module.clone(),
+                section: candidate.section.clone(),
+                content: truncate_chars(candidate.content.trim(), GATE_FIELD_MAX_CHARS),
+                evidence: truncate_chars(candidate.evidence.trim(), GATE_FIELD_MAX_CHARS),
+            }
+        })
+        .collect()
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max).collect();
+    out.push('…');
     out
 }
 
-/// 知识沉淀自动回写：规则校验 → Agent 质量门 → 写模块卡片 → git 提交推送。
-/// 返回逐条结果；任何一条未通过都不会写库，由前端保留议题走人工审核。
+/// 组装 L3 上下文：候选相关度最高的既有条目（跨模块）+ 涉及模块的真实 section 清单。
+fn build_gate_context(
+    target: &KnowledgeTarget,
+    candidates: &[KnowledgeCandidate],
+    indices: &[usize],
+    entries: &[ExistingEntry],
+) -> GateContext {
+    let mut related: Vec<ExistingEntry> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut modules: Vec<String> = Vec::new();
+    for &index in indices {
+        let candidate = &candidates[index];
+        if !modules.contains(&candidate.module) {
+            modules.push(candidate.module.clone());
+        }
+        let normalized = knowledge_gate::normalize_knowledge_text(&candidate.content);
+        for (entry_index, _) in knowledge_gate::retrieve_similar(
+            entries,
+            &normalized,
+            RELATED_ENTRY_K,
+            RELATED_ENTRY_FLOOR,
+        ) {
+            if related.len() >= RELATED_ENTRY_MAX {
+                break;
+            }
+            let entry = &entries[entry_index];
+            if seen.insert(format!("{}|{}", entry.module, entry.normalized)) {
+                // 单条内联条目截断：卡片里可能有很长的条目，不设上限会把提示词推向
+                // Windows argv 上限（32767），届时**每个**分块都会在命令行层面失败。
+                related.push(ExistingEntry {
+                    module: entry.module.clone(),
+                    text: truncate_chars(&entry.text, RELATED_ENTRY_MAX_CHARS),
+                    normalized: entry.normalized.clone(),
+                    hash: entry.hash.clone(),
+                });
+            }
+        }
+    }
+    let mut sections = Vec::new();
+    for module in modules {
+        if let Ok(path) = module_card_path(target, &module) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                sections.push((module, knowledge_gate::card_section_titles(&text)));
+            }
+        }
+    }
+    GateContext { related, sections }
+}
+
+/// 按提示词字数上限把候选切成分块，保证每个分块的提示词不超过 argv 上限。
+/// 单条候选即便自己就超限也照发（不再无限细分），由字段截断兜底。
+fn chunk_gate_inputs(inputs: Vec<GateInput>, context: &GateContext) -> Vec<Vec<GateInput>> {
+    let mut chunks: Vec<Vec<GateInput>> = Vec::new();
+    let mut current: Vec<GateInput> = Vec::new();
+    for input in inputs {
+        current.push(input);
+        let too_big = knowledge_gate::build_gate_prompt(&current, context)
+            .chars()
+            .count()
+            > MAX_GATE_PROMPT_CHARS;
+        if too_big && current.len() > 1 {
+            let last = current.pop().expect("current is non-empty");
+            chunks.push(std::mem::take(&mut current));
+            current.push(last);
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// 跑一次质量门调用。超时 / 非零退出 / 输出不可解析一律返回 `Err`，
+/// 由调用方**逐条降级**为未通过（绝不整批报错丢弃知识）。
+async fn run_gate_once(
+    agent: &str,
+    project_path: &str,
+    chunk: &[GateInput],
+    context: &GateContext,
+    reverse: bool,
+) -> Result<Vec<GateVerdict>, String> {
+    let mut ordered = chunk.to_vec();
+    if reverse {
+        ordered.reverse();
+    }
+    let prompt = knowledge_gate::build_gate_prompt(&ordered, context);
+    let output = crate::agent_assist::run_headless_agent_with_timeout(
+        agent,
+        project_path,
+        &prompt,
+        QUALITY_GATE_TIMEOUT,
+        false,
+        None,
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(format!(
+            "质量门执行失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    knowledge_gate::parse_gate_verdicts(&stdout)
+        .ok_or_else(|| "质量门未返回 <GATE> 结果".to_string())
+}
+
+/// 知识沉淀自动回写：L0 结构 → L1 依据核验 → L2 去重 → L3 语义（双跑）→ 写卡片 → git 提交推送。
+///
+/// 逐条返回结果；门执行失败（超时等）只把该批候选降级为未通过，不影响其他候选。
 #[tauri::command]
 pub async fn knowledge_auto_writeback(
     project_path: String,
@@ -809,21 +1542,20 @@ pub async fn knowledge_auto_writeback(
     if suggestions.is_empty() {
         return Err("知识候选为空".to_string());
     }
-    let target = resolve_knowledge_target(project_path).await?;
+    let target = resolve_knowledge_target(project_path.clone()).await?;
     let _write_guard = lock_graph(&target.id).await;
-    let hub_str = Path::new(&target.skill_dir)
-        .parent()
-        .map(|path| path.to_string_lossy().into_owned())
-        .ok_or_else(|| "无法定位技能库根目录".to_string())?;
-    let _hub = PathBuf::from(&hub_str);
+    // 与 hub 后台同步互斥：图谱数据就在 hub 检出里，同步的 fetch/pull 与本次
+    // add/commit/push 操作同一仓库，必须真互斥而非观测（见 skills::lock_hub_git）。
+    let _hub_git_guard = crate::skills::lock_hub_git().await;
+    let project_root = PathBuf::from(&project_path);
 
-    // 1) 规则层：逐条结构校验，不通过直接出局（不进 Agent）。
+    // L0 结构层：逐条结构校验，不通过直接出局（不进后续层）。
     let mut items: Vec<KnowledgeWritebackItem> = Vec::new();
-    let mut rule_passed: Vec<usize> = Vec::new();
+    let mut structural_passed: Vec<usize> = Vec::new();
     for (index, candidate) in suggestions.iter().enumerate() {
         let item = match validate_candidate(&target, candidate) {
-            Ok(_) => {
-                rule_passed.push(index);
+            Ok(()) => {
+                structural_passed.push(index);
                 KnowledgeWritebackItem {
                     index,
                     module: candidate.module.clone(),
@@ -831,6 +1563,7 @@ pub async fn knowledge_auto_writeback(
                     passed: true,
                     written: false,
                     reason: String::new(),
+                    layer: "L0".to_string(),
                 }
             }
             Err(reason) => KnowledgeWritebackItem {
@@ -840,89 +1573,170 @@ pub async fn knowledge_auto_writeback(
                 passed: false,
                 written: false,
                 reason,
+                layer: "L0".to_string(),
             },
         };
         items.push(item);
     }
 
-    // 2) Agent 层：一次 headless 批量语义质检。
-    if !rule_passed.is_empty() {
-        let prompt = build_gate_prompt(&target, &rule_passed, &suggestions);
-        let output = crate::agent_assist::run_headless_agent_with_timeout(
-            &agent,
-            &hub_str,
-            &prompt,
-            QUALITY_GATE_TIMEOUT,
-            true,
-            None,
-        )
-        .await?;
-        if !output.status.success() {
-            return Err(format!(
-                "质量门执行失败: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let verdicts = parse_gate_verdicts(&stdout).ok_or_else(|| {
-            "质量门未返回 <GATE> 结果，按全部未通过处理（议题保留人工审核）".to_string()
-        })?;
-        let judged: Vec<usize> = verdicts.iter().map(|v| v.index).collect();
-        for verdict in verdicts {
-            if let Some(item) = items.iter_mut().find(|i| i.index == verdict.index) {
-                item.passed = verdict.passed;
-                if !verdict.passed {
-                    item.reason = if verdict.reason.is_empty() {
-                        "质量门未通过".to_string()
-                    } else {
-                        verdict.reason
-                    };
+    // L1 依据核验 + L2 去重（确定性，整图语料一次载入）。
+    let mut semantic_passed: Vec<usize> = Vec::new();
+    if !structural_passed.is_empty() {
+        let entries = {
+            let graph = target.clone();
+            tokio::task::spawn_blocking(move || load_graph_entries(&graph))
+                .await
+                .map_err(|e| format!("读取图谱条目线程错误: {e}"))??
+        };
+        let outcomes = {
+            let root = project_root.clone();
+            let candidates = suggestions.clone();
+            let indices = structural_passed.clone();
+            let entries = entries.clone();
+            tokio::task::spawn_blocking(move || {
+                run_deterministic_layers(&root, &candidates, &indices, &entries)
+            })
+            .await
+            .map_err(|e| format!("依据核验线程错误: {e}"))?
+        };
+        for (index, verdict) in outcomes {
+            let Some(item) = items.iter_mut().find(|item| item.index == index) else {
+                continue;
+            };
+            match verdict.rejection {
+                Some((layer, reason)) => {
+                    item.passed = false;
+                    item.layer = layer;
+                    item.reason = reason;
+                }
+                None => {
+                    item.layer = "L1".to_string();
+                    item.reason = verdict.note;
+                    semantic_passed.push(index);
                 }
             }
         }
-        // 质量门漏判的条目一律按未通过处理，绝不让「漏回」变成放行。
-        for item in items.iter_mut() {
-            if rule_passed.contains(&item.index) && !judged.contains(&item.index) {
-                item.passed = false;
-                item.reason = "质量门未返回该条判定，按未通过处理".to_string();
+
+        // L3 语义层：内联上下文，分批 + 双跑一致才放行。
+        if !semantic_passed.is_empty() {
+            let context = {
+                let graph = target.clone();
+                let candidates = suggestions.clone();
+                let indices = semantic_passed.clone();
+                let entries = entries.clone();
+                tokio::task::spawn_blocking(move || {
+                    build_gate_context(&graph, &candidates, &indices, &entries)
+                })
+                .await
+                .map_err(|e| format!("组装质量门上下文线程错误: {e}"))?
+            };
+            let chunks = chunk_gate_inputs(gate_inputs(&suggestions, &semantic_passed), &context);
+            for chunk in chunks {
+                let indices: Vec<usize> = chunk.iter().map(|input| input.index).collect();
+                let first = run_gate_once(&agent, &project_path, &chunk, &context, false).await;
+                let second = run_gate_once(&agent, &project_path, &chunk, &context, true).await;
+                let (first, second) = match (first, second) {
+                    (Ok(first), Ok(second)) => (Some(first), Some(second)),
+                    (Err(error), _) | (_, Err(error)) => {
+                        for index in &indices {
+                            if let Some(item) = items.iter_mut().find(|item| item.index == *index) {
+                                item.passed = false;
+                                item.layer = "L3".to_string();
+                                item.reason =
+                                    format!("质量门未完成，逐条降级为未通过：{error}");
+                            }
+                        }
+                        continue;
+                    }
+                };
+                for index in &indices {
+                    let first_verdict = first
+                        .as_ref()
+                        .and_then(|verdicts| verdicts.iter().find(|v| v.index == *index));
+                    let second_verdict = second
+                        .as_ref()
+                        .and_then(|verdicts| verdicts.iter().find(|v| v.index == *index));
+                    let Some(item) = items.iter_mut().find(|item| item.index == *index) else {
+                        continue;
+                    };
+                    item.layer = "L3".to_string();
+                    match knowledge_gate::decide_dual(first_verdict, second_verdict) {
+                        Ok(()) => item.passed = true,
+                        Err(reason) => {
+                            item.passed = false;
+                            item.reason = reason;
+                        }
+                    }
+                }
             }
         }
     }
 
-    // 3) 写入通过的条目（同模块多次写入按顺序累积）。
-    let mut changed_docs: Vec<PathBuf> = Vec::new();
-    for (index, candidate) in suggestions.iter().enumerate() {
-        let passed = items
+    // 写入通过的条目（同模块多次写入按顺序累积）。
+    // 一次性取全部待写入模块的 git 状态，避免每写一条就跑一次 git status。
+    let writable: Vec<usize> = items
+        .iter()
+        .filter(|item| item.passed)
+        .map(|item| item.index)
+        .collect();
+    let dirty_modules = if writable.is_empty() {
+        HashSet::new()
+    } else {
+        let modules: Vec<String> = writable
             .iter()
-            .find(|i| i.index == index)
-            .map(|i| i.passed)
-            .unwrap_or(false);
-        if !passed {
-            continue;
-        }
-        if module_card_has_uncommitted_changes(&target, &candidate.module).await? {
-            if let Some(item) = items.iter_mut().find(|i| i.index == index) {
+            .map(|index| suggestions[*index].module.clone())
+            .collect();
+        dirty_module_cards(&target, &modules).await?
+    };
+    // 本次沉淀的溯源标记：同一个 token 写进所有条目，便于按批追溯与回滚。
+    let trace_token = sediment_trace_token(&target.id);
+    let mut changed_docs: Vec<PathBuf> = Vec::new();
+    for index in writable {
+        let candidate = &suggestions[index];
+        if dirty_modules.contains(&candidate.module) {
+            if let Some(item) = items.iter_mut().find(|item| item.index == index) {
                 item.passed = false;
                 item.written = false;
+                item.layer = "write".to_string();
                 item.reason = "目标模块卡片存在未提交人工修改".to_string();
+            }
+            continue;
+        }
+        // 换行会让内容伪造出 `## ` 标题，把后续条目挂到假 section 下（写入完整性）。
+        if candidate.content.contains('\n') || candidate.evidence.contains('\n') {
+            if let Some(item) = items.iter_mut().find(|item| item.index == index) {
+                item.passed = false;
+                item.layer = "L0".to_string();
+                item.reason = "内容或依据包含换行，会破坏卡片结构".to_string();
             }
             continue;
         }
         let doc = module_doc_path(&target, &candidate.module);
         let current = std::fs::read_to_string(&doc)
             .map_err(|e| format!("写入前读取 {} 失败: {e}", candidate.module))?;
-        let next = append_entry(&current, &candidate.section, candidate);
+        let next = append_entry(&current, &candidate.section, candidate, &trace_token)
+            .map_err(|e| format!("{}: {e}", candidate.module))?;
         std::fs::write(&doc, next).map_err(|e| format!("写入 {} 失败: {e}", candidate.module))?;
         if !changed_docs.contains(&doc) {
             changed_docs.push(doc);
         }
-        if let Some(item) = items.iter_mut().find(|i| i.index == index) {
+        if let Some(item) = items.iter_mut().find(|item| item.index == index) {
             item.written = true;
-            item.reason = "已自动写入模块卡片".to_string();
+            item.layer = "write".to_string();
+            // 保留 L1 的依据核验结论，便于事后追溯这条为何被认为有据。
+            item.reason = if item.reason.is_empty() {
+                "已自动写入模块卡片".to_string()
+            } else {
+                format!("已自动写入模块卡片（{}）", item.reason)
+            };
         }
     }
 
-    // 4) git 提交推送（有写入才提交）。
+    // 4) git：先补推未推送的本地提交，再提交本次写入，最后推送。
+    //    「补推」是必须的：push 失败后重跑时，卡片里已有那些条目 ⇒ 会被去重层判为重复
+    //    ⇒ 本次没有新写入 ⇒ 若只依赖「有写入才提交」，那些本地提交会**永远推不上去**。
+    let pushed_before = push_pending_commits(&target).await?;
+
     let written_count = items.iter().filter(|i| i.written).count();
     let mut commit: Option<String> = None;
     if written_count > 0 {
@@ -946,7 +1760,11 @@ pub async fn knowledge_auto_writeback(
                 String::from_utf8_lossy(&add.stderr).trim()
             ));
         }
-        let message = format!("docs(knowledge): auto sediment {written_count} entries via Nezha");
+        let message = format!(
+            "docs(knowledge): auto sediment {written_count} entries via Nezha
+
+kg={trace_token}"
+        );
         let commit_out = crate::git::run_git_with_timeout(
             target.graph_dir.clone(),
             vec!["commit".into(), "-m".into(), message.clone()],
@@ -980,6 +1798,7 @@ pub async fn knowledge_auto_writeback(
         all_passed,
         written_count,
         commit,
+        pushed_pending: pushed_before,
     })
 }
 
@@ -1024,7 +1843,6 @@ mod tests {
         let error = validate_candidate(&target, &candidate).unwrap_err();
         assert!(error.contains("绑定知识库不一致"));
     }
-
     #[test]
     fn normalizes_section_aliases() {
         assert_eq!(
@@ -1047,6 +1865,388 @@ mod tests {
         let lines: Vec<&str> = doc.lines().collect();
         assert!(find_section_heading(&lines, "UI界面与入口").is_some());
         assert!(find_section_heading(&lines, "UI 界面 / 入口").is_some());
+    }
+
+    fn temp_project_with_graph(tag: &str, graph_id: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nezha-kg-env-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".nezha")).unwrap();
+        // 注意：ProjectConfig 的 `agent` / `git` 段是**必填**，而 `read_project_config`
+        // 在 toml 解析失败时会静默回退到 Default（知识图谱绑定一起丢失）。因此夹具
+        // 必须写成完整段，否则测到的是「解析失败」而不是「未绑定图谱」。
+        let knowledge = match graph_id {
+            Some(id) => format!("[knowledge]
+graph_id = \"{id}\"
+"),
+            None => String::new(),
+        };
+        let config = format!(
+            "[agent]
+default = \"claude\"
+
+[git]
+commit_prompt = \"x\"
+
+{knowledge}"
+        );
+        std::fs::write(dir.join(".nezha").join("config.toml"), config).unwrap();
+        dir
+    }
+
+    #[test]
+    fn knowledge_env_is_empty_for_unbound_project() {
+        // 未绑定图谱：不注入任何环境变量，agent 行为与原来一致。
+        let dir = temp_project_with_graph("unbound", None);
+        let env = knowledge_env_for_project(dir.to_str().unwrap());
+        assert!(env.is_empty(), "未绑定项目不应注入：{env:?}");
+        // 目录不存在 / 无配置时同样为空，且不 panic。
+        assert!(knowledge_env_for_project("H:/definitely/not/here").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn knowledge_env_exposes_graph_id_and_data_dir_when_hub_configured() {
+        let dir = temp_project_with_graph("bound", Some("HIS"));
+        let env = knowledge_env_for_project(dir.to_str().unwrap());
+        if crate::skills::configured_hub_path().is_none() {
+            // 未配置技能库时无法定位数据目录：按 best-effort 返回空（不注入）。
+            assert!(env.is_empty(), "未配置 hub 时不应注入：{env:?}");
+        } else {
+            let map: std::collections::HashMap<_, _> = env.iter().cloned().collect();
+            assert_eq!(
+                map.get("NEZHA_KNOWLEDGE_GRAPH_ID").map(String::as_str),
+                Some("HIS")
+            );
+            let data_dir = map.get("NEZHA_KNOWLEDGE_GRAPH_DIR").expect("数据目录");
+            assert!(
+                data_dir.replace('\\', "/").ends_with("knowledge-graphs/HIS/data"),
+                "数据目录应以 knowledge-graphs/<id>/data 结尾：{data_dir}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 真实仓库上的集成检查：`NEZHA_KG_E2E_PROJECT` 指向绑定图谱的项目。
+    #[test]
+    #[ignore = "需要本机真实项目（如 HIS 检出）"]
+    fn acceptance_knowledge_env_on_real_project() {
+        let Ok(project) = std::env::var("NEZHA_KG_E2E_PROJECT") else {
+            eprintln!("SKIP: 未设置 NEZHA_KG_E2E_PROJECT");
+            return;
+        };
+        let env = knowledge_env_for_project(&project);
+        let map: std::collections::HashMap<_, _> = env.iter().cloned().collect();
+        let graph_id = map.get("NEZHA_KNOWLEDGE_GRAPH_ID").expect("应注入 graph id");
+        let data_dir = map.get("NEZHA_KNOWLEDGE_GRAPH_DIR").expect("应注入数据目录");
+        println!("{project} -> graph={graph_id} dir={data_dir}");
+        // 注入的数据目录必须真实存在，否则 agent 拿到的是死路径。
+        assert!(
+            std::path::Path::new(data_dir).is_dir(),
+            "注入的数据目录应真实存在：{data_dir}"
+        );
+    }
+
+    #[test]
+    fn append_without_trace_omits_marker() {
+        // 无 token 时不留空标记（避免产生无信息的残留注释）。
+        let candidate = KnowledgeCandidate {
+            module: "M".into(),
+            section: "职责".into(),
+            content: "某职责".into(),
+            evidence: "X.cs".into(),
+            confidence: "confirmed".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "ICUCIS".into(),
+        };
+        let next = append_entry(&sample_doc(), "职责", &candidate, "").expect("追加成功");
+        assert!(next.contains("某职责"));
+        assert!(!next.contains("<!-- kg:"), "无 token 不应写标记：{next}");
+    }
+
+    #[test]
+    fn trace_token_is_graph_scoped_and_unique() {
+        let a = sediment_trace_token("HIS");
+        assert!(a.starts_with("HIS@"), "{a}");
+        // 结构：`<图谱>@<UTC 时间戳 Z>.<8 位随机段>`
+        let (stamp, suffix) = a.split_once('Z').expect("应含时间戳终止符 Z");
+        assert!(stamp.contains('T'), "时间戳应含 T：{a}");
+        assert_eq!(suffix.strip_prefix('.').map(str::len), Some(8), "随机段长度：{a}");
+        // 连续两次必须不同：同毫秒内调用不会撞 token（实测毫秒时间戳会撞）。
+        let b = sediment_trace_token("HIS");
+        assert_ne!(a, b, "同图谱两次调用应生成不同 token");
+    }
+
+    /// 真实 git 仓库上的集成检查：`push_pending_commits` 的行为不变量。
+    ///
+    /// 需要 `NEZHA_KG_E2E_REPO` 指向一个图谱写操作仓库。按仓库实际状态断言两种之一：
+    /// - **仅领先**（本地有未推送提交）：必须补推成功，且推完后 `@{u}..HEAD` 为 0；
+    /// - **已分叉**（同时领先与落后）：必须**拒绝**，且**不得**留下 merge / rebase 半成品状态。
+    ///
+    /// 夹具建立方式：`git init --bare origin.git` → clone → 提交并 push → 再本地提交一次
+    /// 即得「仅领先」；在此基础上让另一个 clone 抢先 push 一次即得「已分叉」。
+    #[tokio::test]
+    #[ignore = "需要本机临时 git 仓库（NEZHA_KG_E2E_REPO）"]
+    async fn acceptance_push_pending_commits() {
+        let Ok(repo) = std::env::var("NEZHA_KG_E2E_REPO") else {
+            eprintln!("SKIP: 未设置 NEZHA_KG_E2E_REPO");
+            return;
+        };
+        let target = KnowledgeTarget {
+            id: "T".into(),
+            name: "T".into(),
+            adapter: "dotnet".into(),
+            graph_dir: repo.clone(),
+            skill_dir: repo.clone(),
+            data_dir: repo.clone(),
+            ready: true,
+            scan_available: false,
+        };
+        let count = |spec: &str| {
+            let repo = repo.clone();
+            let spec = spec.to_string();
+            async move {
+                let out = crate::git::run_git_with_timeout(
+                    repo,
+                    vec!["rev-list".into(), "--count".into(), spec],
+                    std::time::Duration::from_secs(15),
+                )
+                .await
+                .expect("读取提交计数");
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+        };
+
+        // 先 fetch 一次，让后面的 ahead/behind 判定基于最新远端状态。
+        let _ = crate::git::run_git_with_timeout(
+            repo.clone(),
+            vec!["fetch".into(), "origin".into()],
+            std::time::Duration::from_secs(120),
+        )
+        .await;
+        let ahead0 = count("@{u}..HEAD").await;
+        let behind0 = count("HEAD..@{u}").await;
+        println!("初始 ahead={ahead0} behind={behind0}");
+
+        let result = push_pending_commits(&target).await;
+
+        if behind0 == "0" {
+            // 仅领先：应补推成功。
+            assert!(result.is_ok(), "仅领先时应补推成功：{result:?}");
+            assert_eq!(count("@{u}..HEAD").await, "0", "补推后应无未推送提交");
+        } else {
+            // 已分叉：必须拒绝，且不留下 merge/rebase 状态。
+            assert!(result.is_err(), "分叉时应拒绝写入：{result:?}");
+            let msg = result.unwrap_err();
+            assert!(msg.contains("无法快进") || msg.contains("分叉"), "{msg}");
+            for marker in [".git/MERGE_HEAD", ".git/rebase-merge", ".git/rebase-apply"] {
+                assert!(
+                    !std::path::Path::new(&repo).join(marker).exists(),
+                    "拒绝后不应留下半成品状态：{marker}"
+                );
+            }
+            assert_eq!(count("@{u}..HEAD").await, ahead0, "本地提交应保留");
+        }
+    }
+
+    /// 自动沉淀的候选抽取：从契约产物到写入候选的转换必须保持字段与图谱绑定。
+    /// （真正的写入由 `knowledge_auto_writeback` 负责，此处只验转换与前置判定。）
+    #[test]
+    fn auto_sediment_skips_when_contract_says_skipped() {
+        let raw = r#"{"version":1,"skipped":true,"skipReason":"仅样式调整"}"#;
+        let parsed = crate::agent_assist::parse_knowledge_draft(raw, "HIS").expect("解析");
+        assert!(parsed.is_skipped());
+        assert!(parsed.candidates().is_empty());
+    }
+
+    #[test]
+    fn auto_sediment_requires_non_empty_candidates_to_write() {
+        // 空候选列表（未显式 skipped）不应触发写入，也不应报错。
+        let raw = r#"{"version":1,"skipped":false,"candidates":[]}"#;
+        let parsed = crate::agent_assist::parse_knowledge_draft(raw, "HIS").expect("解析");
+        assert!(!parsed.is_skipped());
+        assert!(parsed.candidates().is_empty());
+    }
+
+    #[test]
+    fn auto_sediment_carries_graph_binding_from_contract() {
+        // 契约未写 graphId 时由兜底填充，转换后仍应绑定当前图谱。
+        let raw = r#"[{"module":"M","section":"职责","content":"c","evidence":"e","confidence":"confirmed"}]"#;
+        let parsed = crate::agent_assist::parse_knowledge_draft(raw, "ICUCIS").expect("解析");
+        let mapped: Vec<super::KnowledgeCandidate> = parsed
+            .candidates()
+            .iter()
+            .map(|s| super::KnowledgeCandidate {
+                module: s.module.clone(),
+                section: s.section.clone(),
+                content: s.content.clone(),
+                evidence: s.evidence.clone(),
+                confidence: s.confidence.clone(),
+                suggested_title: s.suggested_title.clone(),
+                knowledge_graph_id: s.knowledge_graph_id.clone(),
+            })
+            .collect();
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].knowledge_graph_id, "ICUCIS");
+    }
+
+    #[test]
+    fn empty_writeback_result_is_all_passed_and_unwritten() {
+        let result = empty_writeback_result();
+        assert!(result.all_passed);
+        assert_eq!(result.written_count, 0);
+        assert!(result.commit.is_none());
+        assert!(!result.pushed_pending);
+    }
+
+    fn item(layer: &str, passed: bool) -> KnowledgeWritebackItem {
+        KnowledgeWritebackItem {
+            index: 0,
+            module: "M".into(),
+            section: "职责".into(),
+            passed,
+            written: passed,
+            reason: String::new(),
+            layer: layer.to_string(),
+        }
+    }
+
+    #[test]
+    fn rejected_by_layer_counts_only_failures() {
+        let items = vec![
+            item("L1", false),
+            item("L1", false),
+            item("L3", false),
+            item("write", true),
+        ];
+        let counts = rejected_by_layer(&items);
+        assert_eq!(counts.get("L1"), Some(&2));
+        assert_eq!(counts.get("L3"), Some(&1));
+        assert_eq!(counts.get("write"), None, "通过的条目不应计入拒绝");
+    }
+
+    #[test]
+    fn metrics_summary_aggregates_runs_and_layers() {
+        let records = vec![
+            KnowledgeMetricRecord {
+                at: 1,
+                task_id: "t1".into(),
+                graph_id: "HIS".into(),
+                status: "ok".into(),
+                written: 2,
+                rejected_by_layer: HashMap::from([("L2".to_string(), 1)]),
+                pushed_pending: true,
+                error: None,
+            },
+            KnowledgeMetricRecord {
+                at: 2,
+                task_id: "t2".into(),
+                graph_id: "HIS".into(),
+                status: "skipped".into(),
+                written: 0,
+                rejected_by_layer: HashMap::new(),
+                pushed_pending: false,
+                error: None,
+            },
+            KnowledgeMetricRecord {
+                at: 3,
+                task_id: "t3".into(),
+                graph_id: "HIS".into(),
+                status: "failed".into(),
+                written: 0,
+                rejected_by_layer: HashMap::new(),
+                pushed_pending: false,
+                error: Some("未产出知识沉淀产物".into()),
+            },
+        ];
+        let summary = summarize_metrics(&records);
+        assert_eq!(summary.total_runs, 3);
+        assert_eq!(summary.ok_runs, 1);
+        assert_eq!(summary.skipped_runs, 1);
+        assert_eq!(summary.failed_runs, 1);
+        assert_eq!(summary.written_total, 2);
+        assert_eq!(summary.rejected_by_layer.get("L2"), Some(&1));
+        assert_eq!(summary.pushed_pending_runs, 1);
+    }
+
+    #[test]
+    fn metrics_record_roundtrips_through_json() {
+        let record = KnowledgeMetricRecord {
+            at: 42,
+            task_id: "t".into(),
+            graph_id: "HIS".into(),
+            status: "ok".into(),
+            written: 1,
+            rejected_by_layer: HashMap::from([("L3".to_string(), 2)]),
+            pushed_pending: false,
+            error: None,
+        };
+        let line = serde_json::to_string(&record).unwrap();
+        // 单行 JSONL：不得含换行，否则追加写会破坏逐行解析。
+        assert!(!line.contains('\n'));
+        let back: KnowledgeMetricRecord = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.task_id, "t");
+        assert_eq!(back.rejected_by_layer.get("L3"), Some(&2));
+    }
+
+    #[test]
+    fn rejects_scan_generated_section() {
+        let target = sample_target();
+        let mut candidate = KnowledgeCandidate {
+            module: "io".into(),
+            section: "定位".into(),
+            content: "内容".into(),
+            evidence: "Service.cs:1".into(),
+            confidence: "confirmed".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "ICUCIS".into(),
+        };
+        // 与卡片是否存在无关：该判定发生在读卡片之前。
+        let error = validate_candidate(&target, &candidate).unwrap_err();
+        assert!(error.contains("由扫描生成"), "{error}");
+        // 归一化后同样是「定位」的写法也要拦住。
+        candidate.section = " 定位 ".into();
+        assert!(validate_candidate(&target, &candidate).is_err());
+        // 可写段不受影响（此处仍会在「卡片不存在」处被拒，但不是被本规则拒）。
+        candidate.section = "职责".into();
+        let other = validate_candidate(&target, &candidate).unwrap_err();
+        assert!(!other.contains("由扫描生成"), "{other}");
+    }
+
+    /// `GRAPH_WRITE_ACTIVE` 是全局计数：本例是**唯一**使用它的用例，
+    /// 把「计数随持锁增减」与「排队等待者不计入」合并在一处，
+    /// 避免两个并行用例互相观测到对方持有的锁而抖动。
+    #[tokio::test]
+    async fn graph_write_guard_tracks_in_progress() {
+        assert!(!knowledge_write_in_progress(), "初始应为空闲");
+
+        let first = lock_graph("test-graph-a").await;
+        assert!(knowledge_write_in_progress(), "持锁期间应报告写入中");
+        // 不同图谱可以并发持有，计数累加。
+        let second = lock_graph("test-graph-b").await;
+        assert!(knowledge_write_in_progress());
+        drop(second);
+        assert!(knowledge_write_in_progress(), "仍有持有者时不应复位");
+
+        // 同图谱的排队者：计数必须在**拿到锁之后**才 +1，否则 hub 同步会因为
+        // 排队者而空转等待。这里断言**精确值**——若把 fetch_add 提到 lock 之前，
+        // 排队者会让计数变成 2，本断言即失败（只看「最终归零」是钉不住这个性质的）。
+        let waiter = tokio::spawn(async move {
+            let _guard = lock_graph("test-graph-a").await;
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert_eq!(
+            graph_write_active_count(),
+            1,
+            "持有者 1 个；排队的 waiter 不应计入"
+        );
+        drop(first);
+        let _ = waiter.await;
+        assert_eq!(graph_write_active_count(), 0, "全部释放后应归零");
     }
 
     #[test]
@@ -1072,7 +2272,8 @@ mod tests {
             suggested_title: String::new(),
             knowledge_graph_id: "HIS".into(),
         };
-        let next = append_entry(&sample_doc(), &candidate.section, &candidate);
+        let next = append_entry(&sample_doc(), &candidate.section, &candidate, "ICUCIS@20260917T000000.000Z")
+            .expect("追加成功");
         let in_section = next
             .split("## 业务规则 / 已知坑")
             .nth(1)
@@ -1080,16 +2281,201 @@ mod tests {
             .unwrap_or_default();
         assert!(in_section.contains("缓存键必须带租户前缀"));
         assert!(in_section.contains("依据：Hsp.BaseData.Cache.Bll/CacheService.cs:42"));
+        // 可追溯标记：自动写入的条目可被识别，回滚/审计依赖它。
+        assert!(
+            in_section.contains("<!-- kg:ICUCIS@20260917T000000.000Z -->"),
+            "应带溯源标记：{in_section}"
+        );
+        // 条目格式：`- <日期> · <内容>`，不再写入恒定的「已确认」（只有 confirmed 能过门）。
+        assert!(!in_section.contains("已确认"), "{in_section}");
+        assert!(in_section.contains("· 缓存键必须带租户前缀") || in_section.contains("缓存键必须带租户前缀"));
         // 只增不改：原有内容仍在。
         assert!(next.contains("（待补充）"));
     }
 
     #[test]
+    fn append_entry_degrades_when_section_changed_underneath() {
+        // 校验与写入之间卡片被改动（hub 拉取 / 人工编辑）⇒ 必须优雅失败，不能 panic。
+        let candidate = KnowledgeCandidate {
+            module: "M".into(),
+            section: "业务规则与已知坑".into(),
+            content: "某条规则".into(),
+            evidence: "X.cs".into(),
+            confidence: "confirmed".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "HIS".into(),
+        };
+        let err = append_entry(&sample_doc(), "不存在的 section", &candidate, "").unwrap_err();
+        assert!(err.contains("已在判定期间变更"), "{err}");
+    }
+
+    #[test]
     fn parses_gate_verdict_block() {
-        let stdout = "前言\n<GATE>[{\"index\":0,\"passed\":true,\"reason\":\"ok\"},{\"index\":1,\"passed\":false,\"reason\":\"与现状冲突\"}]</GATE>\n后记";
-        let verdicts = parse_gate_verdicts(stdout).expect("parses");
+        let stdout = "前言\n<GATE>[{\"index\":0,\"verdict\":\"distinct\",\"reason\":\"ok\"},{\"index\":1,\"verdict\":\"conflict\",\"reason\":\"与现状冲突\"}]</GATE>\n后记";
+        let verdicts = knowledge_gate::parse_gate_verdicts(stdout).expect("parses");
         assert_eq!(verdicts.len(), 2);
-        assert!(verdicts[0].passed);
+        assert_eq!(verdicts[0].decision().unwrap(), true);
         assert_eq!(verdicts[1].reason, "与现状冲突");
     }
+
+    #[test]
+    fn l0_rejects_unconfirmed_confidence_without_touching_disk() {
+        let target = sample_target();
+        let candidate = KnowledgeCandidate {
+            module: "io".into(),
+            section: "职责".into(),
+            content: "内容".into(),
+            evidence: "Service.cs:1".into(),
+            confidence: "pending".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "ICUCIS".into(),
+        };
+        // confidence 校验在目标卡片存在性之前，因此不依赖磁盘状态。
+        let error = validate_candidate(&target, &candidate).unwrap_err();
+        assert!(error.contains("仅 confirmed 可自动回写"), "{error}");
+    }
+
+    #[test]
+    fn truncate_chars_respects_char_boundaries() {
+        assert_eq!(truncate_chars("abc", 5), "abc");
+        assert_eq!(truncate_chars("abcd", 3), "abc…");
+        // 中文按字符而非字节截断，不应产生乱码。
+        assert_eq!(truncate_chars("知识沉淀规则", 3), "知识沉…");
+    }
+
+    #[test]
+    fn chunks_split_before_exceeding_prompt_budget() {
+        let context = GateContext::default();
+        let make = |index: usize, size: usize| GateInput {
+            index,
+            module: "M".into(),
+            section: "职责".into(),
+            content: "x".repeat(size),
+            evidence: "X.cs".into(),
+        };
+        // 三个大候选应被拆成多个分块，且每个分块的提示词不超上限。
+        let chunks = chunk_gate_inputs(
+            vec![make(0, 12_000), make(1, 12_000), make(2, 12_000)],
+            &context,
+        );
+        assert!(chunks.len() >= 2, "应当分批：{chunks:?}");
+        let total: usize = chunks.iter().map(Vec::len).sum();
+        assert_eq!(total, 3, "不能丢失候选");
+        for chunk in &chunks {
+            assert!(
+                knowledge_gate::build_gate_prompt(chunk, &context)
+                    .chars()
+                    .count()
+                    <= MAX_GATE_PROMPT_CHARS
+            );
+        }
+        // 顺序必须保持稳定（index 递增），避免与双跑换序混淆。
+        let flat: Vec<usize> = chunks.iter().flatten().map(|input| input.index).collect();
+        assert_eq!(flat, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn chunks_keep_single_oversized_candidate() {
+        let context = GateContext::default();
+        let input = GateInput {
+            index: 0,
+            module: "M".into(),
+            section: "职责".into(),
+            content: "x".repeat(MAX_GATE_PROMPT_CHARS * 2),
+            evidence: "X.cs".into(),
+        };
+        let chunks = chunk_gate_inputs(vec![input], &context);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].len(), 1, "单条超限不能丢，交给字段截断兜底");
+    }
+
+    #[test]
+    fn gate_inputs_truncate_oversized_fields() {
+        let candidate = KnowledgeCandidate {
+            module: "M".into(),
+            section: "职责".into(),
+            content: "内".repeat(GATE_FIELD_MAX_CHARS + 100),
+            evidence: "E".repeat(GATE_FIELD_MAX_CHARS + 100),
+            confidence: "confirmed".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "ICUCIS".into(),
+        };
+        let inputs = gate_inputs(std::slice::from_ref(&candidate), &[0]);
+        assert_eq!(inputs[0].content.chars().count(), GATE_FIELD_MAX_CHARS + 1);
+        assert_eq!(inputs[0].evidence.chars().count(), GATE_FIELD_MAX_CHARS + 1);
+    }
 }
+
+// ── L3 验收回归（opt-in）───────────────────────────────────────────
+// 用真实 CLI 跑 L3 双跑，验证重复 / 冲突被拒。默认 `#[ignore]`：会发起真实模型调用。
+// 跑法：`cargo test --lib acceptance_l3 -- --ignored --nocapture`（需 codex/claude 可用）。
+#[cfg(test)]
+mod acceptance_l3 {
+    use super::*;
+
+    fn real_target(card: &str) -> KnowledgeTarget {
+        let data_dir = std::path::Path::new(card).parent().unwrap().parent().unwrap();
+        let graph_dir = data_dir.parent().unwrap();
+        KnowledgeTarget {
+            id: "HIS".into(),
+            name: "HIS 知识图谱".into(),
+            adapter: "dotnet".into(),
+            graph_dir: graph_dir.to_string_lossy().into_owned(),
+            skill_dir: graph_dir.parent().unwrap().join("knowledge-graph").to_string_lossy().into_owned(),
+            data_dir: data_dir.to_string_lossy().into_owned(),
+            ready: true,
+            scan_available: true,
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "会发起真实 CLI 调用（codex/claude）"]
+    async fn acceptance_l3_dual_run() {
+        let Ok(root) = std::env::var("NEZHA_KG_E2E_ROOT") else { eprintln!("SKIP"); return; };
+        let card_path = std::env::var("NEZHA_KG_E2E_CARD").expect("card");
+        let project = std::env::var("NEZHA_KG_E2E_PROJECT").expect("project");
+        let agent = std::env::var("NEZHA_KG_E2E_AGENT").unwrap_or_else(|_| "codex".into());
+        let card = std::fs::read_to_string(&card_path).expect("read card");
+        let target = real_target(&card_path);
+        let _ = card;
+
+        let raw = std::fs::read_to_string(std::path::Path::new(&root).join("candidates.json")).unwrap();
+        let values: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        let suggestions: Vec<KnowledgeCandidate> = values.iter().map(|v| KnowledgeCandidate {
+            module: v["module"].as_str().unwrap_or("").into(),
+            section: v["section"].as_str().unwrap_or("").into(),
+            content: v["content"].as_str().unwrap_or("").into(),
+            evidence: v["evidence"].as_str().unwrap_or("").into(),
+            confidence: v["confidence"].as_str().unwrap_or("").into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "HIS".into(),
+        }).collect();
+
+        let indices: Vec<usize> = (0..suggestions.len()).collect();
+        let entries = load_graph_entries(&target).expect("entries");
+        let context = build_gate_context(&target, &suggestions, &indices, &entries);
+        println!("== 内联既有条目 {} 条；涉及模块 {} 个", context.related.len(), context.sections.len());
+
+        let chunks = chunk_gate_inputs(gate_inputs(&suggestions, &indices), &context);
+        println!("== 分块数 {}", chunks.len());
+        for chunk in chunks {
+            let first = run_gate_once(&agent, &project, &chunk, &context, false).await;
+            let second = run_gate_once(&agent, &project, &chunk, &context, true).await;
+            let (first, second) = match (first, second) {
+                (Ok(a), Ok(b)) => (a, b),
+                (a, b) => { println!("门失败: {:?} / {:?}", a.err(), b.err()); continue; }
+            };
+            for input in &chunk {
+                let idx = input.index;
+                let f = first.iter().find(|v| v.index == idx);
+                let s = second.iter().find(|v| v.index == idx);
+                let kind = values.get(idx).and_then(|v| v["kind"].as_str()).unwrap_or("?");
+                match knowledge_gate::decide_dual(f, s) {
+                    Ok(()) => println!("[{idx}] {kind:26} -> PASS (双跑一致 distinct)"),
+                    Err(reason) => println!("[{idx}] {kind:26} -> REJECT: {reason}"),
+                }
+            }
+        }
+    }
+}
+
