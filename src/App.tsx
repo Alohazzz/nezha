@@ -2178,7 +2178,6 @@ function App() {
       }
       const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
       const instructions = await invoke<string>("get_direct_execution_instructions", {
-        projectPath: project.path,
         taskId,
         hasBug,
         clarifyFirst: hasBug ? false : options.clarifyFirst,
@@ -2273,7 +2272,6 @@ function App() {
       // 3) 直接执行指令 + prompt 组装（议题即 spec，补充说明优先于议题描述）。
       const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
       const instructions = await invoke<string>("get_direct_execution_instructions", {
-        projectPath: project.path,
         taskId: task.id,
         hasBug,
         clarifyFirst: hasBug ? false : clarifyFirst,
@@ -2411,7 +2409,6 @@ function App() {
       taskIds.map(async (taskId) => {
         try {
           instructionsByTaskId[taskId] = await invoke<string>("get_plan_execution_instructions", {
-            projectPath: project.path,
             taskId,
           });
         } catch (e) {
@@ -2530,7 +2527,6 @@ function App() {
           return;
         }
         const instructions = await invoke<string>("get_plan_execution_instructions", {
-          projectPath: project.path,
           taskId,
         });
         let link = "";

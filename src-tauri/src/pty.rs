@@ -1090,7 +1090,7 @@ pub async fn run_task(
         format!(
             "{}\n\n---\n{}",
             with_text_paths,
-            crate::agent_assist::SESSION_SEDIMENTATION_CONTRACT.replace("{TASK_ID}", &task_id)
+            crate::agent_assist::session_sedimentation_contract(&task_id)
         )
     };
 

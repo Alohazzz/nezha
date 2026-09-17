@@ -738,6 +738,40 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 `detects_shallow_clone_by_git_shallow_file`、`graph_write_guard_tracks_in_progress`
 （后者合并了两个观测同一全局计数的用例，避免并行抖动）。
 
+## 11.58 规则文本迁移到 SkillHub 技能（§11.6 的遗留项已闭环）
+
+**迁移完成**：沉淀契约（产出格式 + 提取标准）的**唯一事实源**现在是 SkillHub
+`knowledge-graph/references/sedimentation.md`，Nezha 在注入任务提示词时读取它。
+
+| 项 | 实现 |
+|---|---|
+| 技能侧载体 | 新增 `knowledge-graph/references/sedimentation.md`（含产出格式、提取标准、字段要求、可写/不可写段、Nezha 复核说明）；`SKILL.md` 指向它 |
+| 读取能力 | `skills.rs::read_skill_reference(skill, relative)`：限定技能目录内的相对路径，拒绝绝对路径 / `..` / 空段，失败返回 `None` 不报错 |
+| 注入 | `agent_assist.rs::session_sedimentation_contract(task_id)`：优先技能文本、读不到回退内嵌常量，两条路都替换 `{TASK_ID}` |
+| 回退文本 | 常量更名为 `SESSION_SEDIMENTATION_CONTRACT_FALLBACK`，并**补齐**为与技能同等的可执行约束（见下） |
+
+**为什么必须保持回退与技能等价**：回退只在「技能库未配置 / 读不到」时使用；若它比技能少几条
+硬约束，agent 会产出注定被门拒掉的候选（白费一次模型调用）。审计发现回退原先缺 **冲突不提**
+与 **可写段清单** 两条，已补齐，并加测试逐条钉住 11 项可执行约束。
+
+### 顺带修掉的两处真实不一致（本轮发现）
+
+1. **plan / direct 执行模板与契约矛盾**（我第 4 步引入）：这两个模板各自内联了一份
+   `knowledge_rules`，且写着「无候选则写 `[]`」「必须携带 knowledgeGraphId」——与第 4 步的
+   契约（**必须显式 `skipped`**、graphId 由 Nezha 兜底）直接冲突。由于这两条链路的 prompt
+   最终都经 `run_task` 启动，而 `pty.rs` 才是唯一注入点，模板里那份是**过时副本**。
+   已从两个模板中移除知识段、改为指向任务提示词末尾的契约，并去掉因此不再需要的
+   `knowledge_target` 参数（连带 `get_plan_execution_instructions` /
+   `get_direct_execution_instructions` 的 `project_path` 形参——它们原只为解析图谱）。
+2. **`generate_knowledge_sedimentation` 已是死代码**：第 5 步退役预览弹窗后它再无调用方
+   （前后端皆无引用），且其 headless 尾部自第 4 步起已不可达（draft 分支两条路都 return），
+   而该尾部正是旧 `KNOWLEDGE_SEDIMENTATION_RULES` 的唯一使用者。已整条删除（命令 + 注册 +
+   `SEDIMENTATION_*` 常量 + `build_sedimentation_prompt` + `extract_suggestions` /
+   `parse_knowledge_suggestions` / `parse_suggestions_json` 及其测试）。
+   `parse_suggestions_value` 保留（存活路径 `parse_knowledge_draft` 仍在使用）。
+
+**效果**：改沉淀规则现在只需改技能文件（随 hub 热更新），Nezha 无需发版。
+
 ## 11.6 内容组织口径（规则文本修订）
 
 **问题**：知识组织规则散落三处且互相矛盾——`agent_assist.rs:512` 的 `KNOWLEDGE_SEDIMENTATION_RULES`、SkillHub `knowledge-graph/SKILL.md`（含**已失效**的「回写质量门」六条）、以及 `knowledge.rs:919` 的写入格式。最严重的是：提取规则要求 agent「把与图谱冲突的结论标注出来供复核」，而四层门按产品决策**一律拒绝冲突**，失败出口又未落地（ticket 08）⇒ **冲突知识被提出、被拒、无任何出口**。

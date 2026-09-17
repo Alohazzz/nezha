@@ -559,7 +559,6 @@ pub fn run() {
             knowledge::rename_knowledge_card,
             knowledge::delete_knowledge_card,
             knowledge::publish_knowledge_changes,
-            agent_assist::generate_knowledge_sedimentation,
             notification::get_notifications,
             notification::mark_notification_read,
             notification::mark_all_notifications_read,

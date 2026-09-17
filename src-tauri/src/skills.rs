@@ -900,6 +900,49 @@ fn clone_args(branch: Option<&str>, url: &str, repo_dir: &str) -> Vec<String> {
     args
 }
 
+/// 在技能目录内解析一个相对引用路径，并校验它**没有越界**。
+///
+/// 只接受技能目录内的相对路径：绝对路径、`..`、空段一律拒绝；
+/// 返回的路径仅用于读取，不做任何写入。
+fn resolve_skill_reference(skill_dir: &Path, relative: &str) -> Option<PathBuf> {
+    if relative.trim().is_empty() {
+        return None;
+    }
+    let rel = Path::new(relative);
+    if rel.is_absolute() {
+        return None;
+    }
+    let mut out = skill_dir.to_path_buf();
+    for segment in relative.split(['/', '\\']) {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return None;
+        }
+        out.push(segment);
+    }
+    Some(out)
+}
+
+/// 读取技能目录下某个参考文件的正文（如 `knowledge-graph` 的 `references/sedimentation.md`）。
+///
+/// 用于让「随 hub 热更新的契约文本」成为唯一事实源：调用方读不到时自行回退内嵌文本，
+/// 因此本函数失败一律返回 `None`（不报错、不 panic）。
+pub(crate) fn read_skill_reference(skill_name: &str, relative: &str) -> Option<String> {
+    if validate_skill_name(skill_name).is_err() {
+        return None;
+    }
+    let hub = configured_hub_path()?;
+    let skill_dir = Path::new(&hub).join(skill_name);
+    if !skill_dir.is_dir() {
+        return None;
+    }
+    let path = resolve_skill_reference(&skill_dir, relative)?;
+    let content = std::fs::read_to_string(path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(content)
+}
+
 /// git 源同步：缓存缺失则完整 clone，存在则 fetch 探测、有变更才 --ff-only pull。
 /// 返回 (hub 目录绝对路径, 当前 commit)。
 async fn sync_git_repo(source: &SkillSource) -> Result<(String, String), String> {
