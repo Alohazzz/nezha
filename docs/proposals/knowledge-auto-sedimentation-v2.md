@@ -517,6 +517,21 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.52 实施进度：第 5 步后端（自动触发 + 总开关）已完成
+
+| 项 | 实现 |
+|---|---|
+| 自动触发 | `pty.rs::finalize_task_exit` 在 `gather_task_drafts` **之后**调 `knowledge::spawn_auto_sedimentation`（必须在 gather 之后，否则 worktree 里写的 `knowledge.json` 还没收拢到项目根） |
+| 立即返回 | 实际工作在 `tauri::async_runtime::spawn` 里跑（一次沉淀含最多两次模型调用），结果经 `knowledge-sedimentation` 事件上报，**不拖住 PTY 退出收尾** |
+| 三个前置条件 | 总开关开启 ∧ 项目绑定图谱 ∧ 产物存在；未绑定图谱**直接跳过并返回正常**（产出契约本就没注入，不是错误） |
+| agent 来源 | 用**该任务自身的 agent**（不是「默认 agent」——任务可能用非默认的那个），由 `finalize_task_exit` 传入 |
+| 总开关 | `KnowledgeSettings.auto_writeback` → `enabled`，语义改为「知识沉淀总开关」、**默认由关改为开** |
+| 旧值迁移 | `autoWriteback` / `auto_writeback` 作为 `#[serde(alias)]` 继续可读，**旧 settings.json 无需手工迁移**；显式 `false` 被尊重 |
+| 命令名 | 总开关写入命令由 `save_knowledge_auto_writeback` 改为 `save_knowledge_enabled`；**旧命令名保留为等价别名**，故前端无需同时改动即可生效 |
+
+**为什么把 `agent` 一路传进来**：先写成了读 `settings.agent.default_agent_or_codex()`，但
+`AppSettings` 根本没有该字段（编译期发现），且语义也不对——沉淀该用**跑这个任务的** agent。
+
 ## 11.53 实施进度：第 4 步（会话内产出契约）已完成（后端部分）
 
 | 项 | 实现 |

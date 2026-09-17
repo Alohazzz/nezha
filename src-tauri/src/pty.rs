@@ -141,6 +141,7 @@ fn finalize_task_exit(
     app: &AppHandle,
     task_id: &str,
     project_path: &str,
+    agent: &str,
     is_codex: bool,
     exit_ok: bool,
     exit_code: Option<u32>,
@@ -223,6 +224,14 @@ fn finalize_task_exit(
         };
         if let Some(real_path) = real_path {
             let _ = crate::drafts::gather_task_drafts(project_path, &real_path, task_id);
+            // 知识沉淀自动处理：任务完成后读会话内产出的候选 → 四层门 → 写入图谱。
+            // 放在 gather 之后（否则 worktree 里写的 knowledge.json 还没收拢到项目根）。
+            crate::knowledge::spawn_auto_sedimentation(
+                app.clone(),
+                task_id.to_string(),
+                real_path,
+                agent.to_string(),
+            );
         }
         crate::system_notify::notify_task_event(
             app,
@@ -547,7 +556,13 @@ fn spawn_pty_reader(
 }
 
 /// 在后台线程中轮询子进程退出状态，退出后调用 finalize_task_exit。
-fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_codex: bool) {
+fn spawn_exit_monitor(
+    app: AppHandle,
+    task_id: String,
+    project_path: String,
+    agent: String,
+    is_codex: bool,
+) {
     tokio::task::spawn_blocking(move || loop {
         let exit_status = {
             let tm = app.state::<TaskManager>();
@@ -568,7 +583,15 @@ fn spawn_exit_monitor(app: AppHandle, task_id: String, project_path: String, is_
             };
             // 等待会话注册完成
             wait_for_session(&app, &task_id, is_codex);
-            finalize_task_exit(&app, &task_id, &project_path, is_codex, exit_ok, exit_code);
+            finalize_task_exit(
+                &app,
+                &task_id,
+                &project_path,
+                &agent,
+                is_codex,
+                exit_ok,
+                exit_code,
+            );
             return;
         }
 
@@ -1211,7 +1234,8 @@ pub async fn run_task(
         session_tx,
         None,
     );
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    let agent_for_monitor = agent.clone();
+    spawn_exit_monitor(app, task_id, project_path, agent_for_monitor, is_codex);
 
     Ok(())
 }
@@ -1505,7 +1529,8 @@ pub async fn resume_task(
         None,
         None,
     );
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    let agent_for_monitor = agent.clone();
+    spawn_exit_monitor(app, task_id, project_path, agent_for_monitor, is_codex);
 
     Ok(())
 }
@@ -1624,7 +1649,8 @@ pub async fn fork_task(
         session_tx,
         None,
     );
-    spawn_exit_monitor(app, task_id, project_path, is_codex);
+    let agent_for_monitor = agent.clone();
+    spawn_exit_monitor(app, task_id, project_path, agent_for_monitor, is_codex);
 
     Ok(())
 }

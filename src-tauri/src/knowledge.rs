@@ -19,6 +19,7 @@ use crate::knowledge_gate::{
     self, EvidenceKind, ExistingEntry, GateContext, GateInput, GateVerdict,
 };
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -319,6 +320,115 @@ pub(crate) fn list_knowledge_targets_internal() -> Result<Vec<KnowledgeTarget>, 
     }
     targets.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(targets)
+}
+
+/// 任务完成后自动处理知识沉淀（best-effort，superseded 由日志与事件体现）。
+///
+/// 决策（提案 §8.1）：任务完成即自动处理，无手动按钮。前置条件是三条**都已成立**：
+/// - 总开关开启（`settings.knowledge.enabled`，默认开）
+/// - 项目绑定了图谱（`graph_id` 非空；未绑定项目连产出契约都不注入）
+/// - 该任务的会话内产物存在（缺失 = 「漏了」，由 `generate_knowledge_sedimentation` 报错）
+///
+/// 本函数**立即返回**，实际工作在后台任务里跑（一次沉淀含最多两次模型调用，
+/// 不能拖住 PTY 退出收尾路径）。结果通过 `knowledge-sedimentation` 事件上报。
+pub fn spawn_auto_sedimentation(
+    app: tauri::AppHandle,
+    task_id: String,
+    real_project_path: String,
+    agent: String,
+) {
+    if !crate::app_settings::load_settings_internal().knowledge.enabled {
+        return; // 总开关关闭：不跑沉淀，也不要求产出
+    }
+    tauri::async_runtime::spawn(async move {
+        let result = run_auto_sedimentation(&task_id, &real_project_path, &agent).await;
+        match result {
+            Ok(outcome) => {
+                let _ = app.emit(
+                    "knowledge-sedimentation",
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "status": "ok",
+                        "written": outcome.written_count,
+                        "pushedPending": outcome.pushed_pending,
+                        "items": outcome.items,
+                        "commit": outcome.commit,
+                    }),
+                );
+            }
+            Err(error) => {
+                eprintln!("[knowledge] 自动沉淀未完成：{error}");
+                let _ = app.emit(
+                    "knowledge-sedimentation",
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "status": "failed",
+                        "error": error,
+                    }),
+                );
+            }
+        }
+    });
+}
+
+/// 跑一次自动沉淀：读会话内候选 → 分层门 → 写入 + 提交推送。
+async fn run_auto_sedimentation(
+    task_id: &str,
+    real_project_path: &str,
+    agent: &str,
+) -> Result<KnowledgeWritebackResult, String> {
+    // 未绑定图谱的项目直接跳过（不是错误——产出契约本就没注入）。
+    let target = match resolve_knowledge_target(real_project_path.to_string()).await {
+        Ok(target) => target,
+        Err(_) => return Ok(empty_writeback_result()),
+    };
+    // 复用同一套产出契约解析（含 skipped / 图谱兜底 / 缺失判定）。
+    let draft = crate::drafts::read_draft_file(real_project_path, task_id, "knowledge.json")
+        .map_err(|e| format!("读取知识沉淀产物失败: {e}"))?
+        .filter(|raw| !raw.trim().is_empty());
+    let Some(raw) = draft else {
+        // 缺失 = 「漏了」：如实报错，不静默（这是「忘了」与「确实没有」的区分点）。
+        return Err(format!(
+            "本次任务未产出知识沉淀产物（.nezha/drafts/{task_id}/knowledge.json）"
+        ));
+    };
+    let parsed = crate::agent_assist::parse_knowledge_draft(&raw, &target.id)?;
+    if parsed.is_skipped() {
+        return Ok(empty_writeback_result());
+    }
+    let candidates: Vec<KnowledgeCandidate> = parsed
+        .candidates()
+        .iter()
+        .map(|s| KnowledgeCandidate {
+            module: s.module.clone(),
+            section: s.section.clone(),
+            content: s.content.clone(),
+            evidence: s.evidence.clone(),
+            confidence: s.confidence.clone(),
+            suggested_title: s.suggested_title.clone(),
+            knowledge_graph_id: s.knowledge_graph_id.clone(),
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(empty_writeback_result());
+    }
+    // agent 取自该任务本身的 agent（不是「默认 agent」——任务可能用非默认的那个）。
+    let agent = if agent == "claude" || agent == "codex" {
+        agent.to_string()
+    } else {
+        "claude".to_string()
+    };
+    knowledge_auto_writeback(real_project_path.to_string(), candidates, agent).await
+}
+
+fn empty_writeback_result() -> KnowledgeWritebackResult {
+    KnowledgeWritebackResult {
+        items: Vec::new(),
+        all_passed: true,
+        written_count: 0,
+        commit: None,
+        pushed_pending: false,
+    }
 }
 
 /// 供 PTY 启动时注入给 agent 的图谱环境变量（best-effort，失败返回空）。
@@ -1779,6 +1889,56 @@ commit_prompt = \"x\"
             }
             assert_eq!(count("@{u}..HEAD").await, ahead0, "本地提交应保留");
         }
+    }
+
+    /// 自动沉淀的候选抽取：从契约产物到写入候选的转换必须保持字段与图谱绑定。
+    /// （真正的写入由 `knowledge_auto_writeback` 负责，此处只验转换与前置判定。）
+    #[test]
+    fn auto_sediment_skips_when_contract_says_skipped() {
+        let raw = r#"{"version":1,"skipped":true,"skipReason":"仅样式调整"}"#;
+        let parsed = crate::agent_assist::parse_knowledge_draft(raw, "HIS").expect("解析");
+        assert!(parsed.is_skipped());
+        assert!(parsed.candidates().is_empty());
+    }
+
+    #[test]
+    fn auto_sediment_requires_non_empty_candidates_to_write() {
+        // 空候选列表（未显式 skipped）不应触发写入，也不应报错。
+        let raw = r#"{"version":1,"skipped":false,"candidates":[]}"#;
+        let parsed = crate::agent_assist::parse_knowledge_draft(raw, "HIS").expect("解析");
+        assert!(!parsed.is_skipped());
+        assert!(parsed.candidates().is_empty());
+    }
+
+    #[test]
+    fn auto_sediment_carries_graph_binding_from_contract() {
+        // 契约未写 graphId 时由兜底填充，转换后仍应绑定当前图谱。
+        let raw = r#"[{"module":"M","section":"职责","content":"c","evidence":"e","confidence":"confirmed"}]"#;
+        let parsed = crate::agent_assist::parse_knowledge_draft(raw, "ICUCIS").expect("解析");
+        let mapped: Vec<super::KnowledgeCandidate> = parsed
+            .candidates()
+            .iter()
+            .map(|s| super::KnowledgeCandidate {
+                module: s.module.clone(),
+                section: s.section.clone(),
+                content: s.content.clone(),
+                evidence: s.evidence.clone(),
+                confidence: s.confidence.clone(),
+                suggested_title: s.suggested_title.clone(),
+                knowledge_graph_id: s.knowledge_graph_id.clone(),
+            })
+            .collect();
+        assert_eq!(mapped.len(), 1);
+        assert_eq!(mapped[0].knowledge_graph_id, "ICUCIS");
+    }
+
+    #[test]
+    fn empty_writeback_result_is_all_passed_and_unwritten() {
+        let result = empty_writeback_result();
+        assert!(result.all_passed);
+        assert_eq!(result.written_count, 0);
+        assert!(result.commit.is_none());
+        assert!(!result.pushed_pending);
     }
 
     #[test]

@@ -515,6 +515,7 @@ pub fn run() {
             app_settings::save_terminal_scrollback,
             app_settings::save_terminal_copy_on_select,
             app_settings::save_system_notifications,
+            app_settings::save_knowledge_enabled,
             app_settings::save_knowledge_auto_writeback,
             app_settings::save_batch_grill_enabled,
             app_settings::save_yunxiao_settings,
