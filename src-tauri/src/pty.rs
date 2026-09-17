@@ -1023,13 +1023,25 @@ pub async fn run_task(
     };
 
     // 将文本附件路径追加到提示词
-    let final_prompt = if text_paths.is_empty() {
+    let with_text_paths = if text_paths.is_empty() {
         prompt_with_images
     } else {
         format!(
             "{}\n\n[Attached text files — read these for full context]\n{}",
             prompt_with_images,
             text_paths.join("\n")
+        )
+    };
+
+    // 知识沉淀产出契约：仅对**绑定了知识图谱**的项目注入（未绑定的项目没有可沉淀目标，
+    // 强求只会逼出无意义的 skipped）。图谱身份取自项目配置，已在上面读出。
+    let final_prompt = if config.knowledge.graph_id.trim().is_empty() {
+        with_text_paths
+    } else {
+        format!(
+            "{}\n\n---\n{}",
+            with_text_paths,
+            crate::agent_assist::SESSION_SEDIMENTATION_CONTRACT.replace("{TASK_ID}", &task_id)
         )
     };
 

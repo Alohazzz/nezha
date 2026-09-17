@@ -504,6 +504,32 @@ const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论�
 /// `yunxiao-backfill-issue` 技能补录议题（Skill 负责盘问，Nezha 持有 token 创建）。
 const BACKFILL_SKILL_INSTRUCTION: &str = "此外，在讨论/执行过程中，如果发现一个不属于当前议题、需要单独新立项的问题，可以提示用户手工调用 yunxiao-backfill-issue 技能补录议题：它会总结上下文、判定缺陷/需求、按模板盘问并生成预览，确认后由 Nezha 创建云效议题并自动生成绑定待办。不要未经用户确认就自动立项。\n写补录请求文件 backfill-issue.json 时，目录名必须是你当前任务 id（读取环境变量 $NEZHA_TASK_ID，禁止自造 task_id），即 `.nezha/drafts/{NEZHA_TASK_ID}/backfill-issue.json`，与 discussion.md / knowledge.json 放同一目录；否则 Nezha 的补录侦测匹配不到本任务，不会创建议题与待办。只需写入一次；Nezha 消费后会自动清理该文件，若你随后发现文件消失属正常，不要重复写入或重新落盘。";
 
+/// 会话内知识沉淀**产出契约**：主 agent 在任务收尾时按此写
+/// `.nezha/drafts/$NEZHA_TASK_ID/knowledge.json`，随后由 Nezha 侧四层质量门判定并写入图谱。
+///
+/// 与 `KNOWLEDGE_SEDIMENTATION_RULES` 的分工：本常量描述**产出物格式**（写什么文件、
+/// 什么字段、如何表态「本次无新知识」），规则常量描述**提取标准**（什么值得提）。
+///
+/// 使用 `{TASK_ID}` 占位符，注入时替换为真实 task id（禁止让 agent 自造目录名）。
+pub const SESSION_SEDIMENTATION_CONTRACT: &str = r#"知识沉淀产出（必做）：任务收尾时，按下面的格式把本次会话中确认的、长期有效的项目知识写入
+`.nezha/drafts/{TASK_ID}/knowledge.json`（与该任务的其它草稿同目录；不要写到别处、不要用其它文件名）。
+
+- 有知识要沉淀时：
+{
+  "version": 1,
+  "skipped": false,
+  "candidates": [
+    { "module": "<目标图谱中的模块名>", "section": "<该卡片中已存在的段落标题>",
+      "content": "<一句话知识>", "evidence": "<可定位的依据>", "confidence": "confirmed" }
+  ]
+}
+- 确实没有新知识时**也必须写这个文件**，用显式标记表态（不要留空、不要省略）：
+{ "version": 1, "skipped": true, "skipReason": "<为什么本次没有新知识>" }
+
+字段要求：content 必须是单行（含换行会被拒收）；evidence 要能定位（推荐 `文件路径:行号`）；
+confidence 只填 confirmed（可自动写入）或 pending（仅供人工参考，不会自动写入）。
+只需写入一次；Nezha 消费后可能清理该文件，若随后发现文件消失属正常，不要重复落盘。"#;
+
 /// 知识沉淀提取规则（替代已废弃的 knowledge-sedimentation 技能，内嵌到提示词）。
 /// 讨论提示词与 headless 降级路径共用，保证判定标准一致。
 const KNOWLEDGE_SEDIMENTATION_RULES: &str = r#"知识沉淀规则：
@@ -1521,10 +1547,100 @@ fn build_sedimentation_prompt(
         .replace("{project_path}", project_path.trim())
 }
 
+/// 会话内沉淀产物的读取结论。
+#[derive(Debug, Clone)]
+pub enum SedimentationDraft {
+    /// agent 显式表态「本次没有新知识」。
+    Skipped { reason: String },
+    /// 候选列表（可能为空数组，等价于没有候选但未显式 skipped）。
+    Candidates(Vec<KnowledgeSuggestion>),
+}
+
+impl SedimentationDraft {
+    pub fn candidates(&self) -> &[KnowledgeSuggestion] {
+        match self {
+            SedimentationDraft::Skipped { .. } => &[],
+            SedimentationDraft::Candidates(list) => list,
+        }
+    }
+
+    pub fn is_skipped(&self) -> bool {
+        matches!(self, SedimentationDraft::Skipped { .. })
+    }
+
+    /// 把候选的图谱绑定兜底为 `graph_id`（agent 不再负责写该字段）。
+    fn bind_graph(mut self, graph_id: &str) -> Self {
+        if let SedimentationDraft::Candidates(list) = &mut self {
+            for suggestion in list.iter_mut() {
+                if suggestion.knowledge_graph_id.trim().is_empty() {
+                    suggestion.knowledge_graph_id = graph_id.to_string();
+                }
+            }
+        }
+        self
+    }
+}
+
+/// 读取会话内沉淀产物（`.nezha/drafts/<taskId>/knowledge.json`）。
+///
+/// 兼容三种形态：
+/// - 显式表态：`{"version":1,"skipped":true,"skipReason":"…"}`
+/// - 带壳候选：`{"version":1,"skipped":false,"candidates":[…]}`（多余字段忽略，前向兼容）
+/// - 裸数组：`[{…}]`（历史草稿 / headless 输出）
+///
+/// `knowledgeGraphId` **不再要求 agent 写**：缺失时由本函数兜底填成当前绑定图谱，
+/// 避免「agent 写错图谱 id ⇒ 整份草稿被丢弃」这一纯失败源。
+pub fn parse_knowledge_draft(raw: &str, graph_id: &str) -> Result<SedimentationDraft, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(SedimentationDraft::Candidates(Vec::new()));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|e| format!("解析知识沉淀产物失败: {e}"))?;
+
+    // 裸数组：直接按候选列表处理
+    if value.is_array() {
+        return Ok(SedimentationDraft::Candidates(parse_suggestions_value(
+            value.as_array().cloned().unwrap_or_default(),
+        )?)
+        .bind_graph(graph_id));
+    }
+
+    if !value.is_object() {
+        return Err("知识沉淀产物既不是对象也不是数组".to_string());
+    }
+
+    let skipped = value
+        .get("skipped")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if skipped {
+        let reason = value
+            .get("skipReason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        return Ok(SedimentationDraft::Skipped { reason });
+    }
+
+    let candidates = value
+        .get("candidates")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(SedimentationDraft::Candidates(parse_suggestions_value(candidates)?).bind_graph(graph_id))
+}
+
 /// 解析候选知识 JSON 数组并规范化字段（模块/段落缺失的条目丢弃）。
 fn parse_suggestions_json(inner: &str) -> Result<Vec<KnowledgeSuggestion>, String> {
     let parsed: Vec<serde_json::Value> =
         serde_json::from_str(inner).map_err(|e| format!("解析候选知识 JSON 失败: {e}"))?;
+    parse_suggestions_value(parsed)
+}
+
+/// 从已解析的 JSON 值列表规范化候选（模块/段落缺失的条目丢弃）。
+fn parse_suggestions_value(parsed: Vec<serde_json::Value>) -> Result<Vec<KnowledgeSuggestion>, String> {
     let mut out = Vec::new();
     for item in parsed {
         let module = item
@@ -1642,26 +1758,36 @@ pub async fn generate_knowledge_sedimentation(
     let knowledge_target = crate::knowledge::resolve_knowledge_target(project_path.clone()).await?;
     let graph_data_dir = knowledge_target.data_dir.clone();
 
-    // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
+    // 会话内产出优先：agent 在任务收尾写了 knowledge.json 就直接用它。
+    // 缺失 = 「漏了」（与「显式跳过」区分），不静默兜底——契约要求 agent 必须表态。
     if !force.unwrap_or(false) {
-        if let Some(raw) = crate::drafts::read_draft_file(&project_path, &task_id, "knowledge.json")
-            .map_err(|e| format!("读取知识沉淀草稿失败: {e}"))?
+        match crate::drafts::read_draft_file(&project_path, &task_id, "knowledge.json")
+            .map_err(|e| format!("读取知识沉淀产物失败: {e}"))?
             .filter(|s| !s.trim().is_empty())
         {
-            if let Ok(suggestions) = parse_knowledge_suggestions(&raw) {
-                let bound_to_target = suggestions
-                    .iter()
-                    .all(|suggestion| suggestion.knowledge_graph_id == knowledge_target.id);
-                if bound_to_target {
-                    return Ok(suggestions);
+            Some(raw) => {
+                let draft = parse_knowledge_draft(&raw, &knowledge_target.id)?;
+                if draft.is_skipped() {
+                    // 显式表态「本次无新知识」：正常结束，不是错误。
+                    return Ok(draft.candidates().to_vec());
                 }
-                eprintln!(
-                    "[sedimentation] draft knowledge.json bound to another graph; regenerating"
-                );
-            } else {
-                eprintln!(
-                    "[sedimentation] draft knowledge.json parse failed, falling back to headless"
-                );
+                let suggestions = draft.candidates().to_vec();
+                // 兜底填写后仍与绑定图谱不一致 = agent 显式写了别的图谱，属于真异常。
+                if suggestions
+                    .iter()
+                    .any(|s| s.knowledge_graph_id != knowledge_target.id)
+                {
+                    return Err(format!(
+                        "知识沉淀产物的图谱绑定与项目不符（期望 {}）",
+                        knowledge_target.id
+                    ));
+                }
+                return Ok(suggestions);
+            }
+            None => {
+                return Err(format!(
+                    "本次任务未产出知识沉淀产物（.nezha/drafts/{task_id}/knowledge.json）——                     agent 收尾时既没有提出候选、也没有显式标注 skipped"
+                ));
             }
         }
     }
@@ -2092,6 +2218,111 @@ mod tests {
     #[test]
     fn extract_suggestions_errors_without_tag() {
         assert!(extract_suggestions("no tags here").is_err());
+    }
+
+    // ── 会话内沉淀产出契约（ticket 04 / 11）──────────────────────────
+
+    #[test]
+    fn draft_parses_wrapped_candidates() {
+        let raw = r#"{"version":1,"skipped":false,"candidates":[
+            {"module":"Nto.His.Register","section":"职责","content":"内容","evidence":"X.cs:1","confidence":"confirmed"}]}"#;
+        let draft = parse_knowledge_draft(raw, "HIS").expect("解析成功");
+        let list = draft.candidates();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].module, "Nto.His.Register");
+        assert!(!draft.is_skipped());
+    }
+
+    #[test]
+    fn draft_parses_explicit_skip() {
+        let raw = r#"{"version":1,"skipped":true,"skipReason":"本次只是改样式，无新知识"}"#;
+        let draft = parse_knowledge_draft(raw, "HIS").expect("解析成功");
+        assert!(draft.is_skipped());
+        assert!(draft.candidates().is_empty());
+        // skipped 的 reason 必须保留下来，供指标统计（§9）。
+        match draft {
+            SedimentationDraft::Skipped { reason } => assert!(reason.contains("改样式")),
+            _ => panic!("应为 Skipped"),
+        }
+    }
+
+    #[test]
+    fn draft_backfills_graph_id_when_agent_omits_it() {
+        // agent 不再负责写 knowledgeGraphId：缺失时兜底填当前绑定图谱，
+        // 避免「写错图谱 id ⇒ 整份草稿被丢弃」这一纯失败源。
+        let raw = r#"[{"module":"M","section":"职责","content":"c","evidence":"e","confidence":"confirmed"}]"#;
+        let draft = parse_knowledge_draft(raw, "HIS").expect("解析成功");
+        assert_eq!(draft.candidates()[0].knowledge_graph_id, "HIS");
+    }
+
+    #[test]
+    fn draft_keeps_agent_supplied_graph_id() {
+        let raw = r#"[{"module":"M","section":"职责","content":"c","evidence":"e","confidence":"confirmed","knowledgeGraphId":"ICUCIS"}]"#;
+        let draft = parse_knowledge_draft(raw, "HIS").expect("解析成功");
+        assert_eq!(draft.candidates()[0].knowledge_graph_id, "ICUCIS");
+    }
+
+    #[test]
+    fn draft_accepts_legacy_bare_array_and_ignores_unknown_fields() {
+        // 裸数组（历史草稿 / headless 输出）与多余字段都要能读，保证前向兼容。
+        let raw = r#"[{"module":"M","section":"职责","content":"c","evidence":"e","confidence":"confirmed","someFutureField":123}]"#;
+        let draft = parse_knowledge_draft(raw, "HIS").expect("解析成功");
+        assert_eq!(draft.candidates().len(), 1);
+    }
+
+    #[test]
+    fn draft_empty_input_is_candidates_not_skip() {
+        // 空文本按「无候选」处理（不是 skipped），调用方据此判「漏了」。
+        let draft = parse_knowledge_draft("   ", "HIS").expect("解析成功");
+        assert!(!draft.is_skipped());
+        assert!(draft.candidates().is_empty());
+    }
+
+    #[test]
+    fn draft_rejects_malformed_json() {
+        assert!(parse_knowledge_draft("{not json", "HIS").is_err());
+        assert!(parse_knowledge_draft("42", "HIS").is_err());
+    }
+
+    #[test]
+    fn contract_requires_task_scoped_path_and_skip_marker() {
+        // 契约文本必须含任务级路径与显式 skipped 表态，否则「忘了」与「确实没有」无法区分。
+        assert!(SESSION_SEDIMENTATION_CONTRACT.contains("{TASK_ID}"));
+        assert!(SESSION_SEDIMENTATION_CONTRACT.contains("skipped"));
+        assert!(SESSION_SEDIMENTATION_CONTRACT.contains("skipReason"));
+        let rendered = SESSION_SEDIMENTATION_CONTRACT.replace("{TASK_ID}", "abc-123");
+        assert!(!rendered.contains("{TASK_ID}"), "占位符应被替换");
+        assert!(rendered.contains("abc-123"));
+    }
+
+    #[test]
+    fn knowledge_rules_drop_conflict_extraction_and_scan_sections() {
+        // 规则与四层门必须一致：冲突不提（门一律拒且无出口）、定位属扫描生成段。
+        assert!(
+            KNOWLEDGE_SEDIMENTATION_RULES.contains("不要提取该条"),
+            "应明确「冲突不提」"
+        );
+        assert!(
+            !KNOWLEDGE_SEDIMENTATION_RULES.contains("与现状冲突，需复核"),
+            "不应再要求 agent 标注冲突供复核"
+        );
+        // 只看「section 限定」那一行的清单——「定位」是常用词，全文子串会误伤
+        //（同一条规则里就有「可定位的依据」）。
+        let section_line = KNOWLEDGE_SEDIMENTATION_RULES
+            .lines()
+            .find(|l| l.contains("section 限定"))
+            .expect("规则应含 section 限定行");
+        assert!(
+            !section_line.contains("定位"),
+            "定位不应出现在可写 section 清单：{section_line}"
+        );
+        assert!(
+            !section_line.contains("验证记录"),
+            "验证记录不应出现在可写 section 清单：{section_line}"
+        );
+        for writable in ["职责", "关键实体与数据表", "业务规则与已知坑", "UI界面与入口"] {
+            assert!(section_line.contains(writable), "可写段应保留：{writable}");
+        }
     }
 
     #[test]

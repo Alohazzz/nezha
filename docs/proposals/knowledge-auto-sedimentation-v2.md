@@ -517,6 +517,29 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.53 实施进度：第 4 步（会话内产出契约）已完成（后端部分）
+
+| 项 | 实现 |
+|---|---|
+| 产出契约文本 | `agent_assist.rs::SESSION_SEDIMENTATION_CONTRACT`（`{TASK_ID}` 占位符，注入时替换） |
+| 契约注入范围 | `pty.rs`：仅当项目**绑定了图谱**（`config.knowledge.graph_id` 非空）时追加到任务提示词 |
+| 落点 | `.nezha/drafts/<taskId>/knowledge.json`（复用既有草稿路径与校验） |
+| `skipped` 语义 | 新增 `SedimentationDraft`（`Skipped{reason}` / `Candidates`）与 `parse_knowledge_draft` |
+| 「缺失 = 漏了」 | 草稿文件缺失时**明确报错**（原先是静默回退 headless），不再把漏产出当正常 |
+| `knowledgeGraphId` 兜底 | 缺失时由 Nezha 填当前绑定图谱；**显式写了别的图谱**才报错 |
+| 前向兼容 | 兼容带壳 `{candidates:[…]}` / 裸数组 / 未知字段忽略（hub 技能热更新的前提） |
+| section 收窄 | 规则文本已去掉 `定位` 与 `验证记录`（上一节），并新增断言钉住 |
+
+**当前处于「契约已生效、生产者尚未迁移」的中间态，这是刻意的**：agent 现在会被要求写
+`knowledge.json`，但 `generate_knowledge_sedimentation` 已不再回退 headless ⇒ 若 agent
+没写，「知识沉淀」按钮会**如实报错**「本次任务未产出知识沉淀产物」。选择这个顺序是因为
+「缺失 = 漏了」正是本设计要建立的语义；若保留静默兜底，漏产出将永远不可见。
+前端已有 `catch`（`ProjectPage.tsx::openKnowledgeSedimentation` → 弹窗 `error`），
+不会崩，只是提示。**第 5 步退役该按钮与预览弹窗后，此中间态即消失。**
+
+**顺带修正一处断言陷阱**：`定位` 是常用词（规则里「可**定位**的依据」本身含它），
+全文子串断言会误伤 ⇒ 改为只在「section 限定」那一行上断言清单内容。
+
 ## 11.54 实施进度：第 2 步（写入契约与重试）已完成
 
 | 项 | 实现 |
