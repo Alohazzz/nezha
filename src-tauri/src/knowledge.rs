@@ -319,6 +319,37 @@ pub(crate) fn list_knowledge_targets_internal() -> Result<Vec<KnowledgeTarget>, 
     Ok(targets)
 }
 
+/// 供 PTY 启动时注入给 agent 的图谱环境变量（best-effort，失败返回空）。
+///
+/// 图谱身份由 Nezha 从**主项目**配置解析后下发，因此在 worktree 中
+/// （`.nezha/config.toml` 被 gitignore、那里没有该文件）agent 也能拿到图谱位置。
+/// 见设计规格 ticket 10。
+///
+/// 只读两个小配置文件（项目配置 + hub 配置）并做路径拼接，**不扫描图谱目录**，
+/// 因此可以在 spawn 路径上直接调用。
+pub(crate) fn knowledge_env_for_project(real_project_path: &str) -> Vec<(String, String)> {
+    let Ok(config) = crate::config::read_project_config(real_project_path.to_string()) else {
+        return Vec::new();
+    };
+    let graph_id = config.knowledge.graph_id.trim();
+    if graph_id.is_empty() {
+        return Vec::new(); // 未绑定图谱：不注入，agent 行为与原来一致
+    }
+    let Some(hub) = crate::skills::configured_hub_path() else {
+        return Vec::new();
+    };
+    let data_dir = knowledge_graphs_root(Path::new(&hub))
+        .join(graph_id)
+        .join("data");
+    vec![
+        ("NEZHA_KNOWLEDGE_GRAPH_ID".to_string(), graph_id.to_string()),
+        (
+            "NEZHA_KNOWLEDGE_GRAPH_DIR".to_string(),
+            data_dir.to_string_lossy().into_owned(),
+        ),
+    ]
+}
+
 /// 读取项目配置中的知识库目标。未配置或目标不存在时报错，不回退 HIS。
 pub(crate) fn resolve_knowledge_target_internal(
     project_path: &str,
@@ -1437,6 +1468,89 @@ mod tests {
         let lines: Vec<&str> = doc.lines().collect();
         assert!(find_section_heading(&lines, "UI界面与入口").is_some());
         assert!(find_section_heading(&lines, "UI 界面 / 入口").is_some());
+    }
+
+    fn temp_project_with_graph(tag: &str, graph_id: Option<&str>) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nezha-kg-env-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".nezha")).unwrap();
+        // 注意：ProjectConfig 的 `agent` / `git` 段是**必填**，而 `read_project_config`
+        // 在 toml 解析失败时会静默回退到 Default（知识图谱绑定一起丢失）。因此夹具
+        // 必须写成完整段，否则测到的是「解析失败」而不是「未绑定图谱」。
+        let knowledge = match graph_id {
+            Some(id) => format!("[knowledge]
+graph_id = \"{id}\"
+"),
+            None => String::new(),
+        };
+        let config = format!(
+            "[agent]
+default = \"claude\"
+
+[git]
+commit_prompt = \"x\"
+
+{knowledge}"
+        );
+        std::fs::write(dir.join(".nezha").join("config.toml"), config).unwrap();
+        dir
+    }
+
+    #[test]
+    fn knowledge_env_is_empty_for_unbound_project() {
+        // 未绑定图谱：不注入任何环境变量，agent 行为与原来一致。
+        let dir = temp_project_with_graph("unbound", None);
+        let env = knowledge_env_for_project(dir.to_str().unwrap());
+        assert!(env.is_empty(), "未绑定项目不应注入：{env:?}");
+        // 目录不存在 / 无配置时同样为空，且不 panic。
+        assert!(knowledge_env_for_project("H:/definitely/not/here").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn knowledge_env_exposes_graph_id_and_data_dir_when_hub_configured() {
+        let dir = temp_project_with_graph("bound", Some("HIS"));
+        let env = knowledge_env_for_project(dir.to_str().unwrap());
+        if crate::skills::configured_hub_path().is_none() {
+            // 未配置技能库时无法定位数据目录：按 best-effort 返回空（不注入）。
+            assert!(env.is_empty(), "未配置 hub 时不应注入：{env:?}");
+        } else {
+            let map: std::collections::HashMap<_, _> = env.iter().cloned().collect();
+            assert_eq!(
+                map.get("NEZHA_KNOWLEDGE_GRAPH_ID").map(String::as_str),
+                Some("HIS")
+            );
+            let data_dir = map.get("NEZHA_KNOWLEDGE_GRAPH_DIR").expect("数据目录");
+            assert!(
+                data_dir.replace('\\', "/").ends_with("knowledge-graphs/HIS/data"),
+                "数据目录应以 knowledge-graphs/<id>/data 结尾：{data_dir}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 真实仓库上的集成检查：`NEZHA_KG_E2E_PROJECT` 指向绑定图谱的项目。
+    #[test]
+    #[ignore = "需要本机真实项目（如 HIS 检出）"]
+    fn acceptance_knowledge_env_on_real_project() {
+        let Ok(project) = std::env::var("NEZHA_KG_E2E_PROJECT") else {
+            eprintln!("SKIP: 未设置 NEZHA_KG_E2E_PROJECT");
+            return;
+        };
+        let env = knowledge_env_for_project(&project);
+        let map: std::collections::HashMap<_, _> = env.iter().cloned().collect();
+        let graph_id = map.get("NEZHA_KNOWLEDGE_GRAPH_ID").expect("应注入 graph id");
+        let data_dir = map.get("NEZHA_KNOWLEDGE_GRAPH_DIR").expect("应注入数据目录");
+        println!("{project} -> graph={graph_id} dir={data_dir}");
+        // 注入的数据目录必须真实存在，否则 agent 拿到的是死路径。
+        assert!(
+            std::path::Path::new(data_dir).is_dir(),
+            "注入的数据目录应真实存在：{data_dir}"
+        );
     }
 
     #[test]

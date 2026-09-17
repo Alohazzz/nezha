@@ -517,9 +517,9 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
-## 11.55 实施进度：第 3 步（hub 定时拉取）已完成
+## 11.55 实施进度：第 3 步（hub 定时拉取 + 图谱可达性注入）已完成
 
-按 §11 的实施顺序，第 3 步（可达性与新鲜度）已落地：
+按 §11 的实施顺序，第 3 步（可达性与新鲜度）已落地——新鲜度见上表，可达性见本节末「图谱环境变量注入」：
 
 | 项 | 实现 |
 |---|---|
@@ -537,6 +537,9 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 耗时 **2.06 s、体积无增长**（`.git` 仍 2.6 MB，可达 commit 仍 79）。说明该仓库的
 `.git/shallow` 标记早已失效（历史其实已在本地），补全几乎无代价；但**标记存在仍会让
 `git revert` 复核历史**，所以保留补救逻辑。
+
+**已知遗留（并入第 6 步）**：`KnowledgePanel` **不监听** `skill-hub-changed`（只有 `SkillHubView` 监听），
+因此「读到最新」对 agent 经磁盘生效、但打开着的知识面板不会自动刷新。按决定**并入第 6 步**一起做。
 
 **code-review 修复项**（本轮，均由独立审查发现）：
 
@@ -558,6 +561,27 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
    另新增测试专用访问器 `graph_write_active_count()`（`#[cfg(test)]`）。
 7. **用户文档同步**：`docs/operation-manual.md` / `.html` 里「首次自动 `git clone --depth 1`」
    已改为完整 clone，并补「启动后每 15 分钟后台自动拉取」，已跑 `pnpm help:sync`。
+
+**同批完成的另一半：图谱环境变量注入（ticket 10）**
+
+`pty.rs::setup_nezha_env` 现在额外注入 `NEZHA_KNOWLEDGE_GRAPH_ID` 与
+`NEZHA_KNOWLEDGE_GRAPH_DIR`：
+
+- **用主项目路径解析**（`real_project_path` 参数），因此 worktree 里
+  （`.nezha/config.toml` 被 gitignore、那里没有该文件）agent 也能拿到图谱位置。
+- 三处 spawn 路径全部覆盖：`run_task` / `resume_task` / `fork_task`
+  （`fork_task` 前端本就传主项目路径，直接复用）。
+- **best-effort**：未绑定图谱（`graph_id` 为空）或读配置失败时**不注入**，
+  agent 行为与原来一致，绝不影响任务启动。
+- 解析成本：只读两个小配置文件 + 路径拼接，**不扫描图谱目录**，故可直接在 spawn 路径调用。
+- 测试：未绑定项目返回空、绑定项目返回 `<hub>/knowledge-graphs/<id>/data`；
+  另有一条 `#[ignore]` 的真实仓库集成检查（断言注入的目录真实存在，否则 agent 拿到死路径）。
+
+**踩到的坑（已记入测试注释）**：`ProjectConfig` 的 `agent` / `git` 段是**必填**，而
+`read_project_config` 在 `toml::from_str` 失败时会**静默回退到 `Default`**（知识图谱绑定
+一起丢失）。我的首个测试夹具只写了 `[knowledge]`，于是测到的是「解析失败」而非
+「未绑定图谱」——夹具必须写成完整段。这也是一个真实的既有行为陷阱：
+**配置写得不全时图谱绑定会被静默清空**。
 
 **实测验证（启动即验证，不止编译）**：按项目既有流程启动桌面应用，确认 ① 应用正常渲染
 （WebView2 CDP：`#root` 有子节点、正文 1817 字符）② 启动同步成功

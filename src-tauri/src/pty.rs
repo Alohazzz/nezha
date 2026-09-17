@@ -358,13 +358,24 @@ fn setup_env(cmd: &mut CommandBuilder) {
 ///   agent 与轮询会话发现并行重复上报（见 run_task / resume_task / fork 注释）。
 ///   hook 脚本依靠 NEZHA_TASK_ID + NEZHA_EVENT_DIR 同时存在才工作，缺 EVENT_DIR 时
 ///   脚本内部校验直接 exit 0，不会重复上报。
-fn setup_nezha_env(cmd: &mut CommandBuilder, task_id: &str, agent: &str, use_hooks: bool) {
+fn setup_nezha_env(
+    cmd: &mut CommandBuilder,
+    task_id: &str,
+    agent: &str,
+    use_hooks: bool,
+    real_project_path: &str,
+) {
     cmd.env("NEZHA_TASK_ID", task_id);
     cmd.env("NEZHA_AGENT", agent);
     if use_hooks {
         if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
             cmd.env("NEZHA_EVENT_DIR", dir.to_string_lossy().as_ref());
         }
+    }
+    // 图谱位置注入：用**主项目**路径解析（worktree 里没有 .nezha/config.toml）。
+    // best-effort：未绑定图谱或读配置失败时不注入，不影响任务启动。
+    for (key, value) in crate::knowledge::knowledge_env_for_project(real_project_path) {
+        cmd.env(key, value);
     }
 }
 
@@ -706,6 +717,7 @@ struct SpawnedForkTask {
 /// 必须整体运行在 blocking 线程，避免占用 Tauri 的 Tokio worker。
 fn spawn_fork_task_process(
     project_path: &str,
+    real_project_path: &str,
     task_id: &str,
     agent: &str,
     source_session_id: &str,
@@ -755,7 +767,7 @@ fn spawn_fork_task_process(
     };
     command.cwd(project_path);
     setup_env(&mut command);
-    setup_nezha_env(&mut command, task_id, agent, use_hooks);
+    setup_nezha_env(&mut command, task_id, agent, use_hooks, real_project_path);
     for (key, value) in &launch.extra_env {
         command.env(key, value);
     }
@@ -966,7 +978,7 @@ pub async fn run_task(
     task_manager
         .task_real_paths
         .lock()
-        .insert(task_id.clone(), real_project_path);
+        .insert(task_id.clone(), real_project_path.clone());
 
     let pair = pty_system()
         .openpty(PtySize {
@@ -1122,7 +1134,7 @@ pub async fn run_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks);
+    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks, &real_project_path);
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -1357,7 +1369,7 @@ pub async fn resume_task(
     task_manager
         .task_real_paths
         .lock()
-        .insert(task_id.clone(), real_project_path);
+        .insert(task_id.clone(), real_project_path.clone());
 
     let pair = pty_system()
         .openpty(PtySize {
@@ -1434,7 +1446,7 @@ pub async fn resume_task(
     };
     cmd.cwd(&project_path);
     setup_env(&mut cmd);
-    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks);
+    setup_nezha_env(&mut cmd, &task_id, &agent, use_hooks, &real_project_path);
     for (key, value) in &launch.extra_env {
         cmd.env(key, value);
     }
@@ -1508,6 +1520,9 @@ pub async fn fork_task(
         MAX_REASONING_EFFORT_BYTES,
     )?;
     let launch_project_path = project_path.clone();
+    // fork_task 收到的 project_path 已是主项目路径（前端传 project.path，不含 worktree），
+    // 故直接作为图谱解析来源。
+    let launch_real_project_path = project_path.clone();
     let launch_task_id = task_id.clone();
     let launch_agent = agent.clone();
     // 终端就绪握手：与 run_task 同理，spawn 前等前端 xterm 挂载（issue #74）。
@@ -1524,6 +1539,7 @@ pub async fn fork_task(
     let spawned = tokio::task::spawn_blocking(move || {
         spawn_fork_task_process(
             &launch_project_path,
+            &launch_real_project_path,
             &launch_task_id,
             &launch_agent,
             &source_session_id,
