@@ -517,6 +517,28 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 - **L0 与写入循环内的同步文件 I/O 未包 `spawn_blocking`**：与 AGENTS.md 的约束有出入。当前实现在毫秒级（单卡片读取），但严格合规应在后续收敛。
 - **后缀匹配的宽松度**：`actual.ends_with(claimed)` 比「同段」宽松，边界是可能命中语义无关的同名文件；实测 HIS 无歧义。
 
+## 11.6 内容组织口径（规则文本修订）
+
+**问题**：知识组织规则散落三处且互相矛盾——`agent_assist.rs:512` 的 `KNOWLEDGE_SEDIMENTATION_RULES`、SkillHub `knowledge-graph/SKILL.md`（含**已失效**的「回写质量门」六条）、以及 `knowledge.rs:919` 的写入格式。最严重的是：提取规则要求 agent「把与图谱冲突的结论标注出来供复核」，而四层门按产品决策**一律拒绝冲突**，失败出口又未落地（ticket 08）⇒ **冲突知识被提出、被拒、无任何出口**。
+
+**修订**（评审稿见 [knowledge-sedimentation-contract-v2.md](./knowledge-sedimentation-contract-v2.md)）：
+
+| 项 | 决定 | 理由 |
+|---|---|---|
+| 冲突知识 | **不提**（删除「标注需复核」） | 与门「冲突一律拒」一致，从源头消除死胡同。真需要修正时走 §8.3 回滚通路 |
+| 条目格式 | 保留两行结构，**去掉恒定的 `· 已确认 ·`** | 只有 `confirmed` 能过门 ⇒ 该标记不携带信息。保留独立「依据」行是**刻意**让自动条目可识别（ticket 08 的回滚依赖它）；若对齐存量「来源内联」风格将无法区分人机条目 |
+| `验证记录` | **移出**可写 section | 它是「日期+依据+内容」的流水记录，且写入块本身已带日期与依据，语义重复 |
+| `定位` | **移出**可写 section | `module-card-guide.md` 明确「保留 `## 定位` 自动生成部分」 |
+| `suggestedTitle` | **删除字段** | 现状从未被使用（不写入、不去重） |
+| `knowledgeGraphId` | 改由 Nezha 兜底填入（已在 ticket 11 决定） | agent 写错会导致整份草稿被丢弃，是纯失败源 |
+| `confidence` | 保留 | 仍是门的入口条件，只是不再写入卡片正文 |
+
+**实测确认的良性性质**：`normalize_knowledge_text` 本就把「已确认 / 待验证 / 来源 / 括号标注」当噪声剥掉，故去掉 `已确认` **不影响 L2 去重**，无需迁移。
+
+**规则与门的关系**：规则是**提示**（让 agent 不白产），门是**执法**（即使 agent 违反也会拦下）。
+
+**落地属实施第 4 步**（会话内产出契约），本轮未动；且需同步 SkillHub 侧（删失效的门规则六条、同步 section 清单、写入契约文本）。
+
 ## 12. 已知限制与遗留
 
 - **HIS/ICUCIS adapter 已删除** ⇒ `scan_available=false`、index 无法重建；**EMR 无 `graph.toml`** ⇒ Nezha 看不见该图谱。属 hub 侧资产缺口。

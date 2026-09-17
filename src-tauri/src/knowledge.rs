@@ -719,6 +719,17 @@ fn module_doc_path(target: &KnowledgeTarget, module: &str) -> PathBuf {
         .join(format!("{module}.md"))
 }
 
+/// 不接受自动沉淀的 section：`定位` 由扫描生成（业务领域 / 代码路径 / 工程数），
+/// 属结构性字段，写入会造成结构性漂移。见 docs/proposals/knowledge-sedimentation-contract-v2.md §3。
+const NON_WRITABLE_SECTIONS: &[&str] = &["定位"];
+
+fn is_non_writable_section(section: &str) -> bool {
+    let target = normalize_section(section);
+    NON_WRITABLE_SECTIONS
+        .iter()
+        .any(|blocked| normalize_section(blocked) == target)
+}
+
 /// 在模块文档中定位 section 标题行号（`## <标题>`），按归一化标题匹配。
 fn find_section_heading(lines: &[&str], section: &str) -> Option<usize> {
     let target = normalize_section(section);
@@ -748,6 +759,12 @@ fn validate_candidate(target: &KnowledgeTarget, candidate: &KnowledgeCandidate) 
     }
     if candidate.section.trim().is_empty() {
         return Err("section 为空".to_string());
+    }
+    if is_non_writable_section(&candidate.section) {
+        return Err(format!(
+            "section「{}」由扫描生成，不接受自动沉淀；请改投 职责 / 业务规则与已知坑 等可写段",
+            candidate.section.trim()
+        ));
     }
     if candidate.knowledge_graph_id != target.id {
         return Err(format!(
@@ -916,7 +933,7 @@ fn append_entry(
     if end == 0 || !lines[end - 1].trim().is_empty() {
         block.push(String::new());
     }
-    block.push(format!("- {date} · 已确认 · {}", candidate.content.trim()));
+    block.push(format!("- {date} · {}", candidate.content.trim()));
     block.push(format!("  - 依据：{}", candidate.evidence.trim()));
     if end < lines.len() && lines[end].starts_with("## ") {
         block.push(String::new());
@@ -1388,6 +1405,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_scan_generated_section() {
+        let target = sample_target();
+        let mut candidate = KnowledgeCandidate {
+            module: "io".into(),
+            section: "定位".into(),
+            content: "内容".into(),
+            evidence: "Service.cs:1".into(),
+            confidence: "confirmed".into(),
+            suggested_title: String::new(),
+            knowledge_graph_id: "ICUCIS".into(),
+        };
+        // 与卡片是否存在无关：该判定发生在读卡片之前。
+        let error = validate_candidate(&target, &candidate).unwrap_err();
+        assert!(error.contains("由扫描生成"), "{error}");
+        // 归一化后同样是「定位」的写法也要拦住。
+        candidate.section = " 定位 ".into();
+        assert!(validate_candidate(&target, &candidate).is_err());
+        // 可写段不受影响（此处仍会在「卡片不存在」处被拒，但不是被本规则拒）。
+        candidate.section = "职责".into();
+        let other = validate_candidate(&target, &candidate).unwrap_err();
+        assert!(!other.contains("由扫描生成"), "{other}");
+    }
+
+    #[test]
     fn rejects_unsafe_module_names() {
         assert!(module_is_safe("Hsp.BaseData.Cache"));
         assert!(!module_is_safe("../etc/passwd"));
@@ -1418,6 +1459,9 @@ mod tests {
             .unwrap_or_default();
         assert!(in_section.contains("缓存键必须带租户前缀"));
         assert!(in_section.contains("依据：Hsp.BaseData.Cache.Bll/CacheService.cs:42"));
+        // 条目格式：`- <日期> · <内容>`，不再写入恒定的「已确认」（只有 confirmed 能过门）。
+        assert!(!in_section.contains("已确认"), "{in_section}");
+        assert!(in_section.contains("· 缓存键必须带租户前缀") || in_section.contains("缓存键必须带租户前缀"));
         // 只增不改：原有内容仍在。
         assert!(next.contains("（待补充）"));
     }
