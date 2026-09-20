@@ -445,6 +445,7 @@ pub fn run() {
             build::discover_build_repos,
             build::build_pull_repos,
             build::build_checkout_branch,
+            build::build_prune_stale_branches,
             build::read_build_state,
             build::write_build_state,
             build::refresh_build_state,

@@ -594,6 +594,13 @@
         <li>每个仓库可<strong>独立切换分支</strong>（下拉），并显示当前分支 / <code>脏</code>（有未提交改动）/ <code>缺失</code> 状态。</li>
         <li>勾选要拉取的仓库 → 点「<strong>拉取</strong>」：走 <code>git pull --ff-only --no-rebase</code>；<strong>脏仓库会被阻断</strong>（绝不 stash / reset）；远端引用陈旧导致失败时自动 <code>git fetch --prune --force origin</code> 后重试；结果显示为压缩摘要。</li>
         <li>「<strong>刷新基线</strong>」把当前各仓库 HEAD 写入 <code>.nezha/build-state.json</code>，作为增量构建的比较基准（不编译）。</li>
+        <li>「<strong>清理失效分支</strong>」删除<strong>远端已不存在的本地分支</strong>（只对勾选的仓库生效）：先 <code>git fetch --prune origin</code> 刷新远端引用，再扫描候选 → 弹确认框 → 确认后才删除。
+          <ul>
+            <li>只删<strong>提交已存在于某个 <code>origin/*</code> 分支</strong>的本地分支；<strong>有未提交内容 / 未合入远端的提交一律跳过</strong>（只列原因，不删）。</li>
+            <li>当前检出分支、被 worktree 占用的分支、<code>main</code> / <code>master</code> / <code>develop</code> 与 <code>default_branch</code> 永不参与清理。</li>
+            <li>结果按分支列出 <code>✓ 已删除 / × 删除失败 / · 跳过</code> 与原因。</li>
+          </ul>
+        </li>
       </ul>
 
       <h3><span class="subnum">4.3</span>分析 / 计划</h3>

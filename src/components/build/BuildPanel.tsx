@@ -4,6 +4,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { Check, ChevronDown, Hammer, RefreshCw, Play, X, GitBranch } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { rpRootStyle } from "../../styles/right-panel";
+import { StaleBranchCleanup, type DeletedBranch } from "./StaleBranchCleanup";
 
 interface BuildRepo {
   name: string;
@@ -449,6 +450,18 @@ export function BuildPanel({
       setStatusText("");
     }
   }, [projectPath, load]);
+
+  // 失效分支清理后就地摘掉已删除的分支，不重跑全量仓库发现（会重置勾选状态）。
+  const handleBranchesDeleted = useCallback((deleted: DeletedBranch[]) => {
+    if (deleted.length === 0) return;
+    setRepos((prev) =>
+      prev.map((r) => {
+        const gone = deleted.filter((d) => d.repoPath === r.path).map((d) => d.branch);
+        if (gone.length === 0) return r;
+        return { ...r, branches: r.branches.filter((b) => !gone.includes(b)) };
+      }),
+    );
+  }, []);
 
   const handleRefreshBaseline = useCallback(async () => {
     setError("");
@@ -993,6 +1006,12 @@ export function BuildPanel({
               刷新基线
             </button>
           </div>
+          <StaleBranchCleanup
+            projectPath={projectPath}
+            repos={repos}
+            selected={selected}
+            onDeleted={handleBranchesDeleted}
+          />
         </div>
 
         {pullResults.length > 0 && (

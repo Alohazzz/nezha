@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
@@ -96,6 +96,34 @@ pub struct PullResult {
     pub name: String,
     pub ok: bool,
     pub message: String,
+}
+
+/// 「远端已不存在的本地分支」的判定 / 删除结果。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StaleBranchItem {
+    /// 本地分支名。
+    pub branch: String,
+    /// 本次是否已删除（dry_run 时恒为 false）。
+    pub deleted: bool,
+    /// 是否满足删除条件（分支提交已存在于远端）。
+    pub deletable: bool,
+    /// 跳过原因；可删除时给出判定依据（如「已合入 origin/main」）。
+    pub reason: String,
+}
+
+/// 单个仓库的失效分支清理结果。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StaleBranchRepoResult {
+    /// 仓库名（与 `BuildRepo.name` 一致）。
+    pub name: String,
+    /// 仓库绝对路径（前端据此就地更新分支列表）。
+    pub path: String,
+    /// 远端刷新 / 扫描是否成功。
+    pub ok: bool,
+    /// `ok = false` 时的失败原因。
+    pub message: String,
+    /// 失效分支明细（无失效分支时为空）。
+    pub branches: Vec<StaleBranchItem>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -539,6 +567,218 @@ pub async fn build_pull_repos(
     })
     .await
     .map_err(|e| format!("build_pull_repos panicked: {e}"))?
+}
+
+/// `refs/remotes/origin/*` 的短名（去掉 `origin/` 前缀，剔除 `origin/HEAD` 符号引用）。
+/// 调用前须先 `fetch --prune`，否则拿到的是陈旧引用。
+fn git_origin_branch_names(dir: &str) -> HashSet<String> {
+    let out = match run_git_in(
+        dir,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/remotes/origin",
+        ],
+    ) {
+        Ok(o) if o.status.success() => o,
+        _ => return HashSet::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|s| s.trim())
+        .filter_map(|s| s.strip_prefix("origin/"))
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("HEAD"))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// 已被 worktree 检出的本地分支名（含主工作区当前分支）——这些分支删不掉，清理时直接跳过。
+fn git_worktree_branches(dir: &str) -> HashSet<String> {
+    let out = match run_git_in(dir, &["worktree", "list", "--porcelain"]) {
+        Ok(o) if o.status.success() => o,
+        _ => return HashSet::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("branch refs/heads/"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 找出包含该分支提交的远端跟踪分支（如 `origin/v2.20260901`）。
+/// 命中即说明分支内容已经在远端存在，本地删除不会丢内容。
+fn git_remote_branch_containing(dir: &str, branch: &str) -> Option<String> {
+    let out = run_git_in(dir, &["branch", "-r", "--contains", branch]).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| l.starts_with("origin/") && !l.contains("->"))
+        .map(|l| l.to_string())
+}
+
+/// 受保护分支：默认分支与主干分支永不参与清理。
+fn is_protected_branch(branch: &str, default_branch: &str) -> bool {
+    const PROTECTED: [&str; 3] = ["main", "master", "develop"];
+    let name = branch.to_lowercase();
+    let configured = default_branch.trim().to_lowercase();
+    (!configured.is_empty() && name == configured) || PROTECTED.contains(&name.as_str())
+}
+
+/// 删除本地分支。先 `-d`（用 Git 自带的合并校验）；分支上游已被远端删除、或 HEAD 不在同一条
+/// 线上时 `-d` 会误报「未合并」，此时调用方已用 `branch -r --contains` 证明提交存在于远端，
+/// 再用 `-D` 收口。分支被 worktree 占用等硬性拒绝两种方式都会失败，故不会绕过校验。
+fn delete_local_branch(dir: &str, branch: &str) -> Result<(), String> {
+    if let Ok(out) = run_git_in(dir, &["branch", "-d", branch]) {
+        if out.status.success() {
+            return Ok(());
+        }
+    }
+    let out = run_git_in(dir, &["branch", "-D", branch])?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(git_error_text(&out))
+    }
+}
+
+/// 单仓库失效分支清理。
+///
+/// 判定「可删」需同时满足：远端刷新成功 → 本地有、`origin` 上已无同名分支 →
+/// 提交已存在于某个 `origin/*` 分支 → 未受保护 → 未被任何 worktree 检出。
+/// 任何一条不满足都只记录跳过原因，绝不删除。
+fn prune_repo_stale_branches(
+    repo: &BuildRepo,
+    default_branch: &str,
+    dry_run: bool,
+) -> StaleBranchRepoResult {
+    let mut result = StaleBranchRepoResult {
+        name: repo.name.clone(),
+        path: repo.path.clone(),
+        ok: true,
+        message: String::new(),
+        branches: Vec::new(),
+    };
+    if repo.missing {
+        result.ok = false;
+        result.message = "仓库目录不存在（子模块未初始化？）".to_string();
+        return result;
+    }
+
+    // 远端已删除的分支只有刷新远端跟踪引用后才会从 refs/remotes/origin 消失，
+    // 先 fetch --prune 再判断「远端是否还存在」，否则是拿陈旧引用做结论。
+    match run_git_in(&repo.path, &["fetch", "--prune", "origin"]) {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            result.ok = false;
+            result.message = format!("远端刷新失败：{}", git_error_text(&out));
+            return result;
+        }
+        Err(e) => {
+            result.ok = false;
+            result.message = format!("远端刷新失败：{e}");
+            return result;
+        }
+    }
+
+    let remote = git_origin_branch_names(&repo.path);
+    let occupied = git_worktree_branches(&repo.path);
+    for branch in git_branches(&repo.path) {
+        // 远端仍有同名分支：不是失效分支，不产生明细噪音。
+        if remote.contains(&branch) {
+            continue;
+        }
+        if occupied.contains(&branch) {
+            result.branches.push(StaleBranchItem {
+                branch,
+                deleted: false,
+                deletable: false,
+                reason: "当前检出分支（或被 worktree 占用），需先切走".to_string(),
+            });
+            continue;
+        }
+        if is_protected_branch(&branch, default_branch) {
+            result.branches.push(StaleBranchItem {
+                branch,
+                deleted: false,
+                deletable: false,
+                reason: "受保护分支（默认分支 / main / master / develop）".to_string(),
+            });
+            continue;
+        }
+        let Some(merged_into) = git_remote_branch_containing(&repo.path, &branch) else {
+            result.branches.push(StaleBranchItem {
+                branch,
+                deleted: false,
+                deletable: false,
+                reason: "提交未合入任何远端分支（可能有未提交内容），已跳过".to_string(),
+            });
+            continue;
+        };
+        if dry_run {
+            result.branches.push(StaleBranchItem {
+                branch,
+                deleted: false,
+                deletable: true,
+                reason: format!("已合入 {merged_into}"),
+            });
+            continue;
+        }
+        match delete_local_branch(&repo.path, &branch) {
+            Ok(()) => result.branches.push(StaleBranchItem {
+                branch,
+                deleted: true,
+                deletable: true,
+                reason: format!("已删除（已合入 {merged_into}）"),
+            }),
+            Err(e) => result.branches.push(StaleBranchItem {
+                branch,
+                deleted: false,
+                deletable: true,
+                reason: format!("删除失败：{e}"),
+            }),
+        }
+    }
+    result
+}
+
+fn prune_stale_branches_blocking(
+    project_path: &str,
+    selected: &[String],
+    dry_run: bool,
+) -> Result<Vec<StaleBranchRepoResult>, String> {
+    // 默认分支名只在配置里（可空），用于保护骨干分支不被清理。
+    let default_branch = crate::config::read_project_config(project_path.to_string())
+        .map(|c| c.build.default_branch)
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for repo in discover_repos_blocking(project_path)? {
+        if !selected.iter().any(|s| s == &repo.name) {
+            continue;
+        }
+        out.push(prune_repo_stale_branches(&repo, &default_branch, dry_run));
+    }
+    Ok(out)
+}
+
+/// 清理「远端已不存在的本地分支」（勾选的仓库）。
+/// `dry_run = true` 只扫描并列候选，供前端展示确认；`false` 才真正删除。
+/// 只删提交已合入远端分支的本地分支——有未提交内容 / 未合并的本地分支永远只报跳过。
+#[tauri::command]
+pub async fn build_prune_stale_branches(
+    project_path: String,
+    selected: Vec<String>,
+    dry_run: bool,
+) -> Result<Vec<StaleBranchRepoResult>, String> {
+    validate_project_path(&project_path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        prune_stale_branches_blocking(&project_path, &selected, dry_run)
+    })
+    .await
+    .map_err(|e| format!("build_prune_stale_branches panicked: {e}"))?
 }
 
 fn build_state_path(project_path: &str) -> Result<PathBuf, String> {
@@ -1471,5 +1711,141 @@ mod tests {
         assert!(is_submodule_path("Nto.His/Term/foo.cs", &subs));
         assert!(!is_submodule_path("Nto.Emr2", &subs));
         assert!(!is_submodule_path("Nto.His/DrugInOut", &subs));
+    }
+
+    /// 临时 bare 远端仓库（Drop 时删除）。
+    struct TempBareRemote {
+        path: PathBuf,
+    }
+
+    impl TempBareRemote {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("nezha-build-origin-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            let out = Command::new("git")
+                .arg("init")
+                .arg("--bare")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            Self { path }
+        }
+
+        fn dir(&self) -> &str {
+            self.path.to_str().unwrap()
+        }
+    }
+
+    impl Drop for TempBareRemote {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// 建好「本地仓库 + 本地 bare origin」并推送初始提交，返回（本地仓库, 远端, 初始分支名）。
+    fn repo_with_origin() -> (TempRepo, TempBareRemote, String) {
+        let repo = TempRepo::new();
+        let origin = TempBareRemote::new();
+        std::fs::write(repo.path.join("tracked.txt"), "hello").unwrap();
+        repo.git(&["add", "tracked.txt"]);
+        repo.git(&["commit", "-m", "init"]);
+        repo.git(&["remote", "add", "origin", origin.dir()]);
+        repo.git(&["push", "-u", "origin", "HEAD"]);
+        let base = git_branch(repo.dir());
+        (repo, origin, base)
+    }
+
+    /// 本地提交并推送到远端分支 `name`。
+    fn commit_and_push(repo: &TempRepo, branch: &str, file: &str) {
+        repo.git(&["checkout", "-b", branch]);
+        std::fs::write(repo.path.join(file), file).unwrap();
+        repo.git(&["add", file]);
+        repo.git(&["commit", "-m", branch]);
+        repo.git(&["push", "-u", "origin", branch]);
+    }
+
+    // 只清理「远端已删除 + 提交已存在于远端」的本地分支：
+    //   1. 合并到当前分支并推走的 → 删；
+    //   2. 只合入远端另一条分支（HEAD 线上没有）→ 也要删（Git `-d` 会误报，需要兜底）；
+    //   3. 本地还有未推送提交的 → 一律只报跳过，绝不删。
+    #[test]
+    fn prune_stale_branches_only_deletes_content_preserved_remotely() {
+        let (repo, _origin, base) = repo_with_origin();
+
+        // 1) 已合入当前分支（远端该线已包含它的提交），远端删掉同名分支
+        commit_and_push(&repo, "fix/merged", "merged.txt");
+        repo.git(&["checkout", &base]);
+        repo.git(&["merge", "--no-edit", "fix/merged"]);
+        repo.git(&["push", "origin", &base]);
+        repo.git(&["push", "origin", "--delete", "fix/merged"]);
+
+        // 2) 已合入远端另一条分支，而当前 HEAD 线上没有它的提交
+        commit_and_push(&repo, "release", "release.txt");
+        commit_and_push(&repo, "fix/landed", "landed.txt");
+        repo.git(&["checkout", "release"]);
+        repo.git(&["merge", "--no-edit", "fix/landed"]);
+        repo.git(&["push", "origin", "release"]);
+        repo.git(&["push", "origin", "--delete", "fix/landed"]);
+        repo.git(&["checkout", &base]);
+
+        // 3) 只有本地提交、远端从未有过同名分支，内容也不在任何远端分支上
+        repo.git(&["checkout", "-b", "fix/unmerged"]);
+        std::fs::write(repo.path.join("unmerged.txt"), "unmerged").unwrap();
+        repo.git(&["add", "unmerged.txt"]);
+        repo.git(&["commit", "-m", "unmerged work"]);
+        repo.git(&["checkout", &base]);
+
+        // dry-run：只判定，不动分支
+        let scan = prune_stale_branches_blocking(repo.dir(), &[repo.name()], true).unwrap();
+        assert_eq!(scan.len(), 1, "只有主仓库参与扫描");
+        let scan_repo = &scan[0];
+        assert!(scan_repo.ok, "{}", scan_repo.message);
+        let item = |name: &str| {
+            scan_repo
+                .branches
+                .iter()
+                .find(|b| b.branch == name)
+                .unwrap_or_else(|| panic!("缺少分支明细: {name}"))
+        };
+        assert!(item("fix/merged").deletable);
+        assert!(item("fix/landed").deletable);
+        assert!(!item("fix/unmerged").deletable);
+        assert!(!item("fix/merged").deleted, "dry-run 不得真删");
+        assert!(git_branches(repo.dir()).contains(&"fix/merged".to_string()));
+
+        // 执行：只删前两个
+        let done = prune_stale_branches_blocking(repo.dir(), &[repo.name()], false).unwrap();
+        let done_repo = &done[0];
+        let deleted: Vec<&str> = done_repo
+            .branches
+            .iter()
+            .filter(|b| b.deleted)
+            .map(|b| b.branch.as_str())
+            .collect();
+        assert!(deleted.contains(&"fix/merged"));
+        assert!(deleted.contains(&"fix/landed"));
+        assert!(!deleted.contains(&"fix/unmerged"));
+
+        let left = git_branches(repo.dir());
+        assert!(!left.contains(&"fix/merged".to_string()));
+        assert!(!left.contains(&"fix/landed".to_string()));
+        assert!(left.contains(&"fix/unmerged".to_string()));
+        assert!(left.contains(&base));
+    }
+
+    // 远端仍存在的分支不是「失效分支」，不得进入清理候选（哪怕本地未合并）。
+    #[test]
+    fn prune_stale_branches_ignores_branches_still_on_remote() {
+        let (repo, _origin, base) = repo_with_origin();
+        commit_and_push(&repo, "fix/alive", "alive.txt");
+        repo.git(&["checkout", &base]);
+
+        let scan = prune_stale_branches_blocking(repo.dir(), &[repo.name()], true).unwrap();
+        assert!(
+            scan[0].branches.iter().all(|b| b.branch != "fix/alive"),
+            "远端仍存在的分支不应出现在清理明细里"
+        );
     }
 }

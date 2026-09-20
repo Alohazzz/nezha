@@ -135,6 +135,20 @@
   margin-top: 8px;
 }
 
+/* 失效分支清理：整行按钮 + 明细列表，挂在「仓库拉取」卡片内 */
+.build-stale {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.build-stale-result {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-dim);
+}
+
 /* rp-error 自带面向标题栏的 10px 外边距，在自带内边距的滚动区里对齐卡片 */
 .build-scroll .rp-error {
   margin: 0;
