@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 // ── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 /// Validate that project_path is absolute and looks like a real project directory.
-fn validate_project_path(project_path: &str) -> Result<(), String> {
+pub(crate) fn validate_project_path(project_path: &str) -> Result<(), String> {
     let path = Path::new(project_path);
     if !path.is_absolute() {
         return Err("Project path must be absolute".to_string());
@@ -189,7 +189,7 @@ fn git_path_args(base_args: &[&str], file_paths: Vec<String>) -> Result<Vec<Stri
 /// `project_path` is always the project root (Project.path). `repo_path` is an optional sub-repo
 /// or worktree path that must live inside the project. When omitted, falls back to project_path
 /// (single-repo project, legacy behavior).
-fn resolve_repo_path_blocking(
+pub(crate) fn resolve_repo_path_blocking(
     project_path: &str,
     repo_path: Option<&str>,
 ) -> Result<String, String> {

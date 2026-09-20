@@ -552,7 +552,7 @@ fn namespace_to_repo_path(ns: &str) -> String {
 
 /// 列出当前组织下所有 Codeup 仓库（供「仓库过滤」下拉）。
 /// 从 Codeup API 拉取当前组织下的仓库列表（含克隆地址）。供命令与克隆解析共用。
-async fn fetch_codeup_repositories() -> Result<Vec<CodeupRepository>, String> {
+pub(crate) async fn fetch_codeup_repositories() -> Result<Vec<CodeupRepository>, String> {
     let (token, _) = load_creds().await?;
     let client = build_client()?;
     let org_id = crate::app_settings::load_app_settings()
@@ -615,6 +615,221 @@ pub async fn codeup_list_repositories() -> Result<Vec<CodeupRepository>, String>
     fetch_codeup_repositories().await
 }
 
+// ── 「待发起」视图用的平台侧只读数据 ──────────────────────────────────────────
+
+/// 平台分支条目（只取受保护判定所需字段；作者/时间以本地 git 为准）。
+#[derive(Clone, Debug)]
+pub(crate) struct CodeupBranchInfo {
+    pub name: String,
+    /// 平台侧受保护标志。覆盖面比 git 侧硬编码口径更广（如 `develop-old`）。
+    pub is_protected: bool,
+    /// 平台侧默认分支标志。
+    pub is_default: bool,
+}
+
+/// 平台上的开放合并请求（仅保留评审中 / 待合并 / 已通过）。
+///
+/// 只带「前端要展示 + join 要用」的字段，避免塞进大量用不到的 MR 详情。
+#[derive(Clone, Debug)]
+pub(crate) struct OpenChangeRequest {
+    pub repository_id: String,
+    pub source_branch: String,
+    pub local_id: i64,
+    /// `UNDER_REVIEW` / `TO_BE_MERGED` / `APPROVED`。
+    pub state: String,
+    pub has_conflict: bool,
+}
+
+/// 与云效「已开启」口径一致：评审中 + 已通过(待合并) 都算开放。
+pub(crate) fn is_open_mr_state(state: &str) -> bool {
+    matches!(state, "UNDER_REVIEW" | "TO_BE_MERGED" | "APPROVED")
+}
+
+const BRANCH_PAGE_SIZE: u32 = 100;
+const MAX_BRANCH_PAGES: u32 = 5;
+
+fn repository_branches_url(org: &str, repository_id: &str) -> String {
+    format!(
+        "{API_BASE}/{CODUP_PREFIX}/organizations/{org}/repositories/{repository_id}/branches"
+    )
+}
+
+/// 拉取某仓库的分支列表（含平台侧 `protected` / `defaultBranch`）。
+///
+/// 平台不可达时调用方回落 git 侧判据——本函数只做一次只读分页拉取，失败即 `Err`。
+pub(crate) async fn fetch_codeup_branches(
+    repository_id: &str,
+) -> Result<Vec<CodeupBranchInfo>, String> {
+    let (token, org_id) = load_creds().await?;
+    let client = build_client()?;
+    let mut out: Vec<CodeupBranchInfo> = Vec::new();
+    for page in 1..=MAX_BRANCH_PAGES {
+        let url = format!(
+            "{}?page={page}&perPage={BRANCH_PAGE_SIZE}",
+            repository_branches_url(&org_id, repository_id)
+        );
+        let bytes = crate::yunxiao::get_yunxiao_json(&client, &token, url).await?;
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("解析分支列表失败: {e}"))?;
+        let arr = json
+            .as_array()
+            .or_else(|| json.get("list").and_then(|v| v.as_array()))
+            .or_else(|| json.get("result").and_then(|v| v.as_array()))
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
+        if arr.is_empty() {
+            break;
+        }
+        let page_len = arr.len();
+        for item in arr {
+            let name = item
+                .get("name")
+                .or_else(|| item.get("branchName"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if name.is_empty() {
+                continue;
+            }
+            out.push(CodeupBranchInfo {
+                name,
+                is_protected: item
+                    .get("protected")
+                    .or_else(|| item.get("isProtected"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                is_default: item
+                    .get("defaultBranch")
+                    .or_else(|| item.get("isDefault"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            });
+        }
+        if page_len < BRANCH_PAGE_SIZE as usize {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// 一次拉全组织内的开放 MR（分页），供「本地分支 → 是否有开放 MR」的内存 join。
+///
+/// 首页失败直接返回 `Err`：凭据 / 网络故障必须暴露给用户，不能被前端误读成「没有待发起分支」。
+/// 逐分支查询被明确否决——那是 O(分支数) 次网络往返。
+pub(crate) async fn fetch_open_change_requests() -> Result<Vec<OpenChangeRequest>, String> {
+    let (token, _) = load_creds().await?;
+    let client = build_client()?;
+    let org_id = crate::app_settings::load_app_settings()
+        .await?
+        .yunxiao
+        .organization_id
+        .trim()
+        .to_string();
+    let url_base = format!("{API_BASE}/{CODUP_PREFIX}/organizations/{org_id}/changeRequests");
+    let mut out: Vec<OpenChangeRequest> = Vec::new();
+    let mut expected_page_len: Option<usize> = None;
+    for page in 1..=MAX_CHANGE_PAGES {
+        let url = format!("{url_base}?page={page}&perPage={CHANGE_PAGE_SIZE}");
+        let bytes = match crate::yunxiao::get_yunxiao_json(&client, &token, url).await {
+            Ok(b) => b,
+            Err(e) if page == 1 => return Err(format!("拉取云效合并请求列表失败: {e}")),
+            Err(_) => break,
+        };
+        let json: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(e) if page == 1 => return Err(format!("解析云效合并请求列表失败: {e}")),
+            Err(_) => break,
+        };
+        let arr = json
+            .as_array()
+            .or_else(|| json.get("list").and_then(|v| v.as_array()))
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
+        if arr.is_empty() {
+            break;
+        }
+        let page_len = arr.len();
+        expected_page_len.get_or_insert(page_len);
+        let mut open_on_page = 0usize;
+        for item in arr {
+            let state = item
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !is_open_mr_state(&state) {
+                continue;
+            }
+            open_on_page += 1;
+            let repository_id = item
+                .get("projectId")
+                .and_then(|v| {
+                    v.as_i64().map(|i| i.to_string()).or_else(|| {
+                        v.as_str().map(|s| s.trim().to_string())
+                    })
+                })
+                .unwrap_or_default();
+            let source_branch = item
+                .get("sourceBranch")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if repository_id.is_empty() || source_branch.is_empty() {
+                continue;
+            }
+            out.push(OpenChangeRequest {
+                repository_id,
+                source_branch,
+                local_id: item.get("localId").and_then(|v| v.as_i64()).unwrap_or(0),
+                state,
+                has_conflict: item
+                    .get("hasConflict")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            });
+        }
+        // 云效按近期活跃排序；某页（非首页）没有开放状态 MR 说明已扫完开放集群，提前结束。
+        if open_on_page == 0 && page > 1 {
+            break;
+        }
+        if page_len < expected_page_len.unwrap_or(page_len) || page_len < MIN_CHANGE_PAGE_SIZE {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// 解析本地仓库对应的云效仓库（仓库路径 + 仓库 id），**同步**版本。
+///
+/// 必须按 `pathWithNamespace` 匹配：实测存在同名仓库陷阱（`HSP/HIS` 与 `HSP_XC/HIS` 都叫
+/// `HIS`），按 name 匹配会选错仓库。`None` 表示该仓库不在云效仓库列表里（例如本地独有仓库）
+/// 或没有 `origin` 远端。
+///
+/// 同步而非 async：内部要跑 `git remote get-url`（进程启动），按仓库既有规范必须由调用方放在
+/// `spawn_blocking` 里，不能直接落在异步运行时上。`known` 让调用方复用已拉取的仓库列表。
+pub(crate) fn resolve_codeup_repository_id_blocking(
+    repo_path: &str,
+    known: &[CodeupRepository],
+) -> Result<Option<(String, String)>, String> {
+    let cwd = crate::git::resolve_repo_path_blocking(repo_path, None)?;
+    let output = run_git(&cwd, &["remote", "get-url", "origin"])
+        .map_err(|e| format!("读取 git 远端失败（请确认项目可访问远端）: {e}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let (_, repository) = match parse_codeup_remote(&url) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(known
+        .iter()
+        .find(|r| r.namespace == repository || r.path == repository)
+        .map(|r| (repository, r.id.clone())))
+}
+
 /// 跨仓库聚合「已开启/评审中」的 MR；可选按仓库 id 过滤。
 #[tauri::command]
 pub async fn codeup_list_pending_mrs(
@@ -675,7 +890,7 @@ pub async fn codeup_list_pending_mrs(
                 .to_string();
             // 与云效「已开启」口径对齐：评审中 + 已通过(待合并) 都展示。
             // 是否冲突/有冲突 是独立标记（hasConflict），不在此处过滤 —— 有/无冲突都显示。
-            if state != "UNDER_REVIEW" && state != "TO_BE_MERGED" && state != "APPROVED" {
+            if !is_open_mr_state(&state) {
                 continue;
             }
             open_on_page += 1;

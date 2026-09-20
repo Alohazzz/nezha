@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Nezha · 待发起合并请求 — 视觉原型</title>
+<!-- 真实主题 token（四主题），已把 html.dark 等改写为可嵌套类 -->
+<link rel="stylesheet" href="./themes-scoped.css" />
+<!-- 真实类样式：PR 卡片(pr-*)、右栏面板骨架(rp-*) -->
+<link rel="stylesheet" href="../../src/styles/branch-batch.css" />
+<link rel="stylesheet" href="../../src/styles/right-panel.css" />
+<style>
+:root { --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+
+/* ── branch-batch.ts / layout.ts 中「内联样式对象」的等价转录 ──
+   生产代码里这些是 style={{}} 对象，原型里转成类以便真实渲染。 */
+body { margin: 0; font-family: var(--font-sans); background: #6b7280; color: #111;
+       padding: 18px; }
+.welcomePane { display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-panel); height: 100%; }
+.bbHeader { display: flex; align-items: center; gap: 10px; }
+.bbBtnGhost { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border-radius: 8px; border: 1px solid var(--border-dim); background: transparent;
+  color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.bbBtnPrimary { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px;
+  border-radius: 8px; border: 1px solid var(--accent); background: var(--accent);
+  color: var(--fg-on-accent); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.bbList { display: flex; flex-direction: column; gap: 10px; }
+.bbCard { background: var(--bg-card); border: 1px solid var(--border-dim);
+  border-radius: 12px; padding: 14px; }
+.bbCardHead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bbCardMono { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary); }
+.bbCardSub { display: flex; align-items: center; gap: 10px; margin-top: 8px;
+  color: var(--text-hint); font-size: 11.5px; flex-wrap: wrap; }
+.bbBadge { font-size: 10.5px; font-weight: 700; border-radius: 6px; padding: 1px 7px;
+  border: 1px solid var(--border-medium); color: var(--text-secondary); white-space: nowrap; }
+.bbBadgeActive { background: var(--accent-subtle); color: var(--accent); border-color: var(--accent-soft); }
+.bbBadgeDone { background: rgba(74,222,128,.12); color: var(--success-fg); border-color: rgba(74,222,128,.34); }
+.bbBadgeWarn { background: var(--warning-surface); color: var(--warning); border-color: var(--warning-border); }
+.bbFill { flex: 1; }
+
+/* ── 原型专用：主题并排舞台 ── */
+.stage { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.frame { border-radius: 12px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,.28);
+  height: 560px; display: flex; flex-direction: column; }
+.caption { font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 6px; letter-spacing: .3px; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 13px;
+  border-bottom: 1px solid var(--border-dim); background: var(--bg-panel); flex-wrap: wrap; }
+.select { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px;
+  border-radius: 8px; border: 1px solid var(--border-medium); background: var(--bg-input);
+  color: var(--text-secondary); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.search { height: 26px; min-width: 120px; flex: 1; padding: 0 9px; border-radius: 8px;
+  border: 1px solid var(--border-dim); background: var(--bg-input); color: var(--text-primary);
+  font-size: 12px; }
+.toggle { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
+  border-radius: 8px; border: 1px solid var(--accent); background: var(--accent-subtle);
+  color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.list { padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+.cb { width: 13px; height: 13px; accent-color: var(--accent); flex: none; }
+.cb:disabled { opacity: .4; }
+.infer { color: var(--text-hint); font-size: 10.5px; }
+.metric { display: inline-flex; gap: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 700; }
+.add { color: var(--diff-add-fg, #2ea043); }
+.del { color: var(--diff-delete-fg, #f85149); }
+.reason { color: var(--text-hint); font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage"></div>
+
+<script>
+// 一份骨架，四主题渲染（真实 token 来自 themes-scoped.css）
+const CARDS = `
+  <div class="bbCard">
+    <div class="bbCardHead">
+      <input type="checkbox" class="cb" checked>
+      <span class="bbCardMono">fix/v2.20260901/develop/QHDK-30395-锁号地址挂号异常</span>
+    </div>
+    <div class="bbCardSub">
+      <span class="bbBadge">未合并</span>
+      <span class="bbBadge bbBadgeActive">我的提交</span>
+      <span class="bbBadge">无 MR</span>
+      <span class="bbFill"></span>
+      <span class="metric"><span class="add">+248</span><span class="del">-31</span></span>
+    </div>
+    <div class="bbCardSub">
+      <span>目标分支</span><span class="select">develop ▾</span>
+      <span class="infer">按分支名推断</span>
+    </div>
+    <div class="bbCardSub"><span>3 个未合并提交</span><span>·</span><span>苏一</span><span>·</span><span>2 天前</span></div>
+  </div>
+
+  <div class="bbCard">
+    <div class="bbCardHead">
+      <input type="checkbox" class="cb" checked>
+      <span class="bbCardMono">hotfix/v2.20260901/master/QHDK-30392-归档同步出院时间</span>
+    </div>
+    <div class="bbCardSub">
+      <span class="bbBadge bbBadgeDone">已合并进 master</span>
+      <span class="bbBadge">已有 MR #3527</span>
+    </div>
+    <div class="bbCardSub">
+      <span>目标分支</span><span class="select">master ▾</span>
+      <span class="infer">按分支名推断</span>
+    </div>
+    <div class="reason">已合并，可删除远端分支</div>
+  </div>
+
+  <div class="bbCard">
+    <div class="bbCardHead">
+      <input type="checkbox" class="cb">
+      <span class="bbCardMono">feature/develop/消息嵌入</span>
+    </div>
+    <div class="bbCardSub">
+      <span class="bbBadge bbBadgeWarn">部分合并</span>
+      <span class="bbBadge">无 MR</span>
+      <span class="bbFill"></span>
+      <span class="metric"><span class="add">+96</span><span class="del">-4</span></span>
+    </div>
+    <div class="bbCardSub">
+      <span>目标分支</span><span class="select">develop ▾</span>
+      <span class="infer">项目配置</span>
+    </div>
+    <div class="reason">⚠ 未完成合并进源分支，不可删除</div>
+  </div>
+
+  <div class="bbCard" style="opacity:.7">
+    <div class="bbCardHead">
+      <input type="checkbox" class="cb" disabled>
+      <span class="bbCardMono">develop-old</span>
+      <span class="bbBadge">受保护</span>
+    </div>
+    <div class="bbCardSub">
+      <span class="bbBadge bbBadgeActive">我的提交</span>
+      <span class="bbFill"></span>
+      <span class="metric"><span class="add">+12</span><span class="del">-0</span></span>
+    </div>
+    <div class="reason">受保护分支，不可删除</div>
+  </div>
+`;
+
+const TOOLBAR = `
+  <div class="toolbar">
+    <span class="select">仓库：HSP/HIS ▾</span>
+    <span class="toggle">● 我的提交</span>
+    <input class="search" placeholder="搜索分支…">
+    <span class="bbBtnGhost">↻ 刷新</span>
+  </div>
+  <div class="toolbar" style="border-bottom:1px solid var(--border-dim)">
+    <span style="font-size:11.5px;color:var(--text-hint)">已选 2 项可删除</span>
+    <span class="bbFill"></span>
+    <!-- 用仓库既有 rp-btn[data-variant="danger"]，不要用 --danger-fg 当背景（那是前景色 token）-->
+    <button class="rp-btn" data-variant="danger">🗑 删除远端分支 (2)</button>
+  </div>
+`;
+
+// midnight 需同时带 theme-dark（它只覆盖 delta）
+const THEMES = [
+  { cls: "theme-light",    label: "light" },
+  { cls: "theme-dark",     label: "dark" },
+  { cls: "theme-dark theme-midnight", label: "midnight" },
+  { cls: "theme-eyecare",  label: "eyecare" },
+];
+
+document.getElementById("stage").innerHTML = THEMES.map((t) => `
+  <div>
+    <div class="caption">主题：${t.label}</div>
+    <div class="frame ${t.cls}" style="background:var(--bg-root)">
+      <div class="welcomePane">
+        ${TOOLBAR}
+        <div class="list">${CARDS}</div>
+      </div>
+    </div>
+  </div>
+`).join("");
+</script>
+</body>
+</html>

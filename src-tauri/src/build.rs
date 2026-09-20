@@ -355,7 +355,7 @@ pub async fn discover_build_repos(project_path: String) -> Result<Vec<BuildRepo>
         .map_err(|e| format!("discover_build_repos panicked: {e}"))?
 }
 
-fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String> {
+pub(crate) fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String> {
     let root = read_project_path(project_path)?;
     let mut repos = Vec::new();
 
@@ -621,7 +621,9 @@ fn git_remote_branch_containing(dir: &str, branch: &str) -> Option<String> {
 }
 
 /// 受保护分支：默认分支与主干分支永不参与清理。
-fn is_protected_branch(branch: &str, default_branch: &str) -> bool {
+///
+/// `pub(crate)`：`pending_mr` 的平台侧受保护标志不可用时要回落这套 git 侧口径。
+pub(crate) fn is_protected_branch(branch: &str, default_branch: &str) -> bool {
     const PROTECTED: [&str; 3] = ["main", "master", "develop"];
     let name = branch.to_lowercase();
     let configured = default_branch.trim().to_lowercase();

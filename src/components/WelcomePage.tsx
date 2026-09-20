@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, BarChart3, BookOpen } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, GitPullRequestArrow, BarChart3, BookOpen } from "lucide-react";
 import type {
   Project,
   Task,
@@ -26,6 +26,7 @@ import { YunxiaoView } from "./yunxiao/YunxiaoView";
 import type { DirectLaunchOptions } from "./yunxiao/DirectLaunchDialog";
 import { SkillHubView } from "./skill-hub/SkillHubView";
 import { MergeHubView } from "./codeup/MergeHubView";
+import { PendingMrView } from "./codeup/PendingMrView";
 import { HelpView } from "./help/HelpView";
 import { ProjectListItem } from "./welcome/ProjectListItem";
 import { useI18n, pluralKey } from "../i18n";
@@ -165,7 +166,7 @@ export function WelcomePage({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup" | "weekly" | "help">(
+  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup" | "pendingMr" | "weekly" | "help">(
     "projects",
   );
 
@@ -219,9 +220,15 @@ export function WelcomePage({
             />
             <SidebarItem
               icon={<GitMerge size={15} />}
-              label="合并审核"
+              label={t("welcome.mergeHub")}
               active={view === "codeup"}
               onClick={() => setView("codeup")}
+            />
+            <SidebarItem
+              icon={<GitPullRequestArrow size={15} />}
+              label={t("welcome.pendingMr")}
+              active={view === "pendingMr"}
+              onClick={() => setView("pendingMr")}
             />
             <SidebarItem
               icon={<BarChart3 size={15} />}
@@ -273,6 +280,8 @@ export function WelcomePage({
             onBack={() => setView("projects")}
             onStartCodeupTask={onStartCodeupTask}
           />
+        ) : view === "pendingMr" ? (
+          <PendingMrView projects={allProjects} onBack={() => setView("projects")} />
         ) : view === "yunxiao" ? (
           <YunxiaoView
             projects={allProjects}

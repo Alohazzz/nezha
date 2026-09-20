@@ -23,6 +23,7 @@ mod http;
 mod knowledge;
 mod knowledge_gate;
 mod notification;
+mod pending_mr;
 mod platform;
 mod pty;
 mod session;
@@ -501,6 +502,8 @@ pub fn run() {
             codeup::codeup_create_mr_comment,
             codeup::codeup_cleanup_mr,
             codeup::codeup_resolve_conflicts,
+            pending_mr::list_branch_pr_candidates,
+            pending_mr::prune_remote_branches,
             git::git_branch_diff_stats,
             git::git_branch_diff_file,
             git::git_patch_dependency_check,

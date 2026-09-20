@@ -226,6 +226,80 @@ export interface CodeupRepository {
   webUrl: string;
 }
 
+/** 目标分支推断来源（对齐后端 `TargetSource`）。 */
+export type PendingTargetSource = "user" | "config" | "name" | "default";
+
+/** 合并三态（对齐后端 `MergeState`）。 */
+export type PendingMergeState = "unmerged" | "merged" | "partial";
+
+/** 受保护判定来源（对齐后端 `ProtectedSource`）。 */
+export type PendingProtectedSource = "platform" | "git";
+
+/** 「待发起」视图的单个分支候选（对齐后端 `BranchCandidate`）。 */
+export interface PendingBranchCandidate {
+  branch: string;
+  repo: string;
+  repoPath: string;
+  /** 是否有 upstream（即已推送）。 */
+  pushed: boolean;
+  protected: boolean;
+  protectedSource: PendingProtectedSource | null;
+  /** 相对目标分支的未合并提交数。 */
+  unmerged: number;
+  mergeState: PendingMergeState;
+  /** 已合并时合进了哪条源分支。 */
+  mergedInto: string | null;
+  targetBranch: string;
+  targetSource: PendingTargetSource;
+  /** 独有提交的作者集合里包含本人 git email。 */
+  mine: boolean;
+  authors: string[];
+  lastCommitAuthor: string;
+  lastCommitAt: number;
+  additions: number;
+  deletions: number;
+  openMrId: number | null;
+  openMrState: string;
+  openMrConflict: boolean;
+  /** 是否允许删除远端分支。 */
+  deletable: boolean;
+  skipReason: string;
+  /** 该行部分数据缺失（如合并状态判定失败）。 */
+  dataMissing: boolean;
+}
+
+/** 「待发起」视图单个仓库的扫描结果（对齐后端 `BranchRepoScan`）。 */
+export interface PendingBranchRepoScan {
+  name: string;
+  path: string;
+  ok: boolean;
+  message: string;
+  /** 平台侧分支列表可用（false 表示受保护判定回落 git 口径）。 */
+  platformOk: boolean;
+  /** 平台侧开放 MR 数据可用（false 表示「是否有开放 MR」未知）。 */
+  mrOk: boolean;
+  branches: PendingBranchCandidate[];
+}
+
+/** 删除远端分支的定位信息（对齐后端 `RemoteBranchTarget`）。 */
+export interface PendingRemoteBranchTarget {
+  repoPath: string;
+  repo: string;
+  branch: string;
+  targetBranch: string;
+}
+
+/** 删除远端分支的单项回执（对齐后端 `RemoteBranchPruneItem`）。 */
+export interface PendingRemoteBranchPruneItem {
+  repo: string;
+  repoPath: string;
+  branch: string;
+  targetBranch: string;
+  deleted: boolean;
+  deletable: boolean;
+  reason: string;
+}
+
 export interface Task {
   id: string;
   projectId: string;
