@@ -396,10 +396,16 @@ export function ProjectPage({
     if (!rightPanel || rightPanelDocked) return; // 无面板或已固定则不监听
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node | null;
-      const inPanel =
+      // Radix 把 Popover / Select 的内容 portal 到 body 下，DOM 上不属于面板区域。
+      // 不豁免的话，点面板内下拉的任一项都会被判成「面板外点击」→ 收起面板，
+      // 连带把面板里的弹窗（如「创建 PR」）一起卸载。
+      const inPortalLayer =
+        target instanceof Element && target.closest("[data-radix-popper-content-wrapper]") !== null;
+      const inPanelRegion =
         rightPanelRegionRef.current?.contains(target) ??
         buildPanelRegionRef.current?.contains(target) ??
         false;
+      const inPanel = inPortalLayer || inPanelRegion;
       const inToolbar = rightToolbarRef.current?.contains(target);
       if (!inPanel && !inToolbar) {
         closeRightPanel();
