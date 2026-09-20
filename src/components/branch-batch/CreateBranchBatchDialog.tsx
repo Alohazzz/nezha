@@ -8,10 +8,12 @@ import type {
   YunxiaoSettings,
 } from "../app-settings/types";
 import { EMPTY_YUNXIAO_SETTINGS } from "../app-settings/types";
+import { SelectField } from "../yunxiao/SelectField";
 import type {
   BranchBatch,
   BranchConflictCheck,
   BranchKind,
+  PendingBranchRepoRef,
   Task,
   YunxiaoVersion,
 } from "../../types";
@@ -63,6 +65,11 @@ export function CreateBranchBatchDialog({
   const [error, setError] = useState("");
   const manualBranchRef = useRef(false);
 
+  // 多子仓库工作区（主仓库 + .gitmodules）：创建者要能选批分支落在哪个仓库上。
+  // repoPath 只在入仓时求值一次，后续切换走本地的 selectedRepo 状态。
+  const [repoOptions, setRepoOptions] = useState<PendingBranchRepoRef[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState(repoPath);
+
   // 云效版本选项（取不到就退回手输，不阻断创建）。
   const [yunxiao, setYunxiao] = useState<YunxiaoSettings>(EMPTY_YUNXIAO_SETTINGS);
   const [versions, setVersions] = useState<YunxiaoVersion[]>([]);
@@ -97,10 +104,29 @@ export function CreateBranchBatchDialog({
     };
   }, [yunxiao]);
 
-  // 默认代码目录 = 项目配置基路径 / 共享 hub / 项目内默认，创建者可改。
+  // 发现项目下可用的 git 仓库（主仓库 + 已初始化子模块，与待发起视图同一套口径）。
+  // 单仓库时列表只有一项、选择器不渲染；多仓库时默认选中当前活动仓库。
   useEffect(() => {
     let cancelled = false;
-    invoke<string>("get_branch_batch_worktree_base", { projectPath, repoPath })
+    invoke<PendingBranchRepoRef[]>("list_branch_pr_repos", { projectPath })
+      .then((repos) => {
+        if (cancelled || repos.length <= 1) return;
+        setRepoOptions(repos);
+        setSelectedRepo((prev) =>
+          repos.some((r) => r.path === prev) ? prev : (repos[0]?.path ?? prev),
+        );
+      })
+      .catch((e) => console.warn("[create-batch] discover repos failed:", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath]);
+
+  // 默认代码目录 = 项目配置基路径 / 共享 hub / 所选仓库内默认，创建者可改。
+  // 切换仓库后重新取默认值（不同子仓库可配置不同的 worktree 基路径）。
+  useEffect(() => {
+    let cancelled = false;
+    invoke<string>("get_branch_batch_worktree_base", { projectPath, repoPath: selectedRepo })
       .then((dir) => {
         if (!cancelled) setWorktreeDir(dir);
       })
@@ -108,7 +134,7 @@ export function CreateBranchBatchDialog({
     return () => {
       cancelled = true;
     };
-  }, [projectPath, repoPath]);
+  }, [projectPath, selectedRepo]);
 
   // 源分支名由后端统一生成（与 create_branch_batch 同源），前端只做展示。
   // 用户手动改过之后不再自动覆盖。
@@ -174,7 +200,7 @@ export function CreateBranchBatchDialog({
     try {
       const check = await invoke<BranchConflictCheck>("check_branch_batch_branch", {
         projectPath,
-        repoPath,
+        repoPath: selectedRepo,
         branch: sourceBranch.trim(),
       });
       setRemoteConflict(check.remoteExists);
@@ -187,7 +213,7 @@ export function CreateBranchBatchDialog({
     } finally {
       setChecking(false);
     }
-  }, [sourceBranch, checking, projectPath, repoPath]);
+  }, [sourceBranch, checking, projectPath, selectedRepo]);
 
   const chooseContinue = () => {
     setUseExistingRemote(true);
@@ -224,7 +250,7 @@ export function CreateBranchBatchDialog({
     try {
       const batch = await invoke<BranchBatch>("create_branch_batch", {
         projectPath,
-        repoPath,
+        repoPath: selectedRepo,
         projectId,
         id: crypto.randomUUID(),
         name: name.trim(),
@@ -251,6 +277,25 @@ export function CreateBranchBatchDialog({
     <div style={s.bbDialogOverlay}>
       <div style={s.bbDialog}>
         <div style={s.bbDialogTitle}>创建 PR</div>
+
+        {repoOptions.length > 1 && (
+          <div style={s.bbField}>
+            <span style={s.bbFieldLabel}>目标仓库（多子仓库工作区，分支与 PR 落在所选仓库）</span>
+            <SelectField
+              value={selectedRepo}
+              onChange={(v) => {
+                // 仓库变了，分支冲突结论与分支名展示都属于旧仓库，全部重置。
+                setSelectedRepo(v);
+                setRemoteConflict(false);
+                setLocalConflict(false);
+                manualBranchRef.current = false;
+                setSourceBranch("");
+              }}
+              options={repoOptions.map((r) => ({ value: r.path, label: r.name }))}
+              placeholder="选择仓库"
+            />
+          </div>
+        )}
 
         <div style={s.bbField}>
           <span style={s.bbFieldLabel}>批名称</span>

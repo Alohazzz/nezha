@@ -312,7 +312,9 @@ pub async fn create_branch_batch(
             mr_id: None,
             mr_status: None,
             worktree_path: worktree_str.clone(),
-            worktree_repo: worktree_str.as_ref().and(owner_repo),
+            // 批分支实际落在哪个 git 根（子仓库）就记录哪个，与是否另建 worktree 无关——
+            // 否则无 worktree 的批后续 push / 提交 MR 时会回落到项目根，找错仓库。
+            worktree_repo: owner_repo,
             use_worktree,
             mr_source_sha: None,
         };

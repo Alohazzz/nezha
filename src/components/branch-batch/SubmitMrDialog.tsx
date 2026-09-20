@@ -22,15 +22,16 @@ export function SubmitMrDialog({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    // 默认审核人 = 目标分支保护规则的管理人员。
+    // 默认审核人 = 目标分支保护规则的管理人员。按批所属仓库查（与提交 MR 同一仓库），
+    // 否则多子仓库工作区会拿主仓库的保护规则，预填出另一批审核人。
     void invoke<string[]>("codeup_branch_managers", {
       projectPath,
-      repoPath: null,
+      repoPath: batch.worktreeRepo ?? null,
       targetBranch: batch.targetBranch,
     })
       .then((managers) => setReviewers(managers.join(", ")))
       .catch((e) => console.warn("[submit-mr] load managers failed:", e));
-  }, [projectPath, batch.targetBranch]);
+  }, [projectPath, batch.worktreeRepo, batch.targetBranch]);
 
   const submit = useCallback(async () => {
     if (!batch.targetBranch.trim() || busy) return;
