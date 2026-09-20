@@ -16,7 +16,8 @@ export function PendingMrToolbar({
   repoOptions,
   mineOnly,
   query,
-  loading,
+  busy,
+  busyLabel,
   pruneBusy,
   selectedDeletableCount,
   onBack,
@@ -30,7 +31,10 @@ export function PendingMrToolbar({
   repoOptions: { value: string; label: string }[];
   mineOnly: boolean;
   query: string;
-  loading: boolean;
+  /** 正在发现仓库或扫描分支（两段加载任一在跑）。 */
+  busy: boolean;
+  /** 忙碌时刷新按钮上的文案（「发现中…」/「扫描中…」）。 */
+  busyLabel: string;
   pruneBusy: boolean;
   selectedDeletableCount: number;
   onBack: () => void;
@@ -55,6 +59,7 @@ export function PendingMrToolbar({
           placeholder="全部仓库"
         />
       </div>
+      {/* 开关状态由 data-active 的底色表达，不再用 ●/○ 圆点。 */}
       <button
         type="button"
         className="pm-toggle"
@@ -62,7 +67,7 @@ export function PendingMrToolbar({
         aria-pressed={mineOnly}
         onClick={onToggleMineOnly}
       >
-        {mineOnly ? "●" : "○"} 我的提交
+        我的提交
       </button>
       <input
         className="pm-search"
@@ -70,9 +75,9 @@ export function PendingMrToolbar({
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
       />
-      <button type="button" className="pm-refresh rp-text-btn" disabled={loading} onClick={onRefresh}>
-        <RefreshCw size={13} className={loading ? "spin" : undefined} />
-        {loading ? "刷新中…" : "刷新"}
+      <button type="button" className="pm-refresh rp-text-btn" disabled={busy} onClick={onRefresh}>
+        <RefreshCw size={13} className={busy ? "spin" : undefined} />
+        {busy ? busyLabel : "刷新"}
       </button>
       <div className="pm-toolbar-fill" />
       <button

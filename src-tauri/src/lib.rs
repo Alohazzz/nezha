@@ -502,6 +502,7 @@ pub fn run() {
             codeup::codeup_create_mr_comment,
             codeup::codeup_cleanup_mr,
             codeup::codeup_resolve_conflicts,
+            pending_mr::list_branch_pr_repos,
             pending_mr::list_branch_pr_candidates,
             pending_mr::prune_remote_branches,
             git::git_branch_diff_stats,

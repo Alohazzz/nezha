@@ -287,7 +287,10 @@ fn git_head(dir: &str) -> Result<String, String> {
 }
 
 /// Parse `.gitmodules` for `[submodule "name"]` entries with `path` / `url`.
-fn parse_gitmodules(gitmodules: &str) -> Vec<(String, String, String)> {
+///
+/// `pub(crate)`：`pending_mr` 的轻量仓库发现（只列仓库、不读分支）复用它，
+/// 保证两处对子模块的命名口径一致——仓库名是 `list_branch_pr_candidates` 的过滤键。
+pub(crate) fn parse_gitmodules(gitmodules: &str) -> Vec<(String, String, String)> {
     let mut entries = Vec::new();
     let mut cur: Option<String> = None;
     let mut path = String::new();

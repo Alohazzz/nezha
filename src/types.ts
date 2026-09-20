@@ -268,6 +268,12 @@ export interface PendingBranchCandidate {
   dataMissing: boolean;
 }
 
+/** 项目下一个可扫描的 git 仓库（对齐后端 `BranchRepoRef`）。 */
+export interface PendingBranchRepoRef {
+  name: string;
+  path: string;
+}
+
 /** 「待发起」视图单个仓库的扫描结果（对齐后端 `BranchRepoScan`）。 */
 export interface PendingBranchRepoScan {
   name: string;

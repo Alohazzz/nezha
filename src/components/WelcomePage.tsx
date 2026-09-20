@@ -219,16 +219,16 @@ export function WelcomePage({
               onClick={() => setView("yunxiao")}
             />
             <SidebarItem
-              icon={<GitMerge size={15} />}
-              label={t("welcome.mergeHub")}
-              active={view === "codeup"}
-              onClick={() => setView("codeup")}
-            />
-            <SidebarItem
               icon={<GitPullRequestArrow size={15} />}
               label={t("welcome.pendingMr")}
               active={view === "pendingMr"}
               onClick={() => setView("pendingMr")}
+            />
+            <SidebarItem
+              icon={<GitMerge size={15} />}
+              label={t("welcome.mergeHub")}
+              active={view === "codeup"}
+              onClick={() => setView("codeup")}
             />
             <SidebarItem
               icon={<BarChart3 size={15} />}

@@ -132,7 +132,7 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 12px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--border-dim);
 }
 
@@ -173,7 +173,7 @@
 }
 
 .pm-target-select {
-  min-width: 150px;
+  min-width: 120px;
 }
 
 /* 「我的提交」开关：激活态走 accent 语义 */
@@ -243,7 +243,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-hint);
 }
 
@@ -288,13 +288,14 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 8px;
-}
-
-.pm-card-meta {
-  gap: 10px;
+  margin-top: 6px;
   color: var(--text-hint);
   font-size: 11.5px;
+}
+
+/* 第二行与第一行贴紧：两行卡片的信息密度靠这点间距撑起来 */
+.pm-card-head + .pm-card-row {
+  margin-top: 4px;
 }
 
 .pm-label {
@@ -309,10 +310,11 @@
 
 .pm-badge {
   flex-shrink: 0;
-  padding: 1px 6px;
+  padding: 0 5px;
   border-radius: 4px;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
+  line-height: 16px;
   white-space: nowrap;
   background: var(--bg-hover);
   color: var(--text-muted);
@@ -362,6 +364,49 @@
 
 .pm-metric-del {
   color: var(--diff-delete-fg);
+}
+
+/* 行内分隔点：由元素而非 `·` 文本承担间距，避免 flex gap 双倍留白 */
+.pm-dot-sep {
+  color: var(--text-hint);
+  opacity: 0.55;
+}
+
+.pm-skip-inline {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 第二行：目标分支下拉是唯一可交互的窄元素，其余是只读摘要；
+   窄窗口下整体折行，不把删除按钮挤到看不见的位置。 */
+.pm-card-row .pm-target-select {
+  flex: 0 0 auto;
+}
+
+.pm-card-row .pm-hint {
+  white-space: nowrap;
+}
+
+.pm-card-meta {
+  gap: 8px;
+}
+
+.pm-skip-inline[data-tone="ok"] {
+  color: var(--success-fg);
+}
+
+.pm-skip-inline[data-tone="warn"] {
+  color: var(--warning);
+}
+
+.pm-skip-inline[data-tone="neutral"] {
+  color: var(--text-hint);
+}
+
+/* 行内删除按钮比面板里的小一号，避免把第二行撑高 */
+.pm-card-row .rp-text-btn {
+  padding: 1px 6px;
+  font-size: 11px;
 }
 
 .pm-skip[data-tone="ok"] {

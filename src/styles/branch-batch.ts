@@ -71,6 +71,14 @@ const branchBatch = {
     borderRadius: 12,
     padding: 14,
   },
+  /// 「发起合并」的候选卡片：比 bbCard 更扁（两行信息，不需要 14px 内距），
+  /// 一屏能多放几张。
+  pmCard: {
+    background: "var(--bg-card)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 10,
+    padding: "7px 12px",
+  },
   bbCardHead: {
     display: "flex",
     alignItems: "center" as const,
@@ -349,6 +357,25 @@ const branchBatch = {
     border: "1px solid rgba(248,81,73,.34)",
     background: "rgba(248,81,73,.14)",
     color: "var(--danger-fg)",
+  },
+  /// 「发起合并」卡片内的紧凑下拉触发器：默认 settingsSelectTrigger 高约 34px，
+  /// 行内使用会把卡片撑高，这里压到 26px 并收窄内距。
+  pmTargetTrigger: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+    height: 26,
+    padding: "0 22px 0 8px",
+    background: "var(--bg-input)",
+    border: "1px solid var(--border-medium)",
+    borderRadius: 6,
+    color: "var(--text-primary)",
+    fontSize: 12,
+    fontFamily: "var(--font-ui)",
+    cursor: "pointer",
+    textAlign: "left" as const,
+    whiteSpace: "nowrap" as const,
   },
   bbFill: {
     flex: 1,

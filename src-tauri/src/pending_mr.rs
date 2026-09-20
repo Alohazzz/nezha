@@ -16,6 +16,7 @@
 //! 「可删 / 不可删 + 原因」，`false` 才执行；单条失败不中断整批。
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use crate::git::{resolve_repo_path, run_git, validate_project_path};
 use serde::{Deserialize, Serialize};
@@ -164,6 +165,18 @@ pub struct RemoteBranchPruneItem {
     /// 是否满足删除条件。
     pub deletable: bool,
     pub reason: String,
+}
+
+/// 项目下一个可扫描的 git 仓库（供分段加载的仓库下拉用）。
+///
+/// 只带定位信息：视图先秒出仓库列表，用户选中某个仓库后才去读它的分支。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchRepoRef {
+    /// 仓库显示名（与 `BuildRepo.name` 一致，也是 `repo_filter` 的匹配键）。
+    pub name: String,
+    /// 仓库绝对路径。
+    pub path: String,
 }
 
 // ── git 原语（同步，只在 spawn_blocking 里调用）──────────────────────────────
@@ -672,17 +685,50 @@ fn evaluate_branch(
 
 // ── 扫描 ─────────────────────────────────────────────────────────────────────
 
-/// 发现项目下的仓库（同步）。
-fn discover_repo_list(project_path: &str) -> Result<Vec<(String, String)>, String> {
+/// 列出项目下可用的 git 仓库（**只做发现，不读分支**）。
+///
+/// 与逐分支扫描分开，是为了让视图能先秒出仓库下拉、用户选中后再扫码分支：一次性扫描全部
+/// 仓库要几十秒（每个候选分支都要跑 rev-list / merge-base / cherry / diff，外加 fetch），
+/// 首屏会像卡住一样。发现阶段只做文件系统判断，无 git 子进程。
+///
+/// 过滤掉不是工作树根的目录：`discover_repos_blocking` 把「目录存在」当作子模块可用，而未
+/// 初始化的子模块只留下空目录，此时 `git -C <dir>` 会向上找到父仓库（实测 `HIS/Nto.Pacs`
+/// 解析到 `HIS`），把父仓库的分支原样重复一遍。
+///
+/// 项目里没有可用仓库返回空列表而非错误：「不适用」不是故障，错误条要留给真正的失败
+/// （路径非法、git 失败、平台凭据失效），否则注册了非 git 目录的项目每次打开都刷一条红条。
+fn discover_repo_refs_blocking(project_path: &str) -> Result<Vec<BranchRepoRef>, String> {
     validate_project_path(project_path)?;
-    let repos: Vec<(String, String)> = crate::build::discover_repos_blocking(project_path)?
-        .into_iter()
-        .map(|r| (r.name, r.path))
-        .collect();
-    if repos.is_empty() {
-        return Err("项目下没有发现 git 仓库。".to_string());
+    let root = Path::new(project_path);
+    let mut out: Vec<BranchRepoRef> = Vec::new();
+
+    // 主仓库：项目根自身是 git 仓库时，仓库名与 `BuildRepo.name` 一致（目录名）。
+    if root.join(".git").exists() {
+        let name = root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "root".to_string());
+        out.push(BranchRepoRef {
+            name,
+            path: project_path.to_string(),
+        });
     }
-    Ok(repos)
+
+    let gitmodules = root.join(".gitmodules");
+    if gitmodules.exists() {
+        let content = std::fs::read_to_string(&gitmodules).unwrap_or_default();
+        for (name, rel, _) in crate::build::parse_gitmodules(&content) {
+            let full = root.join(&rel);
+            // 未初始化的子模块只有空目录，不是工作树根，排除。
+            if full.join(".git").exists() {
+                out.push(BranchRepoRef {
+                    name,
+                    path: crate::git::path_to_string(&full)?,
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// 扫描单仓库的本地分支（同步；在 `spawn_blocking` 里跑）。
@@ -759,6 +805,17 @@ fn scan_repo_blocking(
     scan
 }
 
+/// 列出项目下可用的 git 仓库（只做发现，不读分支）。
+///
+/// 「发起合并」视图用它做**分段加载的第一步**：先拿到仓库下拉，用户选中某个仓库后再调用
+/// `list_branch_pr_candidates` 只扫那一个仓库。
+#[tauri::command]
+pub async fn list_branch_pr_repos(project_path: String) -> Result<Vec<BranchRepoRef>, String> {
+    tauri::async_runtime::spawn_blocking(move || discover_repo_refs_blocking(&project_path))
+        .await
+        .map_err(|e| format!("list_branch_pr_repos panicked: {e}"))?
+}
+
 /// 「待发起」视图的只读聚合命令：本地分支元数据 + 平台侧 join。
 ///
 /// 除必要的 `fetch` 外不做任何写操作。`repo_filter` 为仓库名（与 `BuildRepo.name` 一致）；
@@ -772,7 +829,7 @@ pub async fn list_branch_pr_candidates(
 ) -> Result<Vec<BranchRepoScan>, String> {
     let repos = {
         let project_path = project_path.clone();
-        tauri::async_runtime::spawn_blocking(move || discover_repo_list(&project_path))
+        tauri::async_runtime::spawn_blocking(move || discover_repo_refs_blocking(&project_path))
             .await
             .map_err(|e| format!("list_branch_pr_candidates panicked: {e}"))??
     };
@@ -780,7 +837,8 @@ pub async fn list_branch_pr_candidates(
     let filter = repo_filter.map(|f| f.trim().to_string()).unwrap_or_default();
     let repos: Vec<(String, String)> = repos
         .into_iter()
-        .filter(|(name, _)| filter.is_empty() || &filter == name)
+        .filter(|r| filter.is_empty() || filter == r.name)
+        .map(|r| (r.name, r.path))
         .collect();
     if repos.is_empty() {
         return Ok(Vec::new());
@@ -976,7 +1034,7 @@ pub async fn prune_remote_branches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::Command;
 
     /// 测试夹具的绝对基路径。
@@ -1460,7 +1518,85 @@ mod tests {
         // MR 数据可用时该分支不应成为「待发起」候选（前端据此过滤），但行本身要如实带出 MR。
         assert!(scan.mr_ok);
     }
-// 路径安全：仓库路径必须落在项目内，越界路径在产生任何副作用前就被拒绝。
+    // 路径安全：仓库路径必须落在项目内，越界路径在产生任何副作用前就被拒绝。
+    // 仓库发现要给出可用的仓库名（与 repo_filter 的匹配键一致），这是分段加载的第一步。
+    #[test]
+    fn discover_repo_refs_lists_worktree_roots() {
+        let (repo, _origin) = repo_with_origin();
+        let found = discover_repo_refs_blocking(repo.dir()).unwrap();
+        assert_eq!(found.len(), 1, "单仓库项目只列主仓库");
+        let expected = repo
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap();
+        assert_eq!(found[0].name, expected, "仓库名要与 BuildRepo.name 一致");
+        assert_eq!(found[0].path, repo.dir());
+    }
+
+    // 未初始化的子模块：`.gitmodules` 里声明了、目录也在，但里面没有 `.git`。此时
+    // `git -C <dir>` 会向上找到父仓库（实测 HIS 的 Nto.Pacs 解析到 HIS），把父仓库的分支
+    // 原样重复一遍。发现阶段必须把它排除，只留真正的工作树根。
+    #[test]
+    fn discover_repo_refs_excludes_non_worktree_roots() {
+        let (repo, _origin) = repo_with_origin();
+        // 声明一个未初始化的子模块：目录建出来但不 init
+        std::fs::create_dir_all(repo.path.join("Nto.Pacs")).unwrap();
+        std::fs::write(
+            repo.path.join(".gitmodules"),
+            "[submodule \"Nto.Pacs\"]
+	path = Nto.Pacs
+	url = git@example.com:x/pacs.git
+",
+        )
+        .unwrap();
+
+        let found = discover_repo_refs_blocking(repo.dir()).unwrap();
+        let names: Vec<&str> = found.iter().map(|r| r.name.as_str()).collect();
+        // 项目根本身是真仓库，要保留
+        assert!(!names.is_empty(), "真仓库要保留：{names:?}");
+        // 未初始化的子模块要排除（不重复父仓库分支）
+        assert!(
+            !names.iter().any(|n| n.contains("Nto.Pacs")),
+            "未初始化子模块必须排除：{names:?}"
+        );
+    }
+
+    // 「项目里没有可用仓库」是「不适用」而非错误：返回空列表，前端不报红条。
+    #[test]
+    fn discover_repo_refs_is_empty_when_nothing_is_usable() {
+        let workspace = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("pending-mr-tests")
+            .join(format!("ws-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(workspace.join("Fake.Sub")).unwrap();
+        // 根不是仓库，唯一「仓库」是未初始化的子模块
+        std::fs::write(
+            workspace.join(".gitmodules"),
+            "[submodule \"Fake.Sub\"]
+	path = Fake.Sub
+	url = git@example.com:x/y.git
+",
+        )
+        .unwrap();
+        let found = discover_repo_refs_blocking(workspace.to_str().unwrap()).unwrap();
+        assert!(found.is_empty(), "不适用应返回空列表：{found:?}");
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    // 项目路径本身非法仍是错误（真故障要暴露，不能被当成「不适用」吞掉）。
+    #[test]
+    fn discover_repo_refs_still_errors_on_bad_project_path() {
+        assert!(discover_repo_refs_blocking("relative/not/absolute").is_err());
+    }
+
+    // 路径安全：仓库路径必须落在项目内，越界路径在产生任何副作用前就被拒绝。
+    // 未初始化的子模块：目录在但里面没有 `.git`。`git -C` 会向上找到父仓库，把父仓库的
+    // 分支原样重复一遍（实测 HIS 的 Nto.Pacs 解析到 HIS）。发现阶段就要把它排除掉。
+
+    // 一个可用仓库都没有时明确报错，不把「全都不适用」伪装成「没有待发起分支」。
+
     #[test]
     fn rejects_repo_path_outside_project() {
         let project = TempRepo::new();
