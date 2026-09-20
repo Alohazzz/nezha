@@ -149,6 +149,196 @@
   border-top: 1px solid var(--border-dim);
 }
 
+/* ── 失效分支清理确认框（build-dialog-*）────────────────────────────
+   应用内确认框，替代 plugin-dialog 的原生 confirm()：原生框无法跟随主题，
+   且长分支名在窄框里等宽换行后读不出「仓库:分支」的边界。
+   骨架与分支批处理 bbDialog 同规格（遮罩 + 居中卡片），配色一律走主题变量。 */
+.build-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: var(--overlay-bg);
+  animation: build-dialog-overlay-in 0.12s ease-out;
+}
+
+.build-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 2001;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(84vh, 640px);
+  padding: 18px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-medium);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  animation: build-dialog-in 0.14s ease-out;
+}
+
+.build-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.build-dialog-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+}
+
+.build-dialog-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.build-dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.build-dialog-close:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.build-dialog-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.build-dialog-lead {
+  margin: 12px 0 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.build-dialog-lead strong {
+  font-weight: 700;
+  color: var(--warning);
+}
+
+.build-dialog-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  background: var(--bg-input);
+}
+
+.build-dialog-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 7px;
+  border-radius: 6px;
+}
+
+.build-dialog-item:hover {
+  background: var(--bg-hover);
+}
+
+.build-dialog-item-name {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.build-dialog-item-name svg {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--text-hint);
+}
+
+.build-dialog-item-branch {
+  min-width: 0;
+}
+
+.build-dialog-item-sep {
+  color: var(--text-hint);
+}
+
+.build-dialog-item-reason {
+  padding-left: 15px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.build-dialog-more {
+  padding: 5px 7px;
+  font-size: 11px;
+  color: var(--text-hint);
+}
+
+.build-dialog-note {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.build-dialog-note p {
+  margin: 0;
+}
+
+.build-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@keyframes build-dialog-overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes build-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%);
+  }
+}
+
 /* rp-error 自带面向标题栏的 10px 外边距，在自带内边距的滚动区里对齐卡片 */
 .build-scroll .rp-error {
   margin: 0;

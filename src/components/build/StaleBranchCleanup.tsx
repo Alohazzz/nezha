@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
-import { Trash2 } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { AlertTriangle, GitBranch, Trash2, X } from "lucide-react";
 
 /** 「远端已不存在的本地分支」单项结果（对齐后端 `StaleBranchItem`）。 */
 interface StaleBranchItem {
@@ -33,6 +33,19 @@ const MAX_LINES = 40;
 const MAX_CONFIRM_LINES = 15;
 
 type Line = { key: string; tone?: "ok" | "warn" | "error"; text: string };
+
+/** dry-run 扫描出的待删除候选，等待用户在确认框里拍板。 */
+interface PendingCandidate {
+  repo: string;
+  branch: string;
+  reason: string;
+}
+
+interface PendingPrune {
+  candidates: PendingCandidate[];
+  /** 不满足删除条件、会被自动跳过的分支数。 */
+  skipped: number;
+}
 
 function toLines(results: StaleBranchRepoResult[]): Line[] {
   const lines: Line[] = [];
@@ -72,6 +85,81 @@ function summarize(results: StaleBranchRepoResult[]): string {
   return parts.join(" · ");
 }
 
+/** 清理失效分支前的确认框。
+ *
+ *  用应用内 Radix 弹层而不是 `plugin-dialog` 的原生 `confirm()`：原生框吃不下长分支名
+ *  （等宽换行后几乎读不出 `仓库:分支` 的边界），也无法跟随 nezha 主题。 */
+function PruneConfirmDialog({
+  pending,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  pending: PendingPrune | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const candidates = pending?.candidates ?? [];
+  const visible = candidates.slice(0, MAX_CONFIRM_LINES);
+  const hidden = candidates.length - visible.length;
+  return (
+    <Dialog.Root
+      open={pending !== null}
+      onOpenChange={(open) => {
+        // 删除进行中不允许关掉弹层（后端已经在动分支了）。
+        if (!open && !busy) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="build-dialog-overlay" />
+        <Dialog.Content className="build-dialog" aria-describedby="build-dialog-lead">
+          <div className="build-dialog-head">
+            <span className="build-dialog-icon">
+              <AlertTriangle size={15} />
+            </span>
+            <Dialog.Title className="build-dialog-title">清理失效分支</Dialog.Title>
+            <Dialog.Close className="build-dialog-close" aria-label="关闭" disabled={busy}>
+              <X size={14} />
+            </Dialog.Close>
+          </div>
+          <Dialog.Description className="build-dialog-lead" id="build-dialog-lead">
+            将删除 <strong>{candidates.length}</strong> 个远端已不存在的本地分支：
+          </Dialog.Description>
+          <div className="build-dialog-list">
+            {visible.map((c) => (
+              <div key={`${c.repo}:${c.branch}`} className="build-dialog-item">
+                <span className="build-dialog-item-name">
+                  <GitBranch size={11} />
+                  <span className="build-dialog-item-branch">{c.repo}</span>
+                  <span className="build-dialog-item-sep">:</span>
+                  <span className="build-dialog-item-branch">{c.branch}</span>
+                </span>
+                <span className="build-dialog-item-reason">{c.reason}</span>
+              </div>
+            ))}
+            {hidden > 0 && <div className="build-dialog-more">… 其余 {hidden} 个</div>}
+          </div>
+          <div className="build-dialog-note">
+            {pending !== null && pending.skipped > 0 && (
+              <p>另有 {pending.skipped} 个分支不满足删除条件，会自动跳过。</p>
+            )}
+            <p>仅删除提交已存在于远端分支的本地分支；有未提交内容 / 未合并的分支不会被删除。</p>
+          </div>
+          <div className="build-dialog-actions">
+            <button className="rp-btn" onClick={onCancel} disabled={busy}>
+              取消
+            </button>
+            <button className="rp-btn" data-variant="danger" onClick={onConfirm} disabled={busy}>
+              {busy ? "删除中…" : `删除 ${candidates.length} 个分支`}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 /**
  * 清理「远端已不存在的本地分支」。
  *
@@ -95,9 +183,10 @@ export function StaleBranchCleanup({
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<StaleBranchRepoResult[]>([]);
   const [error, setError] = useState("");
+  const [pending, setPending] = useState<PendingPrune | null>(null);
 
-  const selectedNames = repos.filter((r) => selected.has(r.name)).map((r) => r.name);
-  const disabled = busy || selectedNames.length === 0;
+  const selectedNames = () => repos.filter((r) => selected.has(r.name)).map((r) => r.name);
+  const disabled = busy || pending !== null || selectedNames().length === 0;
 
   const handlePrune = useCallback(async () => {
     const names = repos.filter((r) => selected.has(r.name)).map((r) => r.name);
@@ -112,27 +201,29 @@ export function StaleBranchCleanup({
         dryRun: true,
       });
       const candidates = scan.flatMap((r) =>
-        r.branches.filter((b) => b.deletable).map((b) => `${r.name}:${b.branch}（${b.reason}）`),
+        r.branches
+          .filter((b) => b.deletable)
+          .map((b) => ({ repo: r.name, branch: b.branch, reason: b.reason })),
       );
       const skipped = scan.reduce((n, r) => n + r.branches.filter((b) => !b.deletable).length, 0);
       if (candidates.length === 0) {
         setResults(scan);
         return;
       }
-      const prompt = [`将删除 ${candidates.length} 个远端已不存在的本地分支：`, ""];
-      prompt.push(...candidates.slice(0, MAX_CONFIRM_LINES));
-      if (candidates.length > MAX_CONFIRM_LINES) {
-        prompt.push(`… 其余 ${candidates.length - MAX_CONFIRM_LINES} 个`);
-      }
-      prompt.push("");
-      if (skipped > 0) prompt.push(`另有 ${skipped} 个分支不满足删除条件，会自动跳过。`);
-      prompt.push("仅删除提交已存在于远端分支的本地分支；有未提交内容 / 未合并的分支不会被删除。");
-      const ok = await confirm(prompt.join("\n"), {
-        title: "清理失效分支",
-        kind: "warning",
-      });
-      if (!ok) return;
+      setPending({ candidates, skipped });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [projectPath, repos, selected]);
 
+  const handleConfirm = useCallback(async () => {
+    const names = repos.filter((r) => selected.has(r.name)).map((r) => r.name);
+    if (names.length === 0) return;
+    setError("");
+    setBusy(true);
+    try {
       const done = await invoke<StaleBranchRepoResult[]>("build_prune_stale_branches", {
         projectPath,
         selected: names,
@@ -148,6 +239,7 @@ export function StaleBranchCleanup({
       setError(String(e));
     } finally {
       setBusy(false);
+      setPending(null);
     }
   }, [projectPath, repos, selected, onDeleted]);
 
@@ -187,6 +279,12 @@ export function StaleBranchCleanup({
           )}
         </div>
       )}
+      <PruneConfirmDialog
+        pending={pending}
+        busy={busy}
+        onCancel={() => setPending(null)}
+        onConfirm={() => void handleConfirm()}
+      />
     </div>
   );
 }

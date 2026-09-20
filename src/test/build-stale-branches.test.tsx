@@ -1,5 +1,4 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BuildPanel } from "../components/build/BuildPanel";
 import { I18nProvider } from "../i18n";
@@ -11,9 +10,6 @@ vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: vi.fn(async () => true),
-}));
 
 type PruneItem = {
   branch: string;
@@ -92,7 +88,6 @@ const renderPanel = () =>
 describe("BuildPanel stale branch cleanup", () => {
   beforeEach(() => {
     invokeMock.mockReset();
-    vi.mocked(confirm).mockReset();
   });
 
   it("deletes confirmed stale branches and drops them from the branch menu", async () => {
@@ -126,7 +121,6 @@ describe("BuildPanel stale branch cleanup", () => {
             ]),
           ],
     );
-    vi.mocked(confirm).mockResolvedValue(true);
     renderPanel();
 
     // 清理前分支菜单里有 fix/old
@@ -146,6 +140,19 @@ describe("BuildPanel stale branch cleanup", () => {
         dryRun: true,
       });
     });
+    // 确认框只列将要删除的候选，不列跳过的分支
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("fix/old");
+    expect(dialog.textContent).not.toContain("fix/wip");
+    // 此时尚未真删，只有 dry-run 那次调用
+    expect(
+      invokeMock.mock.calls.filter(
+        ([cmd, args]) =>
+          cmd === "build_prune_stale_branches" && (args as { dryRun?: boolean }).dryRun === false,
+      ),
+    ).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /删除 1 个分支/ }));
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("build_prune_stale_branches", {
         projectPath: "/workspace/HIS",
@@ -153,10 +160,7 @@ describe("BuildPanel stale branch cleanup", () => {
         dryRun: false,
       });
     });
-    // 确认框只列将要删除的候选，不列跳过的分支
-    const prompt = vi.mocked(confirm).mock.calls[0][0] as string;
-    expect(prompt).toContain("HIS:fix/old");
-    expect(prompt).not.toContain("fix/wip");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     expect(await screen.findByText(/✓ 已删除 HIS:fix\/old/)).toBeInTheDocument();
     expect(screen.getByText(/跳过 HIS:fix\/wip/)).toBeInTheDocument();
@@ -184,7 +188,7 @@ describe("BuildPanel stale branch cleanup", () => {
     fireEvent.click(await screen.findByRole("button", { name: /清理失效分支/ }));
 
     expect(await screen.findByText(/没有可清理的失效分支/)).toBeInTheDocument();
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
       invokeMock.mock.calls.filter(([cmd]) => cmd === "build_prune_stale_branches"),
     ).toHaveLength(1);
@@ -200,12 +204,13 @@ describe("BuildPanel stale branch cleanup", () => {
           ]
         : [],
     );
-    vi.mocked(confirm).mockResolvedValue(false);
     renderPanel();
 
     fireEvent.click(await screen.findByRole("button", { name: /清理失效分支/ }));
 
-    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    // 用户点「取消」→ 弹层关闭且不触发真删
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(
       invokeMock.mock.calls.filter(
         ([cmd, args]) =>
