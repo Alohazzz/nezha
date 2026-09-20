@@ -89,7 +89,7 @@ pub(crate) fn batch_branch_name(kind: &str, version: &str, target: &str, name: &
         out.push('/');
         out.push_str(&version);
     }
-    // 目标段恒有：target_branch 是必填项，清洗后为空说明传了空白，此时才退回省略。
+    // 目标段可选：目标分支留空（暂不指定合并目标）时整段省略，不让空段产生 `//`。
     if target != "batch" {
         out.push('/');
         out.push_str(&target);
@@ -151,9 +151,11 @@ pub async fn create_branch_batch(
     if !VALID_KINDS.contains(&kind.as_str()) {
         return Err(format!("Unsupported branch kind: {kind}"));
     }
-    if base_branch.trim().is_empty() || target_branch.trim().is_empty() {
-        return Err("baseBranch and targetBranch are required".to_string());
+    // 目标分支允许留空（暂不指定合并目标）；空目标批不能提交 MR / 合并回，见各入口校验。
+    if base_branch.trim().is_empty() {
+        return Err("baseBranch is required".to_string());
     }
+    let target_branch = target_branch.trim().to_string();
     let use_worktree = use_worktree.unwrap_or(false);
 
     let version = version.unwrap_or_default();
@@ -163,7 +165,7 @@ pub async fn create_branch_batch(
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| batch_branch_name(&kind, &version, target_branch.trim(), &name));
-    if branch == target_branch.trim() {
+    if branch == target_branch {
         return Err("源分支不能与目标分支相同".to_string());
     }
     let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
@@ -439,6 +441,9 @@ pub async fn merge_branch_batch(
             batch.kind
         ));
     }
+    if batch.target_branch.trim().is_empty() {
+        return Err("该批创建时未指定合并回目标分支，无法合并；如需合并请先提交 MR 或补记目标分支".to_string());
+    }
     let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
     let effective_repo = batch.worktree_repo.clone().or(repo_path.clone());
     let message = crate::git::merge_task_worktree(
@@ -626,6 +631,9 @@ pub async fn delete_branch_batch(
                 _ => return Err("无法确认远端源分支，禁止删除".to_string()),
             }
         }
+    } else if batch.target_branch.trim().is_empty() {
+        // 未指定合并目标的批没有「已合并进某分支」的判据，跳过未合并计数；
+        // 删除只影响本地 worktree / 分支，远端分支与提交不受影响。
     } else {
         let source_branch_exists = local_branch_exists(
             project_path.clone(),
@@ -679,22 +687,28 @@ pub async fn delete_branch_batch(
     let cwd2 = cwd.clone();
     let branch_name = batch.branch.clone();
     let use_worktree = batch.use_worktree;
-    let target_branch = batch.target_branch.clone();
+    // 无 worktree 时分支可能正被主工作区检出，切回的目标分支；未指定目标时回落基础分支
+    //（与批分支同源，切回不会丢内容）。
+    let checkout_target = if batch.target_branch.trim().is_empty() {
+        batch.base_branch.clone()
+    } else {
+        batch.target_branch.clone()
+    };
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         if use_worktree && Path::new(&wt).is_dir() {
             let _ = run_git(&cwd2, &["worktree", "remove", "--force", &wt]);
             let _ = run_git(&cwd2, &["worktree", "prune"]);
         }
         if !use_worktree {
-            // 无 worktree：分支可能正被主工作区检出，先切回目标分支才能删除。
+            // 先切回检出目标分支才能删除批分支。
             let head = run_git(&cwd2, &["rev-parse", "--abbrev-ref", "HEAD"])?;
             let current = String::from_utf8_lossy(&head.stdout).trim().to_string();
             if current == branch_name {
-                let checkout = run_git(&cwd2, &["checkout", &target_branch])?;
+                let checkout = run_git(&cwd2, &["checkout", &checkout_target])?;
                 if !checkout.status.success() {
                     return Err(format!(
                         "主工作区仍检出在批分支上且无法切回 {}（可能有未提交改动），请处理后重试：{}",
-                        target_branch,
+                        checkout_target,
                         String::from_utf8_lossy(&checkout.stderr).trim()
                     ));
                 }

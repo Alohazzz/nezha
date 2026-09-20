@@ -709,8 +709,8 @@
           <tr><td><strong>类型</strong></td><td><code>feature · 日常开发</code> / <code>fix · 缺陷修复</code> / <code>patch · 现场响应</code> / <code>project · 上线验收</code> / <code>hotfix · 补丁</code></td></tr>
           <tr><td><strong>版本</strong></td><td>分支名里的版本段，可取云效版本（如 <code>v2.20260901</code>，自动去掉云效版本名的尾部 <code>.0</code>），也可手输；留空则不生成版本段</td></tr>
           <tr><td><strong>源分支</strong></td><td>按 <code>类型/版本/目标分支/描述</code> 自动生成、可手改（如 <code>fix/v2.20260901/develop/锁号地址挂号异常问题</code>）；点「检测」校验是否与远端 / 本地重名，冲突时可「继续使用远端分支」或「改名」</td></tr>
-          <tr><td><strong>基础分支</strong></td><td>从哪个分支切出</td></tr>
-          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标；该分支名同时作为源分支名里的目标段（恒带出）</td></tr>
+          <tr><td><strong>基础分支</strong></td><td>从哪个分支切出；默认带出所选仓库的<strong>当前分支</strong>，可手改</td></tr>
+          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标；填了该分支名会同时作为源分支名里的目标段（恒带出）。<strong>允许留空</strong> = 暂不指定合并目标：源分支名不带目标段，批照常创建，但不能提交 MR / 合并回</td></tr>
           <tr><td><strong>选择议题</strong></td><td>勾选组成该批次的议题（顺序即任务顺序）</td></tr>
           <tr><td><strong>另建 worktree</strong></td><td><strong>默认不勾选</strong>——批分支直接切在主工作区，任务与提交都落在该分支上；需要并行隔离时才勾选，并填「代码目录」</td></tr>
         </tbody>

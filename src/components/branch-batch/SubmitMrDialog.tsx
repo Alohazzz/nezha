@@ -22,6 +22,8 @@ export function SubmitMrDialog({
   const [error, setError] = useState("");
 
   useEffect(() => {
+    // 目标分支留空的批不能提交 MR（后端同口径拦截）；按钮禁用并给出提示。
+    if (!batch.targetBranch.trim()) return;
     // 默认审核人 = 目标分支保护规则的管理人员。按批所属仓库查（与提交 MR 同一仓库），
     // 否则多子仓库工作区会拿主仓库的保护规则，预填出另一批审核人。
     void invoke<string[]>("codeup_branch_managers", {
@@ -71,7 +73,7 @@ export function SubmitMrDialog({
 
         <div style={s.bbCardSub}>
           <span style={s.bbCardMono}>{batch.branch}</span>
-          <span>→ {batch.targetBranch}</span>
+          <span>→ {batch.targetBranch || "（未指定合并目标）"}</span>
         </div>
 
         <div style={s.bbField}>
@@ -95,7 +97,13 @@ export function SubmitMrDialog({
         </div>
 
         <div style={s.bbField}>
-          <button type="button" style={s.bbBtnPrimary} disabled={busy} onClick={() => void submit()}>
+          <button
+            type="button"
+            style={s.bbBtnPrimary}
+            disabled={busy || !batch.targetBranch.trim()}
+            title={batch.targetBranch.trim() ? undefined : "未指定合并回目标分支，无法提交 MR"}
+            onClick={() => void submit()}
+          >
             <Send size={13} />
             {busy ? "提交中…" : "提交到 Codeup"}
           </button>

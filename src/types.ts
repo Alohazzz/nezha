@@ -134,7 +134,7 @@ export interface BranchBatch {
   branch: string;
   /** 基础分支（如 develop / master 的 tag），分支由此切出。 */
   baseBranch: string;
-  /** 合并回的目标分支（通常为 develop 或 master）。 */
+  /** 合并回的目标分支（通常为 develop 或 master）；允许为空 = 暂不指定合并目标（不能提交 MR / 合并回）。 */
   targetBranch: string;
   /** 该批包含的议题任务 id 列表（顺序即验收批次内任务顺序）。 */
   taskIds: string[];

@@ -197,7 +197,7 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     });
   });
 
-  it("目标分支段恒在源分支名里，且没有「是否带目标分支段」的开关", async () => {
+  it("目标分支段由 targetBranch 决定（留空则不带出），且没有「是否带目标分支段」的开关", async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -205,12 +205,24 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     await user.click(await screen.findByRole("button", { name: /新建 PR/ }));
     await screen.findByText("创建 PR");
 
-    // 预览命令不再接收 includeTarget：目标分支段由 targetBranch 决定、恒带出。
+    // 预览命令不再接收 includeTarget：目标分支段由 targetBranch 决定。
+    // 目标分支默认留空（允许暂不指定合并目标），此时 preview 收到 null。
     await waitFor(() => {
       const call = invokeMock.mock.calls.find(([cmd]) => cmd === "preview_branch_batch_branch");
       const args = call?.[1] as Record<string, unknown> | undefined;
-      expect(args?.targetBranch).toBe("develop");
+      expect(args?.targetBranch).toBeNull();
       expect(args).not.toHaveProperty("includeTarget");
+    });
+
+    // 手填目标分支后，preview 参数跟着带出目标段。
+    const target = screen.getByPlaceholderText(/留空则暂不指定合并目标/);
+    await user.type(target, "develop");
+    await waitFor(() => {
+      const calls = invokeMock.mock.calls.filter(
+        ([cmd]) => cmd === "preview_branch_batch_branch",
+      );
+      const args = calls[calls.length - 1]?.[1] as Record<string, unknown> | undefined;
+      expect(args?.targetBranch).toBe("develop");
     });
 
     // 源分支输入框展示带目标段的完整名字，且可压缩（flex:1 + min-width:0），

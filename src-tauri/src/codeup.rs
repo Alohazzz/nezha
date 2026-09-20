@@ -523,6 +523,9 @@ pub async fn codeup_create_mr(
     if batch.status != "active" {
         return Err("批次不是进行中状态，无法提交 MR".to_string());
     }
+    if batch.target_branch.trim().is_empty() {
+        return Err("该批未指定合并回目标分支，无法提交 MR；请补记目标分支后重试".to_string());
+    }
     let worktree_str = path_to_string(
         &std::path::Path::new(&project_path)
             .join(".nezha")

@@ -157,7 +157,7 @@ export function BranchBatchView({
       <div className="pr-card-sub">
         <span className="pr-card-mono">{batch.branch}</span>
         <span>← {batch.baseBranch}</span>
-        <span>→ {batch.targetBranch}</span>
+        <span>→ {batch.targetBranch || "（未指定合并目标）"}</span>
         <span>{(batch.taskIds ?? []).length} 个议题</span>
       </div>
       <div className="pr-card-actions">

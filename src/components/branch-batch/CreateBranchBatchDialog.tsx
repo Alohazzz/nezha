@@ -51,7 +51,8 @@ export function CreateBranchBatchDialog({
   const [worktreeDir, setWorktreeDir] = useState("");
   const [kind, setKind] = useState<BranchKind>("feature");
   const [baseBranch, setBaseBranch] = useState("develop");
-  const [targetBranch, setTargetBranch] = useState("develop");
+  // 合并回目标分支允许留空：空表示暂不指定合并目标（源分支名不带目标段，不能提交 MR / 合并回）。
+  const [targetBranch, setTargetBranch] = useState("");
   const [version, setVersion] = useState("");
   const [versionPickerOpen, setVersionPickerOpen] = useState(false);
   const [useWorktree, setUseWorktree] = useState(false);
@@ -131,6 +132,25 @@ export function CreateBranchBatchDialog({
         if (!cancelled) setWorktreeDir(dir);
       })
       .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectPath, selectedRepo]);
+
+  // 基础分支默认 = 所选仓库当前分支；只回填用户未手改过的值。
+  const baseBranchTouchedRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<Array<{ name: string; current: boolean }>>("git_list_branches", {
+      projectPath,
+      repoPath: selectedRepo,
+    })
+      .then((branches) => {
+        if (cancelled || baseBranchTouchedRef.current) return;
+        const current = branches.find((b) => b.current)?.name;
+        if (current) setBaseBranch(current);
+      })
+      .catch((e) => console.warn("[create-batch] load current branch failed:", e));
     return () => {
       cancelled = true;
     };
@@ -231,7 +251,6 @@ export function CreateBranchBatchDialog({
     if (
       !name.trim() ||
       !baseBranch.trim() ||
-      !targetBranch.trim() ||
       !sourceBranch.trim() ||
       (useWorktree && !worktreeDir.trim()) ||
       busy
@@ -256,7 +275,7 @@ export function CreateBranchBatchDialog({
         name: name.trim(),
         kind,
         baseBranch: baseBranch.trim(),
-        targetBranch: targetBranch.trim() || baseBranch.trim(),
+        targetBranch: targetBranch.trim(),
         taskIds: Array.from(selected),
         sourceBranch: sourceBranch.trim(),
         useExistingRemote,
@@ -424,22 +443,25 @@ export function CreateBranchBatchDialog({
         )}
 
         <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>基础分支</span>
+          <span style={s.bbFieldLabel}>基础分支（默认当前分支，可手改）</span>
           <input
             style={s.bbInput}
             value={baseBranch}
-            onChange={(e) => setBaseBranch(e.target.value)}
+            onChange={(e) => {
+              baseBranchTouchedRef.current = true;
+              setBaseBranch(e.target.value);
+            }}
             placeholder="develop"
           />
         </div>
 
         <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>合并回目标分支</span>
+          <span style={s.bbFieldLabel}>合并回目标分支（可留空）</span>
           <input
             style={s.bbInput}
             value={targetBranch}
             onChange={(e) => setTargetBranch(e.target.value)}
-            placeholder="develop"
+            placeholder="develop；留空则暂不指定合并目标"
           />
         </div>
 

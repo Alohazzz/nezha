@@ -247,7 +247,8 @@ pub struct Batch {
     pub branch: String,
     #[serde(rename = "baseBranch")]
     pub base_branch: String,
-    #[serde(rename = "targetBranch")]
+    /// 合并回的目标分支；允许为空 = 暂不指定合并目标（该批不能提交 MR / 合并回）。
+    #[serde(rename = "targetBranch", default)]
     pub target_branch: String,
     /// 该批包含的议题任务 id 列表（顺序即验收批次内任务顺序）。
     /// 必须始终序列化：前端依赖字段存在（空批也不可缺省），缺失会让 TS 侧迭代 undefined 崩溃。
