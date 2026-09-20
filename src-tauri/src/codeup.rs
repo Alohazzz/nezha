@@ -529,22 +529,30 @@ pub async fn codeup_create_mr(
             .join("worktrees")
             .join(&batch_id),
     )?;
-    let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
-    if let Some(dirty) = crate::git::worktree_dirty_reason(&worktree_path)? {
-        return Err(format!(
-            "提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"
-        ));
+    // 无 worktree 的批：分支就在主工作区里，push / rev-parse 都在仓库根执行。
+    // 脏文件判定跳过——主工作区常驻开发状态，拿 worktree 的「必须干净」标准会误拦。
+    let push_dir = if batch.use_worktree {
+        batch.worktree_path.clone().unwrap_or(worktree_str)
+    } else {
+        crate::git::resolve_repo_path(&project_path, batch.worktree_repo.as_deref()).await?
+    };
+    if batch.use_worktree {
+        if let Some(dirty) = crate::git::worktree_dirty_reason(&push_dir)? {
+            return Err(format!(
+                "提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"
+            ));
+        }
     }
 
     // 先非 force push 源分支，保证 MR 引用远端已有提交；再取提交时的 HEAD。
-    let push = run_git(&worktree_path, &["push", "origin", &batch.branch])?;
+    let push = run_git(&push_dir, &["push", "origin", &batch.branch])?;
     if !push.status.success() {
         return Err(format!(
             "推送源分支失败（不会 force push）：{}",
             String::from_utf8_lossy(&push.stderr).trim()
         ));
     }
-    let head_out = run_git(&worktree_path, &["rev-parse", "HEAD"])?;
+    let head_out = run_git(&push_dir, &["rev-parse", "HEAD"])?;
     if !head_out.status.success() {
         return Err(String::from_utf8_lossy(&head_out.stderr).trim().to_string());
     }

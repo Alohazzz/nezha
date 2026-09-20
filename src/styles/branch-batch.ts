@@ -50,6 +50,7 @@ const branchBatch = {
   bbBtnGhost: {
     display: "inline-flex" as const,
     alignItems: "center" as const,
+    justifyContent: "center" as const,
     gap: 6,
     height: 30,
     padding: "0 10px",
@@ -58,6 +59,9 @@ const branchBatch = {
     background: "transparent",
     color: "var(--text-muted)",
     fontSize: 12,
+    // 与 flex:1 的输入框同行时不参与收缩，避免文字被压成两行。
+    flexShrink: 0,
+    whiteSpace: "nowrap" as const,
     cursor: "pointer",
   },
   bbList: {
@@ -502,7 +506,11 @@ const branchBatch = {
     gap: 6,
     borderBottom: "1px solid var(--border-dim)",
   },
+  /// bbSourceRow 里的输入框：flex:1 + minWidth:0 才能在行内被压缩，
+  /// 否则 input 的固有宽度会把同行按钮挤出对话框（分支名被截断的根因）。
   bbSourceInput: {
+    flex: 1,
+    minWidth: 0,
     height: 32,
     padding: "0 10px",
     borderRadius: 8,
@@ -511,7 +519,6 @@ const branchBatch = {
     color: "var(--text-primary)",
     fontSize: 13,
     outline: "none",
-    width: 220,
   },
   bbSourceRow: {
     display: "flex" as const,
@@ -588,6 +595,21 @@ const branchBatch = {
     fontSize: 11.5,
     color: "var(--accent)",
     cursor: "pointer",
+  },
+  /// 「另建 worktree」「带目标分支段」这类对话框开关：整行可点。
+  bbCheckRow: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    marginBottom: 12,
+    fontSize: 12.5,
+    color: "var(--text-secondary)",
+    cursor: "pointer",
+  },
+  bbCheckHint: {
+    marginLeft: "auto",
+    fontSize: 11,
+    color: "var(--text-hint)",
   },
 } satisfies Record<string, React.CSSProperties>;
 

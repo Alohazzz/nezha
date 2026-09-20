@@ -12,6 +12,11 @@ export function batchWorktreePath(batch: BranchBatch, projectPath: string): stri
   return batch.worktreePath ?? `${projectPath}/.nezha/worktrees/${batch.id}`;
 }
 
+/** 批归属的作用域：另建 worktree 的批归到 worktree 路径，否则归到主检出（空 key）。 */
+export function batchScopeKey(batch: BranchBatch, projectPath: string): string {
+  return batch.useWorktree === false ? "" : batchWorktreePath(batch, projectPath);
+}
+
 /** selector 只展示真实可进入的 worktree；失效批次留给 PR 面板清理，不静默改写记录。 */
 export function buildWorktreeScopeOptions({
   tasks,
@@ -36,6 +41,8 @@ export function buildWorktreeScopeOptions({
   }
 
   for (const batch of batches) {
+    // 不另建 worktree 的批住在主检出里，不产生新的作用域选项。
+    if (batch.useWorktree === false) continue;
     if (batch.status === "merged" || batch.status === "closed" || batch.worktreeMissing) continue;
     const key = batchWorktreePath(batch, projectPath);
     if (seen.has(key)) continue;

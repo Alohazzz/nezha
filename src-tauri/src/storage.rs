@@ -80,7 +80,7 @@ pub struct Task {
     /// 所属分支批 id；非空即该任务属于某个可独立验收批次。
     #[serde(rename = "batchId", default, skip_serializing_if = "Option::is_none")]
     pub batch_id: Option<String>,
-    /// 该任务所在分支的类型（feature/patch/release/hotfix）。
+    /// 该任务所在分支的类型（feature/fix/patch/project/hotfix）。
     #[serde(
         rename = "branchKind",
         default,
@@ -232,7 +232,8 @@ pub struct Plan {
     pub archived_at: Option<i64>,
 }
 
-/// 分支批 = 一个可独立验收的 PR（一个批对应一个分支 + 一个 worktree，批内任务顺序共用）。
+/// 分支批 = 一个可独立验收的 PR（一个批对应一个分支，批内任务顺序共用）。
+/// 默认只在主工作区切出批分支；选择另建 worktree 时才有独立代码目录。
 /// 镜像 TypeScript 的 BranchBatch 接口。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Batch {
@@ -240,9 +241,9 @@ pub struct Batch {
     #[serde(rename = "projectId")]
     pub project_id: String,
     pub name: String,
-    /// 分支类型：feature/patch/release/hotfix。
+    /// 分支类型：feature/fix/patch/project/hotfix。
     pub kind: String,
-    /// 批的目标分支名（如 feature/batch-p01）。
+    /// 批的目标分支名（如 fix/v2.20260901/develop/锁号地址挂号异常问题）。
     pub branch: String,
     #[serde(rename = "baseBranch")]
     pub base_branch: String,
@@ -283,6 +284,10 @@ pub struct Batch {
         skip_serializing_if = "Option::is_none"
     )]
     pub worktree_path: Option<String>,
+    /// 该批是否另建 worktree。缺省（旧记录）为 true：改动前所有批次都带 worktree。
+    /// 必须始终序列化：新批次为 false 时要能被读回，否则会被反序列化成旧语义。
+    #[serde(rename = "useWorktree", default = "default_use_worktree")]
+    pub use_worktree: bool,
     /// worktree 所属 sub-repo 路径（多仓库工作区）。缺省视为项目根，向后兼容旧批次。
     #[serde(
         rename = "worktreeRepo",
@@ -297,6 +302,11 @@ pub struct Batch {
         skip_serializing_if = "Option::is_none"
     )]
     pub mr_source_sha: Option<String>,
+}
+
+/// 旧批次记录（字段缺失）一律按「有 worktree」读回——改动前创建的批次都带 worktree。
+fn default_use_worktree() -> bool {
+    true
 }
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
@@ -496,6 +506,7 @@ mod tests {
             mr_status: None,
             worktree_path: None,
             worktree_repo: None,
+            use_worktree: false,
             mr_source_sha: None,
         };
         let json = serde_json::to_string(&batch).unwrap();
@@ -507,6 +518,18 @@ mod tests {
         assert_eq!(back.status, "active");
         assert_eq!(back.additions, Some(312));
         assert_eq!(back.issue_serial_numbers, vec!["QHDK-29312"]);
+        // false 必须能被序列化并读回，否则「不建 worktree」的批会被读成旧语义。
+        assert!(!back.use_worktree);
+    }
+
+    #[test]
+    fn batch_without_use_worktree_field_defaults_to_true() {
+        // 改动前落盘的记录没有 useWorktree 字段——那时批次都带 worktree，必须按 true 读回。
+        let legacy = r#"{"id":"b1","projectId":"p1","name":"n","kind":"feature",
+            "branch":"feature/x","baseBranch":"develop","targetBranch":"develop",
+            "taskIds":[],"status":"active","createdAt":1}"#;
+        let batch: Batch = serde_json::from_str(legacy).unwrap();
+        assert!(batch.use_worktree);
     }
 
     #[test]

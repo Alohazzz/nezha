@@ -119,18 +119,20 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
-/** 分支批的分支类型：feature=日常开发（自 develop 拉），patch=现场响应，release=上线验收，hotfix=补丁容器。 */
-export type BranchKind = "feature" | "patch" | "release" | "hotfix";
+/** 分支批的分支类型：feature=日常开发（自 develop 拉），fix=缺陷修复，patch=现场响应，
+ *  project=上线验收/项目分支，hotfix=补丁容器。 */
+export type BranchKind = "feature" | "fix" | "patch" | "project" | "hotfix";
 
-/** 分支批 = 一个可独立验收的 PR（一个批对应一个分支 + 一个 worktree，批内任务顺序共用）。 */
+/** 分支批 = 一个可独立验收的 PR（一个批对应一个分支，批内任务顺序共用）。
+ *  默认只在主工作区切出批分支；选择另建 worktree 才有独立代码目录。 */
 export interface BranchBatch {
   id: string;
   projectId: string;
   name: string;
   kind: BranchKind;
-  /** 批的目标分支名（如 feature/batch-p01）。 */
+  /** 批的目标分支名（如 fix/v2.20260901/develop/锁号地址挂号异常问题）。 */
   branch: string;
-  /** 基础分支（如 develop / release/<v> / master 的 tag），worktree 与分支由此创建。 */
+  /** 基础分支（如 develop / master 的 tag），分支由此切出。 */
   baseBranch: string;
   /** 合并回的目标分支（通常为 develop 或 master）。 */
   targetBranch: string;
@@ -155,6 +157,8 @@ export interface BranchBatch {
   worktreePath?: string;
   /** worktree 所属 sub-repo 路径（多仓库工作区）。 */
   worktreeRepo?: string;
+  /** 该批是否另建 worktree；false（默认）表示批分支就在主工作区里。 */
+  useWorktree?: boolean;
   /** 列表实时探测：未关闭批次的工作树下缺少运行程序目录（`_run`）时为 true，仅提示不落盘。 */
   runRootMissing?: boolean;
   /** 列表实时探测：未关闭批次的 worktree 目录缺失时为 true，仅提示不落盘。 */

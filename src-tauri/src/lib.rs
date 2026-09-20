@@ -477,6 +477,7 @@ pub fn run() {
             storage::load_project_plans,
             storage::save_project_plans,
             batch::create_branch_batch,
+            batch::preview_branch_batch_branch,
             batch::list_branch_batches,
             batch::get_branch_batch,
             batch::close_branch_batch,

@@ -6,6 +6,7 @@ import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
 import { rpRootStyle } from "../../styles/right-panel";
 import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
 import { SubmitMrDialog } from "./SubmitMrDialog";
+import { batchScopeKey } from "./worktreeScope";
 
 const STATUS_LABEL: Record<BranchBatchStatus, string> = {
   draft: "草稿",
@@ -72,19 +73,14 @@ export function BranchBatchView({
     void load(projectId);
   }, [projectId, load]);
 
-  const batchWorktreePath = useCallback((batch: BranchBatch) => {
-    return batch.worktreePath ?? `${projectPath}/.nezha/worktrees/${batch.id}`;
-  }, [projectPath]);
-
-  /** 仅展示当前选中 worktree 对应的批（一个批最多一条）。 */
+  /** 仅展示当前选中作用域对应的批（无 worktree 的批归主检出）。 */
   const scopedBatches = useMemo(
     () =>
       batches.filter((b) => {
         if (b.worktreeMissing) return false;
-        if (!worktreeScope) return false;
-        return batchWorktreePath(b) === worktreeScope;
+        return batchScopeKey(b, projectPath) === worktreeScope;
       }),
-    [batches, worktreeScope, batchWorktreePath],
+    [batches, worktreeScope, projectPath],
   );
 
   /** 失效批次不出现在 selector，但仍保留清理入口，避免记录变成不可达的孤儿数据。 */
@@ -132,7 +128,10 @@ export function BranchBatchView({
 
   const canSubmit = (batch: BranchBatch) => batch.status === "active";
 
-  const renderBatchCard = (batch: BranchBatch, missing = false) => (
+  const renderBatchCard = (batch: BranchBatch, missing = false) => {
+    // 无 worktree 的批分支就在主检出里，只有「打开」的落点不同。
+    const inMainCheckout = batch.useWorktree === false;
+    return (
     <div key={batch.id} className="pr-card">
       <div className="pr-card-head">
         <span className="pr-card-title">{batch.name}</span>
@@ -140,6 +139,7 @@ export function BranchBatchView({
           {STATUS_LABEL[batch.status]}
         </span>
         <span className="pr-badge">{batch.kind}</span>
+        {inMainCheckout && <span className="pr-badge">主检出</span>}
         {missing && <span className="pr-badge" data-tone="warn">WorkTree 缺失</span>}
         {batch.runRootMissing && <span className="pr-badge" data-tone="warn">运行程序缺失</span>}
         {batch.status !== "merged" &&
@@ -166,6 +166,7 @@ export function BranchBatchView({
           className="rp-btn"
           disabled={missing || busyId === batch.id}
           onClick={() => void handleOpen(batch)}
+          title={inMainCheckout ? "打开仓库主工作区" : undefined}
         >
           <FolderOpen size={13} />
           打开
@@ -187,11 +188,12 @@ export function BranchBatchView({
           onClick={() => void handleDelete(batch)}
         >
           <Trash2 size={13} />
-          删除 WorkTree
+          {inMainCheckout ? "删除批次" : "删除 WorkTree"}
         </button>
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="rp-root" style={rpRootStyle(width)}>
@@ -217,7 +219,11 @@ export function BranchBatchView({
 
       <div className="pr-body">
         {scopedBatches.length === 0 && (
-          <div className="rp-empty">当前 worktree 无关联 PR，点击「新建 PR」创建。</div>
+          <div className="rp-empty">
+            {worktreeScope
+              ? "当前 worktree 无关联 PR，点击「新建 PR」创建。"
+              : "主检出下暂无关联 PR，点击「新建 PR」创建。"}
+          </div>
         )}
         {scopedBatches.map((batch) => renderBatchCard(batch))}
 
@@ -239,7 +245,7 @@ export function BranchBatchView({
           tasks={tasks}
           onCreated={(batch) => {
             setBatches((prev) => [...prev, batch]);
-            onScopeChange(batchWorktreePath(batch));
+            onScopeChange(batchScopeKey(batch, projectPath));
           }}
           onClose={() => setShowCreate(false)}
         />

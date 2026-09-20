@@ -11,7 +11,7 @@ use crate::git::{
 };
 use crate::storage::{load_project_batches, load_project_tasks, save_project_batches, Batch};
 
-const VALID_KINDS: &[&str] = &["feature", "patch", "release", "hotfix"];
+const VALID_KINDS: &[&str] = &["feature", "fix", "patch", "project", "hotfix"];
 
 /// 仅 hotfix 是“只挑拣、不开发、不向上合并”的补丁容器，其余类型都可合并到目标分支。
 pub(crate) fn merge_allows_kind(kind: &str) -> bool {
@@ -56,21 +56,69 @@ fn sanitize_branch_slug(input: &str) -> String {
     }
 }
 
-/// 按分支类型与批名生成目标分支名（如 feature/batch-p01、hotfix/2.5.1-xxx）。
-pub(crate) fn batch_branch_name(kind: &str, name: &str) -> String {
+/// 版本段判据：`v`/`V` 开头且紧跟数字（如 `v2.20260901` / `v20260501.41`）。
+///
+/// 生成的版本段必须满足它，否则「待发起」解析端（`pending_mr::is_version_like`）不会把
+/// 这一段当版本跳过，目标分支段就会被错认成版本，目标推断随之失败。
+fn is_version_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
+    matches!(chars.next(), Some('v' | 'V')) && chars.next().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// 按「类型 / 版本 / 目标分支 / 批名」生成分支名。
+///
+/// 对齐 HIS 仓库的分支命名规范 `<type>/<版本>/<目标分支>/<简短描述>`：
+/// `fix/v2.20260901/develop/锁号地址挂号异常问题`。
+/// 版本段为空（或被清洗掉）时整段省略，回落 `feature/develop/<slug>`。
+pub(crate) fn batch_branch_name(kind: &str, version: &str, target: &str, name: &str) -> String {
     let prefix = match kind {
+        "fix" => "fix",
         "patch" => "patch",
-        "release" => "release",
+        "project" => "project",
         "hotfix" => "hotfix",
         _ => "feature",
     };
-    let slug = sanitize_branch_slug(name);
+    // sanitize_branch_slug 对空串返回 "batch"，用该哨兵值把空段整体丢掉。
+    let version = sanitize_branch_slug(version);
+    let target = sanitize_branch_slug(target);
     // 名过长时截断，避免分支名超 git 限制；保留足够可读前缀。
-    let slug: String = slug.chars().take(48).collect();
-    format!("{prefix}/{slug}")
+    let slug: String = sanitize_branch_slug(name).chars().take(48).collect();
+
+    let mut out = prefix.to_string();
+    if version != "batch" && is_version_segment(&version) {
+        out.push('/');
+        out.push_str(&version);
+    }
+    // 目标段恒有：target_branch 是必填项，清洗后为空说明传了空白，此时才退回省略。
+    if target != "batch" {
+        out.push('/');
+        out.push_str(&target);
+    }
+    out.push('/');
+    out.push_str(&slug);
+    out
 }
 
-/// 创建分支批：校验入参 → 生成分支名 → 建 worktree/分支 → 落盘到 batches.json。
+/// 分支名预览：与 `create_branch_batch` 生成逻辑同源，供对话框实时显示。
+#[tauri::command]
+pub fn preview_branch_batch_branch(
+    kind: String,
+    version: Option<String>,
+    target_branch: Option<String>,
+    name: String,
+) -> String {
+    batch_branch_name(
+        kind.trim(),
+        version.as_deref().unwrap_or(""),
+        target_branch.as_deref().unwrap_or(""),
+        &name,
+    )
+}
+
+/// 创建分支批：校验入参 → 生成分支名 → 建分支（可选建 worktree）→ 落盘到 batches.json。
+///
+/// `use_worktree` 缺省 **false**：只在主工作区把分支切出来（`git checkout -b`），任务用
+/// 「本地处理」模式在项目根跑，提交自然落在批分支上。需要并行隔离时才置 true 另建 worktree。
 #[tauri::command]
 pub async fn create_branch_batch(
     project_path: String,
@@ -88,6 +136,10 @@ pub async fn create_branch_batch(
     worktree_dir: Option<String>,
     // 议题编号列表（commit 门禁与 MR 关联用）；多议题联合方案生成待办时传入。
     issue_serial_numbers: Option<Vec<String>>,
+    // 分支名里的版本段（取自云效版本，如 `v2.20260901`）；空则不生成版本段。
+    version: Option<String>,
+    // 是否另建 worktree；缺省 false = 在主工作区直接切分支。
+    use_worktree: Option<bool>,
 ) -> Result<Batch, String> {
     if id.trim().is_empty() {
         return Err("Batch id is required".to_string());
@@ -102,13 +154,15 @@ pub async fn create_branch_batch(
     if base_branch.trim().is_empty() || target_branch.trim().is_empty() {
         return Err("baseBranch and targetBranch are required".to_string());
     }
+    let use_worktree = use_worktree.unwrap_or(false);
 
+    let version = version.unwrap_or_default();
     let branch = source_branch
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| batch_branch_name(&kind, &name));
+        .unwrap_or_else(|| batch_branch_name(&kind, &version, target_branch.trim(), &name));
     if branch == target_branch.trim() {
         return Err("源分支不能与目标分支相同".to_string());
     }
@@ -129,75 +183,116 @@ pub async fn create_branch_batch(
         return Err("远端不存在此分支，请改名后重新创建".to_string());
     }
 
-    // 计划路径：创建者选的目录优先，缺省回落配置基路径 / 共享 hub / 项目内默认。
-    let worktree_path = match worktree_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(dir) => PathBuf::from(dir).join(&id),
-        None => worktree_base_dir(&project_path, &cwd).join(&id),
+    // 计划路径（仅 use_worktree 时用）：创建者选的目录优先，缺省回落配置基路径 / 共享 hub / 项目内默认。
+    let worktree_path = if use_worktree {
+        let path = match worktree_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(dir) => PathBuf::from(dir).join(&id),
+            None => worktree_base_dir(&project_path, &cwd).join(&id),
+        };
+        if !path.is_absolute() {
+            return Err("代码目录必须是绝对路径".to_string());
+        }
+        Some(path)
+    } else {
+        None
     };
-    if !worktree_path.is_absolute() {
-        return Err("代码目录必须是绝对路径".to_string());
-    }
-    let worktree_str = path_to_string(&worktree_path)?;
     let owner_repo = repo_path.clone().or_else(|| Some(cwd.clone()));
 
     // 阻塞的 git 创建与文件落盘统一放到 spawn_blocking，避免占用 Tokio 运行时。
     // 建成功才落盘批次记录；git 失败就地回滚，不留半态记录。
     tokio::task::spawn_blocking(move || -> Result<Batch, String> {
-        // 确保落盘父目录存在。
-        if let Some(parent) = worktree_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
-        }
-        if worktree_path.exists() {
-            return Err(format!(
-                "Worktree path already exists: {}",
-                worktree_path.display()
-            ));
-        }
-        let output = if use_existing_remote {
-            let fetch = run_git(&cwd, &["fetch", "origin", &branch])?;
-            if !fetch.status.success() {
-                return Err(String::from_utf8_lossy(&fetch.stderr).trim().to_string());
+        let worktree_str = if use_worktree {
+            let worktree_path = worktree_path.expect("worktree path resolved when use_worktree");
+            // 确保落盘父目录存在。
+            if let Some(parent) = worktree_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
             }
-            run_git(
-                &cwd,
-                &[
-                    "worktree",
-                    "add",
-                    "--track",
-                    "-b",
-                    &branch,
-                    &worktree_str,
-                    &format!("origin/{branch}"),
-                ],
-            )?
+            if worktree_path.exists() {
+                return Err(format!(
+                    "Worktree path already exists: {}",
+                    worktree_path.display()
+                ));
+            }
+            let worktree_str = path_to_string(&worktree_path)?;
+            let output = if use_existing_remote {
+                let fetch = run_git(&cwd, &["fetch", "origin", &branch])?;
+                if !fetch.status.success() {
+                    return Err(String::from_utf8_lossy(&fetch.stderr).trim().to_string());
+                }
+                run_git(
+                    &cwd,
+                    &[
+                        "worktree",
+                        "add",
+                        "--track",
+                        "-b",
+                        &branch,
+                        &worktree_str,
+                        &format!("origin/{branch}"),
+                    ],
+                )?
+            } else {
+                run_git(
+                    &cwd,
+                    &[
+                        "worktree",
+                        "add",
+                        "-b",
+                        &branch,
+                        &worktree_str,
+                        &base_branch,
+                    ],
+                )?
+            };
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                // 回滚：worktree add 失败可能已创建分支 ref 或半成品目录。
+                if worktree_path.is_dir() {
+                    let _ = run_git(&cwd, &["worktree", "remove", "--force", &worktree_str]);
+                }
+                let _ = run_git(&cwd, &["worktree", "prune"]);
+                let _ = run_git(&cwd, &["branch", "-D", &branch]);
+                return Err(err);
+            }
+            Some(worktree_str)
         } else {
-            run_git(
-                &cwd,
-                &[
-                    "worktree",
-                    "add",
-                    "-b",
-                    &branch,
-                    &worktree_str,
-                    &base_branch,
-                ],
-            )?
-        };
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // 回滚：worktree add 失败可能已创建分支 ref 或半成品目录。
-            if worktree_path.is_dir() {
-                let _ = run_git(&cwd, &["worktree", "remove", "--force", &worktree_str]);
+            // 不建 worktree：在主工作区把分支切出来，任务与提交都落在该分支上。
+            let output = if use_existing_remote {
+                let fetch = run_git(&cwd, &["fetch", "origin", &branch])?;
+                if !fetch.status.success() {
+                    return Err(String::from_utf8_lossy(&fetch.stderr).trim().to_string());
+                }
+                run_git(
+                    &cwd,
+                    &[
+                        "checkout",
+                        "-b",
+                        &branch,
+                        "--track",
+                        &format!("origin/{branch}"),
+                    ],
+                )?
+            } else {
+                run_git(&cwd, &["checkout", "-b", &branch, &base_branch])?
+            };
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                // 工作区脏 / 分支被占用是最常见的两类失败，给出可操作的中文提示。
+                let lower = err.to_lowercase();
+                if lower.contains("local changes") || lower.contains("would be overwritten") {
+                    return Err(
+                        "主工作区存在未提交改动，无法切换分支；请先提交或暂存后再创建".to_string(),
+                    );
+                }
+                return Err(format!("在主工作区创建分支失败：{err}"));
             }
-            let _ = run_git(&cwd, &["worktree", "prune"]);
-            let _ = run_git(&cwd, &["branch", "-D", &branch]);
-            return Err(err);
-        }
+            None
+        };
 
         let batch = Batch {
             id,
@@ -216,8 +311,9 @@ pub async fn create_branch_batch(
             issue_serial_numbers: issue_serial_numbers.unwrap_or_default(),
             mr_id: None,
             mr_status: None,
-            worktree_path: Some(worktree_str.clone()),
-            worktree_repo: owner_repo,
+            worktree_path: worktree_str.clone(),
+            worktree_repo: worktree_str.as_ref().and(owner_repo),
+            use_worktree,
             mr_source_sha: None,
         };
         let mut batches = load_project_batches(project_id.clone())?;
@@ -254,14 +350,20 @@ pub async fn list_branch_batches(
             .into_iter()
             .map(|b| {
                 let is_open = b.status != "merged" && b.status != "closed";
-                let worktree_path = match b.worktree_path.as_deref() {
-                    Some(path) => PathBuf::from(path),
-                    None => match project_path.as_deref() {
-                        Some(path) if !path.trim().is_empty() => {
-                            Path::new(path).join(".nezha").join("worktrees").join(&b.id)
-                        }
-                        _ => PathBuf::new(),
-                    },
+                // 未启用 worktree 的批没有代码目录，「缺失」判定对它不成立（否则主工作区批次
+                // 会全部被误标「WorkTree 缺失」并被 selector 隐藏）。
+                let worktree_path = if b.use_worktree {
+                    match b.worktree_path.as_deref() {
+                        Some(path) => PathBuf::from(path),
+                        None => match project_path.as_deref() {
+                            Some(path) if !path.trim().is_empty() => {
+                                Path::new(path).join(".nezha").join("worktrees").join(&b.id)
+                            }
+                            _ => PathBuf::new(),
+                        },
+                    }
+                } else {
+                    PathBuf::new()
                 };
                 let run_root_missing = is_open
                     && !worktree_path.as_os_str().is_empty()
@@ -313,8 +415,11 @@ pub struct MergeBatchResult {
     pub batch: Batch,
 }
 
-/// 合并分支批到目标分支（复用 worktree 合并），成功后自动关批并删除 worktree/分支。
-/// 批 = 一个分支 + 一个 worktree，故 worktree 路径由批 id 推导。
+/// 合并分支批到目标分支（复用 worktree 合并），成功后自动关批并清理分支。
+///
+/// 启用 worktree 的批：合并后删除 worktree 与本地分支。
+/// 未启用 worktree 的批：分支在主工作区里，先切回目标分支再删除批分支；工作区脏导致
+/// 切不回去时保留分支（批已关闭，分支留待人工处理）。
 #[tauri::command]
 pub async fn merge_branch_batch(
     project_path: String,
@@ -333,7 +438,6 @@ pub async fn merge_branch_batch(
         ));
     }
     let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
-    let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str.clone());
     let effective_repo = batch.worktree_repo.clone().or(repo_path.clone());
     let message = crate::git::merge_task_worktree(
         project_path.clone(),
@@ -344,11 +448,30 @@ pub async fn merge_branch_batch(
         None,
     )
     .await?;
-    // 合并成功后自动关批（status = merged）并删除 worktree/分支。
+    // 合并成功后自动关批（status = merged）。
     let closed = close_branch_batch(project_id.clone(), batch_id, true)?;
-    let _ =
-        crate::git::remove_task_worktree(project_path, effective_repo, worktree_path, batch.branch)
-            .await;
+    if batch.use_worktree {
+        let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
+        let _ = crate::git::remove_task_worktree(
+            project_path,
+            effective_repo,
+            worktree_path,
+            batch.branch,
+        )
+        .await;
+    } else {
+        // 无 worktree：主工作区 HEAD 仍停在批分支上，先切回目标分支再删批分支。
+        let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
+        let branch = batch.branch.clone();
+        let target = batch.target_branch.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = run_git(&cwd, &["checkout", &target]);
+            let _ = run_git(&cwd, &["branch", "-D", &branch]);
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| format!("Cleanup batch branch panicked: {e}"))??;
+    }
     Ok(MergeBatchResult {
         message,
         batch: closed,
@@ -401,7 +524,7 @@ pub async fn check_branch_batch_branch(
     })
 }
 
-/// 打开 PR worktree（专用命令，用 projectId+batchId 找持久化/兼容路径，放宽项目外共享 hub 限制的同时做路径校验）。
+/// 打开批次代码目录：启用 worktree 的批打开 worktree 目录，否则打开仓库（主工作区）根。
 #[tauri::command]
 pub async fn open_branch_batch_worktree(
     project_path: String,
@@ -413,11 +536,16 @@ pub async fn open_branch_batch_worktree(
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "Batch not found".to_string())?;
     let worktree_str = legacy_batch_worktree_path(&project_path, &batch_id)?;
-    let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
+    let target_path = if batch.use_worktree {
+        batch.worktree_path.clone().unwrap_or(worktree_str)
+    } else {
+        // 无 worktree：批分支就在主工作区里，打开仓库根。
+        resolve_repo_path(&project_path, batch.worktree_repo.as_deref()).await?
+    };
 
-    let target = Path::new(&worktree_path)
+    let target = Path::new(&target_path)
         .canonicalize()
-        .map_err(|e| format!("无法解析 worktree 路径: {e}"))?;
+        .map_err(|e| format!("无法解析目录路径: {e}"))?;
     let target_str = target.to_string_lossy().to_string();
     crate::fs::open_in_system_file_manager(target_str.clone(), target_str).await
 }
@@ -452,7 +580,8 @@ pub async fn delete_branch_batch(
     }
 
     // 2) 未合并提交 / MR 状态 / 脏文件校验
-    let worktree_exists = Path::new(&worktree_path).is_dir();
+    //   未启用 worktree 的批没有代码目录，脏文件判定改由主工作区负责，这里跳过。
+    let worktree_exists = batch.use_worktree && Path::new(&worktree_path).is_dir();
     if worktree_exists {
         if let Some(dirty) = worktree_dirty_reason(&worktree_path)? {
             return Err(format!("worktree 仍有未提交内容，请先处理：{dirty}"));
@@ -547,11 +676,28 @@ pub async fn delete_branch_batch(
     let wt = worktree_path.clone();
     let cwd2 = cwd.clone();
     let branch_name = batch.branch.clone();
+    let use_worktree = batch.use_worktree;
+    let target_branch = batch.target_branch.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        if Path::new(&wt).is_dir() {
+        if use_worktree && Path::new(&wt).is_dir() {
             let _ = run_git(&cwd2, &["worktree", "remove", "--force", &wt]);
+            let _ = run_git(&cwd2, &["worktree", "prune"]);
         }
-        let _ = run_git(&cwd2, &["worktree", "prune"]);
+        if !use_worktree {
+            // 无 worktree：分支可能正被主工作区检出，先切回目标分支才能删除。
+            let head = run_git(&cwd2, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            let current = String::from_utf8_lossy(&head.stdout).trim().to_string();
+            if current == branch_name {
+                let checkout = run_git(&cwd2, &["checkout", &target_branch])?;
+                if !checkout.status.success() {
+                    return Err(format!(
+                        "主工作区仍检出在批分支上且无法切回 {}（可能有未提交改动），请处理后重试：{}",
+                        target_branch,
+                        String::from_utf8_lossy(&checkout.stderr).trim()
+                    ));
+                }
+            }
+        }
         let branch_out = run_git(&cwd2, &["branch", "-D", &branch_name])?;
         if !branch_out.status.success() {
             let err = String::from_utf8_lossy(&branch_out.stderr)
@@ -606,25 +752,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn branch_name_generates_feature_prefix() {
+    fn branch_name_follows_his_type_version_target_desc_shape() {
         assert_eq!(
-            batch_branch_name("feature", "门诊挂号优化"),
-            "feature/门诊挂号优化"
+            batch_branch_name("fix", "v2.20260901", "develop", "锁号地址挂号异常问题"),
+            "fix/v2.20260901/develop/锁号地址挂号异常问题"
         );
         assert_eq!(
-            batch_branch_name("feature", "batch p01"),
-            "feature/batch-p01"
+            batch_branch_name("feature", "v2.20260501.44", "develop", "腾冲协同接口调试"),
+            "feature/v2.20260501.44/develop/腾冲协同接口调试"
+        );
+        assert_eq!(
+            batch_branch_name("project", "v2.20260501.20", "master", "富民上线开发分支"),
+            "project/v2.20260501.20/master/富民上线开发分支"
+        );
+    }
+
+    #[test]
+    fn branch_name_always_carries_the_target_segment() {
+        // 目标段不再可选：只要传了目标分支就带出（含无版本时的形态）。
+        assert_eq!(
+            batch_branch_name("feature", "", "develop", "门诊挂号优化"),
+            "feature/develop/门诊挂号优化"
+        );
+        assert_eq!(
+            batch_branch_name("patch", "v2.20250901", "master", "HIS 现场"),
+            "patch/v2.20250901/master/his-现场"
+        );
+        // 目标段是空白（异常入参）时才退回省略，不让空段产生 `//`。
+        assert_eq!(
+            batch_branch_name("fix", "", "  ", "收费端"),
+            "fix/收费端"
+        );
+    }
+
+    #[test]
+    fn branch_name_drops_version_segment_unless_v_prefixed() {
+        // 版本段必须是 v+数字，否则整段丢弃（避免破坏「待发起」的目标分支推断）。
+        assert_eq!(
+            batch_branch_name("fix", "2.5.1", "develop", "收费端"),
+            "fix/develop/收费端"
         );
     }
 
     #[test]
     fn branch_name_respects_kind_prefix() {
-        assert_eq!(batch_branch_name("patch", "HIS 现场"), "patch/his-现场");
         assert_eq!(
-            batch_branch_name("hotfix", "2.5.1 收费端"),
-            "hotfix/2.5.1-收费端"
+            batch_branch_name("patch", "", "develop", "HIS 现场"),
+            "patch/develop/his-现场"
         );
-        assert_eq!(batch_branch_name("release", "v2.6.0"), "release/v2.6.0");
+        assert_eq!(
+            batch_branch_name("hotfix", "v2.20260901", "master", "收费端"),
+            "hotfix/v2.20260901/master/收费端"
+        );
+        assert_eq!(batch_branch_name("fix", "", "develop", "挂号"), "fix/develop/挂号");
     }
 
     #[test]
@@ -635,10 +815,11 @@ mod tests {
     }
 
     #[test]
-    fn merge_allows_feature_patch_release_but_not_pick_only_hotfix() {
+    fn merge_allows_feature_fix_patch_project_but_not_pick_only_hotfix() {
         assert!(merge_allows_kind("feature"));
+        assert!(merge_allows_kind("fix"));
         assert!(merge_allows_kind("patch"));
-        assert!(merge_allows_kind("release"));
+        assert!(merge_allows_kind("project"));
         assert!(!merge_allows_kind("hotfix"));
     }
 }
