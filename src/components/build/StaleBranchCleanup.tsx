@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AlertTriangle, GitBranch, Trash2, X } from "lucide-react";
@@ -100,6 +100,7 @@ function PruneConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const contentRef = useRef<HTMLDivElement>(null);
   const candidates = pending?.candidates ?? [];
   const visible = candidates.slice(0, MAX_CONFIRM_LINES);
   const hidden = candidates.length - visible.length;
@@ -113,7 +114,17 @@ function PruneConfirmDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay className="build-dialog-overlay" />
-        <Dialog.Content className="build-dialog" aria-describedby="build-dialog-lead">
+        <Dialog.Content
+          ref={contentRef}
+          className="build-dialog"
+          aria-describedby="build-dialog-lead"
+          // 焦点落在弹层容器本身：避免打开瞬间给关闭按钮画出一圈「被选中」的焦点环，
+          // 也避免回车直接命中删除按钮。Tab 照常进入按钮序列。
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            contentRef.current?.focus();
+          }}
+        >
           <div className="build-dialog-head">
             <span className="build-dialog-icon">
               <AlertTriangle size={15} />
@@ -131,7 +142,7 @@ function PruneConfirmDialog({
               <div key={`${c.repo}:${c.branch}`} className="build-dialog-item">
                 <span className="build-dialog-item-name">
                   <GitBranch size={11} />
-                  <span className="build-dialog-item-branch">{c.repo}</span>
+                  <span className="build-dialog-item-repo">{c.repo}</span>
                   <span className="build-dialog-item-sep">:</span>
                   <span className="build-dialog-item-branch">{c.branch}</span>
                 </span>

@@ -181,6 +181,11 @@
   animation: build-dialog-in 0.14s ease-out;
 }
 
+/* 弹层容器在打开时接住初始焦点（见 onOpenAutoFocus），它本身不可交互，不画焦点环 */
+.build-dialog:focus {
+  outline: none;
+}
+
 .build-dialog-head {
   display: flex;
   align-items: center;
@@ -271,28 +276,34 @@
   background: var(--bg-hover);
 }
 
+/* 仓库名 + 分支名走行内流：仓库名不可拆（不丢标识），分支名可任意折行；
+   放不下时整段分支自然换到下一行，而不是把某一侧压成省略号。 */
 .build-dialog-item-name {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
+  display: block;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--text-primary);
-  word-break: break-all;
 }
 
 .build-dialog-item-name svg {
-  flex-shrink: 0;
-  align-self: center;
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -1px;
   color: var(--text-hint);
 }
 
-.build-dialog-item-branch {
-  min-width: 0;
+.build-dialog-item-repo {
+  white-space: nowrap;
 }
 
+.build-dialog-item-branch {
+  word-break: break-all;
+}
+
+/* JSX 会吃掉落在新行之间的空格，分隔符两侧的间距由 margin 提供 */
 .build-dialog-item-sep {
+  margin: 0 4px;
   color: var(--text-hint);
 }
 
