@@ -221,6 +221,16 @@ export interface CodeupMr {
   worktreePath: string;
 }
 
+/** 合并代码审查的逐项判定（`.nezha/review-<mrId>.json`，与后端 ReviewFinding 对应）。 */
+export interface CodeupReviewFinding {
+  rule: string;
+  status: string;
+  path?: string;
+  startLine?: number;
+  endLine?: number;
+  message: string;
+}
+
 /** Codeup 仓库（欢迎页合并审核的仓库过滤下拉用）。 */
 export interface CodeupRepository {
   id: string;

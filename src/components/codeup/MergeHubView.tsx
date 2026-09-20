@@ -4,7 +4,7 @@ import { Send, Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-r
 import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import type { CodeupMr, CodeupRepository } from "../../types";
+import type { CodeupMr, CodeupRepository, CodeupReviewFinding } from "../../types";
 import s from "../../styles";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -127,24 +127,24 @@ export function MergeHubView({
         setNotice("请先拉取代码，再执行分支合并。");
         return;
       }
-      // 非阻塞安全网：若该 MR 当前审查报告存在 fail（阻止级）标记，弹一次确认提示。
+      // 非阻塞安全网：优先读逐项判定（`.nezha/review-<mrId>.json`）数真实 fail 数；
+      // 没有判定文件时（老报告或 Agent 未写出）不弹确认，避免对 Markdown 全文做正则误报。
       try {
-        const report = await invoke<string | null>("codeup_read_review_report", {
+        const findings = await invoke<CodeupReviewFinding[] | null>("codeup_read_review", {
           repository: mr.repository,
           mrId: String(mr.localId),
         });
-        if (report) {
-          const failCount = (report.match(/\bfail\b/gi) ?? []).length;
-          if (failCount > 0) {
-            const ok = await confirm(
-              `审查报告存在 ${failCount} 处 fail（阻止级）标记，仍要交给 Agent 合并？`,
-              { title: "合并确认", kind: "warning" },
-            );
-            if (!ok) return;
-          }
+        const failCount = (findings ?? []).filter((f) => f.status === "fail").length;
+        if (failCount > 0) {
+          const first = findings?.find((f) => f.status === "fail");
+          const ok = await confirm(
+            `审查判定存在 ${failCount} 处 fail（阻止级）标记${first?.rule ? `（如「${first.rule}」）` : ""}，仍要交给 Agent 合并？`,
+            { title: "合并确认", kind: "warning" },
+          );
+          if (!ok) return;
         }
       } catch {
-        // 读不到报告则不做额外确认，直接交给 Agent 合并。
+        // 读不到判定则不做额外确认，直接交给 Agent 合并。
       }
       setBusyId(mr.id);
       setBusyAction("merge");

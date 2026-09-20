@@ -1880,11 +1880,8 @@ pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), 
     };
     // 保留 `.nezha/pulled-<mrId>`：表示该 MR 已拉取过，清理后仍显示「已拉取」，避免每次都要重拉。
     // 真正发起审查/合并任务时，`codeup_pull_code` 仍会 fetch + checkout 最新代码，不影响新鲜度。
-    let _ = std::fs::remove_file(
-        Path::new(&root)
-            .join(".nezha")
-            .join(format!("review-{mr_id}.json")),
-    );
+    // 保留 `.nezha/review-<mrId>.json`（逐项判定）与 `.nezha/review-report-<mrId>.md`（总结报告）：
+    // 合并前的 fail 闸门要读逐项判定数真实 fail 数，这里不清，下次审查由 Agent 直接覆盖。
 
     // 合并/审查成功后自动清理该 MR 的临时 checkout：先脱离 `codeup-mr-<id>` 分支，
     // 再删除该分支，让共享文件夹不再残留该 MR 的工作区。保留 .git 克隆与 pulled 标记，

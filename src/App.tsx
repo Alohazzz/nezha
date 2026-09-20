@@ -1195,7 +1195,8 @@ function App() {
         `──── 代码审查（规则与输出由 \`merge-code-review\` 技能统一管理）────\n` +
         `请读取并遵循 \`merge-code-review\` 技能：\`~/.codex/skills/merge-code-review/SKILL.md\`（审查规范在 \`references/csharp-dev-manual.md\`）。对 \`git diff origin/${mr.targetBranch}...origin/${mr.sourceBranch}\` 的改动按技能规则逐项审查；读文件内容用 \`git show origin/${mr.sourceBranch}:<path>\`。\n` +
         `不要输出结构化 <REVIEW> JSON 数组。请汇总本次改动发现的全部问题，写出一份**对人可读的整体审查总结报告**：按规则分组、标注严重程度（warn/fail）、文件路径与行号、问题说明与修改建议，并在报告末尾给出「是否可合并」结论。\n` +
-        `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。`;
+        `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。\n` +
+        `同时把逐项判定写成 JSON 数组，写入当前工作区 \`.nezha/review-${mr.localId}.json\`（同样用相对路径）：每项形如 {"rule":"规则名","status":"pass|warn|fail","path":"文件相对路径","startLine":行号,"endLine":行号,"message":"原因/建议"}；每条审查规则至少一条判定，无问题的规则给 status=pass；status 只能取 pass/warn/fail。`;
     } else if (kind === "merge") {
       prompt =
         `你是 MR 合并助手。只使用 git 命令，不得调用平台/接口合并。\n` +
