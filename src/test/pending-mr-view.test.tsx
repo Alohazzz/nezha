@@ -145,6 +145,7 @@ describe("PendingMrView", () => {
         projectPath: "/workspace/HIS",
         repoFilter: "HIS",
         targetOverrides: null,
+        onlyBranches: null,
       }),
     );
   });
@@ -379,5 +380,113 @@ describe("PendingMrView", () => {
     mockList([scan([candidate({ branch: "mine/develop/x", mine: false })])]);
     await renderAndSelectRepo();
     expect(await screen.findByText("mine/develop/x")).toBeInTheDocument();
+  });
+
+  it("only enables 发起合并请求 for pushed branches with unmerged commits", async () => {
+    mockList([
+      scan([
+        candidate({ branch: "feature/develop/todo", unmerged: 2 }),
+        // 已收尾的分支可删但不可发起——两类动作共用勾选，计数按各自属性区分。
+        candidate({
+          branch: "merged/v2/develop/QHDK-9",
+          unmerged: 0,
+          mergeState: "merged",
+          mergedInto: "develop",
+          deletable: true,
+        }),
+      ]),
+    ]);
+    await renderAndSelectRepo();
+    await screen.findByText("feature/develop/todo");
+
+    const createBtn = screen.getByRole("button", { name: /发起合并请求/ });
+    expect(createBtn).toBeDisabled();
+
+    // 勾已收尾分支：可删计数 +1，但不可发起。
+    fireEvent.click(screen.getByLabelText("merged/v2/develop/QHDK-9"));
+    expect(screen.getByRole("button", { name: /发起合并请求/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /删除远端分支/ })).toBeEnabled();
+
+    // 勾上未合并分支后发起才启用。
+    fireEvent.click(screen.getByLabelText("feature/develop/todo"));
+    expect(screen.getByRole("button", { name: /发起合并请求/ })).toBeEnabled();
+  });
+
+  it("prefills reviewers from the target-branch managers and creates MRs in one batch", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "list_branch_pr_repos") {
+        return Promise.resolve([{ name: "HIS", path: "/workspace/HIS" }]);
+      }
+      if (command === "list_branch_pr_candidates") {
+        return Promise.resolve([scan([candidate({ branch: "feature/develop/todo", unmerged: 2 })])]);
+      }
+      if (command === "codeup_branch_managers") return Promise.resolve(["张三", "李四"]);
+      if (command === "codeup_create_mrs_batch") {
+        return Promise.resolve([
+          {
+            repo: "HIS",
+            repoPath: "/workspace/HIS",
+            sourceBranch: "feature/develop/todo",
+            targetBranch: "develop",
+            created: true,
+            mrId: "abc",
+            mrLocalId: 3528,
+            reason: "已发起合并请求（feature/develop/todo → develop）",
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+    await renderAndSelectRepo();
+    await screen.findByText("feature/develop/todo");
+
+    fireEvent.click(screen.getByLabelText("feature/develop/todo"));
+    fireEvent.click(screen.getByRole("button", { name: /发起合并请求/ }));
+
+    // 确认弹层列出分支与目标分支，且审核人已按目标分支管理人员预填。
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("feature/develop/todo");
+    expect(dialog.textContent).toContain("目标分支 develop");
+    const textarea = await screen.findByPlaceholderText(/如：张三/);
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe("张三, 李四"));
+
+    fireEvent.click(screen.getByRole("button", { name: /发起 1 个合并请求/ }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("codeup_create_mrs_batch", {
+        projectPath: "/workspace/HIS",
+        items: [
+          {
+            repoPath: "/workspace/HIS",
+            repo: "HIS",
+            sourceBranch: "feature/develop/todo",
+            targetBranch: "develop",
+            reviewers: ["张三", "李四"],
+          },
+        ],
+      });
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByText(/✓ 已发起 HIS:feature\/develop\/todo #3528/)).toBeInTheDocument();
+  });
+
+  it("rescans only the changed branch when the target branch is switched", async () => {
+    mockList([scan([candidate({ branch: "feature/develop/todo", unmerged: 2 })])]);
+    await renderAndSelectRepo();
+    await screen.findByText("feature/develop/todo");
+    invokeMock.mockClear();
+
+    // 打开行内目标分支下拉，改选 master。
+    fireEvent.click(screen.getByRole("combobox", { name: /develop/ }));
+    fireEvent.click(await screen.findByRole("option", { name: "master" }));
+
+    // 关键契约：只重算被改的那一条（onlyBranches），且覆盖值随请求发回后端参与判定。
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("list_branch_pr_candidates", {
+        projectPath: "/workspace/HIS",
+        repoFilter: "HIS",
+        targetOverrides: { "feature/develop/todo": "master" },
+        onlyBranches: ["feature/develop/todo"],
+      }),
+    );
   });
 });

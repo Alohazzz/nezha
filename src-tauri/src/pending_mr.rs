@@ -736,12 +736,17 @@ fn discover_repo_refs_blocking(project_path: &str) -> Result<Vec<BranchRepoRef>,
 /// `overrides`：用户在行内手动指定的目标分支（`分支名 → 目标分支`）。这些值优先级最高，
 /// 且**会参与所有判定**（未合并数、合并三态、可删性），保证徽标与「N 项可删」计数始终
 /// 与用户看到的目标分支一致——否则改完目标分支后，行上仍显示按旧目标算出的合并状态。
+///
+/// `only_branches`：只评估这些分支（`None` = 全部）。行内改目标分支时前端会带上被改的那一条，
+/// 把「一次切换 = 全仓库上百个 git 子进程」收敛成一个分支的固定开销。`known_branches` 仍取
+/// 全量——目标分支推断要靠它判断某个命名段是不是真实分支。
 fn scan_repo_blocking(
     repo_name: &str,
     repo_path: &str,
     config_default: &str,
     overrides: &HashMap<String, String>,
     platform: Option<&RepoPlatform>,
+    only_branches: Option<&HashSet<String>>,
 ) -> BranchRepoScan {
     let mut scan = BranchRepoScan {
         name: repo_name.to_string(),
@@ -765,6 +770,16 @@ fn scan_repo_blocking(
         return scan;
     }
     let known_branches: HashSet<String> = branches.iter().map(|b| b.name.clone()).collect();
+    let branches: Vec<BranchMeta> = match only_branches {
+        Some(only) => branches
+            .into_iter()
+            .filter(|b| only.contains(&b.name))
+            .collect(),
+        None => branches,
+    };
+    if branches.is_empty() {
+        return scan;
+    }
 
     // 目标分支可能不止一条（用户覆盖 / 配置项 / 命名推断），先把不同的目标各 fetch 一次；
     // 此后所有比较都用 origin/<target>，避免拿陈旧本地 ref 做结论。
@@ -826,6 +841,7 @@ pub async fn list_branch_pr_candidates(
     project_path: String,
     repo_filter: Option<String>,
     target_overrides: Option<HashMap<String, String>>,
+    only_branches: Option<Vec<String>>,
 ) -> Result<Vec<BranchRepoScan>, String> {
     let repos = {
         let project_path = project_path.clone();
@@ -848,6 +864,11 @@ pub async fn list_branch_pr_candidates(
     let platforms = fetch_platform_data(&repos).await;
 
     let overrides = target_overrides.unwrap_or_default();
+    // 只评估指定分支（行内改目标分支时用）：空 Vec 视为「没指定」而不是「评估零个分支」，
+    // 否则前端传空数组会把整个列表清空。
+    let only: Option<HashSet<String>> = only_branches
+        .filter(|v| !v.is_empty())
+        .map(|v| v.into_iter().collect());
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<BranchRepoScan>, String> {
         // 默认目标分支只在项目配置里（可空）。
         let config_default = crate::config::read_project_config(project_path)
@@ -862,6 +883,7 @@ pub async fn list_branch_pr_candidates(
                     &config_default,
                     &overrides,
                     platforms.get(path),
+                    only.as_ref(),
                 )
             })
             .collect())
@@ -1183,7 +1205,7 @@ mod tests {
 
     /// 平台不可用、无行内覆盖时的扫描（回落 git 侧受保护口径）。
     fn scan(repo: &TempRepo, config_default: &str) -> BranchRepoScan {
-        scan_repo_blocking("HIS", repo.dir(), config_default, &HashMap::new(), None)
+        scan_repo_blocking("HIS", repo.dir(), config_default, &HashMap::new(), None, None)
     }
 
     /// 带用户目标分支覆盖的扫描。
@@ -1192,7 +1214,7 @@ mod tests {
         config_default: &str,
         overrides: &HashMap<String, String>,
     ) -> BranchRepoScan {
-        scan_repo_blocking("HIS", repo.dir(), config_default, overrides, None)
+        scan_repo_blocking("HIS", repo.dir(), config_default, overrides, None, None)
     }
 
     fn known(names: &[&str]) -> HashSet<String> {
@@ -1273,6 +1295,37 @@ mod tests {
         assert_eq!(item.target_source, TargetSource::User);
         assert_eq!(item.merge_state, MergeState::Unmerged);
         assert!(!item.deletable, "按新目标分支判定后不可删除");
+    }
+
+    // 增量扫描：只评估指定分支。行内改目标分支只重算那一条，结果必须与全量扫描一致——
+    // 否则前端「只重算一个分支」的提速会以结论不一致为代价。
+    #[test]
+    fn only_branches_limits_evaluation_without_changing_verdicts() {
+        let (repo, _origin) = repo_with_origin();
+        write_commit(&repo, "feature/develop/one", "one.txt", "1");
+        repo.git(&["push", "-u", "origin", "feature/develop/one"]);
+        write_commit(&repo, "feature/develop/two", "two.txt", "2");
+        repo.git(&["push", "-u", "origin", "feature/develop/two"]);
+        repo.git(&["checkout", "develop"]);
+
+        // 全量：两条都在。
+        let full = scan(&repo, "");
+        assert!(full.branches.iter().any(|b| b.branch == "feature/develop/one"));
+        assert!(full.branches.iter().any(|b| b.branch == "feature/develop/two"));
+
+        // 增量：只回被指定的那一条，且结论与全量一致。
+        let only: HashSet<String> = ["feature/develop/two".to_string()].into_iter().collect();
+        let partial =
+            scan_repo_blocking("HIS", repo.dir(), "", &HashMap::new(), None, Some(&only));
+        let names: Vec<&str> = partial.branches.iter().map(|b| b.branch.as_str()).collect();
+        assert_eq!(names, vec!["feature/develop/two"]);
+        let picked = branch_of(&partial, "feature/develop/two");
+        let reference = branch_of(&full, "feature/develop/two");
+        assert_eq!(picked.unmerged, reference.unmerged);
+        assert_eq!(picked.merge_state, reference.merge_state);
+        assert_eq!(picked.target_branch, reference.target_branch);
+        // 目标分支的推断要用**全量**分支名做 known_branches，不能因过滤而失效。
+        assert_eq!(picked.target_source, TargetSource::Name);
     }
 
     // 「我的提交」判据：多作者分支里只要有本人的提交即算「我的」。
@@ -1450,7 +1503,7 @@ mod tests {
             mr_ok: true,
             ..Default::default()
         };
-        let scan = scan_repo_blocking("HIS", repo.dir(), "", &HashMap::new(), Some(&platform));
+        let scan = scan_repo_blocking("HIS", repo.dir(), "", &HashMap::new(), Some(&platform), None);
         let item = branch_of(&scan, "develop-old");
         assert!(item.protected, "平台受保护标志应生效");
         assert!(!item.deletable);
@@ -1499,6 +1552,7 @@ mod tests {
             crate::codeup::OpenChangeRequest {
                 repository_id: "42".to_string(),
                 source_branch: "feature/develop/with-mr".to_string(),
+                target_branch: "develop".to_string(),
                 local_id: 3527,
                 state: "UNDER_REVIEW".to_string(),
                 has_conflict: false,
@@ -1511,7 +1565,7 @@ mod tests {
             mr_ok: true,
             protected: HashSet::new(),
         };
-        let scan = scan_repo_blocking("HIS", repo.dir(), "", &HashMap::new(), Some(&platform));
+        let scan = scan_repo_blocking("HIS", repo.dir(), "", &HashMap::new(), Some(&platform), None);
         let item = branch_of(&scan, "feature/develop/with-mr");
         assert_eq!(item.open_mr_id, Some(3527));
         assert_eq!(item.open_mr_state, "UNDER_REVIEW");

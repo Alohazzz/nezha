@@ -4,10 +4,10 @@
 //!
 //! > ⚠️ 端点路径为最佳推断，集中定义在下方常量/函数中。由于 Codeup OpenAPI 需在已登录的环境才能实测，路径/字段若与实际情况有出入，改动应集中在 `CODUP_PREFIX` / `*_path()` / 解析函数里，避免散落。
 
-use crate::git::{path_to_string, resolve_repo_path, run_git};
+use crate::git::{path_to_string, resolve_repo_path, run_git, validate_project_path};
 use crate::storage::{load_project_batches, load_projects, save_project_batches, Batch};
 use crate::yunxiao::{build_client, read_json_body, API_BASE};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -444,6 +444,71 @@ pub(crate) async fn batch_mr_is_merged(
     Ok(state.contains("MERGED"))
 }
 
+/// 在 Codeup 上创建合并请求（仅提交、不合并）的**去批次化**核心。
+///
+/// 抽出来供两条链路共用：分支批的 `codeup_create_mr`（回写批记录）与「待发起」视图的
+/// `codeup_create_mrs_batch`（逐条回执）。调用方负责先解析出组织 id 与推送源分支。
+async fn post_change_request(
+    client: &reqwest::Client,
+    token: &str,
+    org: &str,
+    source_branch: &str,
+    target_branch: &str,
+    title: &str,
+    description: &str,
+    reviewers: &[String],
+) -> Result<(String, Option<i64>), String> {
+    let url = format!("{API_BASE}/{CODUP_PREFIX}/organizations/{org}/changeRequests");
+    let body = serde_json::json!({
+        "title": title,
+        "description": description,
+        "sourceBranch": source_branch,
+        "targetBranch": target_branch,
+        "reviewerIds": reviewers,
+    });
+    let resp = client
+        .post(url)
+        .header("x-yunxiao-token", token)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("创建合并请求失败: {e}"))?;
+    let bytes = read_json_body(resp).await?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析创建合并请求响应失败: {e}"))?;
+    let result = json.get("result").unwrap_or(&json);
+    let mr_id = json
+        .get("id")
+        .or_else(|| json.get("mrId"))
+        .and_then(|v| v.as_str().map(String::from))
+        .or_else(|| json.get("id").and_then(serde_json::Value::as_i64).map(|i| i.to_string()))
+        .or_else(|| {
+            result
+                .get("id")
+                .or_else(|| result.get("mrId"))
+                .and_then(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .or_else(|| v.as_i64().map(|i| i.to_string()))
+                })
+        })
+        .ok_or_else(|| "创建合并请求后未取到 MR id".to_string())?;
+    let local_id = result
+        .get("localId")
+        .or_else(|| json.get("localId"))
+        .and_then(serde_json::Value::as_i64)
+        // 云效部分返回值把 localId 作为字符串给出。
+        .or_else(|| {
+            result
+                .get("localId")
+                .or_else(|| json.get("localId"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.trim().parse::<i64>().ok())
+        });
+    Ok((mr_id, local_id))
+}
+
 /// 在 Codeup 上创建合并请求；仅提交（不合并）。成功后回写批的 mrId/mrStatus，status=review。
 #[tauri::command]
 pub async fn codeup_create_mr(
@@ -487,37 +552,18 @@ pub async fn codeup_create_mr(
 
     let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
     let org = repo_org_id(&repo);
-    let url = format!("{API_BASE}/{CODUP_PREFIX}/organizations/{org}/changeRequests");
     let client = build_client()?;
-    let body = serde_json::json!({
-        "title": batch.name,
-        "description": format!("由 Nezha 分支批 {} 发起（{}）", batch.id, batch.kind),
-        "sourceBranch": batch.branch,
-        "targetBranch": batch.target_branch,
-        "reviewerIds": reviewers,
-    });
-    let resp = client
-        .post(url)
-        .header("x-yunxiao-token", &token)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("创建合并请求失败: {e}"))?;
-    let bytes = read_json_body(resp).await?;
-    let json: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("解析创建合并请求响应失败: {e}"))?;
-    let mr_id = json
-        .get("id")
-        .or_else(|| json.get("mrId"))
-        .or_else(|| json.get("result").and_then(|r| r.get("id")))
-        .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| {
-            json.get("id")
-                .and_then(|v| v.as_i64())
-                .map(|i| i.to_string())
-        })
-        .ok_or_else(|| "创建合并请求后未取到 MR id".to_string())?;
+    let (mr_id, _) = post_change_request(
+        &client,
+        &token,
+        org,
+        &batch.branch,
+        &batch.target_branch,
+        &batch.name,
+        &format!("由 Nezha 分支批 {} 发起（{}）", batch.id, batch.kind),
+        &reviewers,
+    )
+    .await?;
 
     let mut batches = load_project_batches(project_id.clone())?;
     let updated = batches
@@ -531,6 +577,239 @@ pub async fn codeup_create_mr(
     let result = updated.clone();
     save_project_batches(project_id, batches)?;
     Ok(result)
+}
+
+// ── 「待发起」视图的批量发起合并请求 ─────────────────────────────────────────
+
+/// 批量发起合并请求的单项输入。
+///
+/// 刻意**不绑定分支批**：`codeup_create_mr` 要求 `batch_id` 存在、批次 active 且带干净
+/// worktree，而「待发起」视图覆盖的正是 agent 用 `git checkout -b` 自建、或用户手推的分支，
+/// 它们没有批次记录。这里只依赖仓库路径 + 源/目标分支，满足「到点发起」的闭环。
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MrCreateItem {
+    /// 仓库绝对路径（多仓库项目下是子模块路径）。
+    pub repo_path: String,
+    /// 仓库显示名（仅用于回执回显）。
+    #[serde(default)]
+    pub repo: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    /// MR 标题；缺省用源分支名。
+    #[serde(default)]
+    pub title: Option<String>,
+    /// MR 描述；缺省给出「由 Nezha 发起」的说明。
+    #[serde(default)]
+    pub description: Option<String>,
+    /// 审核人（默认由前端按目标分支保护规则预填，可编辑）。
+    #[serde(default)]
+    pub reviewers: Vec<String>,
+}
+
+/// 批量发起的逐条回执。单条失败不中断整批，失败原因逐条给出。
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MrCreateReceipt {
+    pub repo: String,
+    pub repo_path: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    /// 本次是否真的创建了 MR（幂等跳过 / 失败时 false）。
+    pub created: bool,
+    /// 新建 MR 的业务 id。
+    pub mr_id: Option<String>,
+    /// 仓库内 MR 编号（云效返回时才带）。
+    pub mr_local_id: Option<i64>,
+    /// 结果说明：成功 / 幂等跳过 / 失败原因。
+    pub reason: String,
+}
+
+/// 批量发起合并请求（去批次化）。
+///
+/// 与删除同理，这是**对外可见且难以撤销**的推送动作，因此逐条给回执、单条失败不中断，
+/// 并在创建前做幂等判重（同一「仓库 + 源分支 + 目标分支」已有开放 MR 就跳过，不重复发起）。
+///
+/// 每条的处理顺序：解析云效仓库 id → 幂等判重 → 非 force push 源分支 → POST changeRequests。
+/// 路径安全：每个仓库路径都必须在项目内（在产生任何推送副作用之前校验）。
+#[tauri::command]
+pub async fn codeup_create_mrs_batch(
+    project_path: String,
+    items: Vec<MrCreateItem>,
+) -> Result<Vec<MrCreateReceipt>, String> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    validate_project_path(&project_path)?;
+    let (token, _) = load_creds().await?;
+    let client = build_client()?;
+    // 已知仓库列表一次拉全：既用于把本地仓库映射到云效仓库 id（幂等判重），
+    // 也避免逐条打仓库列表接口。拉不到不整体失败——逐条回执会如实标注。
+    let known_repos = fetch_codeup_repositories().await.unwrap_or_default();
+
+    // 路径边界校验 + 「仓库 → 云效仓库 id / 组织」解析：都要跑进程与文件系统，
+    // 且**必须在任何推送之前**完成——越界路径不允许产生任何副作用。
+    let wanted: Vec<(String, String)> = items
+        .iter()
+        .map(|item| (item.repo_path.clone(), item.repo.clone()))
+        .collect();
+    let resolved = {
+        let known_repos = known_repos.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<Vec<ResolvedMrRepo>, String> {
+            let mut out = Vec::new();
+            for (repo_path, repo) in wanted {
+                // canonicalize + starts_with 校验；越界立即报错，不做任何推送。
+                let dir = crate::git::resolve_repo_path_blocking(&project_path, Some(&repo_path))?;
+                // 组织 id 与仓库路径都从 origin URL 解析（与 codeup_create_mr 同口径）。
+                let output = run_git(&dir, &["remote", "get-url", "origin"])?;
+                let org = if output.status.success() {
+                    parse_codeup_remote(String::from_utf8_lossy(&output.stdout).trim())
+                        .map(|(org, _)| org)
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let repository_id =
+                    resolve_codeup_repository_id_blocking(&dir, &known_repos)
+                        .ok()
+                        .flatten()
+                        .map(|(_, id)| id)
+                        .unwrap_or_default();
+                out.push(ResolvedMrRepo {
+                    repo,
+                    dir,
+                    org,
+                    repository_id,
+                });
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| format!("codeup_create_mrs_batch panicked: {e}"))??
+    };
+
+    // 幂等判据：一次拉全组织内开放 MR，按 (repositoryId, source, target) 判重。
+    let open_mrs = fetch_open_change_requests().await.unwrap_or_default();
+
+    let mut out: Vec<MrCreateReceipt> = Vec::new();
+    for (item, resolved) in items.into_iter().zip(resolved) {
+        let mut receipt = MrCreateReceipt {
+            repo: if resolved.repo.is_empty() {
+                item.repo.clone()
+            } else {
+                resolved.repo.clone()
+            },
+            repo_path: resolved.dir.clone(),
+            source_branch: item.source_branch.clone(),
+            target_branch: item.target_branch.clone(),
+            created: false,
+            mr_id: None,
+            mr_local_id: None,
+            reason: String::new(),
+        };
+
+        if resolved.org.is_empty() {
+            receipt.reason =
+                "未找到 git origin 远端，无法定位云效仓库（检查该仓库的 origin）".to_string();
+            out.push(receipt);
+            continue;
+        }
+
+        // 幂等：同源 + 同目标已有开放 MR 就跳过，避免重复发起。
+        // repository_id 拿不到时（仓库不在云效列表里）不做判重，交给创建接口裁决。
+        if !resolved.repository_id.is_empty() {
+            if let Some(existing) = open_mrs.iter().find(|mr| {
+                mr.repository_id == resolved.repository_id
+                    && mr.source_branch == item.source_branch
+                    && mr.target_branch == item.target_branch
+            }) {
+                receipt.mr_local_id = Some(existing.local_id);
+                receipt.reason = format!("已有开放合并请求 #{}，跳过", existing.local_id);
+                out.push(receipt);
+                continue;
+            }
+        }
+
+        // 非 force push 源分支：MR 必须引用远端已有提交。
+        let dir_for_push = resolved.dir.clone();
+        let source_branch = item.source_branch.clone();
+        let push = tauri::async_runtime::spawn_blocking(move || {
+            run_git(&dir_for_push, &["push", "origin", &source_branch])
+        })
+        .await
+        .map_err(|e| format!("codeup_create_mrs_batch panicked: {e}"))?;
+        match push {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                receipt.reason = format!(
+                    "推送源分支失败（不会 force push）：{}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+                out.push(receipt);
+                continue;
+            }
+            Err(e) => {
+                receipt.reason = format!("推送源分支失败：{e}");
+                out.push(receipt);
+                continue;
+            }
+        }
+
+        let title = item
+            .title
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| item.source_branch.clone());
+        let description = item
+            .description
+            .clone()
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| {
+                format!(
+                    "由 Nezha 待发起视图发起（{} → {}）",
+                    item.source_branch, item.target_branch
+                )
+            });
+
+        match post_change_request(
+            &client,
+            &token,
+            &resolved.org,
+            &item.source_branch,
+            &item.target_branch,
+            &title,
+            &description,
+            &item.reviewers,
+        )
+        .await
+        {
+            Ok((mr_id, local_id)) => {
+                receipt.created = true;
+                receipt.mr_id = Some(mr_id);
+                receipt.mr_local_id = local_id;
+                receipt.reason = format!(
+                    "已发起合并请求（{} → {}）",
+                    item.source_branch, item.target_branch
+                );
+            }
+            Err(e) => receipt.reason = e,
+        }
+        out.push(receipt);
+    }
+    Ok(out)
+}
+
+/// `codeup_create_mrs_batch` 在 `spawn_blocking` 里解析出的仓库定位信息。
+#[derive(Debug)]
+struct ResolvedMrRepo {
+    /// 仓库显示名（仅用于回执回显）。
+    repo: String,
+    /// 仓库绝对路径（canonicalize 后，已校验在项目内）。
+    dir: String,
+    /// 云效组织 id（origin URL 的第一段）。
+    org: String,
+    /// 云效仓库 id（幂等判重用；不在云效列表里时为空）。
+    repository_id: String,
 }
 
 /// changeRequests 分页上限（每页 20），只取最近若干页；已开启 MR 按更新时间靠前。
@@ -634,6 +913,9 @@ pub(crate) struct CodeupBranchInfo {
 pub(crate) struct OpenChangeRequest {
     pub repository_id: String,
     pub source_branch: String,
+    /// 目标分支。发起前的幂等判据要用「同源 + 同目标」才精确：同一条源分支指向不同目标分支
+    /// 是两个不同的合并请求，不能因为源分支同名就跳过。
+    pub target_branch: String,
     pub local_id: i64,
     /// `UNDER_REVIEW` / `TO_BE_MERGED` / `APPROVED`。
     pub state: String,
@@ -782,6 +1064,12 @@ pub(crate) async fn fetch_open_change_requests() -> Result<Vec<OpenChangeRequest
             out.push(OpenChangeRequest {
                 repository_id,
                 source_branch,
+                target_branch: item
+                    .get("targetBranch")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
                 local_id: item.get("localId").and_then(|v| v.as_i64()).unwrap_or(0),
                 state,
                 has_conflict: item

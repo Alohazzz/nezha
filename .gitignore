@@ -39,4 +39,6 @@ vite.config.d.ts
 .codex
 .codegraph/
 .planning/
+.scratch/
+.zcode/
 pnpm-workspace.yaml

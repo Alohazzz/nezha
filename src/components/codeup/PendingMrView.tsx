@@ -9,11 +9,22 @@ import type {
 } from "../../types";
 import { load, save } from "../../utils";
 import s from "../../styles";
+import { CreateMrConfirmDialog } from "./CreateMrConfirmDialog";
 import { PendingMrCard } from "./PendingMrCard";
 import { PruneRemoteConfirmDialog } from "./PruneRemoteConfirmDialog";
 import { ALL_REPOS, PendingMrBanners, PendingMrSelectAll, PendingMrToolbar } from "./PendingMrToolbar";
+import { useCreateMrs } from "./useCreateMrs";
 import { useRemoteBranchPrune } from "./useRemoteBranchPrune";
-import { applyFilters, candidateKey, flattenScans, sortCandidates, targetSourceLabel } from "./pendingMr";
+import {
+  applyFilters,
+  candidateKey,
+  effectiveTarget,
+  flattenScans,
+  isMrCandidate,
+  mergeScans,
+  sortCandidates,
+  targetSourceLabel,
+} from "./pendingMr";
 
 const MINE_ONLY_KEY = "nezha.pendingMr.mineOnly";
 const TARGET_OVERRIDES_KEY = "nezha.pendingMr.targetOverrides";
@@ -111,10 +122,21 @@ export function PendingMrView({
    *
    * `repo` 为空时按「仓库名」逐个项目扫描（同一仓库名可能出现在多个项目下）；
    * 指定仓库名时只扫那一个——这就是分段加载省下的时间。
+   *
+   * `onlyBranches`：只重算这些分支并把结果**并回**已有扫描（`mergeScans`）。行内改目标分支用
+   * 这个通道——否则改一行要重跑全仓库上百个 git 子进程（一次切换几秒起），而且整表替换时
+   * 其他仓库的行会被空结果抹掉。
+   *
+   * 无论全量还是增量都会点亮忙碌态：增量虽快，但用户改完下拉必须立刻看到「在算」，否则就是
+   * 上一版「点了没反应」的体感。
    */
   const loadBranches = useCallback(
-    async (repo: string, showSpinner: boolean, currentOverrides: TargetOverrides) => {
-      if (showSpinner) setScanning(true);
+    async (
+      repo: string,
+      currentOverrides: TargetOverrides,
+      onlyBranches?: string[],
+    ) => {
+      setScanning(true);
       setError("");
       const collected: ScopedScan[] = [];
       const failures: string[] = [];
@@ -132,15 +154,17 @@ export function PendingMrView({
             projectPath: project.path,
             repoFilter: repo || null,
             targetOverrides: overridesArg,
+            onlyBranches: onlyBranches ?? null,
           });
           for (const scan of list) collected.push({ ...scan, projectPath: project.path });
         } catch (e) {
           failures.push(`${project.name}：${e}`);
         }
       }
-      setScans(collected);
+      // 增量扫描按「仓库 + 分支」并回；全量扫描整表替换（并回也可，但替换语义更直观）。
+      setScans((prev) => (onlyBranches ? mergeScans(prev, collected) : collected));
       setError(failures.join("；"));
-      if (showSpinner) setScanning(false);
+      setScanning(false);
     },
     [projects],
   );
@@ -184,6 +208,10 @@ export function PendingMrView({
         put(branch.targetBranch, branch.protected);
       }
     }
+    // 用户手动指定的覆盖值也要进选项，否则刚选完的项在重扫回来前会从列表里消失。
+    for (const target of Object.values(overrides)) {
+      if (target.trim()) put(target, false);
+    }
     for (const fallback of ["develop", "master", "main"]) put(fallback, true);
 
     // 选项一律只显示纯分支名（不挂 ◎ 之类的圆点）：受保护与否由选中项旁边那个
@@ -191,7 +219,7 @@ export function PendingMrView({
     return [...names.values()]
       .sort((a, b) => a.canonical.localeCompare(b.canonical))
       .map(({ canonical }) => ({ value: canonical, label: canonical }));
-  }, [scans]);
+  }, [scans, overrides]);
 
   /** 受保护的目标分支名集合（小写），供卡片在选中项旁显示「受保护」徽标。 */
   const protectedTargets = useMemo(() => {
@@ -231,9 +259,14 @@ export function PendingMrView({
       [...selected].map((key) => visibleByKey.get(key)).filter(Boolean) as PendingBranchCandidate[],
     [selected, visibleByKey],
   );
-  /** 已选中且可删的条数：头部主操作的计数，也是按钮是否可用的依据。 */
+  /** 已选中且可删的条数：头部「删除远端分支」的计数，也是按钮是否可用的依据。 */
   const selectedDeletable = useMemo(
     () => selectedBranches.filter((b) => b.deletable),
+    [selectedBranches],
+  );
+  /** 已选中且可发起 MR 的条数：头部「发起合并请求」的计数与可用依据。 */
+  const selectedCandidates = useMemo(
+    () => selectedBranches.filter(isMrCandidate),
     [selectedBranches],
   );
 
@@ -268,7 +301,26 @@ export function PendingMrView({
   } = useRemoteBranchPrune({
     scans,
     selectedDeletable,
-    refresh: () => void loadBranches(repoFilter, false, overrides),
+    refresh: () => void loadBranches(repoFilter, overrides),
+    clearSelection: () => setSelected(new Set()),
+    setError,
+    setNotice,
+  });
+
+  const {
+    createBusy,
+    createResults,
+    pending: pendingCreate,
+    reviewers,
+    setReviewers,
+    startCreate,
+    confirmCreate,
+    resetCreateResults,
+    cancelCreate,
+  } = useCreateMrs({
+    scans,
+    selectedCandidates,
+    refresh: () => void loadBranches(repoFilter, overrides),
     clearSelection: () => setSelected(new Set()),
     setError,
     setNotice,
@@ -284,27 +336,36 @@ export function PendingMrView({
       setRepoFilter(repo);
       setSelected(new Set());
       resetPruneResults();
+      resetCreateResults();
       setScans([]);
       if (!repo) return;
-      void loadBranches(repo, true, overrides);
+      void loadBranches(repo, overrides);
     },
-    [loadBranches, overrides, resetPruneResults],
+    [loadBranches, overrides, resetPruneResults, resetCreateResults],
   );
 
   /**
-   * 行内改目标分支：记住覆盖值**并重跑扫描**。
+   * 行内改目标分支：记住覆盖值并**只重算这一个分支**。
    *
-   * 重跑是必要的——合并状态与可删性都是相对目标分支算出来的，不重算的话行上会继续显示
-   * 按旧目标得出的结论（徽标与实际不符）。Radix Select 的变更是一次离散动作，不是逐键输入，
-   * 因此直接触发一次扫描即可。
+   * 重算是必要的——合并状态与可删性都是相对目标分支算出来的，不重算的话行上会继续显示
+   * 按旧目标得出的结论（徽标与实际不符）。但没必要重跑整个仓库：后端支持 `onlyBranches`，
+   * 一次切换从「全仓库上百个 git 子进程」收敛成一个分支的固定开销。行上的选中值由
+   * `overrides` 乐观接管（见 `targetValueFor`），不等重扫回来。
    */
   const onTargetChange = useCallback(
     (branch: PendingBranchCandidate, value: string) => {
       const next = { ...overrides, [overrideKey(branch.repoPath, branch.branch)]: value };
       setOverrides(next);
-      void loadBranches(repoFilter, false, next);
+      void loadBranches(repoFilter, next, [branch.branch]);
     },
     [overrides, loadBranches, repoFilter],
+  );
+
+  /** 行上展示的目标分支：覆盖值优先，避免重扫回来前先弹回旧值。 */
+  const targetValueFor = useCallback(
+    (branch: PendingBranchCandidate) =>
+      canonicalTarget(effectiveTarget(branch, overrides[overrideKey(branch.repoPath, branch.branch)])),
+    [canonicalTarget, overrides],
   );
 
   const repoErrors = projectRepos.filter((entry) => entry.error);
@@ -321,15 +382,18 @@ export function PendingMrView({
         query={query}
         busy={reposLoading || scanning}
         busyLabel={reposLoading ? "发现中…" : "扫描中…"}
+        createBusy={createBusy}
         pruneBusy={pruneBusy}
+        selectedMrCount={selectedCandidates.length}
         selectedDeletableCount={selectedDeletable.length}
         onBack={onBack}
         onRepoChange={onRepoChange}
         onToggleMineOnly={() => setMineOnly((v) => !v)}
         onQueryChange={setQuery}
         onRefresh={() =>
-          repoFilter ? void loadBranches(repoFilter, true, overrides) : void loadRepos()
+          repoFilter ? void loadBranches(repoFilter, overrides) : void loadRepos()
         }
+        onCreate={() => void startCreate()}
         onPrune={() => void startPrune()}
       />
 
@@ -392,14 +456,35 @@ export function PendingMrView({
             checked={selected.has(candidateKey(branch))}
             mrOk={mrOkByRepo.get(branch.repoPath) ?? false}
             targetOptions={targetOptions}
-            targetValue={canonicalTarget(branch.targetBranch)}
-            targetProtected={protectedTargets.has(branch.targetBranch.toLowerCase())}
+            targetValue={targetValueFor(branch)}
+            targetProtected={protectedTargets.has(
+              effectiveTarget(
+                branch,
+                overrides[overrideKey(branch.repoPath, branch.branch)],
+              ).toLowerCase(),
+            )}
             targetSource={targetSourceLabel(branch.targetSource)}
             onToggle={(checked) => toggleRow(branch, checked)}
             onTargetChange={(value) => onTargetChange(branch, value)}
             onPrune={() => void startPrune()}
           />
         ))}
+
+        {createResults.length > 0 && (
+          <div className="pm-results">
+            <div className="pm-label">发起结果</div>
+            {createResults.map((item) => (
+              <div
+                key={`${item.repoPath}:${item.sourceBranch}`}
+                className="pm-result-line"
+                data-tone={item.created ? "ok" : "warn"}
+              >
+                {item.created ? "✓ 已发起" : "· 跳过"} {item.repo}:{item.sourceBranch}
+                {item.mrLocalId !== null && ` #${item.mrLocalId}`} — {item.reason}
+              </div>
+            ))}
+          </div>
+        )}
 
         {pruneResults.length > 0 && (
           <div className="pm-results">
@@ -423,6 +508,15 @@ export function PendingMrView({
         busy={pruneBusy}
         onCancel={cancelPrune}
         onConfirm={() => void confirmPrune()}
+      />
+
+      <CreateMrConfirmDialog
+        pending={pendingCreate}
+        busy={createBusy}
+        reviewers={reviewers}
+        onReviewersChange={setReviewers}
+        onCancel={cancelCreate}
+        onConfirm={() => void confirmCreate()}
       />
     </div>
   );

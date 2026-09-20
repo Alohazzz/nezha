@@ -294,7 +294,6 @@ export interface PendingRemoteBranchTarget {
   branch: string;
   targetBranch: string;
 }
-
 /** 删除远端分支的单项回执（对齐后端 `RemoteBranchPruneItem`）。 */
 export interface PendingRemoteBranchPruneItem {
   repo: string;
@@ -303,6 +302,30 @@ export interface PendingRemoteBranchPruneItem {
   targetBranch: string;
   deleted: boolean;
   deletable: boolean;
+  reason: string;
+}
+
+/** 批量发起合并请求的单项输入（对齐后端 `MrCreateItem`）。 */
+export interface PendingMrCreateItem {
+  repoPath: string;
+  repo: string;
+  sourceBranch: string;
+  targetBranch: string;
+  title?: string;
+  description?: string;
+  reviewers: string[];
+}
+
+/** 批量发起合并请求的逐条回执（对齐后端 `MrCreateReceipt`）。 */
+export interface PendingMrCreateReceipt {
+  repo: string;
+  repoPath: string;
+  sourceBranch: string;
+  targetBranch: string;
+  /** 本次是否真的创建了 MR（幂等跳过 / 失败时为 false）。 */
+  created: boolean;
+  mrId: string | null;
+  mrLocalId: number | null;
   reason: string;
 }
 

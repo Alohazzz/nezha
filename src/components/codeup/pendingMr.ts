@@ -46,6 +46,51 @@ export function isPrCandidate(branch: PendingBranchCandidate, mrOk = true): bool
   return branch.pushed && branch.unmerged > 0 && noOpenMr;
 }
 
+/**
+ * 该分支能否「发起合并请求」：已推送、还有未合并提交、且没有开放 MR。
+ *
+ * 与删除门禁正好互斥（可删 = 已完整合并），因此同一套勾选可以同时驱动两个动作——
+ * 勾中的行按各自属性分别计入「发起合并(N)」或「删除远端分支(N)」的计数。
+ *
+ * 平台 MR 数据不可用时（`mrOk = false`）不因此拒绝：用户是明确勾选的，重复发起由后端
+ * 的幂等判重兜底；这里只在行上保留「MR 未知」徽标提示。
+ */
+export function isMrCandidate(branch: PendingBranchCandidate): boolean {
+  return branch.pushed && branch.unmerged > 0 && branch.openMrId === null;
+}
+
+/** 行内目标分支的生效值：用户覆盖优先，其次后端推断结果。 */
+export function effectiveTarget(branch: PendingBranchCandidate, override?: string): string {
+  return override && override.trim() !== "" ? override : branch.targetBranch;
+}
+
+/**
+ * 把一次**增量**扫描结果并回已有扫描（行内改目标分支只重算那一条）。
+ *
+ * 后端按 `onlyBranches` 只返回被重算的分支，不能整表替换——否则其他仓库/其他分支的行
+ * 会被空数组抹掉。这里是按「仓库路径 + 分支名」做 upsert：重算到的行覆盖旧行，其余保留。
+ */
+export function mergeScans<T extends { path: string; branches: PendingBranchCandidate[] }>(
+  prev: T[],
+  incoming: T[],
+): T[] {
+  const byPath = new Map(prev.map((scan) => [scan.path, scan]));
+  for (const scan of incoming) {
+    const old = byPath.get(scan.path);
+    if (!old) {
+      byPath.set(scan.path, scan);
+      continue;
+    }
+    const updated = new Map(scan.branches.map((b) => [b.branch, b]));
+    const merged = old.branches.map((b) => updated.get(b.branch) ?? b);
+    for (const b of scan.branches) {
+      if (!old.branches.some((o) => o.branch === b.branch)) merged.push(b);
+    }
+    byPath.set(scan.path, { ...old, ...scan, branches: merged });
+  }
+  return [...byPath.values()];
+}
+
 /** 候选排序：我的提交优先 → 最近提交时间倒序 → 仓库名 → 分支名（稳定可预期）。 */
 export function sortCandidates(
   branches: PendingBranchCandidate[],

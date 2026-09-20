@@ -488,6 +488,7 @@ pub fn run() {
             codeup::codeup_resolve_repo,
             codeup::codeup_branch_managers,
             codeup::codeup_create_mr,
+            codeup::codeup_create_mrs_batch,
             codeup::codeup_list_repositories,
             codeup::codeup_list_pending_mrs,
             codeup::codeup_get_mr,

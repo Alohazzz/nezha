@@ -71,6 +71,7 @@
   h2{font-size:22px; line-height:1.5; margin:0 0 20px; padding-bottom:13px; border-bottom:1px solid var(--line); letter-spacing:-.2px}
   h2 .num{color:var(--faint); font-weight:500; margin-right:10px; font-variant-numeric:tabular-nums}
   h3{font-size:17px; line-height:1.55; margin:34px 0 12px}
+  h4{font-size:14.5px; line-height:1.55; margin:24px 0 10px; color:var(--muted)}
   p{margin:0 0 18px}
   ul,ol{margin:0 0 18px; padding-left:24px}
   li{margin:9px 0}
@@ -693,6 +694,7 @@
     <section id="sec6">
       <h2><span class="num">6</span>创建 PR</h2>
       <p>把一批已完成的议题改动，打包成「批次 + 分支 + worktree」，再推送成一个云效 Codeup 合并请求（MR）。认证复用「云效议题」里配置的令牌与组织（第 1.1 节），无需单独配置。</p>
+      <p>创建 MR 有两条路径：<strong>批次链路</strong>（6.1–6.2，先有批次 / worktree）与「<strong>发起合并</strong>」视图（6.3，直接为<strong>已存在</strong>的分支发起，并顺带清理已收尾的远端分支）。</p>
 
       <h3><span class="subnum">6.1</span>新建 PR</h3>
       <p>进入项目后，点右侧工具栏「<strong>PR</strong>」图标，展开 PR 面板 → 点「<strong>新建 PR</strong>」：</p>
@@ -720,6 +722,90 @@
         <li>可填「<strong>审核人</strong>」（默认取目标分支管理人员，可编辑，逗号分隔）；</li>
         <li>确认后点「<strong>提交到 Codeup</strong>」——Nezha 先把批次分支推送到远端，再调用 Codeup 接口创建 MR，并把 MR 状态回写到该批次。</li>
       </ul>
+
+      <h3><span class="subnum">6.3</span>发起合并：为已有分支发起 / 清理 MR</h3>
+      <p>批次链路要求先有「批次 + worktree」；但 agent 用 <code>git checkout -b</code> 自建、或你自己推送的分支没有批次记录，走不了 6.2。这类分支走欢迎页左侧的「<strong>发起合并</strong>」视图——它把本地分支元数据与云效平台数据 join 起来，一次看清「哪些分支还没发起 MR、该合到哪、是否已可收尾」。</p>
+      <figure>
+        <img src="screenshots/module-guide/07-pending-mr-list-dark.png" alt="发起合并视图：候选分支列表（暗色）" />
+        <figcaption>发起合并视图（暗色）：工具条（仓库筛选 / 我的提交 / 搜索 / 刷新）+ 候选分支卡片，每行带合并状态徽标、目标分支下拉与删除按钮</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/module-guide/08-pending-mr-list-light.png" alt="发起合并视图：候选分支列表（亮色）" />
+        <figcaption>同一视图的亮色主题：徽标与按钮在两种主题下的可读性对照</figcaption>
+      </figure>
+
+      <h4>加载与筛选</h4>
+      <p>视图<strong>分段加载</strong>，避免一进来就卡住：</p>
+      <ol>
+        <li>打开后先做文件系统级仓库发现（无 git 子进程，秒回）；未选仓库时不会去扫码分支。</li>
+        <li>在工具条「<strong>仓库</strong>」下拉里选一个仓库，才扫那一个仓库的分支。</li>
+        <li>工具条其余控件：<strong>我的提交</strong>开关（默认开，只看含本人提交的分支）、<strong>搜索</strong>（按分支名）、<strong>刷新</strong>。</li>
+      </ol>
+      <p>未选仓库时是提示态，不会自动全扫：</p>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/06-pending-mr-empty-dark.png" alt="发起合并视图：未选仓库的提示态" />
+        <figcaption>未选仓库时的提示态：先选仓库才扫码分支</figcaption>
+      </figure>
+      <p>列表只出现「<strong>已推送 + 有未合并提交 + 无开放 MR</strong>」的候选分支，以及已完整合并、可清理的分支。</p>
+
+      <h4>行信息与徽标</h4>
+      <table>
+        <thead><tr><th>徽标</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><strong>已合并进 X</strong> / <strong>部分合并</strong> / <strong>未合并</strong></td><td>相对目标分支的合并状态；「部分合并」= 有提交进去了、还有没进去</td></tr>
+          <tr><td><strong>无 MR</strong> / <strong>已有 MR #N</strong> / <strong>MR 未知</strong></td><td>平台上是否已有开放 MR；「MR 未知」表示平台数据没拉到（不据此过滤）</td></tr>
+          <tr><td><strong>我的提交</strong></td><td>该分支的独有提交里有本人 commit</td></tr>
+          <tr><td><strong>受保护</strong></td><td>平台 / git 口径的受保护分支（不可删除）</td></tr>
+          <tr><td><strong>数据缺失</strong></td><td>该行部分数据（如合并状态）算不出来</td></tr>
+        </tbody>
+      </table>
+      <p>行尾还给出「N 个未合并提交 · 作者 · 时间」与相对目标分支的 diff 计量（+新增 / -删除）。</p>
+
+      <h4>目标分支</h4>
+      <p>每行有一个「<strong>目标分支</strong>」下拉，默认按规则推断并标注来源：</p>
+      <figure class="shot-xs">
+        <img src="screenshots/module-guide/09-pending-mr-target-dropdown-dark.png" alt="发起合并视图：行内目标分支下拉" />
+        <figcaption>行内「目标分支」下拉：选项来自各仓库出现过的分支名</figcaption>
+      </figure>
+      <table>
+        <thead><tr><th>来源</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><strong>手动指定</strong></td><td>你在这行选过的值（跨会话记住）</td></tr>
+          <tr><td><strong>项目配置</strong></td><td>项目 <code>.nezha/config.toml</code> 里的默认分支</td></tr>
+          <tr><td><strong>按分支名推断</strong></td><td>从分支命名规范里的目标段推断（如 <code>hotfix/…/master/…</code> → <code>master</code>）</td></tr>
+          <tr><td><strong>默认值</strong></td><td>都推断不出来时的兜底（<code>develop</code> / <code>master</code> / <code>main</code> 里最像主干的一条）</td></tr>
+        </tbody>
+      </table>
+      <p>改一行的目标分支后，Nezha <strong>只重算这一个分支</strong>的合并状态与可删性（不会重扫整个仓库），并立刻用新值更新界面。</p>
+
+      <h4>批量发起合并请求</h4>
+      <p>勾选要发起的分支 → 点工具条右侧「<strong>发起合并请求(N)</strong>」：</p>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/10-pending-mr-create-dialog-dark.png" alt="发起合并请求确认层（暗色）" />
+        <figcaption>发起合并请求确认层（暗色）：逐条列出「分支 → 目标分支」与审核人</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/11-pending-mr-create-dialog-light.png" alt="发起合并请求确认层（亮色）" />
+        <figcaption>同一确认层的亮色主题</figcaption>
+      </figure>
+      <ol>
+        <li>弹出确认层，逐条列出「分支 → 目标分支」，并可填「<strong>审核人</strong>」（默认取目标分支管理人员，可编辑，逗号分隔）；</li>
+        <li>点「<strong>发起 N 个合并请求</strong>」——Nezha 逐条先把源分支<strong>非强制推送</strong>到远端，再调 Codeup 接口创建 MR。</li>
+      </ol>
+      <p>已有「同源 + 同目标」开放 MR 的分支会自动跳过（幂等，不会重复发起）；单条失败不中断整批，结果在列表下方逐条回执。</p>
+
+      <h4>批量删除远端分支</h4>
+      <p>同一套勾选也驱动「<strong>删除远端分支(N)</strong>」。删除是两阶段：先 <strong>dry-run 扫描</strong>（只看哪些可删、哪些被跳过及原因），弹出确认框核对后再执行，逐条回执。</p>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/12-pending-mr-delete-dialog-dark.png" alt="删除远端分支确认框（暗色）" />
+        <figcaption>删除远端分支确认框（暗色）：列出待删分支与目标分支，说明只删远端</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/13-pending-mr-delete-dialog-light.png" alt="删除远端分支确认框（亮色）" />
+        <figcaption>同一确认框的亮色主题</figcaption>
+      </figure>
+      <p>硬门禁：只有<strong>已完整合并进目标分支</strong>的远端分支才允许删除；未完成合并、受保护、未推送的一律拒绝。<strong>只删远端分支，不会删你的本地分支。</strong></p>
+      <blockquote>「发起合并请求(N)」与「删除远端分支(N)」的计数彼此独立：未合并的分支计入发起、已收尾的分支计入删除。同一行不会同时进两个计数。</blockquote>
     </section>
 
     <section id="sec7">
@@ -795,6 +881,12 @@
           <tr><td>「知识库」提示「技能库未配置」</td><td>先到「应用设置 → 技能库」配置技能仓库来源。</td></tr>
           <tr><td>「分支合并」点不动</td><td>需先对该 MR「拉取代码」。</td></tr>
           <tr><td>创建 PR 报分支重名</td><td>用「检测」后选「继续使用远端分支」或「改名」。</td></tr>
+          <tr><td>「发起合并」视图一开始是空的</td><td>分段加载：先选工具条「<strong>仓库</strong>」下拉里的某个仓库，才会扫码分支（一次全扫要几十秒，所以不自动全扫）。</td></tr>
+          <tr><td>「发起合并」里看不到我要的分支</td><td>列表只收「已推送 + 有未合并提交 + 无开放 MR」的分支；关掉「<strong>我的提交</strong>」开关看同事的分支，或确认该分支已 <code>push</code> 到远端。</td></tr>
+          <tr><td>「发起合并请求」按钮点不动</td><td>勾选的分支里没有符合条件的（未推送 / 已合并 / 已有开放 MR 都会被排除）；勾一条还没发起 MR 的分支再试。</td></tr>
+          <tr><td>发起合并报「已有开放合并请求 #N，跳过」</td><td>该源分支 + 目标分支组合在云效上已有开放 MR，Nezha 不重复发起（幂等）；去「合并审核」处理那条即可。</td></tr>
+          <tr><td>「删除远端分支」点不动</td><td>勾选的分支都不满足删除门禁：只有<strong>已完整合并进目标分支</strong>的才可删，未合并 / 受保护 / 未推送会被拒。</td></tr>
+          <tr><td>改完目标分支后行的状态没变</td><td>改目标分支会让后端<strong>只重算该分支</strong>；等这次重算回来（工具条会转圈）就地更新。若目标分支在远端不存在，该行会标「数据缺失」或从候选列表消失。</td></tr>
           <tr><td>审查报告「回写到评论」失败</td><td>确认云效令牌有合并请求评论权限；报告本身可先「复制」或「导出 .md」保底。</td></tr>
           <tr><td>合并审核列表一直为空</td><td>当前筛选仓库下确实没有待处理 / 待合并的 MR；换「全部仓库」或点「刷新」。</td></tr>
         </tbody>

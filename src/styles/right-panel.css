@@ -98,6 +98,19 @@
   color: var(--primary-action-fg);
 }
 
+/* accent 变体：次要的「建设性」主操作（如发起合并请求），用 accent 语义与实底主操作区分 */
+.rp-text-btn[data-variant="accent"] {
+  border-color: var(--accent-soft);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.rp-text-btn[data-variant="accent"]:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
 /* 标题栏图标按钮（同 git-history-icon-btn） */
 .rp-icon-btn {
   display: inline-flex;

@@ -1,4 +1,4 @@
-import { RefreshCw, Trash2, X } from "lucide-react";
+import { RefreshCw, Send, Trash2, X } from "lucide-react";
 import { SelectField } from "../yunxiao/SelectField";
 import s from "../../styles";
 
@@ -9,7 +9,8 @@ export const ALL_REPOS = "__all__";
  * 「待发起」视图的头部工具条。
  *
  * 左起：返回、仓库筛选（Radix Select）、「我的提交」开关、搜索、刷新；
- * 右侧主操作是「删除远端分支(N)」，N 为当前已选中且**可删**的条数，N = 0 时禁用。
+ * 右侧主操作是「发起合并请求(N)」与「删除远端分支(N)」——两者共用同一套勾选，
+ * 按各自属性分别计数：未合并的分支计入发起、已收尾的分支计入删除。
  */
 export function PendingMrToolbar({
   repoFilter,
@@ -18,13 +19,16 @@ export function PendingMrToolbar({
   query,
   busy,
   busyLabel,
+  createBusy,
   pruneBusy,
+  selectedMrCount,
   selectedDeletableCount,
   onBack,
   onRepoChange,
   onToggleMineOnly,
   onQueryChange,
   onRefresh,
+  onCreate,
   onPrune,
 }: {
   repoFilter: string;
@@ -35,13 +39,17 @@ export function PendingMrToolbar({
   busy: boolean;
   /** 忙碌时刷新按钮上的文案（「发现中…」/「扫描中…」）。 */
   busyLabel: string;
+  createBusy: boolean;
   pruneBusy: boolean;
+  /** 已选中且可发起 MR 的条数。 */
+  selectedMrCount: number;
   selectedDeletableCount: number;
   onBack: () => void;
   onRepoChange: (repo: string) => void;
   onToggleMineOnly: () => void;
   onQueryChange: (query: string) => void;
   onRefresh: () => void;
+  onCreate: () => void;
   onPrune: () => void;
 }) {
   return (
@@ -80,6 +88,19 @@ export function PendingMrToolbar({
         {busy ? busyLabel : "刷新"}
       </button>
       <div className="pm-toolbar-fill" />
+      {/* 发起合并是右侧主操作：已推送、有未合并提交、无开放 MR 的勾选项计入。 */}
+      <button
+        type="button"
+        className="rp-text-btn"
+        data-variant="accent"
+        disabled={createBusy || selectedMrCount === 0}
+        title="为勾选的分支在云效上发起合并请求（已有同源同目标 MR 的会自动跳过）"
+        onClick={onCreate}
+      >
+        <Send size={13} />
+        发起合并请求
+        {selectedMrCount > 0 && <span className="rp-count-chip">{selectedMrCount}</span>}
+      </button>
       <button
         type="button"
         className="rp-text-btn"
