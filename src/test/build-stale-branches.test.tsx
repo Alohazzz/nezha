@@ -85,6 +85,16 @@ const renderPanel = () =>
     </I18nProvider>,
   );
 
+/** 清理按钮在仓库列表加载完（勾选非空）之前是 disabled 的，此时点击会被忽略。
+ *  面板外壳先于 `load()` 完成渲染，所以必须等按钮真正可用再点，否则测试结果
+ *  取决于微任务时序（CI 上偶发「找不到结果文案」）。 */
+async function clickPruneWhenReady() {
+  const button = await screen.findByRole("button", { name: /清理失效分支/ });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+  return button;
+}
+
 describe("BuildPanel stale branch cleanup", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -130,7 +140,7 @@ describe("BuildPanel stale branch cleanup", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByText("fix/old")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /清理失效分支/ }));
+    await clickPruneWhenReady();
 
     // 先 dry-run 扫描 → 弹确认 → 再真删
     await waitFor(() => {
@@ -139,8 +149,7 @@ describe("BuildPanel stale branch cleanup", () => {
         selected: ["HIS"],
         dryRun: true,
       });
-    });
-    // 确认框只列将要删除的候选，不列跳过的分支
+    });    // 确认框只列将要删除的候选，不列跳过的分支
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain("fix/old");
     expect(dialog.textContent).not.toContain("fix/wip");
@@ -185,7 +194,7 @@ describe("BuildPanel stale branch cleanup", () => {
     ]);
     renderPanel();
 
-    fireEvent.click(await screen.findByRole("button", { name: /清理失效分支/ }));
+    await clickPruneWhenReady();
 
     expect(await screen.findByText(/没有可清理的失效分支/)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -206,7 +215,7 @@ describe("BuildPanel stale branch cleanup", () => {
     );
     renderPanel();
 
-    fireEvent.click(await screen.findByRole("button", { name: /清理失效分支/ }));
+    await clickPruneWhenReady();
 
     // 用户点「取消」→ 弹层关闭且不触发真删
     fireEvent.click(await screen.findByRole("button", { name: "取消" }));
