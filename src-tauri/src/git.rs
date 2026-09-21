@@ -372,8 +372,65 @@ fn dir_is_git_repo(path: &Path) -> bool {
     path.join(".git").exists()
 }
 
+/// 项目设置里「可选子仓库」白名单的关键字（小写）。读不到配置时返回空列表（= 不过滤）。
+///
+/// 与构建面板共用同一份配置：`BuildConfig::visible_subrepos`。用同一套口径过滤，
+/// 仓库切换器（Git 变更 / Git 历史的数据来源）才和构建面板列出同一批子仓库。
+fn subrepo_whitelist(project_path: &str) -> Vec<String> {
+    crate::config::read_project_config(project_path.to_string())
+        .map(|cfg| cfg.build.visible_subrepos)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|key| key.trim().to_lowercase())
+        .filter(|key| !key.is_empty())
+        .collect()
+}
+
+/// 主仓库 `.gitmodules` 里「已初始化」的子模块 git 根。
+///
+/// - 名字沿用 `.gitmodules` 的 `[submodule "name"]` 标签，和构建面板一致；
+/// - 按「可选子仓库」白名单过滤（名称或路径的子串、忽略大小写；白名单为空表示全列）；
+/// - 未初始化 / 目录缺失的子模块不返回——拿它当 cwd 跑 git 会向上解析到主仓库，
+///   面板会假装成主仓库的内容，比不列出来更糟。
+fn submodule_git_roots(root_path: &str, project_canonical: &Path) -> Vec<GitRoot> {
+    let gitmodules = Path::new(root_path).join(".gitmodules");
+    let Ok(content) = std::fs::read_to_string(&gitmodules) else {
+        return Vec::new();
+    };
+    let whitelist = subrepo_whitelist(root_path);
+    let mut found: Vec<GitRoot> = Vec::new();
+    for (name, rel, _url) in crate::build::parse_gitmodules(&content) {
+        let full = Path::new(root_path).join(&rel);
+        if !dir_is_git_repo(&full) {
+            continue;
+        }
+        let Ok(canonical) = full.canonicalize() else {
+            continue;
+        };
+        // 与第一层扫描同样的防逃逸：子模块软链指向工作区外时不展示。
+        if !canonical.starts_with(project_canonical) {
+            continue;
+        }
+        let Some(path) = full.to_str() else {
+            continue;
+        };
+        if !whitelist.is_empty() {
+            let haystack = format!("{}\n{}", name.to_lowercase(), path.to_lowercase());
+            if !whitelist.iter().any(|key| haystack.contains(key)) {
+                continue;
+            }
+        }
+        found.push(GitRoot {
+            path: path.to_string(),
+            name,
+            is_root: false,
+        });
+    }
+    found
+}
+
 /// 发现给定 project_path 下所有 git 工作目录。
-/// - 如果 project_path 自身是 git → 返回单元素 vec（单仓库路径）
+/// - 如果 project_path 自身是 git → 主仓库在前，其后是 `.gitmodules` 子模块（按白名单过滤）
 /// - 否则扫描第一层子目录中含 `.git` 的，按名字排序后返回
 /// - 都不是 → 返回空 vec（前端识别为非 git 项目）
 fn discover_git_roots_blocking(project_path: &str) -> Result<Vec<GitRoot>, String> {
@@ -383,11 +440,14 @@ fn discover_git_roots_blocking(project_path: &str) -> Result<Vec<GitRoot>, Strin
         .canonicalize()
         .map_err(|e| format!("Cannot resolve project path: {}", e))?;
     if dir_is_git_repo(root) {
-        return Ok(vec![GitRoot {
+        // 主仓库必须排第一：前端 selectedRoot 缺省取 result[0]，子模块只是额外可选项。
+        let mut found = vec![GitRoot {
             path: project_path.to_string(),
             name: ".".to_string(),
             is_root: true,
-        }]);
+        }];
+        found.extend(submodule_git_roots(project_path, &project_canonical));
+        return Ok(found);
     }
 
     let mut found: Vec<GitRoot> = Vec::new();
@@ -2974,6 +3034,60 @@ mod tests {
         assert_eq!(roots[0].path, project_path);
         assert_eq!(roots[0].name, ".");
         assert!(roots[0].is_root);
+    }
+
+    #[test]
+    fn discovers_initialized_submodules_after_the_root_repository() {
+        let repo = TempRepo::new();
+        let project_path = repo.path_string();
+        let root = Path::new(&project_path);
+        fs::write(
+            root.join(".gitmodules"),
+            "[submodule \"Hsp.Win\"]\n\tpath = Hsp.Win\n\turl = git@example.com:Hsp.Win.git\n\
+             [submodule \"Nto.His/Nto.His.DrugInOut\"]\n\tpath = Nto.His/Nto.His.DrugInOut\n\turl = git@example.com:DrugInOut.git\n\
+             [submodule \"Other\"]\n\tpath = Other\n\turl = git@example.com:Other.git\n\
+             [submodule \"Term\"]\n\tpath = Term\n\turl = git@example.com:Term.git\n",
+        )
+        .unwrap();
+        for rel in ["Hsp.Win", "Nto.His/Nto.His.DrugInOut", "Other"] {
+            let dir = root.join(rel);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(".git"), "gitdir: /tmp/elsewhere\n").unwrap();
+        }
+        // Term 留在 `.gitmodules` 里但不建目录：未初始化的子模块不能被当成 git 根。
+
+        let roots = discover_git_roots_blocking(&project_path).unwrap();
+
+        // 默认白名单（DrugInOut / Term / Hsp.Win）放行两个命中项；Other 被过滤。
+        let names: Vec<&str> = roots.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec![".", "Hsp.Win", "Nto.His/Nto.His.DrugInOut"]);
+        assert!(roots[0].is_root);
+        assert_eq!(roots[1].path, root.join("Hsp.Win").to_str().unwrap());
+        assert!(!roots[1].is_root);
+    }
+
+    #[test]
+    fn empty_subrepo_whitelist_lists_every_initialized_submodule() {
+        let repo = TempRepo::new();
+        let project_path = repo.path_string();
+        let root = Path::new(&project_path);
+        fs::write(
+            root.join(".gitmodules"),
+            "[submodule \"Other\"]\n\tpath = Other\n\turl = git@example.com:Other.git\n",
+        )
+        .unwrap();
+        let dir = root.join("Other");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".git"), "gitdir: /tmp/elsewhere\n").unwrap();
+
+        let mut config = crate::config::ProjectConfig::default();
+        config.build.visible_subrepos = Vec::new();
+        crate::config::write_project_config(project_path.clone(), config).unwrap();
+
+        let roots = discover_git_roots_blocking(&project_path).unwrap();
+
+        let names: Vec<&str> = roots.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec![".", "Other"]);
     }
 
     #[test]
