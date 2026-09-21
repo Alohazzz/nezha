@@ -2,6 +2,7 @@ import { useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { GitBranch, Send, X } from "lucide-react";
 import type { PendingBranchCandidate } from "../../types";
+import { ReviewerPicker } from "./ReviewerPicker";
 
 /** 弹层里最多列出的分支条数：再多也会被折叠成「其余 N 个」。 */
 export const MAX_CREATE_LINES = 15;
@@ -13,12 +14,14 @@ export const MAX_CREATE_LINES = 15;
  * 发起 MR 是**幂等**的（同源 + 同目标已有开放 MR 会被后端跳过），所以这里不做 dry-run，
  * 只让用户核对「哪些分支 → 哪个目标分支」与审核人。
  *
- * 审核人默认为目标分支保护规则的管理人员，可按需编辑（逗号分隔），会应用到本批全部 MR。
+ * 审核人用成员选择器（对齐云效「添加成员」）：默认勾选目标分支保护规则里的默认评审人，
+ * 可搜索勾选、也可手填。值以人名传递，后端发起时解析成云效用户 ID。
  */
 export function CreateMrConfirmDialog({
   pending,
   busy,
   reviewers,
+  recommendedReviewers,
   onReviewersChange,
   onCancel,
   onConfirm,
@@ -26,8 +29,11 @@ export function CreateMrConfirmDialog({
   /** 待发起项；`null` 表示弹层关闭。 */
   pending: PendingBranchCandidate[] | null;
   busy: boolean;
-  reviewers: string;
-  onReviewersChange: (value: string) => void;
+  /** 已选审核人（人名）。 */
+  reviewers: string[];
+  /** 目标分支保护规则里的默认评审人（置顶并标「推荐」）。 */
+  recommendedReviewers: string[];
+  onReviewersChange: (value: string[]) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -82,13 +88,11 @@ export function CreateMrConfirmDialog({
           </div>
           <div className="build-dialog-note">
             <label className="pm-dialog-field">
-              <span>审核人（默认目标分支管理人员，可编辑，逗号分隔）</span>
-              <textarea
-                className="pm-dialog-input"
+              <span>审核人（默认目标分支的评审人，可搜索添加）</span>
+              <ReviewerPicker
                 value={reviewers}
-                onChange={(e) => onReviewersChange(e.target.value)}
-                rows={2}
-                placeholder="如：张三, 李四"
+                onChange={onReviewersChange}
+                recommended={recommendedReviewers}
                 disabled={busy}
               />
             </label>

@@ -312,6 +312,7 @@ export function PendingMrView({
     createResults,
     pending: pendingCreate,
     reviewers,
+    recommendedReviewers,
     setReviewers,
     startCreate,
     confirmCreate,
@@ -514,6 +515,7 @@ export function PendingMrView({
         pending={pendingCreate}
         busy={createBusy}
         reviewers={reviewers}
+        recommendedReviewers={recommendedReviewers}
         onReviewersChange={setReviewers}
         onCancel={cancelCreate}
         onConfirm={() => void confirmCreate()}

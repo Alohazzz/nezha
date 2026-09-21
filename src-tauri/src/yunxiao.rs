@@ -54,16 +54,26 @@ pub(crate) async fn read_json_body(resp: reqwest::Response) -> Result<Vec<u8>, S
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.bytes().await.unwrap_or_default();
+        // 一律带上状态码与 errorCode：云效对未知路径只回一个 `{"errorMessage":"Not Found"}`，
+        // 只吐消息体时看不出是「路径写错」还是「对象不存在」，排查得重新抓包。
         let message = if body.is_empty() {
             format!("HTTP {status}")
         } else {
             match serde_json::from_slice::<serde_json::Value>(&body) {
-                Ok(json) => json
-                    .get("errorMessage")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&body_string(&body))
-                    .to_string(),
-                Err(_) => body_string(&body),
+                Ok(json) => {
+                    let detail = json
+                        .get("errorMessage")
+                        .or_else(|| json.get("errorMsg"))
+                        .or_else(|| json.get("errorDescription"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| body_string(&body));
+                    match json.get("errorCode").and_then(serde_json::Value::as_str) {
+                        Some(code) if !code.is_empty() => format!("HTTP {status} [{code}]: {detail}"),
+                        _ => format!("HTTP {status}: {detail}"),
+                    }
+                }
+                Err(_) => format!("HTTP {status}: {}", body_string(&body)),
             }
         };
         return Err(message);
