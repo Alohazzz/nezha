@@ -7,6 +7,11 @@ import { useI18n } from "../i18n";
 import s from "../styles";
 import { KnowledgeGraphPanel } from "./settings/KnowledgeGraphPanel";
 import { Select } from "./settings/Select";
+import { MultiSelect } from "./settings/MultiSelect";
+import {
+  DEFAULT_VISIBLE_SUBREPOS,
+  resolveVisibleSubrepos,
+} from "./build/visibleSubrepos";
 
 interface ProjectConfig {
   agent: {
@@ -23,6 +28,11 @@ interface ProjectConfig {
   };
   knowledge?: {
     graphId?: string;
+  };
+  build?: {
+    /** 构建面板「可选子仓库」白名单；空数组 = 列出全部子模块。 */
+    visible_subrepos?: string[];
+    [key: string]: unknown;
   };
   [key: string]: unknown;
 }
@@ -50,35 +60,72 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
     String(DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS),
   );
   const [worktreeBasePath, setWorktreeBasePath] = useState("");
+  // 构建面板「可选子仓库」：存的是子仓库名（后端按名称/路径做 includes 匹配）。
+  // 空数组 = 不限制，列出全部子模块。
+  const [visibleSubrepos, setVisibleSubrepos] = useState<string[]>([]);
+  // 选项来自项目实际发现的子模块，而不是让用户手敲关键字。
+  const [subrepoOptions, setSubrepoOptions] = useState<
+    { value: string; label: string; title?: string }[]
+  >([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      invoke<ProjectConfig>("read_project_config", { projectPath }),
-      Promise.resolve([]),
-    ])
-      .then(([c]) => {
-        setConfig(c);
-        setAgentDefault(c.agent.default);
-        const mode = c.agent.default_permission_mode;
-        if (mode === "ask" || mode === "auto_edit" || mode === "full_access") {
-          setDefaultPermissionMode(mode);
-        }
-        setPromptPrefix(c.agent.prompt_prefix ?? "");
-        setCommitPrompt(c.git.commit_prompt);
-        const timeoutSecs = c.git.commit_message_timeout_secs ?? DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS;
-        setCommitMessageTimeoutSecs(
-          String(
-            Math.min(
-              Math.max(timeoutSecs, MIN_COMMIT_MESSAGE_TIMEOUT_SECS),
-              MAX_COMMIT_MESSAGE_TIMEOUT_SECS,
-            ),
+    let cancelled = false;
+
+    // 配置与仓库发现一起等：保存的「可选子仓库」关键字要按实际发现的仓库名归一，
+    // 否则历史配置里的缩写字（如 DrugInOut）勾不上对应的 Nto.His/Nto.His.DrugInOut。
+    void (async () => {
+      const [c, discovered] = await Promise.all([
+        invoke<ProjectConfig>("read_project_config", { projectPath }).catch((e) => {
+          if (!cancelled) setError(String(e));
+          return null;
+        }),
+        // 仓库发现单独容错：失败不该让整个设置页打不开，退化为空列表即可。
+        // 用轻量的 list_build_subrepos（只读 .gitmodules，约 5ms）：这里只需要
+        // 「有哪些子仓库」，不值得为填一个下拉框跑完整的仓库发现。
+        invoke<{ name: string; path: string }[]>("list_build_subrepos", {
+          projectPath,
+        }).catch(() => []),
+      ]);
+      if (cancelled) return;
+
+      setSubrepoOptions(
+        discovered.map((r) => ({ value: r.name, label: r.name, title: r.path })),
+      );
+
+      if (!c) return;
+      setConfig(c);
+      setAgentDefault(c.agent.default);
+      const mode = c.agent.default_permission_mode;
+      if (mode === "ask" || mode === "auto_edit" || mode === "full_access") {
+        setDefaultPermissionMode(mode);
+      }
+      setPromptPrefix(c.agent.prompt_prefix ?? "");
+      setCommitPrompt(c.git.commit_prompt);
+      const timeoutSecs = c.git.commit_message_timeout_secs ?? DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS;
+      setCommitMessageTimeoutSecs(
+        String(
+          Math.min(
+            Math.max(timeoutSecs, MIN_COMMIT_MESSAGE_TIMEOUT_SECS),
+            MAX_COMMIT_MESSAGE_TIMEOUT_SECS,
           ),
-        );
-        setWorktreeBasePath(c.worktree?.base_path ?? "");
-      })
-      .catch((e) => setError(String(e)));
+        ),
+      );
+      setWorktreeBasePath(c.worktree?.base_path ?? "");
+      setVisibleSubrepos(
+        resolveVisibleSubrepos(
+          // 与 BuildPanel 的兜底保持一致：拿不到配置时用内置默认白名单，
+          // 而不是「不限制」——两处对同一份配置必须给出同一种解读。
+          c.build?.visible_subrepos ?? DEFAULT_VISIBLE_SUBREPOS,
+          discovered,
+        ),
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [projectPath]);
 
   function handleCommitMessageTimeoutChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -138,6 +185,10 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
           worktree: {
             ...(config?.worktree ?? {}),
             base_path: worktreeBasePath.trim(),
+          },
+          build: {
+            ...(config?.build ?? {}),
+            visible_subrepos: visibleSubrepos,
           },
         },
       });
@@ -273,6 +324,23 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
                     选择
                   </button>
                 </div>
+              </div>
+            </div>
+
+            <div style={s.modalSection}>
+              <div style={s.modalSectionTitle}>{t("settings.build")}</div>
+              <div style={s.modalField}>
+                <label style={s.modalLabel}>
+                  {t("settings.visibleSubrepos")}
+                  <span style={s.modalLabelHint}>{t("settings.visibleSubreposHint")}</span>
+                </label>
+                <MultiSelect
+                  options={subrepoOptions}
+                  selected={visibleSubrepos}
+                  onChange={setVisibleSubrepos}
+                  allOption={t("settings.visibleSubreposAll")}
+                  emptyLabel={t("settings.visibleSubreposEmpty")}
+                />
               </div>
             </div>
           </>

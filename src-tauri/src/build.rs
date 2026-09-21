@@ -36,6 +36,10 @@ pub struct BuildConfig {
     pub skip_clean: bool,
     #[serde(default)]
     pub default_branch: String,
+    /// 构建面板「可选子仓库」白名单：主仓库恒显示；子模块的名称或路径命中任一关键字
+    /// （忽略大小写）才列出。留空表示列出全部子模块。可在项目设置页编辑。
+    #[serde(default = "default_visible_subrepos")]
+    pub visible_subrepos: Vec<String>,
     #[serde(default = "default_max_parallel")]
     pub max_parallel: u32,
     /// 构建失败后自动创建修复任务（full_access）。默认关闭：不经确认就拉起智能体进程
@@ -52,6 +56,13 @@ fn default_configuration() -> String {
 }
 fn default_platform() -> String {
     "AnyCPU".to_string()
+}
+fn default_visible_subrepos() -> Vec<String> {
+    vec![
+        "DrugInOut".to_string(),
+        "Term".to_string(),
+        "Hsp.Win".to_string(),
+    ]
 }
 fn default_max_parallel() -> u32 {
     2
@@ -70,6 +81,7 @@ impl Default for BuildConfig {
             skip_restore: false,
             skip_clean: false,
             default_branch: String::new(),
+            visible_subrepos: default_visible_subrepos(),
             max_parallel: default_max_parallel(),
             auto_fix_on_failure: false,
         }
@@ -346,6 +358,45 @@ pub fn write_build_config(project_path: String, build: BuildConfig) -> Result<()
     let mut cfg = crate::config::read_project_config(project_path.clone())?;
     cfg.build = build;
     crate::config::write_project_config(project_path, cfg)
+}
+
+/// 仅从 `.gitmodules` 读出的子仓库条目（名称 + 绝对路径）。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BuildSubrepo {
+    pub name: String,
+    pub path: String,
+}
+
+/// 轻量列出项目的子仓库（只读 `.gitmodules`，**不跑任何 git 命令**）。
+///
+/// 用途：只需要「有哪些子仓库可勾选」的场景（如设置页的「可选子仓库」下拉）。
+/// 完整 `discover_build_repos` 即使已并发化，仍要为每个仓库跑数条 git 命令
+/// （每条都是一次约 80ms 的进程启动），只为填一个下拉框不值当——这里约 5ms。
+/// 命名口径与 `discover_repos_blocking` 一致（均取自 `parse_gitmodules`），
+/// 因此列表里的名字可以直接作为构建面板白名单的匹配值。
+#[tauri::command]
+pub async fn list_build_subrepos(project_path: String) -> Result<Vec<BuildSubrepo>, String> {
+    validate_project_path(&project_path)?;
+    tauri::async_runtime::spawn_blocking(move || list_subrepos_blocking(&project_path))
+        .await
+        .map_err(|e| format!("list_build_subrepos panicked: {e}"))?
+}
+
+/// `list_build_subrepos` 的同步实现（无 git 调用，只解析 `.gitmodules`）。
+fn list_subrepos_blocking(project_path: &str) -> Result<Vec<BuildSubrepo>, String> {
+    let root = read_project_path(project_path)?;
+    let gitmodules = root.join(".gitmodules");
+    if !gitmodules.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&gitmodules).unwrap_or_default();
+    Ok(parse_gitmodules(&content)
+        .into_iter()
+        .map(|(name, rel, _)| BuildSubrepo {
+            name,
+            path: root.join(&rel).to_string_lossy().into_owned(),
+        })
+        .collect())
 }
 
 /// 自动推导仓库清单：主仓库 + `.gitmodules` 子模块。
@@ -1716,6 +1767,51 @@ mod tests {
         assert!(is_submodule_path("Nto.His/Term/foo.cs", &subs));
         assert!(!is_submodule_path("Nto.Emr2", &subs));
         assert!(!is_submodule_path("Nto.His/DrugInOut", &subs));
+    }
+
+    // 构建面板的「可选子仓库」白名单：缺省必须含 Hsp.Win；显式空数组表示不限制
+    // （前端据此展示全部子模块），因此不能把「缺失」与「空」混为一谈。
+    #[test]
+    fn visible_subrepos_default_includes_hsp_win_and_empty_means_unrestricted() {
+        assert!(default_visible_subrepos().iter().any(|s| s == "Hsp.Win"));
+        assert_eq!(BuildConfig::default().visible_subrepos, default_visible_subrepos());
+
+        // 配置里缺该字段（老配置文件）→ 落到默认白名单
+        let legacy: BuildConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.visible_subrepos, default_visible_subrepos());
+
+        // 显式空数组 → 保持为空（前端不过滤）
+        let unrestricted: BuildConfig =
+            serde_json::from_str("{\"visible_subrepos\":[]}").unwrap();
+        assert!(unrestricted.visible_subrepos.is_empty());
+    }
+
+    // 轻量列举（只读 .gitmodules）必须与完整 discover 用同一套子模块命名口径——
+    // 设置页的下拉值就是这些名字，构建面板按名字匹配白名单，两者不一致会「勾了不生效」。
+    #[test]
+    fn list_subrepos_names_match_gitmodules_entries() {
+        let repo = TempRepo::new();
+        std::fs::create_dir_all(repo.path.join("Nto.His/Nto.His.Term")).unwrap();
+        std::fs::write(
+            repo.path.join(".gitmodules"),
+            "[submodule \"Hsp.Win\"]\n\tpath = Hsp.Win\n\turl = git@example.com:Hsp_Main.git\n\
+             [submodule \"Nto.His/Nto.His.Term\"]\n\tpath = Nto.His/Nto.His.Term\n\turl = git@example.com:Term.git\n",
+        )
+        .unwrap();
+
+        let subs = list_subrepos_blocking(repo.dir()).unwrap();
+        let names: Vec<&str> = subs.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Hsp.Win", "Nto.His/Nto.His.Term"]);
+        // 路径是「项目根 + 相对路径」，下拉的 tooltip 用它区分同名子仓库。
+        assert!(subs[0].path.replace('\\', "/").ends_with("/Hsp.Win"));
+        assert!(subs[1].path.replace('\\', "/").ends_with("/Nto.His/Nto.His.Term"));
+    }
+
+    // 没有 .gitmodules 的项目应返回空列表，而不是报错（设置页据此展示空态）。
+    #[test]
+    fn list_subrepos_is_empty_without_gitmodules() {
+        let repo = TempRepo::new();
+        assert!(list_subrepos_blocking(repo.dir()).unwrap().is_empty());
     }
 
     /// 临时 bare 远端仓库（Drop 时删除）。

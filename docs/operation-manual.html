@@ -591,7 +591,7 @@
 
       <h3><span class="subnum">4.2</span>仓库拉取</h3>
       <ul>
-        <li>「<strong>仓库拉取</strong>」列出自动推导的仓库：主仓库 + <code>.gitmodules</code> 子模块（当前只展示 HIS / DrugInOut / Term）。</li>
+        <li>「<strong>仓库拉取</strong>」列出自动推导的仓库：主仓库 + <code>.gitmodules</code> 子模块。子模块默认只展示 DrugInOut / Term / Hsp.Win，可在<strong>项目设置 → 构建 → 可选子仓库</strong>的多选下拉里勾选要展示的子仓库（不勾选任何一项表示列出全部子模块）。</li>
         <li>每个仓库可<strong>独立切换分支</strong>（下拉），并显示当前分支 / <code>脏</code>（有未提交改动）/ <code>缺失</code> 状态。</li>
         <li>勾选要拉取的仓库 → 点「<strong>拉取</strong>」：走 <code>git pull --ff-only --no-rebase</code>；<strong>脏仓库会被阻断</strong>（绝不 stash / reset）；远端引用陈旧导致失败时自动 <code>git fetch --prune --force origin</code> 后重试；结果显示为压缩摘要。</li>
         <li>「<strong>刷新基线</strong>」把当前各仓库 HEAD 写入 <code>.nezha/build-state.json</code>，作为增量构建的比较基准（不编译）。</li>
