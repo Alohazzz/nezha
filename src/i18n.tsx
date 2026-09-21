@@ -373,7 +373,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "settings.build": "Build",
     "settings.visibleSubrepos": "Selectable Sub-repositories",
     "settings.visibleSubreposHint":
-      "Sub-repositories listed in the build panel. The root repo always shows. None selected means every submodule is listed.",
+      "Sub-repositories listed in the build panel and in the repository switcher (which drives the Git changes / Git history panels). The root repo always shows. None selected means every submodule is listed.",
     "settings.visibleSubreposAll": "All sub-repositories (unrestricted)",
     "settings.visibleSubreposEmpty": "No sub-repositories found in this project.",
     "settings.secondsUnit": "seconds",
@@ -1480,7 +1480,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "settings.build": "构建",
     "settings.visibleSubrepos": "可选子仓库",
     "settings.visibleSubreposHint":
-      "构建面板中列出的子仓库。主仓库恒显示；不勾选任何一项表示列出全部子模块。",
+      "构建面板与仓库切换器（「Git 变更」「Git 历史」的数据来源）中列出的子仓库。主仓库恒显示；不勾选任何一项表示列出全部子模块。",
     "settings.visibleSubreposAll": "全部子仓库（不限制）",
     "settings.visibleSubreposEmpty": "本项目未发现子仓库。",
     "settings.secondsUnit": "秒",
