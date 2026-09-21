@@ -757,6 +757,51 @@ pub(crate) fn resolve_reviewer_ids(
     Ok(ids)
 }
 
+/// 创建成功的合并请求标识。
+///
+/// `local_id` 是**权威**标识：云效所有 MR 详情 / 动作路径段
+/// （`…/repositories/{repositoryId}/changeRequests/{localId}`）收的都是它。
+/// 官方 `ChangeRequest` 响应模型里**没有** `id` / `mrBizId`——那套是**列表**接口
+/// （`…/organizations/{org}/changeRequests`）的形状，创建/详情返回的是另一套。
+/// 创建后能用于后续查状态的只有 `localId`。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CreatedChangeRequest {
+    local_id: i64,
+    /// 业务 id（`mrBizId`）。创建响应通常不带；带上时留作记录，不做路径参数。
+    biz_id: Option<String>,
+}
+
+/// JSON 值 → i64（云效同一字段在不同接口会以数字或字符串给出）。
+fn json_as_i64(value: &serde_json::Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+}
+
+/// 从创建 MR 的响应里解析出 MR 标识（纯函数，便于单测）。
+///
+/// **只认 `localId`**：它是后续路径操作的唯一可用标识。刻意不退化成取 `id`——
+/// 官方响应模型没有该字段，一旦服务端某天补上（含义未知），把它写进批次记录就会让
+/// 「删除批次时的已合并门禁」拿着错编号去查，报出 `Invalid param value` 这类
+/// 与真实原因无关的错。宁可在这里明确报错，也不要存一个语义不明的值。
+fn parse_created_change_request(json: &serde_json::Value) -> Result<CreatedChangeRequest, String> {
+    let item = json.get("result").unwrap_or(json);
+    let local_id = item
+        .get("localId")
+        .or_else(|| json.get("localId"))
+        .and_then(json_as_i64)
+        .ok_or_else(|| {
+            "创建合并请求已成功，但响应里没有 localId，无法记录该 MR（请到云效上确认）".to_string()
+        })?;
+    let biz_id = item
+        .get("mrBizId")
+        .or_else(|| json.get("mrBizId"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .filter(|s| !s.is_empty());
+    Ok(CreatedChangeRequest { local_id, biz_id })
+}
+
 /// 在 Codeup 上创建合并请求（仅提交、不合并）的**去批次化**核心。
 ///
 /// 抽出来供两条链路共用：分支批的 `codeup_create_mr`（回写批记录）与「待发起」视图的
@@ -777,7 +822,7 @@ async fn post_change_request(
     title: &str,
     description: &str,
     reviewer_ids: &[String],
-) -> Result<(String, Option<i64>), String> {
+) -> Result<CreatedChangeRequest, String> {
     let url = change_requests_url(org, repository_id);
     let body = serde_json::json!({
         "title": title,
@@ -801,50 +846,82 @@ async fn post_change_request(
     let bytes = read_json_body(resp).await?;
     let json: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析创建合并请求响应失败: {e}"))?;
-    // 创建接口直接返回 MR 对象（不是包在 result 里），但两种形态都兼容。
-    let result = json.get("result").unwrap_or(&json);
-    let mr_id = json
-        .get("id")
-        .or_else(|| json.get("mrId"))
-        .and_then(|v| v.as_str().map(String::from))
-        .or_else(|| json.get("id").and_then(serde_json::Value::as_i64).map(|i| i.to_string()))
-        .or_else(|| {
-            result
-                .get("id")
-                .or_else(|| result.get("mrId"))
-                .and_then(|v| {
-                    v.as_str()
-                        .map(String::from)
-                        .or_else(|| v.as_i64().map(|i| i.to_string()))
-                })
-        })
-        // 实测创建响应里没有 `id`/`mrBizId`，只有数字 localId —— 用它兜底，
-        // 否则「创建成功但取不到 id」会把调用方误报成失败。
-        .or_else(|| {
-            result
-                .get("localId")
-                .or_else(|| json.get("localId"))
-                .and_then(|v| {
-                    v.as_str()
-                        .map(String::from)
-                        .or_else(|| v.as_i64().map(|i| i.to_string()))
-                })
-        })
-        .ok_or_else(|| "创建合并请求后未取到 MR id".to_string())?;
-    let local_id = result
-        .get("localId")
-        .or_else(|| json.get("localId"))
-        .and_then(serde_json::Value::as_i64)
-        // 云效部分返回值把 localId 作为字符串给出。
-        .or_else(|| {
-            result
-                .get("localId")
-                .or_else(|| json.get("localId"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.trim().parse::<i64>().ok())
-        });
-    Ok((mr_id, local_id))
+    parse_created_change_request(&json)
 }
+
+/// 本地是否存在该 ref（`rev-parse --verify --quiet`）。
+fn ref_exists(dir: &str, name: &str) -> bool {
+    run_git(dir, &["rev-parse", "--verify", "--quiet", name])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// 源分支相对目标分支的提交数——创建代码评审的前提。
+///
+/// 云效对「源分支相对目标分支没有改动」会回
+/// `400 MERGE_REQUEST_VALIDATE_ERROR: 源分支或提交不存在/没有改动`，用户拿到的是一串
+/// 英文 API 报文，且分支已经被白推上去。这里提前判掉，给出可操作的中文提示，
+/// 也省掉那次无意义的 push。
+///
+/// 返回 `Some(0)` = **确定**没有改动，应当拦下；`None` = 判不了（缺 ref / 远端不可达），
+/// 此时**放行**交给云效裁决——本地信息不全时误拦合法 MR 的代价更高。
+///
+/// 目标 ref 优先取 `origin/<target>`：云效比的是**远端**目标分支，本地 `<target>` 可能
+/// 是过期快照。`fetch` 为 true 时先拉一次目标分支（失败不阻断，退回本地已有 ref）。
+///
+/// 拦下是否可靠：`origin/<target>..<source>` 计数为 0 说明源分支是目标 ref 的祖先，
+/// 而目标 ref 不会比远端更新（只能由 fetch 前进），故源分支也确实不含远端目标没有的提交。
+async fn source_branch_ahead_count(
+    dir: &str,
+    source: &str,
+    target: &str,
+    fetch: bool,
+) -> Option<u64> {
+    let (source, target) = (source.trim(), target.trim());
+    if source.is_empty() || target.is_empty() {
+        return None;
+    }
+    if fetch {
+        // 目标分支取最新远端；失败不阻断（离线 / 无权限时退回本地 ref 继续判）。
+        let _ = crate::git::run_git_with_timeout(
+            dir.to_string(),
+            vec!["fetch".into(), "origin".into(), target.to_string()],
+            std::time::Duration::from_secs(300),
+        )
+        .await;
+    }
+    let (dir, source, target) = (dir.to_string(), source.to_string(), target.to_string());
+    tauri::async_runtime::spawn_blocking(move || -> Option<u64> {
+        let target_ref = if ref_exists(&dir, &format!("origin/{target}")) {
+            format!("origin/{target}")
+        } else if ref_exists(&dir, &target) {
+            target.clone()
+        } else {
+            return None;
+        };
+        // 源分支优先用本地 ref：它就是即将被 push 的那份内容。
+        let source_ref = if ref_exists(&dir, &source) {
+            source.clone()
+        } else if ref_exists(&dir, &format!("origin/{source}")) {
+            format!("origin/{source}")
+        } else {
+            return None;
+        };
+        let range = format!("{target_ref}..{source_ref}");
+        let out = run_git(&dir, &["rev-list", "--count", &range]).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// 「源分支无改动」的统一提示（两条链路共用，措辞一致）。
+const NO_CHANGES_HINT: &str =
+    "源分支相对目标分支没有改动，无法创建代码评审（请先在该分支上提交改动）";
 
 /// 在 Codeup 上创建合并请求；仅提交（不合并）。成功后回写批的 mrId/mrStatus，status=review。
 #[tauri::command]
@@ -884,7 +961,28 @@ pub async fn codeup_create_mr(
         }
     }
 
-    // 先非 force push 源分支，保证 MR 引用远端已有提交；再取提交时的 HEAD。
+    // 创建代码评审的前提：源分支相对目标分支必须有改动，否则云效会回
+    // `MERGE_REQUEST_VALIDATE_ERROR`。提前拦下，避免白推一次分支 + 让用户读 API 报文。
+    // 判不了（缺 ref / 离线）时放行，交给云效裁决。
+    if source_branch_ahead_count(&push_dir, &batch.branch, &batch.target_branch, true).await
+        == Some(0)
+    {
+        return Err(NO_CHANGES_HINT.to_string());
+    }
+
+    // 云效侧定位与审核人解析都放在 push **之前**：这些都是能提前判定的失败，
+    // 一旦不通过就地返回、不产生任何推送副作用。反过来（先推再解析）会让分支
+    // 白推上去却发不出一条 MR——正是批量链路明确避免的情形。
+    let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
+    let org = repo_org_id(&repo);
+    let client = build_client()?;
+    // 创建接口是仓库级路径，必须先拿到云效仓库数字 id（网络拉取，失败即报错——
+    // 猜一个 id 只会换来一个更难理解的 404/500）。
+    let repository_id = codeup_repository_id_for(&repo.repository).await?;
+    // 审核人由前端以「人名」传来（默认取自目标分支的评审人），这里换成云效 userID。
+    let reviewers = resolve_reviewer_ids(&reviewers, &fetch_org_members().await?)?;
+
+    // 非 force push 源分支，保证 MR 引用远端已有提交；再取提交时的 HEAD。
     let push = run_git(&push_dir, &["push", "origin", &batch.branch])?;
     if !push.status.success() {
         return Err(format!(
@@ -898,15 +996,7 @@ pub async fn codeup_create_mr(
     }
     let source_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
 
-    let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
-    let org = repo_org_id(&repo);
-    let client = build_client()?;
-    // 创建接口是仓库级路径，必须先拿到云效仓库数字 id（网络拉取，失败即报错——
-    // 猜一个 id 只会换来一个更难理解的 404/500）。
-    let repository_id = codeup_repository_id_for(&repo.repository).await?;
-    // 审核人由前端以「人名」传来（默认取自目标分支的评审人），这里换成云效 userID。
-    let reviewers = resolve_reviewer_ids(&reviewers, &fetch_org_members().await?)?;
-    let (mr_id, _) = post_change_request(
+    let created = post_change_request(
         &client,
         &token,
         org,
@@ -924,7 +1014,9 @@ pub async fn codeup_create_mr(
         .iter_mut()
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "Batch not found".to_string())?;
-    updated.mr_id = Some(mr_id);
+    // mr_id 存 **localId**：云效的 MR 详情/动作路径段收的就是它，删除批次时的
+    // 「已合并门禁」也正是拿这个值去查状态（见 batch_mr_is_merged）。
+    updated.mr_id = Some(created.local_id.to_string());
     updated.mr_status = Some("opened".to_string());
     updated.status = "review".to_string();
     updated.mr_source_sha = Some(source_sha);
@@ -971,9 +1063,9 @@ pub struct MrCreateReceipt {
     pub target_branch: String,
     /// 本次是否真的创建了 MR（幂等跳过 / 失败时 false）。
     pub created: bool,
-    /// 新建 MR 的业务 id。
+    /// 新建 MR 的业务 id（`mrBizId`）。创建响应通常不带，故多为 `None`。
     pub mr_id: Option<String>,
-    /// 仓库内 MR 编号（云效返回时才带）。
+    /// 仓库内 MR 编号（`localId`）——云效 MR 详情/动作路径段收的就是它。
     pub mr_local_id: Option<i64>,
     /// 结果说明：成功 / 幂等跳过 / 失败原因。
     pub reason: String,
@@ -984,7 +1076,9 @@ pub struct MrCreateReceipt {
 /// 与删除同理，这是**对外可见且难以撤销**的推送动作，因此逐条给回执、单条失败不中断，
 /// 并在创建前做幂等判重（同一「仓库 + 源分支 + 目标分支」已有开放 MR 就跳过，不重复发起）。
 ///
-/// 每条的处理顺序：解析云效仓库 id → 幂等判重 → 非 force push 源分支 → POST changeRequests。
+/// 每条的处理顺序：路径校验 → 解析云效仓库 id → 幂等判重 → **无改动预检** →
+/// 审核人解析 → 非 force push 源分支 → POST changeRequests。
+/// 全部可提前判定的失败都排在 push 之前，确保不产生推送副作用。
 /// 路径安全：每个仓库路径都必须在项目内（在产生任何推送副作用之前校验）。
 #[tauri::command]
 pub async fn codeup_create_mrs_batch(
@@ -1084,9 +1178,8 @@ pub async fn codeup_create_mrs_batch(
             continue;
         }
 
-        // 审核人先在本地解析成 userID：解析失败要在推送之前拦住，避免把分支推上去
-        // 却发不出一条 MR。幂等跳过时不解析（那条根本不会创建）。
         // 幂等：同源 + 同目标已有开放 MR 就跳过，避免重复发起。
+        // 放在无改动预检 / 审核人解析之前：命中幂等时那两项都不必算。
         if let Some(existing) = open_mrs.iter().find(|mr| {
             mr.repository_id == resolved.repository_id
                 && mr.source_branch == item.source_branch
@@ -1094,6 +1187,27 @@ pub async fn codeup_create_mrs_batch(
         }) {
             receipt.mr_local_id = Some(existing.local_id);
             receipt.reason = format!("已有开放合并请求 #{}，跳过", existing.local_id);
+            out.push(receipt);
+            continue;
+        }
+
+        // 创建代码评审的前提：源分支相对目标分支必须有改动。提前拦下，避免白推一次分支
+        // + 让用户读云效的 API 报文。放在审核人解析**之前**：这是纯本地判定（无网络），
+        // 且「没有改动」比「审核人写错」更根本——先让用户看到它，省一次往返。
+        //
+        // `fetch=false`：本函数要对一批分支逐条处理，逐条 fetch 目标分支会让整批慢很多。
+        // 用本地 `origin/<target>` 判「是否有改动」仍然可靠——目标 ref 只会被 fetch 推向前，
+        // 源分支是它的祖先时对**更新的**远端目标同样没有改动。判不了（ref 缺失）时放行。
+        if source_branch_ahead_count(
+            &resolved.dir,
+            &item.source_branch,
+            &item.target_branch,
+            false,
+        )
+        .await
+            == Some(0)
+        {
+            receipt.reason = NO_CHANGES_HINT.to_string();
             out.push(receipt);
             continue;
         }
@@ -1161,10 +1275,10 @@ pub async fn codeup_create_mrs_batch(
         )
         .await
         {
-            Ok((mr_id, local_id)) => {
+            Ok(created) => {
                 receipt.created = true;
-                receipt.mr_id = Some(mr_id);
-                receipt.mr_local_id = local_id;
+                receipt.mr_id = created.biz_id;
+                receipt.mr_local_id = Some(created.local_id);
                 receipt.reason = format!(
                     "已发起合并请求（{} → {}）",
                     item.source_branch, item.target_branch
@@ -2472,6 +2586,159 @@ mod tests {
     fn empty_reviewer_list_needs_no_members() {
         assert!(resolve_reviewer_ids(&[], &[]).unwrap().is_empty());
         assert!(resolve_reviewer_ids(&["  ".into()], &[]).unwrap().is_empty());
+    }
+
+    /// 创建响应只有 `localId`（官方 ChangeRequest 模型没有 id/mrBizId）——它是后续
+    /// 路径操作的唯一可用标识，必须优先取到。
+    #[test]
+    fn parses_created_mr_from_local_id() {
+        let created = parse_created_change_request(&serde_json::json!({
+            "localId": 3541,
+            "title": "t",
+            "projectId": 3402790,
+            "mrBizId": "cef5669cc62e4a5990ebebdf1d1b2932",
+        }))
+        .unwrap();
+        assert_eq!(created.local_id, 3541);
+        assert_eq!(
+            created.biz_id.as_deref(),
+            Some("cef5669cc62e4a5990ebebdf1d1b2932")
+        );
+    }
+
+    /// 数字与字符串两种给出方式都要认（云效同一字段在不同接口形态不一）。
+    #[test]
+    fn parses_created_mr_local_id_from_string_and_result_wrapper() {
+        let as_string =
+            parse_created_change_request(&serde_json::json!({ "localId": "42" })).unwrap();
+        assert_eq!(as_string.local_id, 42);
+        let wrapped = parse_created_change_request(&serde_json::json!({
+            "result": { "localId": 7 }
+        }))
+        .unwrap();
+        assert_eq!(wrapped.local_id, 7);
+    }
+
+    /// 没有 localId 时必须报错，**不能**退回取 `id`：官方模型没有该字段，一旦服务端
+    /// 补上（含义未知），存进批次记录会让「已合并门禁」拿着错编号去查。
+    #[test]
+    fn refuses_to_guess_mr_id_when_local_id_missing() {
+        for payload in [
+            serde_json::json!({ "id": "abc" }),
+            serde_json::json!({ "mrBizId": "abc" }),
+            serde_json::json!({ "result": { "id": 1 } }),
+        ] {
+            let err = parse_created_change_request(&payload).unwrap_err();
+            assert!(err.contains("localId"), "unexpected: {err}");
+        }
+    }
+
+    // ── 无改动预检（真实 git）──────────────────────────────────────────────────
+
+    /// 测试夹具的绝对基路径：不能用 `std::env::temp_dir()`（Git Bash 下会拿到 `/tmp`
+    /// 这类非 Windows 绝对路径），固定落在已 gitignore 的 `target/` 下。
+    fn temp_base() -> std::path::PathBuf {
+        let base = std::env::current_dir()
+            .expect("current dir")
+            .join("target")
+            .join("codeup-tests");
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    struct TempRepo {
+        path: std::path::PathBuf,
+    }
+
+    impl TempRepo {
+        fn new() -> Self {
+            let path = temp_base().join(format!("nezha-codeup-test-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            let repo = Self { path };
+            repo.git(&["init"]);
+            for (k, v) in [("user.email", "me@test.test"), ("user.name", "me")] {
+                repo.git(&["config", k, v]);
+            }
+            // 把默认分支固定成 master：`git init` 的默认名随 git 版本/配置而变
+            // （master 或 main），不固定的话 `git branch master` 会因重名而失败。
+            repo.git(&["branch", "-M", "master"]);
+            repo
+        }
+
+        fn dir(&self) -> String {
+            self.path.to_string_lossy().into_owned()
+        }
+
+        fn git(&self, args: &[&str]) {
+            let o = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        }
+
+        /// 提交一个文件（内容带 n 以产生不同 patch）。
+        fn commit_file(&self, name: &str, n: u32, msg: &str) {
+            std::fs::write(self.path.join(name), format!("{name}-{n}")).unwrap();
+            self.git(&["add", "."]);
+            self.git(&["commit", "-m", msg]);
+        }
+    }
+
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// 源分支相对目标分支有改动 → 计数 > 0（放行）。
+    #[tokio::test]
+    async fn ahead_count_is_positive_when_branch_has_changes() {
+        let repo = TempRepo::new();
+        repo.commit_file("a.txt", 1, "base");
+        repo.git(&["checkout", "-b", "feature"]);
+        repo.commit_file("a.txt", 2, "work");
+        assert_eq!(
+            source_branch_ahead_count(&repo.dir(), "feature", "master", false).await,
+            Some(1)
+        );
+    }
+
+    /// 源分支与目标分支指向同一提交（用户报的那个场景）→ 计数 0（拦下）。
+    #[test]
+    fn ahead_count_is_zero_when_branch_equals_target() {
+        // 用 block_on 跑 async 判定；这里只为断言数值，故手动驱动。
+        let repo = TempRepo::new();
+        repo.commit_file("a.txt", 1, "base");
+        // 新建分支但**不提交**，与 master 同提交。
+        repo.git(&["checkout", "-b", "feature-empty"]);
+        let dir = repo.dir();
+        let count = tauri::async_runtime::block_on(source_branch_ahead_count(
+            &dir,
+            "feature-empty",
+            "master",
+            false,
+        ));
+        assert_eq!(count, Some(0), "空分支必须被判为无改动");
+    }
+
+    /// 目标分支的本地 ref 不存在时判不了（`None`）——必须**放行**而不是误拦：
+    /// 本地信息不全时拦掉合法 MR 的代价更高。
+    #[test]
+    fn ahead_count_is_unknown_when_target_ref_missing() {
+        let repo = TempRepo::new();
+        repo.commit_file("a.txt", 1, "base");
+        let dir = repo.dir();
+        // 只有当前分支，没有 origin/master 也没有 master。
+        let count = tauri::async_runtime::block_on(source_branch_ahead_count(
+            &dir,
+            "master",
+            "no-such-target",
+            false,
+        ));
+        assert_eq!(count, None);
     }
 
     /// 保护规则的默认评审人：**顶层数组**（实测响应形态），目标分支规则命中后取
