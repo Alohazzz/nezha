@@ -5,6 +5,7 @@ import { Check, ChevronDown, Hammer, RefreshCw, Play, X, GitBranch } from "lucid
 import { useI18n } from "../../i18n";
 import { rpRootStyle } from "../../styles/right-panel";
 import { StaleBranchCleanup, type DeletedBranch } from "./StaleBranchCleanup";
+import { filterVisibleRepos } from "./visibleSubrepos";
 
 interface BuildRepo {
   name: string;
@@ -30,6 +31,8 @@ interface BuildConfig {
   skip_restore: boolean;
   skip_clean: boolean;
   default_branch: string;
+  /** 可选子仓库白名单（主仓库恒显示）；空数组表示展示全部子模块。 */
+  visible_subrepos?: string[];
   max_parallel: number;
   auto_fix_on_failure: boolean;
 }
@@ -290,12 +293,17 @@ export function BuildPanel({
   const load = useCallback(async () => {
     setError("");
     // 逐项容错加载：单个失败不拖垮整面板
+    // 先读配置：仓库过滤需要用到其中的「可选子仓库」白名单。
+    let cfg: BuildConfig | null = null;
+    try {
+      cfg = await invoke<BuildConfig>("read_build_config", { projectPath });
+      setConfig(cfg);
+    } catch (e) {
+      setError(`配置读取失败: ${String(e)}`);
+    }
     try {
       const repoList = await invoke<BuildRepo[]>("discover_build_repos", { projectPath });
-      // 只显示 HIS + DrugInOut + Term（其余子模块后续再考虑）
-      const visible = repoList.filter(
-        (r) => !r.is_submodule || /druginou|term/i.test(r.name) || /druginou|term/i.test(r.path),
-      );
+      const visible = filterVisibleRepos(repoList, cfg?.visible_subrepos);
       setRepos(visible);
       setSelected((prev) => {
         const next = new Set<string>();
@@ -306,23 +314,18 @@ export function BuildPanel({
       setError(`仓库发现失败: ${String(e)}`);
     }
     try {
-      setConfig(await invoke<BuildConfig>("read_build_config", { projectPath }));
-    } catch (e) {
-      setError(`配置读取失败: ${String(e)}`);
-    }
-    try {
       setState(await invoke<BuildState>("read_build_state", { projectPath }));
     } catch {
       /* 状态可缺省 */
     }
     try {
-      const cfg = await invoke<{ agent: { default: string; default_permission_mode: string } }>(
+      const projCfg = await invoke<{ agent: { default: string; default_permission_mode: string } }>(
         "read_project_config",
         { projectPath },
       );
       setAgentInfo({
-        agent: cfg.agent.default,
-        perm: cfg.agent.default_permission_mode || "ask",
+        agent: projCfg.agent.default,
+        perm: projCfg.agent.default_permission_mode || "ask",
       });
     } catch {
       /* 缺省用 claude/ask */
@@ -410,8 +413,8 @@ export function BuildPanel({
         // 后端返回切换后的实际本地分支名（远端分支会 --track 建同名本地分支）
         const finalBranch = await invoke<string>("build_checkout_branch", { projectPath, repoPath: repo.path, branch });
         // 只原地更新被切换的仓库，不重跑全量仓库发现：
-        // discover_build_repos 会把所有仓库的所有分支重新加载一遍，且未走 load 的 visible 过滤，
-        // 会让隐藏的子模块（如 DrugInOut/Term 之外的那些）也跟着重新冒出来。
+        // discover_build_repos 会把所有仓库的所有分支重新加载一遍，且未走 load 的
+        // 「可选子仓库」白名单过滤，会让白名单之外的子模块也跟着重新冒出来。
         setRepos((prev) =>
           prev.map((r) => {
             if (r.path !== repo.path) return r;

@@ -36,6 +36,10 @@ pub struct BuildConfig {
     pub skip_clean: bool,
     #[serde(default)]
     pub default_branch: String,
+    /// 构建面板「可选子仓库」白名单：主仓库恒显示；子模块的名称或路径命中任一关键字
+    /// （忽略大小写）才列出。留空表示列出全部子模块。可在项目设置页编辑。
+    #[serde(default = "default_visible_subrepos")]
+    pub visible_subrepos: Vec<String>,
     #[serde(default = "default_max_parallel")]
     pub max_parallel: u32,
     /// 构建失败后自动创建修复任务（full_access）。默认关闭：不经确认就拉起智能体进程
@@ -52,6 +56,13 @@ fn default_configuration() -> String {
 }
 fn default_platform() -> String {
     "AnyCPU".to_string()
+}
+fn default_visible_subrepos() -> Vec<String> {
+    vec![
+        "DrugInOut".to_string(),
+        "Term".to_string(),
+        "Hsp.Win".to_string(),
+    ]
 }
 fn default_max_parallel() -> u32 {
     2
@@ -70,6 +81,7 @@ impl Default for BuildConfig {
             skip_restore: false,
             skip_clean: false,
             default_branch: String::new(),
+            visible_subrepos: default_visible_subrepos(),
             max_parallel: default_max_parallel(),
             auto_fix_on_failure: false,
         }
@@ -212,49 +224,51 @@ fn git_branch(dir: &str) -> String {
     }
 }
 
-fn git_branches(dir: &str) -> Vec<String> {
-    if let Ok(out) = run_git_in(
-        dir,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-    ) {
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        Vec::new()
-    }
-}
-
-/// 远端跟踪分支列表（`origin/xxx` 短名）。剔除 `*/HEAD` 符号引用，
-/// 以及已存在同名本地分支的远端项（切到它直接选本地分支即可，重复展示徒增噪音）。
-fn git_remote_branches(dir: &str, local: &[String]) -> Vec<String> {
+/// 一次 `for-each-ref` 同时取本地分支与远端跟踪分支，返回 `(本地, 远端)`。
+///
+/// 合并的原因：每次 git 调用都是一次进程启动（Windows 上实测约 80ms），把
+/// `refs/heads` 与 `refs/remotes` 拆成两次调用等于每个仓库多付一次启动开销。
+/// 用完整 refname（`refs/heads/x` / `refs/remotes/origin/x`）区分两侧，短名有歧义。
+///
+/// 远端项剔除 `*/HEAD` 符号引用，以及已存在同名本地分支的项
+/// （切到它直接选本地分支即可，重复展示徒增噪音）。
+fn git_all_branches(dir: &str) -> (Vec<String>, Vec<String>) {
     let out = match run_git_in(
         dir,
-        &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ],
     ) {
         Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+        _ => return (Vec::new(), Vec::new()),
     };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| {
-            if s.is_empty() {
-                return false;
+
+    let mut local: Vec<String> = Vec::new();
+    let mut remotes: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let r = line.trim();
+        if let Some(name) = r.strip_prefix("refs/heads/") {
+            if !name.is_empty() {
+                local.push(name.to_string());
             }
+        } else if let Some(name) = r.strip_prefix("refs/remotes/") {
             // origin/HEAD、upstream/HEAD 等符号引用
-            if s.ends_with("/HEAD") {
-                return false;
+            if name.is_empty() || name.ends_with("/HEAD") {
+                continue;
             }
             // 远端短名去掉首个路径段（remote 名）即本地分支名
-            match s.split_once('/') {
-                Some((_, local_name)) => !local.iter().any(|l| l == local_name),
-                None => false,
+            match name.split_once('/') {
+                Some((_, local_name)) if !local.iter().any(|l| l == local_name) => {
+                    remotes.push(name.to_string())
+                }
+                _ => {}
             }
-        })
-        .collect()
+        }
+    }
+    (local, remotes)
 }
 
 fn git_dirty(dir: &str) -> bool {
@@ -348,6 +362,69 @@ pub fn write_build_config(project_path: String, build: BuildConfig) -> Result<()
     crate::config::write_project_config(project_path, cfg)
 }
 
+/// 仅从 `.gitmodules` 读出的子仓库条目（名称 + 绝对路径）。
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BuildSubrepo {
+    pub name: String,
+    pub path: String,
+}
+
+/// 轻量列出项目的子仓库（只读 `.gitmodules`，**不跑任何 git 命令**）。
+///
+/// 用途：只需要「有哪些子仓库可勾选」的场景（如设置页的「可选子仓库」下拉）。
+/// 完整 `discover_build_repos` 即使已并发化，仍要为每个仓库跑数条 git 命令
+/// （每条都是一次约 80ms 的进程启动），只为填一个下拉框不值当——这里约 5ms。
+/// 命名口径与 `discover_repos_blocking` 一致（均取自 `parse_gitmodules`），
+/// 因此列表里的名字可以直接作为构建面板白名单的匹配值。
+#[tauri::command]
+pub async fn list_build_subrepos(project_path: String) -> Result<Vec<BuildSubrepo>, String> {
+    validate_project_path(&project_path)?;
+    tauri::async_runtime::spawn_blocking(move || list_subrepos_blocking(&project_path))
+        .await
+        .map_err(|e| format!("list_build_subrepos panicked: {e}"))?
+}
+
+/// `list_build_subrepos` 的同步实现（无 git 调用，只解析 `.gitmodules`）。
+fn list_subrepos_blocking(project_path: &str) -> Result<Vec<BuildSubrepo>, String> {
+    let root = read_project_path(project_path)?;
+    let gitmodules = root.join(".gitmodules");
+    if !gitmodules.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(&gitmodules).unwrap_or_default();
+    Ok(parse_gitmodules(&content)
+        .into_iter()
+        .map(|(name, rel, _)| BuildSubrepo {
+            name,
+            path: root.join(&rel).to_string_lossy().into_owned(),
+        })
+        .collect())
+}
+
+/// 单仓库的 git 元信息（`discover_repos_blocking` 内部用，便于并发收集）。
+struct RepoGitInfo {
+    remote: String,
+    branch: String,
+    branches: Vec<String>,
+    remote_branches: Vec<String>,
+    dirty: bool,
+}
+
+/// 收集单仓库的 git 元信息（同步；由 `discover_repos_blocking` 并发调用）。
+///
+/// `remote` 传 `Some` 时直接采用（子模块来自 `.gitmodules`），避免多余的一次
+/// `git remote` 进程启动。
+fn repo_git_info(dir: &str, remote: Option<String>) -> RepoGitInfo {
+    let (branches, remote_branches) = git_all_branches(dir);
+    RepoGitInfo {
+        remote: remote.unwrap_or_else(|| git_remote(dir)),
+        branch: git_branch(dir),
+        branches,
+        remote_branches,
+        dirty: git_dirty(dir),
+    }
+}
+
 /// 自动推导仓库清单：主仓库 + `.gitmodules` 子模块。
 /// 在阻塞线程执行（涉及 git / 文件 IO）。
 #[tauri::command]
@@ -360,23 +437,29 @@ pub async fn discover_build_repos(project_path: String) -> Result<Vec<BuildRepo>
 
 pub(crate) fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRepo>, String> {
     let root = read_project_path(project_path)?;
-    let mut repos = Vec::new();
+
+    // 待查询的仓库：先只做文件系统层面的事实收集（主仓库判定 + `.gitmodules` 解析），
+    // 不涉及 git 子进程，因此这一步几乎零成本。
+    struct Pending {
+        name: String,
+        path: String,
+        /// 子模块的远端来自 `.gitmodules`（免一次 `git remote`）；主仓库留空、稍后查。
+        url: String,
+        is_submodule: bool,
+        missing: bool,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
 
     if is_repo(project_path) {
         let name = root
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "root".to_string());
-        let branches = git_branches(project_path);
-        repos.push(BuildRepo {
+        pending.push(Pending {
             name,
             path: project_path.to_string(),
-            remote: git_remote(project_path),
-            branch: git_branch(project_path),
-            remote_branches: git_remote_branches(project_path, &branches),
-            branches,
+            url: String::new(),
             is_submodule: false,
-            dirty: git_dirty(project_path),
             missing: false,
         });
     }
@@ -386,39 +469,75 @@ pub(crate) fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRep
         let content = std::fs::read_to_string(&gitmodules).unwrap_or_default();
         for (name, rel, url) in parse_gitmodules(&content) {
             let full = root.join(&rel);
-            let full_str = full.to_string_lossy().into_owned();
-            let missing = !full.exists();
-            let branches = if !missing {
-                git_branches(&full_str)
-            } else {
-                Vec::new()
-            };
-            repos.push(BuildRepo {
+            pending.push(Pending {
                 name,
-                path: full_str.clone(),
-                remote: url,
-                branch: if !missing {
-                    git_branch(&full_str)
-                } else {
-                    String::new()
-                },
-                remote_branches: if !missing {
-                    git_remote_branches(&full_str, &branches)
-                } else {
-                    Vec::new()
-                },
-                branches,
+                path: full.to_string_lossy().into_owned(),
+                url,
                 is_submodule: true,
-                dirty: if !missing {
-                    git_dirty(&full_str)
-                } else {
-                    false
-                },
-                missing,
+                missing: !full.exists(),
             });
         }
     }
-    Ok(repos)
+
+    // 并发查询各仓库的分支 / 状态。
+    //
+    // 为什么并发：每个仓库要跑 3-5 条 git 命令，而每条命令都是一次进程启动
+    // （Windows 上实测 ~80ms，与仓库大小无关）。9 个仓库串行 ≈ 3.2s，全部卡在
+    // 进程启动上；仓库之间互不依赖，并发后墙钟时间收敛到「最慢单仓库」。
+    let infos: Vec<Option<RepoGitInfo>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = pending
+            .iter()
+            .map(|p| {
+                scope.spawn(move || {
+                    if p.missing {
+                        return None;
+                    }
+                    // 子模块远端已在 .gitmodules 里，省掉一次 `git remote` 进程启动。
+                    let remote = if p.is_submodule {
+                        None
+                    } else {
+                        Some(git_remote(&p.path))
+                    };
+                    Some(repo_git_info(&p.path, remote))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or(None))
+            .collect()
+    });
+
+    Ok(pending
+        .into_iter()
+        .zip(infos)
+        .map(|(p, info)| match info {
+            Some(i) => BuildRepo {
+                name: p.name,
+                path: p.path,
+                remote: i.remote,
+                branch: i.branch,
+                branches: i.branches,
+                remote_branches: i.remote_branches,
+                is_submodule: p.is_submodule,
+                dirty: i.dirty,
+                missing: false,
+            },
+            // missing 的子模块（未初始化）不进 git 查询；线程 panic 也落这里，
+            // 但不能谎报成 missing（UI 会显示「缺失」），故用 p.missing 决定该标志。
+            None => BuildRepo {
+                name: p.name,
+                path: p.path,
+                remote: p.url,
+                branch: String::new(),
+                branches: Vec::new(),
+                remote_branches: Vec::new(),
+                is_submodule: p.is_submodule,
+                dirty: false,
+                missing: p.missing,
+            },
+        })
+        .collect())
 }
 
 /// 切到指定仓库的指定分支（用于在 Build 面板选择子模块/主仓库分支）。
@@ -691,7 +810,8 @@ fn prune_repo_stale_branches(
 
     let remote = git_origin_branch_names(&repo.path);
     let occupied = git_worktree_branches(&repo.path);
-    for branch in git_branches(&repo.path) {
+    // 这里只要本地分支（远端侧单独用 git_origin_branch_names 取，口径不同）。
+    for branch in git_all_branches(&repo.path).0 {
         // 远端仍有同名分支：不是失效分支，不产生明细噪音。
         if remote.contains(&branch) {
             continue;
@@ -1718,6 +1838,51 @@ mod tests {
         assert!(!is_submodule_path("Nto.His/DrugInOut", &subs));
     }
 
+    // 构建面板的「可选子仓库」白名单：缺省必须含 Hsp.Win；显式空数组表示不限制
+    // （前端据此展示全部子模块），因此不能把「缺失」与「空」混为一谈。
+    #[test]
+    fn visible_subrepos_default_includes_hsp_win_and_empty_means_unrestricted() {
+        assert!(default_visible_subrepos().iter().any(|s| s == "Hsp.Win"));
+        assert_eq!(BuildConfig::default().visible_subrepos, default_visible_subrepos());
+
+        // 配置里缺该字段（老配置文件）→ 落到默认白名单
+        let legacy: BuildConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.visible_subrepos, default_visible_subrepos());
+
+        // 显式空数组 → 保持为空（前端不过滤）
+        let unrestricted: BuildConfig =
+            serde_json::from_str("{\"visible_subrepos\":[]}").unwrap();
+        assert!(unrestricted.visible_subrepos.is_empty());
+    }
+
+    // 轻量列举（只读 .gitmodules）必须与完整 discover 用同一套子模块命名口径——
+    // 设置页的下拉值就是这些名字，构建面板按名字匹配白名单，两者不一致会「勾了不生效」。
+    #[test]
+    fn list_subrepos_names_match_gitmodules_entries() {
+        let repo = TempRepo::new();
+        std::fs::create_dir_all(repo.path.join("Nto.His/Nto.His.Term")).unwrap();
+        std::fs::write(
+            repo.path.join(".gitmodules"),
+            "[submodule \"Hsp.Win\"]\n\tpath = Hsp.Win\n\turl = git@example.com:Hsp_Main.git\n\
+             [submodule \"Nto.His/Nto.His.Term\"]\n\tpath = Nto.His/Nto.His.Term\n\turl = git@example.com:Term.git\n",
+        )
+        .unwrap();
+
+        let subs = list_subrepos_blocking(repo.dir()).unwrap();
+        let names: Vec<&str> = subs.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Hsp.Win", "Nto.His/Nto.His.Term"]);
+        // 路径是「项目根 + 相对路径」，下拉的 tooltip 用它区分同名子仓库。
+        assert!(subs[0].path.replace('\\', "/").ends_with("/Hsp.Win"));
+        assert!(subs[1].path.replace('\\', "/").ends_with("/Nto.His/Nto.His.Term"));
+    }
+
+    // 没有 .gitmodules 的项目应返回空列表，而不是报错（设置页据此展示空态）。
+    #[test]
+    fn list_subrepos_is_empty_without_gitmodules() {
+        let repo = TempRepo::new();
+        assert!(list_subrepos_blocking(repo.dir()).unwrap().is_empty());
+    }
+
     /// 临时 bare 远端仓库（Drop 时删除）。
     struct TempBareRemote {
         path: PathBuf,
@@ -1818,7 +1983,7 @@ mod tests {
         assert!(item("fix/landed").deletable);
         assert!(!item("fix/unmerged").deletable);
         assert!(!item("fix/merged").deleted, "dry-run 不得真删");
-        assert!(git_branches(repo.dir()).contains(&"fix/merged".to_string()));
+        assert!(git_all_branches(repo.dir()).0.contains(&"fix/merged".to_string()));
 
         // 执行：只删前两个
         let done = prune_stale_branches_blocking(repo.dir(), &[repo.name()], false).unwrap();
@@ -1833,7 +1998,7 @@ mod tests {
         assert!(deleted.contains(&"fix/landed"));
         assert!(!deleted.contains(&"fix/unmerged"));
 
-        let left = git_branches(repo.dir());
+        let left = git_all_branches(repo.dir()).0;
         assert!(!left.contains(&"fix/merged".to_string()));
         assert!(!left.contains(&"fix/landed".to_string()));
         assert!(left.contains(&"fix/unmerged".to_string()));
