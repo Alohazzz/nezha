@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Send, X } from "lucide-react";
 import type { BranchBatch } from "../../types";
-import s from "../../styles";
+import { ReviewerPicker } from "../codeup/ReviewerPicker";
 
 export function SubmitMrDialog({
   projectPath,
@@ -17,22 +17,27 @@ export function SubmitMrDialog({
   onDone: () => void;
   onClose: () => void;
 }) {
-  const [reviewers, setReviewers] = useState("");
+  /** 审核人（人名）。与「发起合并请求」弹层同一套选择器，由后端解析成云效用户 ID。 */
+  const [reviewers, setReviewers] = useState<string[]>([]);
+  const [recommended, setRecommended] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     // 目标分支留空的批不能提交 MR（后端同口径拦截）；按钮禁用并给出提示。
     if (!batch.targetBranch.trim()) return;
-    // 默认审核人 = 目标分支保护规则的管理人员。按批所属仓库查（与提交 MR 同一仓库），
+    // 默认审核人 = 目标分支的默认评审人。按批所属仓库查（与提交 MR 同一仓库），
     // 否则多子仓库工作区会拿主仓库的保护规则，预填出另一批审核人。
     void invoke<string[]>("codeup_branch_managers", {
       projectPath,
       repoPath: batch.worktreeRepo ?? null,
       targetBranch: batch.targetBranch,
     })
-      .then((managers) => setReviewers(managers.join(", ")))
-      .catch((e) => console.warn("[submit-mr] load managers failed:", e));
+      .then((managers) => {
+        setRecommended(managers);
+        setReviewers(managers);
+      })
+      .catch((e) => console.warn("[submit-mr] load reviewers failed:", e));
   }, [projectPath, batch.worktreeRepo, batch.targetBranch]);
 
   const submit = useCallback(async () => {
@@ -40,16 +45,12 @@ export function SubmitMrDialog({
     setBusy(true);
     setError("");
     try {
-      const list = reviewers
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
       await invoke("codeup_create_mr", {
         projectPath,
         repoPath: batch.worktreeRepo ?? null,
         projectId,
         batchId: batch.id,
-        reviewers: list,
+        reviewers,
       });
       onDone();
       onClose();
@@ -61,55 +62,57 @@ export function SubmitMrDialog({
   }, [busy, reviewers, projectPath, projectId, batch.id, batch.targetBranch, batch.worktreeRepo, onDone, onClose]);
 
   return (
-    <div style={s.bbDialogOverlay}>
-      <div style={s.bbDialog}>
-        <div style={s.bbDialogTitle}>
-          提交合并请求
-          <div style={s.bbFill} />
-          <button type="button" style={s.bbBtnGhost} onClick={onClose}>
-            <X size={13} />
+    <div className="build-dialog-overlay">
+      <div className="build-dialog pm-submit-dialog">
+        <div className="build-dialog-head">
+          <span className="build-dialog-icon">
+            <Send size={15} />
+          </span>
+          <span className="build-dialog-title">提交合并请求</span>
+          <button type="button" className="build-dialog-close" aria-label="关闭" onClick={onClose}>
+            <X size={14} />
           </button>
         </div>
 
-        <div style={s.bbCardSub}>
-          <span style={s.bbCardMono}>{batch.branch}</span>
+        <div className="pm-submit-branch">
+          <code>{batch.branch}</code>
           <span>→ {batch.targetBranch || "（未指定合并目标）"}</span>
         </div>
 
-        <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>审核人（默认目标分支管理人员，可编辑，逗号分隔）</span>
-          <textarea
-            style={s.bbInput}
+        <label className="pm-dialog-field">
+          <span>审核人（默认目标分支的评审人，可搜索添加）</span>
+          <ReviewerPicker
             value={reviewers}
-            onChange={(e) => setReviewers(e.target.value)}
-            rows={3}
-            placeholder="如：张三, 李四"
+            onChange={setReviewers}
+            recommended={recommended}
+            disabled={busy}
           />
+        </label>
+
+        <div className="pm-dialog-field">
+          <span>说明</span>
+          <div className="pm-submit-summary">
+            标题：{batch.name}；来源：{batch.branch}；目标：{batch.targetBranch}
+          </div>
         </div>
 
-        <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>说明</span>
-          <input
-            style={s.bbInput}
-            disabled
-            value={`标题：${batch.name}；来源：${batch.branch}；目标：${batch.targetBranch}`}
-          />
-        </div>
-
-        <div style={s.bbField}>
+        <div className="build-dialog-actions">
+          <button className="rp-btn" onClick={onClose} disabled={busy}>
+            取消
+          </button>
           <button
-            type="button"
-            style={s.bbBtnPrimary}
+            className="rp-btn"
+            data-variant="primary"
             disabled={busy || !batch.targetBranch.trim()}
             title={batch.targetBranch.trim() ? undefined : "未指定合并回目标分支，无法提交 MR"}
             onClick={() => void submit()}
           >
-            <Send size={13} />
+            <Send size={12} />
             {busy ? "提交中…" : "提交到 Codeup"}
           </button>
         </div>
 
-        {error && <div style={s.bbGateHint}>{error}</div>}
+        {error && <div className="pm-submit-error">{error}</div>}
       </div>
     </div>
   );

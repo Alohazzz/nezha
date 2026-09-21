@@ -20,6 +20,9 @@ interface ScopedScan {
  * 确认后逐条创建、单条失败不中断。
  *
  * 后端按 `project_path` 校验仓库路径，故请求要**按项目分组**发送。
+ *
+ * 审核人以**人名**贯穿前后端：保护规则预填、成员选择器勾选、用户手填都是人名，
+ * 后端发起时统一解析成云效 userID（重名 / 查无此人会逐条报错，不静默丢弃）。
  */
 export function useCreateMrs({
   scans,
@@ -42,8 +45,10 @@ export function useCreateMrs({
   const [createResults, setCreateResults] = useState<PendingMrCreateReceipt[]>([]);
   /** 待确认项；`null` 表示弹层关闭。 */
   const [pending, setPending] = useState<PendingBranchCandidate[] | null>(null);
-  /** 审核人（逗号分隔）——默认按目标分支保护规则预填，用户可改。 */
-  const [reviewers, setReviewers] = useState("");
+  /** 已选审核人（人名列表）。 */
+  const [reviewers, setReviewers] = useState<string[]>([]);
+  /** 目标分支保护规则里的默认审核人，在成员选择器里置顶并标「推荐」。 */
+  const [recommendedReviewers, setRecommendedReviewers] = useState<string[]>([]);
 
   /** 按项目根分组——后端以 project_path 为边界校验仓库路径。 */
   const groupByProject = useCallback(
@@ -58,14 +63,14 @@ export function useCreateMrs({
     [scans],
   );
 
-  /** 打开确认弹层，并按目标分支保护规则预填审核人（不同目标分支的管理人员取并集）。 */
+  /** 打开确认弹层，并按目标分支保护规则预填审核人（不同目标分支的评审人取并集）。 */
   const startCreate = useCallback(async () => {
     if (selectedCandidates.length === 0) return;
     setError("");
     setNotice("");
     setPending(selectedCandidates);
 
-    // 目标分支 → 该分支的管理人员。按 (仓库, 目标分支) 去重，避免同一目标重复请求。
+    // 目标分支 → 该分支的默认评审人。按 (仓库, 目标分支) 去重，避免同一目标重复请求。
     const targets = new Map<string, { projectPath: string; repoPath: string; target: string }>();
     for (const branch of selectedCandidates) {
       const projectPath = scans.find((scan) => scan.path === branch.repoPath)?.projectPath ?? "";
@@ -88,11 +93,12 @@ export function useCreateMrs({
           if (!names.includes(name)) names.push(name);
         }
       } catch (e) {
-        // 审核人是可选信息：拉不到就让用户自己填，不阻断发起流程。
-        console.warn("[create-mrs] load branch managers failed:", e);
+        // 默认评审人是可选信息：拉不到就让用户自己选/填，不阻断发起流程。
+        console.warn("[create-mrs] load branch reviewers failed:", e);
       }
     }
-    setReviewers(names.join(", "));
+    setRecommendedReviewers(names);
+    setReviewers(names);
   }, [selectedCandidates, scans, setError, setNotice]);
 
   /** 用户确认后才真发起。单条失败不中断整批（后端逐条返回回执）。 */
@@ -101,10 +107,6 @@ export function useCreateMrs({
     if (targets.length === 0) return;
     setCreateBusy(true);
     try {
-      const reviewerList = reviewers
-        .split(",")
-        .map((name) => name.trim())
-        .filter(Boolean);
       const done: PendingMrCreateReceipt[] = [];
       for (const [projectPath, branches] of groupByProject(targets)) {
         const items: PendingMrCreateItem[] = branches.map((branch) => ({
@@ -112,7 +114,7 @@ export function useCreateMrs({
           repo: branch.repo,
           sourceBranch: branch.branch,
           targetBranch: branch.targetBranch,
-          reviewers: reviewerList,
+          reviewers,
         }));
         const result = await invoke<PendingMrCreateReceipt[]>("codeup_create_mrs_batch", {
           projectPath,
@@ -145,6 +147,7 @@ export function useCreateMrs({
     createResults,
     pending,
     reviewers,
+    recommendedReviewers,
     setReviewers,
     startCreate,
     confirmCreate,

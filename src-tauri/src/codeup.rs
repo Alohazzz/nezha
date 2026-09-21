@@ -2,14 +2,24 @@
 //!
 //! 与 `yunxiao.rs` 共用同一接入点与鉴权头（`x-yunxiao-token`），token 复用应用级设置里的云效个人访问令牌。本模块只负责 Codeup 仓库侧的 MR 生命周期与分支保护管理员的读取。
 //!
-//! > ⚠️ 端点路径为最佳推断，集中定义在下方常量/函数中。由于 Codeup OpenAPI 需在已登录的环境才能实测，路径/字段若与实际情况有出入，改动应集中在 `CODUP_PREFIX` / `*_path()` / 解析函数里，避免散落。
+//! > ⚠️ 端点路径以官方 OpenAPI 契约为准（已用真实令牌逐个实测）。改动应集中在
+//! > `CODUP_PREFIX` / `*_url()` / 解析函数里，避免散落。
+//!
+//! 已实测的关键契约（易踩坑，勿改回）：
+//! - **创建 MR 是仓库级路径** `…/repositories/{repositoryId}/changeRequests`；组织级
+//!   `…/organizations/{org}/changeRequests` 只有列表 GET 存在，POST 会 404。
+//! - 评审人字段是 `reviewerUserIds`，收**云效 userID**（不是人名）；另需
+//!   `sourceProjectId` / `targetProjectId`（仓库数字 id）与 `createFrom`。
+//! - MR 详情/动作路径段收 `localId`，传 `mrBizId` 报 `Invalid param value`。
 
 use crate::git::{path_to_string, resolve_repo_path, run_git, validate_project_path};
 use crate::storage::{load_project_batches, load_projects, save_project_batches, Batch};
 use crate::yunxiao::{build_client, read_json_body, API_BASE};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 /// Codeup API 前缀（相对接入点）。若实际为其它路径，仅需改这里。
 const CODUP_PREFIX: &str = "oapi/v1/codeup";
@@ -205,11 +215,9 @@ fn strip_verbatim_prefix(path: &str) -> String {
 /// 从 Codeup 仓库列表里为某个仓库找到克隆地址（`httpUrlToRepo`）。
 async fn codeup_find_clone_url(repository: &str) -> Result<String, String> {
     let repos = fetch_codeup_repositories().await?;
-    for r in &repos {
-        if r.namespace == repository || r.path == repository {
-            if !r.http_url.is_empty() {
-                return Ok(r.http_url.clone());
-            }
+    if let Some(found) = find_codeup_repository(repository, &repos) {
+        if !found.http_url.is_empty() {
+            return Ok(found.http_url.clone());
         }
     }
     Err(format!(
@@ -337,8 +345,76 @@ fn repo_org_id(repo: &CodeupRepo) -> &str {
     &repo.org_id
 }
 
-fn branch_rules_url(org: &str, repo: &str) -> String {
-    format!("{API_BASE}/{CODUP_PREFIX}/organizations/{org}/repositories/{repo}/rule")
+/// 归一化仓库路径，用于比较「git origin 解析出的路径」与「云效仓库标识」。
+///
+/// 两边**经常不一致**：云效的 `nameWithNamespace` 会吃掉分隔符——仓库 `HSP/Hsp_Main`
+/// 的平台标识是 `HSP/HspMain`，而 origin URL 保留原始下划线。直接字符串相等会让这类仓库
+/// 永远匹配不上，表现为「创建 MR 时找不到仓库」，也波及「本地分支 → 开放 MR」的 join。
+/// 只保留字母数字并小写后再比（`HSP/HIS` 与 `HSP_XC/HIS` 仍能区分开）。
+fn normalize_repo_path(path: &str) -> String {
+    path.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// 从克隆地址里取「组织内仓库路径」（如 `HSP/Hsp_Main`）。
+fn repo_path_from_clone_url(url: &str) -> String {
+    parse_codeup_remote(url)
+        .map(|(_, repo)| repo)
+        .unwrap_or_default()
+}
+
+/// 云效仓库是否就是本地 origin 指向的那个仓库。
+///
+/// 先比平台命名空间，再比克隆地址里的路径——`httpUrlToRepo` 与本地 origin 是同一来源，
+/// 是这里最可靠的同一性判据（命名空间可能被平台改写过分隔符）。
+fn codeup_repo_matches(repository: &str, candidate: &CodeupRepository) -> bool {
+    let want = normalize_repo_path(repository);
+    if want.is_empty() {
+        return false;
+    }
+    normalize_repo_path(&candidate.namespace) == want
+        || normalize_repo_path(&repo_path_from_clone_url(&candidate.http_url)) == want
+}
+
+/// 在已知仓库列表里找到 origin 对应的云效仓库。
+fn find_codeup_repository<'a>(
+    repository: &str,
+    known: &'a [CodeupRepository],
+) -> Option<&'a CodeupRepository> {
+    known.iter().find(|r| codeup_repo_matches(repository, r))
+}
+
+/// 合并请求集合地址（**仓库级**）。
+///
+/// 组织级 `…/organizations/{org}/changeRequests` 只有列表 GET 存在；创建/查询单条都在
+/// 仓库级路径下。历史上创建 MR 用了组织级路径，逐条 404（`Not Found`），
+/// 表现为「点了发起合并请求，平台没收到」。
+fn change_requests_url(org: &str, repository_id: &str) -> String {
+    format!(
+        "{API_BASE}/{CODUP_PREFIX}/organizations/{org}/repositories/{repository_id}/changeRequests"
+    )
+}
+
+/// 按仓库路径取云效仓库数字 id（创建 MR / 读保护规则都要用）。
+///
+/// 匹配走 `find_codeup_repository`（归一化路径 + 克隆地址），不能按仓库名比：
+/// 组织里存在同名仓库陷阱（`HSP/HIS` 与 `HSP_XC/HIS` 都叫 `HIS`）。
+async fn codeup_repository_id_for(repository: &str) -> Result<String, String> {
+    let repos = fetch_codeup_repositories().await?;
+    find_codeup_repository(repository, &repos)
+        .map(|r| r.id.clone())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            format!("未在云效组织内找到仓库 {repository}（检查该仓库的 git origin）")
+        })
+}
+
+fn branch_rules_url(org: &str, repository_id: &str) -> String {
+    format!(
+        "{API_BASE}/{CODUP_PREFIX}/organizations/{org}/repositories/{repository_id}/protectedBranches"
+    )
 }
 
 /// 从 JSON 中宽容提取字符串数组字段（兼容 reviewers / managers / users / names 等命名差异）。
@@ -366,7 +442,98 @@ fn extract_string_list(value: &serde_json::Value, keys: &[&str]) -> Vec<String> 
     out
 }
 
-/// 读取某仓库某分支的保护规则管理人员（审核人默认来源）。
+/// 从「用户对象」数组里取人名（`allowMergeUsers` / `defaultAssignees` 的元素形态）。
+fn user_names_from(value: &serde_json::Value, keys: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in keys {
+        let Some(arr) = value.get(key).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for item in arr {
+            let name = item
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| {
+                    item.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            let name = name.trim().to_string();
+            if !name.is_empty() && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// 从 `protectedBranches` 的响应里挑出目标分支的默认评审人（纯函数，便于单测）。
+///
+/// 响应是**顶层数组**（每个受保护分支一条规则），但也兼容 `{rules|list|result: [...]}`
+/// 的包裹形态——历史实现只认包裹形态，对顶层数组会退化成「拿整个数组当一条规则」，
+/// 结果一个字段都取不到、静默返回空列表（实测踩到）。
+///
+/// 规则字段：`branch`（空表示通配）、`allowMergeUsers`（允许合并的人）、
+/// `mergeRequestSetting.defaultAssignees`（该分支的默认评审人）。
+/// 默认评审人排在前面（更贴近用户期望），`allowMergeUsers` 作为补充。
+pub(crate) fn branch_reviewers_from_rules(json: &serde_json::Value, target_branch: &str) -> Vec<String> {
+    let rules: &[serde_json::Value] = match json.as_array() {
+        Some(arr) => arr.as_slice(),
+        None => json
+            .get("rules")
+            .or_else(|| json.get("list"))
+            .or_else(|| json.get("result"))
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or_else(|| std::slice::from_ref(json)),
+    };
+    let target = target_branch.trim();
+    let mut names: Vec<String> = Vec::new();
+    let mut from_merge_users: Vec<String> = Vec::new();
+    for rule in rules {
+        if !rule.is_object() {
+            continue;
+        }
+        let branch = rule
+            .get("branch")
+            .or_else(|| rule.get("branchName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        // 规则里空 branch 表示通配；非空时必须与目标分支一致。
+        if !branch.is_empty() && branch != target {
+            continue;
+        }
+        if let Some(setting) = rule.get("mergeRequestSetting") {
+            for name in user_names_from(setting, &["defaultAssignees"]) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        for name in user_names_from(rule, &["allowMergeUsers"]) {
+            if !from_merge_users.contains(&name) {
+                from_merge_users.push(name);
+            }
+        }
+    }
+    for name in from_merge_users {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// 读取某仓库某目标分支的**默认评审人**（「发起 MR」弹层的预填来源）。
+///
+/// 数据源是 `…/repositories/{id}/protectedBranches`：每个受保护分支规则带
+/// `allowMergeUsers`（允许合并的人）与 `mergeRequestSetting.defaultAssignees`
+/// （该分支的默认评审人），都是带 `name` 的用户对象。此前的 `…/repositories/{repo}/rule`
+/// 路径不存在（404），前端把它包在 try/catch 里只 warn，于是预填永远是空的。
+///
+/// 返回人名（与弹层输入框同口径）；发起时后端再统一解析成云效 userID。
 #[tauri::command]
 pub async fn codeup_branch_managers(
     project_path: String,
@@ -376,36 +543,41 @@ pub async fn codeup_branch_managers(
     let (token, _) = load_creds().await?;
     let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
     let org = repo_org_id(&repo);
+    let repository_id = codeup_repository_id_for(&repo.repository).await?;
     let client = build_client()?;
-    let bytes =
-        crate::yunxiao::get_yunxiao_json(&client, &token, branch_rules_url(org, &repo.repository))
-            .await?;
+    let bytes = crate::yunxiao::get_yunxiao_json(
+        &client,
+        &token,
+        branch_rules_url(org, &repository_id),
+    )
+    .await?;
     let json: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("解析分支规则失败: {e}"))?;
-    let rules = json
-        .get("rules")
-        .or_else(|| json.get("list"))
-        .or_else(|| json.get("result"))
-        .and_then(|v| v.as_array())
-        .map(|a| a.as_slice())
-        .unwrap_or_else(|| std::slice::from_ref(&json));
-    let mut names: Vec<String> = Vec::new();
-    for rule in rules {
-        let branch = rule
-            .get("branch")
-            .or_else(|| rule.get("branchName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !branch.is_empty() && branch != target_branch {
-            continue;
-        }
-        for m in extract_string_list(rule, &["managers", "reviewers", "users", "managerNames"]) {
-            if !names.contains(&m) {
-                names.push(m);
-            }
-        }
-    }
-    Ok(names)
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析分支保护规则失败: {e}"))?;
+    Ok(branch_reviewers_from_rules(&json, &target_branch))
+}
+
+/// 组织成员列表（供「发起 MR」弹层的评审人选择器）。
+///
+/// 返回 `[{ name, userId }]`：UI 展示 name，选中后只需把 name 发回后端即可
+/// （`resolve_reviewer_ids` 统一做 name → userID 解析，重名会显式报错）。
+#[tauri::command]
+pub async fn codeup_list_members() -> Result<Vec<CodeupMemberEntry>, String> {
+    Ok(fetch_org_members()
+        .await?
+        .into_iter()
+        .map(|m| CodeupMemberEntry {
+            name: m.name,
+            user_id: m.user_id,
+        })
+        .collect())
+}
+
+/// `codeup_list_members` 的返回项。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeupMemberEntry {
+    pub name: String,
+    pub user_id: String,
 }
 
 fn load_batch(project_id: &str, batch_id: &str) -> Result<Batch, String> {
@@ -424,9 +596,7 @@ pub(crate) async fn batch_mr_is_merged(
     let (token, org_id) = load_creds().await?;
     let repo = resolve_codeup_repo(project_path, repo_path).await?;
     let repos = fetch_codeup_repositories().await?;
-    let repository_id = repos
-        .iter()
-        .find(|r| r.namespace == repo.repository || r.path == repo.repository)
+    let repository_id = find_codeup_repository(&repo.repository, &repos)
         .map(|r| r.id.clone())
         .ok_or_else(|| format!("未找到仓库 {} 的 Codeup 仓库 id", repo.repository))?;
     let url = change_item_url(&org_id, &repository_id, mr_id);
@@ -444,27 +614,181 @@ pub(crate) async fn batch_mr_is_merged(
     Ok(state.contains("MERGED"))
 }
 
+/// 组织成员（`GET /oapi/v1/platform/organizations/{org}/members` 分页返回）。
+#[derive(Clone, Debug)]
+pub struct CodeupMember {
+    pub name: String,
+    /// 云效用户 ID（`userId`）。合并请求的评审人字段收的就是这个值。
+    pub user_id: String,
+}
+
+/// 组织成员列表的缓存条目：成员 + 拉取时刻（用于 TTL）。
+struct MemberCacheEntry {
+    members: Vec<CodeupMember>,
+    fetched_at: std::time::Instant,
+}
+
+/// 组织成员列表缓存：`(org, token)` → 成员。
+///
+/// 发起 MR 时前端给的是**人名**（用户可编辑、可预填），而 changeRequests 的
+/// `reviewerUserIds` 收的是云效 userID，必须做人名 → ID 的解析。成员表一页 100、
+/// 当前组织 189 人，每次发起都重拉两页太浪费，故按组织缓存。
+///
+/// 带 TTL 而非永久缓存：新入职成员若因缓存而查不到，用户会持续拿到「找不到审核人」，
+/// 且重试仍命中旧缓存，只能重启应用才能恢复。
+static ORG_MEMBERS_CACHE: LazyLock<Mutex<HashMap<String, MemberCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 成员表缓存有效期。
+const MEMBER_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+const MEMBER_PAGE_SIZE: u32 = 100;
+const MAX_MEMBER_PAGES: u32 = 20;
+
+/// 拉取组织全量成员（分页），按 `(org, token)` 缓存（带 TTL）。
+pub(crate) async fn fetch_org_members() -> Result<Vec<CodeupMember>, String> {
+    let (token, org) = load_creds().await?;
+    if org.trim().is_empty() {
+        return Err("云效组织 ID 不能为空（请在应用设置中配置）".to_string());
+    }
+    let cache_key = format!("{org}\u{0}{token}");
+    if let Some(entry) = ORG_MEMBERS_CACHE.lock().get(&cache_key) {
+        if entry.fetched_at.elapsed() < MEMBER_CACHE_TTL {
+            return Ok(entry.members.clone());
+        }
+    }
+    let client = build_client()?;
+    let mut out: Vec<CodeupMember> = Vec::new();
+    for page in 1..=MAX_MEMBER_PAGES {
+        let url = format!(
+            "{API_BASE}/oapi/v1/platform/organizations/{org}/members?page={page}&perPage={MEMBER_PAGE_SIZE}"
+        );
+        let bytes = crate::yunxiao::get_yunxiao_json(&client, &token, url).await?;
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("解析云效成员列表失败: {e}"))?;
+        let arr = json
+            .as_array()
+            .or_else(|| json.get("list").and_then(|v| v.as_array()))
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
+        if arr.is_empty() {
+            break;
+        }
+        let page_len = arr.len();
+        for item in arr {
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let user_id = item
+                .get("userId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if name.is_empty() || user_id.is_empty() {
+                continue;
+            }
+            out.push(CodeupMember { name, user_id });
+        }
+        if page_len < MEMBER_PAGE_SIZE as usize {
+            break;
+        }
+    }
+    ORG_MEMBERS_CACHE.lock().insert(
+        cache_key,
+        MemberCacheEntry {
+            members: out.clone(),
+            fetched_at: std::time::Instant::now(),
+        },
+    );
+    Ok(out)
+}
+
+/// 把前端传进来的审核人（可能是人名，也可能已经是 userID）解析成云效 userID。
+///
+/// 解析不出来的名字**必须报错**：静默丢掉会发出一条「没有评审人」的 MR，而用户以为
+/// 自己已经指定了审核人——这种静默降级比发起失败更难发现。成员列表拉取失败时若入参
+/// 本身已是 ID 形态（32 位十六进制）则直接放行，避免网络抖动卡住发起。
+pub(crate) fn resolve_reviewer_ids(
+    reviewers: &[String],
+    members: &[CodeupMember],
+) -> Result<Vec<String>, String> {
+    let mut ids: Vec<String> = Vec::new();
+    for raw in reviewers {
+        let name = raw.trim();
+        if name.is_empty() {
+            continue;
+        }
+        // 已经是 userID（云效 userID 是 24 位十六进制）就直接用。
+        if name.len() == 24 && name.chars().all(|c| c.is_ascii_hexdigit()) {
+            if !ids.contains(&name.to_string()) {
+                ids.push(name.to_string());
+            }
+            continue;
+        }
+        let matched: Vec<&CodeupMember> = members.iter().filter(|m| m.name == name).collect();
+        match matched.as_slice() {
+            [] => {
+                // 成员表没拉到（空）时不阻断：可能只是列表接口抖动，交给服务端裁决。
+                if members.is_empty() {
+                    return Err(format!(
+                        "无法解析审核人「{name}」：未取到云效组织成员列表，请稍后重试或改填用户 ID"
+                    ));
+                }
+                return Err(format!(
+                    "云效组织成员里找不到审核人「{name}」，请检查姓名或改填云效用户 ID"
+                ));
+            }
+            [only] => {
+                if !ids.contains(&only.user_id) {
+                    ids.push(only.user_id.clone());
+                }
+            }
+            _ => {
+                return Err(format!(
+                    "审核人「{name}」在云效组织里有重名，请改填云效用户 ID"
+                ));
+            }
+        }
+    }
+    Ok(ids)
+}
+
 /// 在 Codeup 上创建合并请求（仅提交、不合并）的**去批次化**核心。
 ///
 /// 抽出来供两条链路共用：分支批的 `codeup_create_mr`（回写批记录）与「待发起」视图的
-/// `codeup_create_mrs_batch`（逐条回执）。调用方负责先解析出组织 id 与推送源分支。
+/// `codeup_create_mrs_batch`（逐条回执）。调用方负责先解析出组织 id、仓库 id、推送源分支。
+///
+/// 路径是**仓库级**的 `…/repositories/{repositoryId}/changeRequests`：组织级
+/// `…/organizations/{org}/changeRequests` 只有列表 GET 存在，POST 会 404（这正是「发起合并
+/// 请求后平台没收到」的真因）。请求体同样以官方契约为准：`reviewerUserIds`（收 userID，
+/// 不是人名）+ `sourceProjectId`/`targetProjectId` + `createFrom`。
+#[allow(clippy::too_many_arguments)]
 async fn post_change_request(
     client: &reqwest::Client,
     token: &str,
     org: &str,
+    repository_id: &str,
     source_branch: &str,
     target_branch: &str,
     title: &str,
     description: &str,
-    reviewers: &[String],
+    reviewer_ids: &[String],
 ) -> Result<(String, Option<i64>), String> {
-    let url = format!("{API_BASE}/{CODUP_PREFIX}/organizations/{org}/changeRequests");
+    let url = change_requests_url(org, repository_id);
     let body = serde_json::json!({
         "title": title,
         "description": description,
         "sourceBranch": source_branch,
         "targetBranch": target_branch,
-        "reviewerIds": reviewers,
+        // 官方契约：仓库数字 ID 必须回传，缺省时云效会尝试自动推断，失败即 500。
+        "sourceProjectId": repository_id,
+        "targetProjectId": repository_id,
+        "createFrom": "WEB",
+        "reviewerUserIds": reviewer_ids,
     });
     let resp = client
         .post(url)
@@ -477,6 +801,7 @@ async fn post_change_request(
     let bytes = read_json_body(resp).await?;
     let json: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析创建合并请求响应失败: {e}"))?;
+    // 创建接口直接返回 MR 对象（不是包在 result 里），但两种形态都兼容。
     let result = json.get("result").unwrap_or(&json);
     let mr_id = json
         .get("id")
@@ -487,6 +812,18 @@ async fn post_change_request(
             result
                 .get("id")
                 .or_else(|| result.get("mrId"))
+                .and_then(|v| {
+                    v.as_str()
+                        .map(String::from)
+                        .or_else(|| v.as_i64().map(|i| i.to_string()))
+                })
+        })
+        // 实测创建响应里没有 `id`/`mrBizId`，只有数字 localId —— 用它兜底，
+        // 否则「创建成功但取不到 id」会把调用方误报成失败。
+        .or_else(|| {
+            result
+                .get("localId")
+                .or_else(|| json.get("localId"))
                 .and_then(|v| {
                     v.as_str()
                         .map(String::from)
@@ -564,10 +901,16 @@ pub async fn codeup_create_mr(
     let repo = resolve_codeup_repo(&project_path, repo_path.as_deref()).await?;
     let org = repo_org_id(&repo);
     let client = build_client()?;
+    // 创建接口是仓库级路径，必须先拿到云效仓库数字 id（网络拉取，失败即报错——
+    // 猜一个 id 只会换来一个更难理解的 404/500）。
+    let repository_id = codeup_repository_id_for(&repo.repository).await?;
+    // 审核人由前端以「人名」传来（默认取自目标分支的评审人），这里换成云效 userID。
+    let reviewers = resolve_reviewer_ids(&reviewers, &fetch_org_members().await?)?;
     let (mr_id, _) = post_change_request(
         &client,
         &token,
         org,
+        &repository_id,
         &batch.branch,
         &batch.target_branch,
         &batch.name,
@@ -701,6 +1044,10 @@ pub async fn codeup_create_mrs_batch(
 
     // 幂等判据：一次拉全组织内开放 MR，按 (repositoryId, source, target) 判重。
     let open_mrs = fetch_open_change_requests().await.unwrap_or_default();
+    // 审核人解析材料：一次拉全成员表，供逐条把人名换成云效 userID。
+    // 拉不到时留空 —— `resolve_reviewer_ids` 会对「有审核人但无成员表」显式报错，
+    // 不会静默发出没有评审人的 MR。
+    let members = fetch_org_members().await.unwrap_or_default();
 
     let mut out: Vec<MrCreateReceipt> = Vec::new();
     for (item, resolved) in items.into_iter().zip(resolved) {
@@ -726,20 +1073,39 @@ pub async fn codeup_create_mrs_batch(
             continue;
         }
 
+        // 创建接口是仓库级路径，必须先有云效仓库数字 id；缺了就直接跳过并说明原因，
+        // 不去猜一个 id（猜错只会换来一个更难懂的 404）。
+        if resolved.repository_id.is_empty() {
+            receipt.reason = format!(
+                "未在云效组织内找到仓库 {}（检查该仓库的 git origin）",
+                resolved.repo
+            );
+            out.push(receipt);
+            continue;
+        }
+
+        // 审核人先在本地解析成 userID：解析失败要在推送之前拦住，避免把分支推上去
+        // 却发不出一条 MR。幂等跳过时不解析（那条根本不会创建）。
         // 幂等：同源 + 同目标已有开放 MR 就跳过，避免重复发起。
-        // repository_id 拿不到时（仓库不在云效列表里）不做判重，交给创建接口裁决。
-        if !resolved.repository_id.is_empty() {
-            if let Some(existing) = open_mrs.iter().find(|mr| {
-                mr.repository_id == resolved.repository_id
-                    && mr.source_branch == item.source_branch
-                    && mr.target_branch == item.target_branch
-            }) {
-                receipt.mr_local_id = Some(existing.local_id);
-                receipt.reason = format!("已有开放合并请求 #{}，跳过", existing.local_id);
+        if let Some(existing) = open_mrs.iter().find(|mr| {
+            mr.repository_id == resolved.repository_id
+                && mr.source_branch == item.source_branch
+                && mr.target_branch == item.target_branch
+        }) {
+            receipt.mr_local_id = Some(existing.local_id);
+            receipt.reason = format!("已有开放合并请求 #{}，跳过", existing.local_id);
+            out.push(receipt);
+            continue;
+        }
+
+        let reviewer_ids = match resolve_reviewer_ids(&item.reviewers, &members) {
+            Ok(ids) => ids,
+            Err(e) => {
+                receipt.reason = e;
                 out.push(receipt);
                 continue;
             }
-        }
+        };
 
         // 非 force push 源分支：MR 必须引用远端已有提交。
         let dir_for_push = resolved.dir.clone();
@@ -786,11 +1152,12 @@ pub async fn codeup_create_mrs_batch(
             &client,
             &token,
             &resolved.org,
+            &resolved.repository_id,
             &item.source_branch,
             &item.target_branch,
             &title,
             &description,
-            &item.reviewers,
+            &reviewer_ids,
         )
         .await
         {
@@ -1123,10 +1490,7 @@ pub(crate) fn resolve_codeup_repository_id_blocking(
         Ok(v) => v,
         Err(_) => return Ok(None),
     };
-    Ok(known
-        .iter()
-        .find(|r| r.namespace == repository || r.path == repository)
-        .map(|r| (repository, r.id.clone())))
+    Ok(find_codeup_repository(&repository, known).map(|r| (repository, r.id.clone())))
 }
 
 /// 跨仓库聚合「已开启/评审中」的 MR；可选按仓库 id 过滤。
@@ -1327,7 +1691,10 @@ pub async fn codeup_list_pending_mrs(
     Ok(out)
 }
 
-/// 按仓库 id + MR 编号拼 change 详情/动作地址（动作子路径未实测，需联调）。
+/// 按仓库 id + MR **局部编号**拼 change 详情/动作地址。
+///
+/// 路径段收的是 `localId`（仓库内第几个 MR），不是列表里的 `mrBizId`：
+/// 实测传 mrBizId 返回 `Invalid param value`。调用方必须传 localId。
 fn change_item_url(org: &str, repository_id: &str, mr_id: &str) -> String {
     format!(
         "{API_BASE}/{CODUP_PREFIX}/organizations/{org}/repositories/{repository_id}/changeRequests/{mr_id}"
@@ -1399,20 +1766,20 @@ pub async fn codeup_get_mr(repository_id: String, mr_id: String) -> Result<Codeu
     })
 }
 
-/// 管理人「通过」（approve）一条 MR。动作子路径为最佳推断，需联调。
+/// 管理人「通过」（approve）一条 MR。
+///
+/// 官方契约是 `…/{localId}/review` + `reviewOpinion: "PASS"`（此前用的
+/// `…/submitReview` + `{state:"APPROVED"}` 是推断值，子路径不存在）。
 #[tauri::command]
 pub async fn codeup_approve_mr(repository_id: String, mr_id: String) -> Result<String, String> {
     let (token, org_id) = load_creds().await?;
     let client = build_client()?;
-    let url = format!(
-        "{}/submitReview",
-        change_item_url(&org_id, &repository_id, &mr_id)
-    );
+    let url = format!("{}/review", change_item_url(&org_id, &repository_id, &mr_id));
     let resp = client
         .post(url)
         .header("x-yunxiao-token", &token)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "state": "APPROVED" }))
+        .json(&serde_json::json!({ "reviewOpinion": "PASS" }))
         .send()
         .await
         .map_err(|e| format!("通过合并请求失败: {e}"))?;
@@ -1420,7 +1787,10 @@ pub async fn codeup_approve_mr(repository_id: String, mr_id: String) -> Result<S
     Ok(mr_id)
 }
 
-/// 管理人「合并」一条 MR（Codeup 侧真正合并）。动作子路径为最佳推断，需联调。
+/// 管理人「合并」一条 MR（Codeup 侧真正合并）。
+///
+/// 官方契约字段是 `mergeType`（驼峰，取值 `ff-only` / `no-fast-forward` / `squash` /
+/// `rebase`），此前发的是下划线的 `merge_type`。
 #[tauri::command]
 pub async fn codeup_merge_mr(
     repository_id: String,
@@ -1430,12 +1800,14 @@ pub async fn codeup_merge_mr(
     let (token, org_id) = load_creds().await?;
     let client = build_client()?;
     let url = format!("{}/merge", change_item_url(&org_id, &repository_id, &mr_id));
-    let merge_type = merge_type.unwrap_or_else(|| "merge".to_string());
+    let merge_type = merge_type
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "no-fast-forward".to_string());
     let resp = client
         .post(url)
         .header("x-yunxiao-token", &token)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "merge_type": merge_type }))
+        .json(&serde_json::json!({ "mergeType": merge_type }))
         .send()
         .await
         .map_err(|e| format!("合并请求失败: {e}"))?;
@@ -2020,5 +2392,190 @@ mod tests {
                 .unwrap();
         assert_eq!(org, "641881e9b9581d62e8f8186e");
         assert_eq!(repo, "HSP/HIS");
+    }
+
+    /// 创建 MR 的路径必须是**仓库级**：组织级 POST 会 404（「平台没收到」的真因）。
+    #[test]
+    fn builds_repository_scoped_change_requests_url() {
+        let url = change_requests_url("org1", "3402809");
+        assert_eq!(
+            url,
+            "https://openapi-rdc.aliyuncs.com/oapi/v1/codeup/organizations/org1/repositories/3402809/changeRequests"
+        );
+        assert!(url.contains("/repositories/3402809/"));
+    }
+
+    fn members() -> Vec<CodeupMember> {
+        vec![
+            CodeupMember {
+                name: "苏一".to_string(),
+                user_id: "641a5524b8f7e038cbee4317".to_string(),
+            },
+            CodeupMember {
+                name: "付茂玲".to_string(),
+                user_id: "642bbc4b3cecdaec3aff0c12".to_string(),
+            },
+        ]
+    }
+
+    /// 人名要换成 userID —— 直接把人名发给云效会 400/500。
+    #[test]
+    fn resolves_reviewer_names_to_user_ids() {
+        let ids = resolve_reviewer_ids(&["苏一".into(), "付茂玲".into()], &members()).unwrap();
+        assert_eq!(
+            ids,
+            vec![
+                "641a5524b8f7e038cbee4317".to_string(),
+                "642bbc4b3cecdaec3aff0c12".to_string()
+            ]
+        );
+    }
+
+    /// 已经是 userID 形态的入参直接放行，避免成员表拉取失败时卡住发起。
+    #[test]
+    fn passes_through_raw_user_ids_and_dedupes() {
+        let ids = resolve_reviewer_ids(
+            &["641a5524b8f7e038cbee4317".into(), "苏一".into()],
+            &members(),
+        )
+        .unwrap();
+        assert_eq!(ids, vec!["641a5524b8f7e038cbee4317".to_string()]);
+    }
+
+    /// 查无此人必须报错：静默丢弃会发出一条没有评审人的 MR。
+    #[test]
+    fn rejects_unknown_reviewer_instead_of_silently_dropping() {
+        let err = resolve_reviewer_ids(&["张三".into()], &members()).unwrap_err();
+        assert!(err.contains("找不到审核人"), "{err}");
+        assert!(err.contains("张三"), "{err}");
+    }
+
+    /// 重名无法安全解析，要求用户改填用户 ID。
+    #[test]
+    fn rejects_ambiguous_reviewer_names() {
+        let dup = vec![
+            CodeupMember {
+                name: "张三".to_string(),
+                user_id: "aaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            },
+            CodeupMember {
+                name: "张三".to_string(),
+                user_id: "bbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            },
+        ];
+        let err = resolve_reviewer_ids(&["张三".into()], &dup).unwrap_err();
+        assert!(err.contains("重名"), "{err}");
+    }
+
+    /// 没选审核人时不应触发任何解析（这是最常见的路径）。
+    #[test]
+    fn empty_reviewer_list_needs_no_members() {
+        assert!(resolve_reviewer_ids(&[], &[]).unwrap().is_empty());
+        assert!(resolve_reviewer_ids(&["  ".into()], &[]).unwrap().is_empty());
+    }
+
+    /// 保护规则的默认评审人：**顶层数组**（实测响应形态），目标分支规则命中后取
+    /// `mergeRequestSetting.defaultAssignees` + 兜底 `allowMergeUsers`，默认评审人排前面。
+    #[test]
+    fn extracts_default_reviewers_from_top_level_array() {
+        let json = serde_json::json!([
+            { "branch": "develop-old", "allowMergeUsers": [], "mergeRequestSetting": { "defaultAssignees": [] } },
+            {
+                "branch": "develop",
+                "allowMergeUsers": [],
+                "mergeRequestSetting": {
+                    "defaultAssignees": [{ "name": "苏一" }, { "name": "付茂玲" }]
+                }
+            },
+            {
+                "branch": "master",
+                "allowMergeUsers": [{ "name": "陈学清" }, { "name": "苏一" }],
+                "mergeRequestSetting": { "defaultAssignees": [] }
+            }
+        ]);
+        assert_eq!(
+            branch_reviewers_from_rules(&json, "develop"),
+            vec!["苏一".to_string(), "付茂玲".to_string()]
+        );
+        // 没有配置默认评审人时，回落到「允许合并的人」。
+        assert_eq!(
+            branch_reviewers_from_rules(&json, "master"),
+            vec!["陈学清".to_string(), "苏一".to_string()]
+        );
+        // 只取命中目标分支的那条规则，不把其他分支的评审人混进来。
+        assert!(branch_reviewers_from_rules(&json, "release").is_empty());
+    }
+
+    /// 兼容 `{rules: [...]}` 包裹形态（接口版本差异），并容忍非对象元素。
+    #[test]
+    fn extracts_reviewers_from_wrapped_and_junk_shapes() {
+        let wrapped = serde_json::json!({
+            "rules": [
+                { "branch": "master", "mergeRequestSetting": { "defaultAssignees": [{ "name": "苏一" }] } }
+            ]
+        });
+        assert_eq!(
+            branch_reviewers_from_rules(&wrapped, "master"),
+            vec!["苏一".to_string()]
+        );
+        // 空 branch 视为通配规则。
+        let wildcard = serde_json::json!([
+            { "branch": "", "mergeRequestSetting": { "defaultAssignees": [{ "name": "苏一" }] } }
+        ]);
+        assert_eq!(
+            branch_reviewers_from_rules(&wildcard, "master"),
+            vec!["苏一".to_string()]
+        );
+        // 顶层数组里的非对象元素不能让解析崩或误配。
+        let junk = serde_json::json!(["oops", 42, null]);
+        assert!(branch_reviewers_from_rules(&junk, "master").is_empty());
+    }
+
+    /// 构造 `CodeupRepository` 的测试夹具。
+    fn codeup_repo(id: &str, namespace: &str, http_url: &str) -> CodeupRepository {
+        CodeupRepository {
+            id: id.to_string(),
+            name: String::new(),
+            path: String::new(),
+            namespace: namespace.to_string(),
+            http_url: http_url.to_string(),
+            web_url: String::new(),
+        }
+    }
+
+    /// 实测坑：平台命名空间会吃掉分隔符（仓库 `HSP/Hsp_Main` 在平台上是
+    /// `HSP/HspMain`），而 origin URL 保留下划线。只比字符串相等会永远匹配不上，
+    /// 表现为「创建 MR 时找不到仓库」。
+    #[test]
+    fn matches_repo_despite_namespace_separator_rewrite() {
+        let repos = vec![codeup_repo(
+            "3402809",
+            "641881e9b9581d62e8f8186e / HSP / HspMain",
+            "https://codeup.aliyun.com/641881e9b9581d62e8f8186e/HSP/Hsp_Main.git",
+        )];
+        let found = find_codeup_repository("HSP/Hsp_Main", &repos).expect("must match");
+        assert_eq!(found.id, "3402809");
+    }
+
+    /// 同名仓库不能串台：`HSP/HIS` 与 `HSP_XC/HIS` 都叫 HIS，必须按命名空间区分。
+    #[test]
+    fn keeps_same_named_repos_apart() {
+        let repos = vec![
+            codeup_repo(
+                "1",
+                "org / HSP / HIS",
+                "https://codeup.aliyun.com/org/HSP/HIS.git",
+            ),
+            codeup_repo(
+                "2",
+                "org / HSP_XC / HIS",
+                "https://codeup.aliyun.com/org/HSP_XC/HIS.git",
+            ),
+        ];
+        assert_eq!(find_codeup_repository("HSP/HIS", &repos).unwrap().id, "1");
+        assert_eq!(
+            find_codeup_repository("HSP_XC/HIS", &repos).unwrap().id,
+            "2"
+        );
     }
 }

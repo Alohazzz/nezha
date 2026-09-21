@@ -421,6 +421,13 @@ describe("PendingMrView", () => {
         return Promise.resolve([scan([candidate({ branch: "feature/develop/todo", unmerged: 2 })])]);
       }
       if (command === "codeup_branch_managers") return Promise.resolve(["张三", "李四"]);
+      if (command === "codeup_list_members") {
+        return Promise.resolve([
+          { name: "张三", userId: "aaaaaaaaaaaaaaaaaaaaaaaa" },
+          { name: "李四", userId: "bbbbbbbbbbbbbbbbbbbbbbbb" },
+          { name: "王五", userId: "cccccccccccccccccccccccc" },
+        ]);
+      }
       if (command === "codeup_create_mrs_batch") {
         return Promise.resolve([
           {
@@ -443,12 +450,14 @@ describe("PendingMrView", () => {
     fireEvent.click(screen.getByLabelText("feature/develop/todo"));
     fireEvent.click(screen.getByRole("button", { name: /发起合并请求/ }));
 
-    // 确认弹层列出分支与目标分支，且审核人已按目标分支管理人员预填。
+    // 确认弹层列出分支与目标分支，且审核人已按目标分支的默认评审人预填成 chip。
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain("feature/develop/todo");
     expect(dialog.textContent).toContain("目标分支 develop");
-    const textarea = await screen.findByPlaceholderText(/如：张三/);
-    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe("张三, 李四"));
+    await waitFor(() => {
+      expect(screen.getByLabelText("移除评审人 张三")).toBeInTheDocument();
+      expect(screen.getByLabelText("移除评审人 李四")).toBeInTheDocument();
+    });
 
     fireEvent.click(screen.getByRole("button", { name: /发起 1 个合并请求/ }));
     await waitFor(() => {
@@ -467,6 +476,106 @@ describe("PendingMrView", () => {
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByText(/✓ 已发起 HIS:feature\/develop\/todo #3528/)).toBeInTheDocument();
+  });
+
+  it("lets the user pick reviewers from the org member list", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "list_branch_pr_repos") {
+        return Promise.resolve([{ name: "HIS", path: "/workspace/HIS" }]);
+      }
+      if (command === "list_branch_pr_candidates") {
+        return Promise.resolve([scan([candidate({ branch: "feature/develop/todo", unmerged: 2 })])]);
+      }
+      // 保护规则拿不到默认评审人：模拟真实里的「预填为空、必须自己选」。
+      if (command === "codeup_branch_managers") {
+        return Promise.reject(new Error("HTTP 404 [NotFound]: Not Found"));
+      }
+      if (command === "codeup_list_members") {
+        return Promise.resolve([
+          { name: "苏一", userId: "aaaaaaaaaaaaaaaaaaaaaaaa" },
+          { name: "陈学清", userId: "bbbbbbbbbbbbbbbbbbbbbbbb" },
+        ]);
+      }
+      if (command === "codeup_create_mrs_batch") {
+        return Promise.resolve([
+          {
+            repo: "HIS",
+            repoPath: "/workspace/HIS",
+            sourceBranch: "feature/develop/todo",
+            targetBranch: "develop",
+            created: true,
+            mrId: "abc",
+            mrLocalId: 3528,
+            reason: "已发起合并请求（feature/develop/todo → develop）",
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+    await renderAndSelectRepo();
+    await screen.findByText("feature/develop/todo");
+
+    fireEvent.click(screen.getByLabelText("feature/develop/todo"));
+    fireEvent.click(screen.getByRole("button", { name: /发起合并请求/ }));
+
+    // 打开成员列表并勾选一个成员（值以人名传递，后端再解析成 userID）。
+    const input = await screen.findByPlaceholderText(/输入姓名搜索/);
+    fireEvent.focus(input);
+    fireEvent.click(await screen.findByRole("button", { name: /苏一/ }));
+    await waitFor(() => expect(screen.getByLabelText("移除评审人 苏一")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /发起 1 个合并请求/ }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("codeup_create_mrs_batch", {
+        projectPath: "/workspace/HIS",
+        items: [
+          expect.objectContaining({
+            sourceBranch: "feature/develop/todo",
+            reviewers: ["苏一"],
+          }),
+        ],
+      });
+    });
+  });
+
+  it("surfaces per-item reviewer resolution failures in the result panel", async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "list_branch_pr_repos") {
+        return Promise.resolve([{ name: "HIS", path: "/workspace/HIS" }]);
+      }
+      if (command === "list_branch_pr_candidates") {
+        return Promise.resolve([scan([candidate({ branch: "feature/develop/todo", unmerged: 2 })])]);
+      }
+      if (command === "codeup_branch_managers") return Promise.resolve(["查无此人"]);
+      if (command === "codeup_list_members") {
+        return Promise.resolve([{ name: "苏一", userId: "aaaaaaaaaaaaaaaaaaaaaaaa" }]);
+      }
+      // 后端在审核人解析失败时**不创建** MR，而是逐条回执说明原因。
+      if (command === "codeup_create_mrs_batch") {
+        return Promise.resolve([
+          {
+            repo: "HIS",
+            repoPath: "/workspace/HIS",
+            sourceBranch: "feature/develop/todo",
+            targetBranch: "develop",
+            created: false,
+            mrId: null,
+            mrLocalId: null,
+            reason: "云效组织成员里找不到审核人「查无此人」，请检查姓名或改填云效用户 ID",
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+    await renderAndSelectRepo();
+    await screen.findByText("feature/develop/todo");
+
+    fireEvent.click(screen.getByLabelText("feature/develop/todo"));
+    fireEvent.click(screen.getByRole("button", { name: /发起合并请求/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /发起 1 个合并请求/ }));
+
+    // 审核人解析失败必须逐条可见，不能静默发出一条没有评审人的 MR。
+    expect(await screen.findByText(/找不到审核人「查无此人」/)).toBeInTheDocument();
   });
 
   it("rescans only the changed branch when the target branch is switched", async () => {
