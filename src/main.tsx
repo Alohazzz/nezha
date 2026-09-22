@@ -1,9 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { AppConfirmHost } from "./components/AppConfirmDialog";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./hooks/useNotifications";
 import { I18nProvider } from "./i18n";
+import s from "./styles";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -21,34 +23,10 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            height: "100vh",
-            padding: 32,
-            fontFamily: "var(--font-ui)",
-            color: "#666",
-          }}
-        >
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Something went wrong</div>
-          <pre
-            style={{
-              fontSize: 12,
-              color: "#999",
-              maxWidth: 600,
-              overflow: "auto",
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {this.state.error.message}
-          </pre>
-          <button
-            onClick={() => this.setState({ error: null })}
-            style={{ marginTop: 16, padding: "8px 16px", cursor: "pointer" }}
-          >
+        <div style={s.errorBoundaryWrap}>
+          <div style={s.errorBoundaryTitle}>Something went wrong</div>
+          <pre style={s.errorBoundaryMessage}>{this.state.error.message}</pre>
+          <button style={s.errorBoundaryBtn} onClick={() => this.setState({ error: null })}>
             Retry
           </button>
         </div>
@@ -65,6 +43,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         <ToastProvider>
           <NotificationsProvider>
             <App />
+            <AppConfirmHost />
           </NotificationsProvider>
         </ToastProvider>
       </I18nProvider>

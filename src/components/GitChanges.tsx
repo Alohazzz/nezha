@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "./AppConfirmDialog";
 import {
   RefreshCw,
   Filter,
@@ -318,7 +318,7 @@ export function GitChanges({
     e.stopPropagation();
     const untracked = c.status === "?";
     const name = fileName(c.path);
-    const ok = await confirm(
+    const ok = await appConfirm(
       t(untracked ? "git.confirmDiscardUntracked" : "git.confirmDiscardTracked", { name }),
       {
         title: t("git.confirmDiscardTitle", { name }),
@@ -348,7 +348,7 @@ export function GitChanges({
   ) => {
     e.preventDefault();
     e.stopPropagation();
-    const ok = await confirm(
+    const ok = await appConfirm(
       t(directory.untracked ? "git.confirmDiscardUntracked" : "git.confirmDiscardTracked", {
         name: directory.name,
       }),
@@ -375,7 +375,7 @@ export function GitChanges({
   };
 
   const handleDiscardAll = async () => {
-    const ok = await confirm(t("git.confirmDiscardAll"), {
+    const ok = await appConfirm(t("git.confirmDiscardAll"), {
       title: t("git.confirmDiscardAllTitle"),
       kind: "warning",
       okLabel: t("git.discardAll"),

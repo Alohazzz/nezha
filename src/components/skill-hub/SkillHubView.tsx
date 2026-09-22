@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "../AppConfirmDialog";
 import {
   Settings as SettingsIcon,
   Blocks,
@@ -130,7 +130,7 @@ export function SkillHubView({ config, allProjects, onEnterSkillHub, onOpenAppSe
   const handleDeleteSkill = useCallback(
     async (skill: Skill) => {
       const name = skill.displayName || skill.name;
-      const ok = await confirm(t("skill.delete.prompt", { name }), {
+      const ok = await appConfirm(t("skill.delete.prompt", { name }), {
         title: t("skill.delete.title", { name }),
         kind: "warning",
         okLabel: t("skill.delete.confirm"),

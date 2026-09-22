@@ -9,7 +9,7 @@ import {
 import { useCancellableInvoke } from "../hooks/useCancellableInvoke";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "./AppConfirmDialog";
 import { ListTree, RotateCcw } from "lucide-react";
 import s from "../styles";
 import { useToast } from "./Toast";
@@ -658,7 +658,7 @@ export function FileExplorer({
     const name = idx >= 0 ? targetPath.slice(idx + 1) : targetPath;
     setCtxMenu(null);
 
-    const ok = await confirm(
+    const ok = await appConfirm(
       t(isDir ? "file.confirmDeleteFolder" : "file.confirmDeleteFile", { name }),
       {
         title: t("file.confirmDeleteTitle", { name }),

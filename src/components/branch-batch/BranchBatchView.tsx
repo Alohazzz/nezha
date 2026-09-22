@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "../AppConfirmDialog";
 import { FolderOpen, Plus, Send, Trash2, X } from "lucide-react";
 import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
 import { rpRootStyle } from "../../styles/right-panel";
@@ -109,7 +109,7 @@ export function BranchBatchView({
   const handleDelete = useCallback(
     async (batch: BranchBatch) => {
       const inMainCheckout = batch.useWorktree === false;
-      const ok = await confirm(
+      const ok = await appConfirm(
         inMainCheckout
           ? `确认删除 PR「${batch.name}」吗？\n将删除本地分支；仅当远端分支也已不存在时才会移除本条 PR 记录，否则只做关闭留痕。`
           : `确认删除工作树「${batch.name}」吗？\n将删除本地 worktree 与本地分支，并把批次置为已关闭；远端分支和 MR 不受影响。`,

@@ -249,6 +249,12 @@
   color: var(--text-secondary);
 }
 
+/* 应用内确认框（AppConfirmDialog）正文：消息自带 \n（如分支批删除说明）时保留换行。
+   用 data 属性做条件样式，不引入行内 style。 */
+.build-dialog-lead[data-pre="true"] {
+  white-space: pre-wrap;
+}
+
 .build-dialog-lead strong {
   font-weight: 700;
   color: var(--warning);

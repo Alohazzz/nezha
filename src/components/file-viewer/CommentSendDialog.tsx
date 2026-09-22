@@ -1,7 +1,7 @@
 import { useState } from "react";
 import * as Select from "@radix-ui/react-select";
 import { ChevronDown } from "lucide-react";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "../AppConfirmDialog";
 import { STATUS_LABEL, type Task } from "../../types";
 import s from "../../styles";
 import { useI18n } from "../../i18n";
@@ -46,7 +46,7 @@ export function CommentSendDialog<T extends SendableComment>({
   const handleDirectSend = async () => {
     if (!task) return;
     if (isRunning) {
-      const ok = await confirm(t("reviewComments.confirmInterrupt"), {
+      const ok = await appConfirm(t("reviewComments.confirmInterrupt"), {
         title: t("reviewComments.confirmInterruptTitle"),
         kind: "warning",
       });

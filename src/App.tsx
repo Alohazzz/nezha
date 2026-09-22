@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
-import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "./components/AppConfirmDialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1468,7 +1469,7 @@ function App() {
     if (!task || !task.worktreePath || !task.worktreeBranch) return;
     const project = projects.find((p) => p.id === task.projectId);
     if (!project) return;
-    const ok = await confirm(t("task.discardWorktreePrompt", { branch: task.worktreeBranch }), {
+    const ok = await appConfirm(t("task.discardWorktreePrompt", { branch: task.worktreeBranch }), {
       title: t("task.discardWorktreeTitle"),
       kind: "warning",
     });
@@ -1777,7 +1778,7 @@ function App() {
     const task = tasks.find((item) => item.id === taskId);
     if (!task) return;
     const promptPreview = `${task.prompt.slice(0, 100)}${task.prompt.length > 100 ? "..." : ""}`;
-    const ok = await confirm(t("task.deletePrompt", { prompt: promptPreview }), {
+    const ok = await appConfirm(t("task.deletePrompt", { prompt: promptPreview }), {
       title: t("task.deleteTitle"),
       kind: "warning",
     });
@@ -1790,7 +1791,7 @@ function App() {
       .filter((task) => task.projectId === project.id)
       .map((task) => task.id);
     if (projectTaskIds.length === 0) return;
-    const ok = await confirm(
+    const ok = await appConfirm(
       t("task.clearPrompt", { count: projectTaskIds.length, project: project.name }),
       {
         title: t("task.clearTitle"),
@@ -1954,7 +1955,7 @@ function App() {
   async function handleDeletePlan(planId: string) {
     const plan = plans.find((p) => p.id === planId);
     if (!plan) return;
-    const ok = await confirm(
+    const ok = await appConfirm(
       t("board.deletePrompt", {
         name: plan.name || buildPlanDisplayName(plan.issues.map((i) => i.serialNumber)),
       }),
@@ -3029,7 +3030,7 @@ function App() {
   async function handleDeleteProject(projectId: string) {
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
-    const ok = await confirm(t("task.deleteProjectPrompt", { project: project.name }), {
+    const ok = await appConfirm(t("task.deleteProjectPrompt", { project: project.name }), {
       title: t("task.deleteProjectTitle"),
       kind: "warning",
     });

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Send, Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-react";
-import { confirm, save } from "@tauri-apps/plugin-dialog";
+import { save } from "@tauri-apps/plugin-dialog";
+import { appConfirm } from "../AppConfirmDialog";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { CodeupMr, CodeupRepository, CodeupReviewFinding } from "../../types";
@@ -137,7 +138,7 @@ export function MergeHubView({
         const failCount = (findings ?? []).filter((f) => f.status === "fail").length;
         if (failCount > 0) {
           const first = findings?.find((f) => f.status === "fail");
-          const ok = await confirm(
+          const ok = await appConfirm(
             `审查判定存在 ${failCount} 处 fail（阻止级）标记${first?.rule ? `（如「${first.rule}」）` : ""}，仍要交给 Agent 合并？`,
             { title: "合并确认", kind: "warning" },
           );
