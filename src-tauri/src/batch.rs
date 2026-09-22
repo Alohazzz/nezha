@@ -394,6 +394,13 @@ pub fn get_branch_batch(project_id: String, batch_id: String) -> Result<Option<B
         .find(|b| b.id == batch_id))
 }
 
+/// 从 batches.json 整条移除批次记录（区别于关批：记录不保留）。
+fn remove_batch_record(project_id: String, batch_id: &str) -> Result<(), String> {
+    let mut batches = load_project_batches(project_id.clone())?;
+    batches.retain(|b| b.id != batch_id);
+    save_project_batches(project_id, batches)
+}
+
 /// 关闭/合并分支批：merged=true 记为 merged，否则记为 closed，并写上 closedAt。
 #[tauri::command]
 pub fn close_branch_batch(
@@ -557,7 +564,9 @@ pub async fn open_branch_batch_worktree(
     crate::fs::open_in_system_file_manager(target_str.clone(), target_str).await
 }
 
-/// 删除 PR worktree：只删代码目录与本地分支（任务/Shell 占用、未合并/脏文件/MR 状态校验后）并关批。
+/// 删除 PR worktree：只删代码目录与本地分支（任务/Shell 占用、未合并/脏文件/MR 状态校验后）。
+/// 无 worktree（主检出）的批：本地分支清理后，若远端分支也已不存在，整条移除 PR 记录；
+/// 远端分支仍存在时仅关批保留记录（远端分支从不改动，避免丢失平台侧仍有分支的 PR 线索）。
 #[tauri::command]
 pub async fn delete_branch_batch(
     project_path: String,
@@ -573,6 +582,22 @@ pub async fn delete_branch_batch(
     let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
     let effective_repo = batch.worktree_repo.clone().or_else(|| None);
     let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
+
+    // 0) 分支存在性预检（远端为 live ls-remote；本操作不触碰远端，结果全程有效）。
+    //    本地与远端 ref 都没了 = 没有任何提交可保护，只保留未合并 MR 门禁。
+    let remote_branch_gone = !remote_branch_exists(
+        project_path.clone(),
+        effective_repo.clone(),
+        batch.branch.clone(),
+    )
+    .await?;
+    let local_branch_gone = !local_branch_exists(
+        project_path.clone(),
+        effective_repo.clone(),
+        batch.branch.clone(),
+    )
+    .await?;
+    let branch_gone = remote_branch_gone && local_branch_gone;
 
     // 1) 任务占用
     let tasks = load_project_tasks(project_id.clone())?;
@@ -603,16 +628,19 @@ pub async fn delete_branch_batch(
             return Err("MR 尚未合并，禁止删除".to_string());
         }
         // 提交 MR 后本地不得新增提交：比对提交时记录的源分支 HEAD。
+        // 分支 ref 已全部消失时无从比对，也没有提交可新增，跳过 SHA 校验。
         if let Some(expected) = batch.mr_source_sha.as_deref() {
-            let actual = if worktree_exists {
-                run_git_head(&worktree_path)?
-            } else {
-                run_git_ref(&cwd, &batch.branch)?
-            };
-            if !actual.is_empty() && actual != expected {
-                return Err("源分支在提交 MR 后新增了提交，禁止删除".to_string());
+            if !branch_gone {
+                let actual = if worktree_exists {
+                    run_git_head(&worktree_path)?
+                } else {
+                    run_git_ref(&cwd, &batch.branch)?
+                };
+                if !actual.is_empty() && actual != expected {
+                    return Err("源分支在提交 MR 后新增了提交，禁止删除".to_string());
+                }
             }
-        } else {
+        } else if !branch_gone {
             // 旧批次无提交时 SHA：以远端源分支为参照，无法确认则 fail closed。
             let remote = run_git_ref(&cwd, &format!("origin/{}", batch.branch)).ok();
             match remote {
@@ -631,16 +659,12 @@ pub async fn delete_branch_batch(
                 _ => return Err("无法确认远端源分支，禁止删除".to_string()),
             }
         }
-    } else if batch.target_branch.trim().is_empty() {
+    } else if batch.target_branch.trim().is_empty() || branch_gone {
         // 未指定合并目标的批没有「已合并进某分支」的判据，跳过未合并计数；
+        // 分支 ref 已全部消失时同理：没有提交可保护，只保留上面的 MR 门禁。
         // 删除只影响本地 worktree / 分支，远端分支与提交不受影响。
     } else {
-        let source_branch_exists = local_branch_exists(
-            project_path.clone(),
-            effective_repo.clone(),
-            batch.branch.clone(),
-        )
-        .await?;
+        let source_branch_exists = !local_branch_gone;
         let count = if source_branch_exists {
             branch_unmerged_count(
                 cwd.clone(),
@@ -649,24 +673,14 @@ pub async fn delete_branch_batch(
             )
             .await?
         } else {
-            // worktree 和本地分支都可能已被外部清理；此时仍要检查远端分支，
-            // 避免删除记录后掩盖一个还有未合并提交的 PR。
-            let remote_source_exists = remote_branch_exists(
-                project_path.clone(),
-                effective_repo.clone(),
+            // 本地分支已被外部清理但远端仍在（branch_gone=false 保证到得了这里）：
+            // 仍要查远端未合并提交，避免删记录后掩盖一个还有未合并提交的 PR。
+            remote_branch_unmerged_count(
+                cwd.clone(),
+                batch.target_branch.clone(),
                 batch.branch.clone(),
             )
-            .await?;
-            if remote_source_exists {
-                remote_branch_unmerged_count(
-                    cwd.clone(),
-                    batch.target_branch.clone(),
-                    batch.branch.clone(),
-                )
-                .await?
-            } else {
-                0
-            }
+            .await?
         };
         if count > 0 {
             return Err("源分支仍有未合并提交，禁止删除".to_string());
@@ -694,7 +708,12 @@ pub async fn delete_branch_batch(
     } else {
         batch.target_branch.clone()
     };
+    let skip_branch_cleanup = !use_worktree && local_branch_gone;
     tokio::task::spawn_blocking(move || -> Result<(), String> {
+        if skip_branch_cleanup {
+            // 本地分支早已不存在，主检出也没有 worktree 目录可清，无事可做。
+            return Ok(());
+        }
         if use_worktree && Path::new(&wt).is_dir() {
             let _ = run_git(&cwd2, &["worktree", "remove", "--force", &wt]);
             let _ = run_git(&cwd2, &["worktree", "prune"]);
@@ -728,7 +747,15 @@ pub async fn delete_branch_batch(
     .await
     .map_err(|e| format!("Delete worktree task panicked: {e}"))??;
 
-    close_branch_batch(project_id, batch_id, false).map(|_| batch2)
+    // 主检出批（无 worktree）：本地分支清理后远端分支也已不存在的，PR 已无任何
+    // 落点，整条移除记录；远端分支仍存在时仅关批保留记录，避免丢失平台侧线索。
+    // 带 worktree 的批保持「关批留痕」语义不变。
+    if !use_worktree && remote_branch_gone {
+        remove_batch_record(project_id, &batch_id)?;
+        Ok(batch2)
+    } else {
+        close_branch_batch(project_id, batch_id, false).map(|_| batch2)
+    }
 }
 
 /// 新建 PR 对话框的默认代码目录（配置基路径 / 共享 hub / 项目内默认，实时解析）。

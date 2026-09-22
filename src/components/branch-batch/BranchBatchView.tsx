@@ -57,15 +57,17 @@ export function BranchBatchView({
   const [notice, setNotice] = useState("");
 
   const load = useCallback(async (pid: string) => {
-    if (!pid) return;
+    if (!pid) return [];
     try {
       const list = await invoke<BranchBatch[]>("list_branch_batches", {
         projectId: pid,
         projectPath,
       });
       setBatches(list);
+      return list;
     } catch (e) {
       console.error("[branch-batch] load failed:", e);
+      return [];
     }
   }, [projectPath]);
 
@@ -106,9 +108,12 @@ export function BranchBatchView({
 
   const handleDelete = useCallback(
     async (batch: BranchBatch) => {
+      const inMainCheckout = batch.useWorktree === false;
       const ok = await confirm(
-        `确认删除工作树「${batch.name}」吗？\n将删除本地 worktree 与本地分支，并把批次置为已关闭；远端分支和 MR 不受影响。`,
-        { title: "删除 WorkTree", kind: "warning" },
+        inMainCheckout
+          ? `确认删除 PR「${batch.name}」吗？\n将删除本地分支；仅当远端分支也已不存在时才会移除本条 PR 记录，否则只做关闭留痕。`
+          : `确认删除工作树「${batch.name}」吗？\n将删除本地 worktree 与本地分支，并把批次置为已关闭；远端分支和 MR 不受影响。`,
+        { title: inMainCheckout ? "删除 PR" : "删除 WorkTree", kind: "warning" },
       );
       if (!ok) return;
       setBusyId(batch.id);
@@ -116,7 +121,11 @@ export function BranchBatchView({
       try {
         await invoke("delete_branch_batch", { projectPath, projectId, batchId: batch.id, shellOpen });
         onScopeChange("");
-        await load(projectId);
+        const list = await load(projectId);
+        // 远端分支仍存在时后端只关批不移除记录，明示这个结果避免「删了没反应」的困惑。
+        if (inMainCheckout && list.some((b) => b.id === batch.id)) {
+          setNotice("远端分支仍存在，已关闭该 PR 记录；需彻底删除请先在代码平台删除远端分支。");
+        }
       } catch (e) {
         setNotice(String(e));
       } finally {
@@ -188,7 +197,7 @@ export function BranchBatchView({
           onClick={() => void handleDelete(batch)}
         >
           <Trash2 size={13} />
-          {inMainCheckout ? "删除批次" : "删除 WorkTree"}
+          {inMainCheckout ? "删除 PR" : "删除 WorkTree"}
         </button>
       </div>
     </div>
