@@ -15,6 +15,7 @@ import s from "../../styles";
 import { CreatePlanDialog } from "../branch-batch/CreatePlanDialog";
 import { SubmitMrDialog } from "../branch-batch/SubmitMrDialog";
 import { DirectLaunchDialog, type DirectLaunchOptions } from "../yunxiao/DirectLaunchDialog";
+import { SelectField } from "../yunxiao/SelectField";
 import { deriveIssueStatus, type IssueStatus } from "./deriveIssueStatus";
 import { PlanIssueRow } from "./PlanIssueRow";
 
@@ -149,6 +150,20 @@ export function PlanPanel({
     }
   }
 
+  async function handleRemoveIssue(workitemId: string) {
+    if (!selected || !project) return;
+    try {
+      const plan = await invoke<DeliveryPlan>("remove_delivery_plan_issue", {
+        projectId: project.id,
+        planId: selected.id,
+        workitemId,
+      });
+      onDeliveryPlansChange(deliveryPlans.map((p) => (p.id === plan.id ? plan : p)));
+    } catch (e) {
+      setNotice(String(e));
+    }
+  }
+
   async function handleStartIssue(rowIssue: { workitemId: string; serialNumber: string; subject: string }) {
     if (!project) return;
     try {
@@ -173,20 +188,15 @@ export function PlanPanel({
   return (
     <div style={s.dpRoot}>
       <div style={s.dpToolbar}>
-        <select
-          style={s.dpToolbarSelect}
+        <SelectField
           value={projectId}
-          onChange={(e) => {
-            setProjectId(e.target.value);
+          onChange={(v) => {
+            setProjectId(v);
             setSelectedId("");
           }}
-        >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              项目：{p.name}
-            </option>
-          ))}
-        </select>
+          options={projects.map((p) => ({ value: p.id, label: `项目：${p.name}` }))}
+          placeholder="选择项目"
+        />
         <span style={s.dpSpacer} />
         <button
           type="button"
@@ -293,7 +303,7 @@ export function PlanPanel({
                 <div style={s.dpEmpty}>
                   暂无议题
                   <br />
-                  从云效议题列表「添加到计划」开始组织批次
+                  从云效议题列表「添加到计划」开始组织议题
                   <br />
                   <button type="button" style={s.dpBtnPrimary} onClick={() => onGoYunxiao()}>
                     去添加议题
@@ -317,6 +327,7 @@ export function PlanPanel({
                         status={row.status}
                         schemes={row.schemes}
                         onStart={() => void handleStartIssue(row.issue)}
+                        onRemove={() => void handleRemoveIssue(row.issue.workitemId)}
                         onOpenWorkitem={onOpenWorkitem}
                       />
                     ))}

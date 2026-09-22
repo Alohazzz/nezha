@@ -296,7 +296,7 @@ export function WelcomePage({
             onStartCodeupTask={onStartCodeupTask}
           />
         ) : view === "pendingMr" ? (
-          <PendingMrView projects={allProjects} onBack={() => setView("projects")} />
+          <PendingMrView projects={allProjects} deliveryPlans={deliveryPlans} onBack={() => setView("projects")} />
         ) : view === "deliveryPlan" ? (
           <PlanPanel
             projects={allProjects}

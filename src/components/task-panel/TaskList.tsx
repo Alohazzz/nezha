@@ -147,7 +147,7 @@ export function TaskList({
         label = `WorkTree · ${task.worktreeBranch ?? "?"}`;
       } else if (batch) {
         key = `batch:${batch.id}`;
-        label = `WorkTree · ${batch.branch}`;
+        label = `计划 · ${batch.name}`;
       } else {
         key = MAIN;
         label = "主检出";

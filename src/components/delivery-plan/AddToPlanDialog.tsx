@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import type { DeliveryPlan, PlanIssue, YunxiaoWorkitem } from "../../types";
 import s from "../../styles";
+import { SelectField } from "../yunxiao/SelectField";
 
 /** 云效议题「添加到计划」：选目标计划（本项目活跃计划）后写入成员（有序追加）。
  *  单计划归属（S1）：已属其它计划的议题由后端整体拒绝并明示。 */
@@ -61,17 +62,15 @@ export function AddToPlanDialog({
           {candidates.length === 0 ? (
             <div style={s.bbCheckHint}>本项目暂无进行中的计划，请先「创建计划」</div>
           ) : (
-            <select
-              style={s.bbInput}
+            <SelectField
               value={planId}
-              onChange={(e) => setPlanId(e.target.value)}
-            >
-              {candidates.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {p.branch}
-                </option>
-              ))}
-            </select>
+              onChange={setPlanId}
+              options={candidates.map((p) => ({
+                value: p.id,
+                label: `${p.name} · ${p.branch}`,
+              }))}
+              placeholder="选择计划"
+            />
           )}
         </div>
         <div style={s.bbCheckHint}>

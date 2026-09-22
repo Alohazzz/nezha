@@ -13,7 +13,7 @@
 //! - MR 详情/动作路径段收 `localId`，传 `mrBizId` 报 `Invalid param value`。
 
 use crate::git::{path_to_string, resolve_repo_path, run_git, validate_project_path};
-use crate::storage::{load_project_batches, load_projects, save_project_batches, DeliveryPlan};
+use crate::storage::{load_project_batches_sync, load_projects, save_project_batches_sync, DeliveryPlan};
 use crate::yunxiao::{build_client, read_json_body, API_BASE};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -581,7 +581,7 @@ pub struct CodeupMemberEntry {
 }
 
 fn load_plan(project_id: &str, plan_id: &str) -> Result<DeliveryPlan, String> {
-    load_project_batches(project_id.to_string())?
+    load_project_batches_sync(project_id.to_string())?
         .into_iter()
         .find(|b| b.id == plan_id)
         .ok_or_else(|| "DeliveryPlan not found".to_string())
@@ -935,7 +935,7 @@ pub async fn codeup_create_mr(
     let (token, _) = load_creds().await?;
     let batch = load_plan(&project_id, &plan_id)?;
     if batch.status != "active" {
-        return Err("批次不是进行中状态，无法提交 MR".to_string());
+        return Err("计划不是进行中状态，无法提交 MR".to_string());
     }
     if batch.target_branch.trim().is_empty() {
         return Err("该批未指定合并回目标分支，无法提交 MR；请补记目标分支后重试".to_string());
@@ -1009,7 +1009,7 @@ pub async fn codeup_create_mr(
     )
     .await?;
 
-    let mut batches = load_project_batches(project_id.clone())?;
+    let mut batches = load_project_batches_sync(project_id.clone())?;
     let updated = batches
         .iter_mut()
         .find(|b| b.id == plan_id)
@@ -1021,7 +1021,7 @@ pub async fn codeup_create_mr(
     updated.status = "review".to_string();
     updated.mr_source_sha = Some(source_sha);
     let result = updated.clone();
-    save_project_batches(project_id, batches)?;
+    save_project_batches_sync(project_id, batches)?;
     Ok(result)
 }
 

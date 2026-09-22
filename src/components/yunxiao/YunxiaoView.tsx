@@ -33,6 +33,7 @@ import { YunxiaoProjectSelect } from "./YunxiaoProjectSelect";
 import { useYunxiaoCloudProjects } from "./useYunxiaoCloudProjects";
 import { PlanLaunchDialog } from "./plan/PlanLaunchDialog";
 import { AddToPlanDialog } from "../delivery-plan/AddToPlanDialog";
+import { CreatePlanDialog } from "../branch-batch/CreatePlanDialog";
 import { DirectLaunchDialog, type DirectLaunchOptions } from "./DirectLaunchDialog";
 import s from "../../styles";
 
@@ -226,6 +227,7 @@ export function YunxiaoView({
   const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
   const [launchIssues, setLaunchIssues] = useState<YunxiaoWorkitem[] | null>(null);
   const [addToPlanIssues, setAddToPlanIssues] = useState<YunxiaoWorkitem[] | null>(null);
+  const [showCreatePlan, setShowCreatePlan] = useState(false);
   // 「直接开始」弹窗的待确认议题（null = 未打开）。
   const [directIssue, setDirectIssue] = useState<YunxiaoWorkitem | null>(null);
 
@@ -481,6 +483,14 @@ export function YunxiaoView({
             </div>
             <div style={s.yunxiaoCount}>{t("yunxiao.count", { count: total })}</div>
           </div>
+          <button
+            type="button"
+            style={s.yunxiaoSelectGhostBtn}
+            disabled={!targetProject}
+            onClick={() => setShowCreatePlan(true)}
+          >
+            创建计划
+          </button>
           <YunxiaoImportBar
             targetProjectId={targetProjectId}
             onTargetProjectChange={setTargetProjectId}
@@ -559,6 +569,15 @@ export function YunxiaoView({
           onStartDiscussion={onStartPlanDiscussion}
           onCancelPlan={onCancelPlan}
           onClose={() => setLaunchIssues(null)}
+        />
+      )}
+      {showCreatePlan && targetProject && (
+        <CreatePlanDialog
+          projectId={targetProject.id}
+          projectPath={targetProject.path}
+          repoPath={targetProject.path}
+          onCreated={(plan) => onDeliveryPlansChange([...deliveryPlans, plan])}
+          onClose={() => setShowCreatePlan(false)}
         />
       )}
       {addToPlanIssues && targetProject && (

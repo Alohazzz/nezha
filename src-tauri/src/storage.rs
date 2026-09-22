@@ -408,29 +408,49 @@ pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), St
     atomic_write(&tasks_path(&project_id)?, &raw)
 }
 
-/// 加载某项目的交付计划列表（不存在则返回空列表）。
+/// 同步核心（含文件 I/O 与 legacy 迁移）：只允许在 spawn_blocking 闭包或同步上下文调用。
 /// 首次加载自动做 legacy 迁移（taskIds → issues + 回写 task.deliveryPlanId），幂等。
-#[tauri::command]
-pub fn load_project_batches(project_id: String) -> Result<Vec<DeliveryPlan>, String> {
-    let path = batches_path(&project_id)?;
+pub(crate) fn load_project_batches_sync(
+    project_id: impl AsRef<str>,
+) -> Result<Vec<DeliveryPlan>, String> {
+    let project_id = project_id.as_ref();
+    let path = batches_path(project_id)?;
     if !path.exists() {
         return Ok(vec![]);
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut plans: Vec<DeliveryPlan> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    if migrate_legacy_batches(&project_id, &mut plans)? {
+    if migrate_legacy_batches(project_id, &mut plans)? {
         // 迁移后立即重写，让 taskIds/issueSerialNumbers 从此不再落盘。
-        save_project_batches(project_id.clone(), plans.clone())?;
+        save_project_batches_sync(project_id, plans.clone())?;
     }
     Ok(plans)
 }
 
-/// 保存某项目的交付计划列表（原子写入，空列表也照常写 "[]"，不删文件）。
-#[tauri::command]
-pub fn save_project_batches(project_id: String, batches: Vec<DeliveryPlan>) -> Result<(), String> {
-    ensure_project_dir(&project_id)?;
+/// 同步核心：原子写入，空列表也照常写 "[]"，不删文件。
+pub(crate) fn save_project_batches_sync(
+    project_id: impl AsRef<str>,
+    batches: Vec<DeliveryPlan>,
+) -> Result<(), String> {
+    let project_id = project_id.as_ref();
+    ensure_project_dir(project_id)?;
     let raw = serde_json::to_string_pretty(&batches).map_err(|e| e.to_string())?;
-    atomic_write(&batches_path(&project_id)?, &raw)
+    atomic_write(&batches_path(project_id)?, &raw)
+}
+
+/// IPC 入口：阻塞 I/O 统一进 spawn_blocking，不占 Tokio 运行时（AGENTS.md 后端性能红线）。
+#[tauri::command]
+pub async fn load_project_batches(project_id: String) -> Result<Vec<DeliveryPlan>, String> {
+    tokio::task::spawn_blocking(move || load_project_batches_sync(&project_id))
+        .await
+        .map_err(|e| format!("Load batches task panicked: {e}"))?
+}
+
+#[tauri::command]
+pub async fn save_project_batches(project_id: String, batches: Vec<DeliveryPlan>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || save_project_batches_sync(&project_id, batches))
+        .await
+        .map_err(|e| format!("Save batches task panicked: {e}"))?
 }
 
 /// legacy 迁移（幂等）：检测到 `legacy_task_ids`（旧 taskIds）即执行——
@@ -450,8 +470,8 @@ fn migrate_legacy_batches(
         return Ok(false);
     }
 
-    // 留 .bak（仅首次，已存在不覆盖）。
-    if dirty {
+    // 留 .bak（仅首次，已存在不覆盖）；状态钳制重写同样有备份。
+    if dirty || status_dirty {
         if let Ok(path) = batches_path(project_id) {
             if path.exists() {
                 let bak = path.with_file_name("batches.json.bak");

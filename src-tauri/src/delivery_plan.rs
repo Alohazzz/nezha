@@ -1,4 +1,4 @@
-//! 分支批（Branch DeliveryPlan）管理：一个批 = 一个可独立验收的 PR，
+//! 分支批（Branch DeliveryPlan）管理：一个计划 = 一个可独立交付的单元，
 //! 对应一个分支 + 一个 worktree，批内议题任务顺序共用该工作区。
 
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use crate::git::{
     worktree_dirty_reason,
 };
 use crate::storage::{
-    load_project_batches, load_project_tasks, save_project_batches, DeliveryPlan, PlanIssue,
+    load_project_batches_sync, load_project_tasks, save_project_batches_sync, DeliveryPlan, PlanIssue,
 };
 
 const VALID_KINDS: &[&str] = &["feature", "fix", "patch", "project", "hotfix"];
@@ -117,10 +117,10 @@ pub fn preview_delivery_plan_branch(
     )
 }
 
-/// 创建分支批：校验入参 → 生成分支名 → 建分支（可选建 worktree）→ 落盘到 batches.json。
+/// 创建交付计划：校验入参 → 生成分支名 → 建分支（可选建 worktree）→ 落盘到 batches.json。
 ///
 /// `use_worktree` 缺省 **false**：只在主工作区把分支切出来（`git checkout -b`），任务用
-/// 「本地处理」模式在项目根跑，提交自然落在批分支上。需要并行隔离时才置 true 另建 worktree。
+/// 「本地处理」模式在项目根跑，提交自然落在计划分支上。需要并行隔离时才置 true 另建 worktree。
 #[tauri::command]
 pub async fn create_delivery_plan(
     project_path: String,
@@ -319,13 +319,13 @@ pub async fn create_delivery_plan(
             use_worktree,
             mr_source_sha: None,
         };
-        let mut batches = load_project_batches(project_id.clone())?;
+        let mut batches = load_project_batches_sync(project_id.clone())?;
         batches.push(batch.clone());
-        save_project_batches(project_id, batches)?;
+        save_project_batches_sync(project_id, batches)?;
         Ok(batch)
     })
     .await
-    .map_err(|e| format!("Create batch task panicked: {e}"))?
+    .map_err(|e| format!("Create plan task panicked: {e}"))?
 }
 
 /// 批次视图：批次记录 + 实时探测的运行程序缺失提示（不落盘）。
@@ -347,7 +347,7 @@ pub async fn list_delivery_plans(
     project_id: String,
     project_path: Option<String>,
 ) -> Result<Vec<DeliveryPlanView>, String> {
-    let batches = load_project_batches(project_id)?;
+    let batches = load_project_batches_sync(project_id)?;
     tokio::task::spawn_blocking(move || {
         Ok(batches
             .into_iter()
@@ -382,22 +382,22 @@ pub async fn list_delivery_plans(
             .collect())
     })
     .await
-    .map_err(|e| format!("List batches task panicked: {e}"))?
+    .map_err(|e| format!("List plans task panicked: {e}"))?
 }
 
 /// 获取单个分支批。
 #[tauri::command]
 pub fn get_delivery_plan(project_id: String, batch_id: String) -> Result<Option<DeliveryPlan>, String> {
-    Ok(load_project_batches(project_id)?
+    Ok(load_project_batches_sync(project_id)?
         .into_iter()
         .find(|b| b.id == batch_id))
 }
 
-/// 从 batches.json 整条移除批次记录（区别于关批：记录不保留）。
+/// 从 batches.json 整条移除批次记录（区别于关计划：记录不保留）。
 fn remove_batch_record(project_id: String, batch_id: &str) -> Result<(), String> {
-    let mut batches = load_project_batches(project_id.clone())?;
+    let mut batches = load_project_batches_sync(project_id.clone())?;
     batches.retain(|b| b.id != batch_id);
-    save_project_batches(project_id, batches)
+    save_project_batches_sync(project_id, batches)
 }
 
 /// 关闭/合并分支批：merged=true 记为 merged，否则记为 closed，并写上 closedAt。
@@ -407,7 +407,7 @@ pub fn close_delivery_plan(
     batch_id: String,
     merged: bool,
 ) -> Result<DeliveryPlan, String> {
-    let mut batches = load_project_batches(project_id.clone())?;
+    let mut batches = load_project_batches_sync(project_id.clone())?;
     let batch = batches
         .iter_mut()
         .find(|b| b.id == batch_id)
@@ -415,7 +415,7 @@ pub fn close_delivery_plan(
     batch.status = if merged { "merged" } else { "closed" }.to_string();
     batch.closed_at = Some(now_ms());
     let result = batch.clone();
-    save_project_batches(project_id, batches)?;
+    save_project_batches_sync(project_id, batches)?;
     Ok(result)
 }
 
@@ -425,7 +425,7 @@ pub struct MergeBatchResult {
     pub batch: DeliveryPlan,
 }
 
-/// 合并分支批到目标分支（复用 worktree 合并），成功后自动关批并清理分支。
+/// 合并分支批到目标分支（复用 worktree 合并），成功后自动关计划并清理分支。
 ///
 /// 启用 worktree 的批：合并后删除 worktree 与本地分支。
 /// 未启用 worktree 的批：分支在主工作区里，先切回目标分支再删除批分支；工作区脏导致
@@ -437,18 +437,18 @@ pub async fn merge_delivery_plan(
     project_id: String,
     batch_id: String,
 ) -> Result<MergeBatchResult, String> {
-    let batch = load_project_batches(project_id.clone())?
+    let batch = load_project_batches_sync(project_id.clone())?
         .into_iter()
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "DeliveryPlan not found".to_string())?;
     if !merge_allows_kind(&batch.kind) {
         return Err(format!(
-            "批次类型 {} 是挑拣容器，不允许向上合并",
+            "计划类型 {} 是挑拣容器，不允许向上合并",
             batch.kind
         ));
     }
     if batch.target_branch.trim().is_empty() {
-        return Err("该批创建时未指定合并回目标分支，无法合并；如需合并请先提交 MR 或补记目标分支".to_string());
+        return Err("该计划创建时未指定合并回目标分支，无法合并；如需合并请先提交 MR 或补记目标分支".to_string());
     }
     let worktree_str = legacy_delivery_plan_worktree_path(&project_path, &batch_id)?;
     let effective_repo = batch.worktree_repo.clone().or(repo_path.clone());
@@ -461,7 +461,7 @@ pub async fn merge_delivery_plan(
         None,
     )
     .await?;
-    // 合并成功后自动关批（status = merged）。
+    // 合并成功后自动关计划（status = merged）。
     let closed = close_delivery_plan(project_id.clone(), batch_id, true)?;
     if batch.use_worktree {
         let worktree_path = batch.worktree_path.clone().unwrap_or(worktree_str);
@@ -473,7 +473,7 @@ pub async fn merge_delivery_plan(
         )
         .await;
     } else {
-        // 无 worktree：主工作区 HEAD 仍停在批分支上，先切回目标分支再删批分支。
+        // 无 worktree：主工作区 HEAD 仍停在计划分支上，先切回目标分支再删计划分支。
         let cwd = resolve_repo_path(&project_path, effective_repo.as_deref()).await?;
         let branch = batch.branch.clone();
         let target = batch.target_branch.clone();
@@ -544,7 +544,7 @@ pub async fn open_delivery_plan_worktree(
     project_id: String,
     batch_id: String,
 ) -> Result<(), String> {
-    let batch = load_project_batches(project_id.clone())?
+    let batch = load_project_batches_sync(project_id.clone())?
         .into_iter()
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "DeliveryPlan not found".to_string())?;
@@ -563,9 +563,9 @@ pub async fn open_delivery_plan_worktree(
     crate::fs::open_in_system_file_manager(target_str.clone(), target_str).await
 }
 
-/// 删除 PR worktree：只删代码目录与本地分支（任务/Shell 占用、未合并/脏文件/MR 状态校验后）。
-/// 无 worktree（主检出）的批：本地分支清理后，若远端分支也已不存在，整条移除 PR 记录；
-/// 远端分支仍存在时仅关批保留记录（远端分支从不改动，避免丢失平台侧仍有分支的 PR 线索）。
+/// 删除 计划 worktree：只删代码目录与本地分支（任务/Shell 占用、未合并/脏文件/MR 状态校验后）。
+/// 无 worktree（主检出）的计划：本地分支清理后，若远端分支也已不存在，整条移除 PR 记录；
+/// 远端分支仍存在时仅关计划保留记录（远端分支从不改动，避免丢失平台侧仍有分支的 PR 线索）。
 #[tauri::command]
 pub async fn delete_delivery_plan(
     project_path: String,
@@ -573,7 +573,7 @@ pub async fn delete_delivery_plan(
     batch_id: String,
     shell_open: bool,
 ) -> Result<DeliveryPlan, String> {
-    let batch = load_project_batches(project_id.clone())?
+    let batch = load_project_batches_sync(project_id.clone())?
         .into_iter()
         .find(|b| b.id == batch_id)
         .ok_or_else(|| "DeliveryPlan not found".to_string())?;
@@ -641,7 +641,7 @@ pub async fn delete_delivery_plan(
                 }
             }
         } else if !branch_gone {
-            // 旧批次无提交时 SHA：以远端源分支为参照，无法确认则 fail closed。
+            // 旧计划次无提交时 SHA：以远端源分支为参照，无法确认则 fail closed。
             let remote = run_git_ref(&cwd, &format!("origin/{}", batch.branch)).ok();
             match remote {
                 Some(r) if !r.is_empty() => {
@@ -726,7 +726,7 @@ pub async fn delete_delivery_plan(
                 let checkout = run_git(&cwd2, &["checkout", &checkout_target])?;
                 if !checkout.status.success() {
                     return Err(format!(
-                        "主工作区仍检出在批分支上且无法切回 {}（可能有未提交改动），请处理后重试：{}",
+                        "主工作区仍检出在计划分支上且无法切回 {}（可能有未提交改动），请处理后重试：{}",
                         checkout_target,
                         String::from_utf8_lossy(&checkout.stderr).trim()
                     ));
@@ -748,8 +748,8 @@ pub async fn delete_delivery_plan(
     .map_err(|e| format!("Delete worktree task panicked: {e}"))??;
 
     // 主检出批（无 worktree）：本地分支清理后远端分支也已不存在的，PR 已无任何
-    // 落点，整条移除记录；远端分支仍存在时仅关批保留记录，避免丢失平台侧线索。
-    // 带 worktree 的批保持「关批留痕」语义不变。
+    // 落点，整条移除记录；远端分支仍存在时仅关计划保留记录，避免丢失平台侧线索。
+    // 带 worktree 的批保持「关计划留痕」语义不变。
     if !use_worktree && remote_branch_gone {
         remove_batch_record(project_id, &batch_id)?;
         Ok(batch2)
@@ -783,7 +783,7 @@ pub async fn add_delivery_plan_issues(
     issues: Vec<PlanIssue>,
 ) -> Result<DeliveryPlan, String> {
     tokio::task::spawn_blocking(move || {
-        let mut plans = load_project_batches(project_id.clone())?;
+        let mut plans = load_project_batches_sync(project_id.clone())?;
         let taken = |wid: &str| {
             plans
                 .iter()
@@ -806,7 +806,7 @@ pub async fn add_delivery_plan_issues(
             }
         }
         let updated = plan.clone();
-        save_project_batches(project_id, plans)?;
+        save_project_batches_sync(project_id, plans)?;
         Ok(updated)
     })
     .await
@@ -821,14 +821,14 @@ pub async fn remove_delivery_plan_issue(
     workitem_id: String,
 ) -> Result<DeliveryPlan, String> {
     tokio::task::spawn_blocking(move || {
-        let mut plans = load_project_batches(project_id.clone())?;
+        let mut plans = load_project_batches_sync(project_id.clone())?;
         let plan = plans
             .iter_mut()
             .find(|p| p.id == plan_id)
             .ok_or_else(|| "DeliveryPlan not found".to_string())?;
         plan.issues.retain(|i| i.workitem_id != workitem_id);
         let updated = plan.clone();
-        save_project_batches(project_id, plans)?;
+        save_project_batches_sync(project_id, plans)?;
         Ok(updated)
     })
     .await

@@ -424,7 +424,7 @@ export interface Plan {
   status: PlanStatus;
   /** 承载方案讨论的临时任务 id */
   discussionTaskId?: string;
-  /** 生成待办时创建的分支批 id */
+  /** （休眠）历史字段，计划关联经 workitemId 派生 */
   batchId?: string;
   /** 主方案 id：本方案是它的追加子方案（一次追加的一批议题合成）。依赖不由它决定，见 deps.json */
   parentPlanId?: string;
