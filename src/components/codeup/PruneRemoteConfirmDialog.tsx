@@ -14,16 +14,24 @@ export const MAX_CONFIRM_LINES = 15;
  *
  * 确认框里逐条给出分支名与目标分支——删除是对外可见且难以撤销的操作，不能让用户
  * 在没看清删哪条的情况下点头。
+ *
+ * **检查态**（`checking`）：弹层在 dry-run 门禁跑完之前就乐观打开，确认按钮显示
+ * 「检查删除条件…」且禁用，取消始终可用——门禁要跑好几秒，不能让用户对着列表干等。
+ * `busy` 是真删执行中：此时弹层不可关闭、按钮全禁用（后端已经在动远端分支）。
  */
 export function PruneRemoteConfirmDialog({
   pending,
   busy,
+  checking,
   onCancel,
   onConfirm,
 }: {
   /** 待删除项；`null` 表示弹层关闭。 */
   pending: PendingRemoteBranchTarget[] | null;
+  /** 真删执行中（确认后）：锁死弹层。 */
   busy: boolean;
+  /** dry-run 门禁检查中：确认按钮禁用，取消可用。 */
+  checking: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -35,7 +43,7 @@ export function PruneRemoteConfirmDialog({
     <Dialog.Root
       open={pending !== null}
       onOpenChange={(open) => {
-        // 删除进行中不允许关掉弹层（后端已经在动远端分支了）。
+        // 删除进行中不允许关掉弹层（后端已经在动远端分支了）；检查中可随时取消。
         if (!open && !busy) onCancel();
       }}
     >
@@ -86,8 +94,17 @@ export function PruneRemoteConfirmDialog({
             <button className="rp-btn" onClick={onCancel} disabled={busy}>
               取消
             </button>
-            <button className="rp-btn" data-variant="danger" onClick={onConfirm} disabled={busy}>
-              {busy ? "删除中…" : `删除 ${candidates.length} 个远端分支`}
+            <button
+              className="rp-btn"
+              data-variant="danger"
+              onClick={onConfirm}
+              disabled={busy || checking}
+            >
+              {busy
+                ? "删除中…"
+                : checking
+                  ? "检查删除条件…"
+                  : `删除 ${candidates.length} 个远端分支`}
             </button>
           </div>
         </Dialog.Content>

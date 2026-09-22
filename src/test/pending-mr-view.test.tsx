@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
 import type { PendingBranchCandidate, PendingBranchRepoScan, Project } from "../types";
@@ -326,6 +326,317 @@ describe("PendingMrView", () => {
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByText(/✓ 已删除 HIS:merged\/v2\/develop\/QHDK-9/)).toBeInTheDocument();
+  });
+
+  it("row-level delete prunes that row even when its checkbox is not checked", async () => {
+    // 回归：行内「删除」曾复用基于勾选集的 startPrune——未勾选时静默 return（点了毫无
+    // 反应），勾了别的行时删的还不是被点击的行。行内删除必须始终只处理自己这一行。
+    const rowBranch = candidate({
+      branch: "merged/v2/develop/QHDK-9",
+      unmerged: 0,
+      mergeState: "merged",
+      mergedInto: "develop",
+      deletable: true,
+      skipReason: "",
+    });
+    const otherBranch = candidate({
+      branch: "merged/v2/develop/QHDK-10",
+      unmerged: 0,
+      mergeState: "merged",
+      mergedInto: "develop",
+      deletable: true,
+      skipReason: "",
+    });
+    mockList(
+      [scan([rowBranch, otherBranch])],
+      (dryRun) =>
+        dryRun
+          ? [
+              {
+                repo: "HIS",
+                repoPath: "/workspace/HIS",
+                branch: "merged/v2/develop/QHDK-9",
+                targetBranch: "develop",
+                deleted: false,
+                deletable: true,
+                reason: "已完整合入 origin/develop",
+              },
+            ]
+          : [
+              {
+                repo: "HIS",
+                repoPath: "/workspace/HIS",
+                branch: "merged/v2/develop/QHDK-9",
+                targetBranch: "develop",
+                deleted: true,
+                deletable: true,
+                reason: "已删除远端分支（已完整合入 origin/develop）",
+              },
+            ],
+    );
+    await renderAndSelectRepo();
+    await screen.findByText("merged/v2/develop/QHDK-9");
+
+    // 不勾选任何复选框，直接点这一行的「删除」。
+    const row = screen
+      .getByText("merged/v2/develop/QHDK-9")
+      .closest(".pm-card") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: /删除/ }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("prune_remote_branches", {
+        projectPath: "/workspace/HIS",
+        items: [
+          {
+            repoPath: "/workspace/HIS",
+            repo: "HIS",
+            branch: "merged/v2/develop/QHDK-9",
+            targetBranch: "develop",
+          },
+        ],
+        dryRun: true,
+      });
+    });
+
+    // 确认后真删这一行。
+    fireEvent.click(await screen.findByRole("button", { name: /删除 1 个远端分支/ }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("prune_remote_branches", {
+        projectPath: "/workspace/HIS",
+        items: [
+          {
+            repoPath: "/workspace/HIS",
+            repo: "HIS",
+            branch: "merged/v2/develop/QHDK-9",
+            targetBranch: "develop",
+          },
+        ],
+        dryRun: false,
+      });
+    });
+    expect(await screen.findByText(/✓ 已删除 HIS:merged\/v2\/develop\/QHDK-9/)).toBeInTheDocument();
+  });
+
+  it("hides branches whose remote copy is already gone after a rescan", async () => {
+    // 扫描侧契约：远端已无该分支的行不得以「已合并，可删除」留在列表里（后端会把
+    // pushed 置 false / 带 skipReason），否则用户勾选后必然被 dry-run 打回。
+    mockList([
+      scan([
+        candidate({
+          branch: "merged/v2/develop/gone",
+          unmerged: 0,
+          mergeState: "merged",
+          mergedInto: "develop",
+          pushed: false,
+          deletable: false,
+          skipReason: "远端已无该分支",
+        }),
+      ]),
+    ]);
+    await renderAndSelectRepo();
+    expect(
+      await screen.findByText(/当前筛选下没有发起合并的分支/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("merged/v2/develop/gone")).not.toBeInTheDocument();
+  });
+
+  it("says the branches are already gone when every skip reason reports a missing remote ref", async () => {
+    // dry-run 全部跳过且原因都是「远端已无该分支」是**达成**而非拒绝：文案若与
+    // 「均不满足删除条件」混用，用户会以为点了没有任何反应。
+    mockList(
+      [
+        scan([
+          candidate({
+            branch: "merged/v2/develop/QHDK-9",
+            unmerged: 0,
+            mergeState: "merged",
+            mergedInto: "develop",
+            deletable: true,
+            skipReason: "",
+          }),
+        ]),
+      ],
+      () => [
+        {
+          repo: "HIS",
+          repoPath: "/workspace/HIS",
+          branch: "merged/v2/develop/QHDK-9",
+          targetBranch: "develop",
+          deleted: false,
+          deletable: false,
+          reason: "远端已无该分支",
+        },
+      ],
+    );
+    await renderAndSelectRepo();
+    await screen.findByText("merged/v2/develop/QHDK-9");
+
+    fireEvent.click(screen.getByLabelText("merged/v2/develop/QHDK-9"));
+    fireEvent.click(screen.getByRole("button", { name: /删除远端分支/ }));
+
+    expect(await screen.findByText(/所选分支在远端已不存在/)).toBeInTheDocument();
+    expect(screen.queryByText(/均不满足删除条件/)).not.toBeInTheDocument();
+  });
+
+  it("counts an idempotent already-gone receipt as success, not failure", async () => {
+    // 执行阶段才发现远端已无该分支（exists/fetch 过了之后被平台或他人删掉）：
+    // 后端回执 deleted=true + 「删除目标已达成」，前端必须计入「已删除」而非「失败」。
+    mockList(
+      [
+        scan([
+          candidate({
+            branch: "merged/v2/develop/QHDK-9",
+            unmerged: 0,
+            mergeState: "merged",
+            mergedInto: "develop",
+            deletable: true,
+            skipReason: "",
+          }),
+        ]),
+      ],
+      (dryRun) =>
+        dryRun
+          ? [
+              {
+                repo: "HIS",
+                repoPath: "/workspace/HIS",
+                branch: "merged/v2/develop/QHDK-9",
+                targetBranch: "develop",
+                deleted: false,
+                deletable: true,
+                reason: "已完整合入 origin/develop",
+              },
+            ]
+          : [
+              {
+                repo: "HIS",
+                repoPath: "/workspace/HIS",
+                branch: "merged/v2/develop/QHDK-9",
+                targetBranch: "develop",
+                deleted: true,
+                deletable: true,
+                reason: "远端已无该分支，删除目标已达成（分支可能已被平台或他人删除）",
+              },
+            ],
+    );
+    await renderAndSelectRepo();
+    await screen.findByText("merged/v2/develop/QHDK-9");
+
+    fireEvent.click(screen.getByLabelText("merged/v2/develop/QHDK-9"));
+    fireEvent.click(screen.getByRole("button", { name: /删除远端分支/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /删除 1 个远端分支/ }));
+
+    expect(await screen.findByText(/已删除 1 个远端分支/)).toBeInTheDocument();
+    expect(screen.queryByText(/失败 1 个/)).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/✓ 已删除 HIS:merged\/v2\/develop\/QHDK-9/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/删除目标已达成/)).toBeInTheDocument();
+  });
+
+  it("opens the confirm dialog immediately while the dry-run gate is still running", async () => {
+    // 操作体验：dry-run 门禁（云效 API + ls-remote + fetch）要跑好几秒，点击删除后
+    // 确认框必须**立刻**出现，确认按钮显示检查态，门禁通过才点亮——不能让用户干等。
+    let resolveDryRun!: (v: unknown) => void;
+    mockList(
+      [
+        scan([
+          candidate({
+            branch: "merged/v2/develop/QHDK-9",
+            unmerged: 0,
+            mergeState: "merged",
+            mergedInto: "develop",
+            deletable: true,
+            skipReason: "",
+          }),
+        ]),
+      ],
+      (dryRun) => {
+        if (!dryRun) return [];
+        return new Promise((res) => {
+          resolveDryRun = res;
+        });
+      },
+    );
+    await renderAndSelectRepo();
+    await screen.findByText("merged/v2/develop/QHDK-9");
+
+    fireEvent.click(screen.getByLabelText("merged/v2/develop/QHDK-9"));
+    fireEvent.click(screen.getByRole("button", { name: /删除远端分支/ }));
+
+    // dry-run 尚未返回，弹窗必须已经出现且列出该分支。
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("merged/v2/develop/QHDK-9");
+    // 确认按钮处于检查态（禁用），取消始终可用。
+    expect(screen.getByRole("button", { name: /检查删除条件/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "取消" })).toBeEnabled();
+
+    // 门禁通过 → 确认按钮点亮为可执行的删除。
+    await act(async () => {
+      resolveDryRun([
+        {
+          repo: "HIS",
+          repoPath: "/workspace/HIS",
+          branch: "merged/v2/develop/QHDK-9",
+          targetBranch: "develop",
+          deleted: false,
+          deletable: true,
+          reason: "已完整合入 origin/develop",
+        },
+      ]);
+    });
+    expect(
+      screen.getByRole("button", { name: /删除 1 个远端分支/ }),
+    ).toBeEnabled();
+  });
+
+  it("canceling during the dry-run check ignores the stale result", async () => {
+    // 检查阶段取消后，在途 dry-run 迟到的结果不得把弹层重新打开（run 作废守卫）。
+    let resolveDryRun!: (v: unknown) => void;
+    mockList(
+      [
+        scan([
+          candidate({
+            branch: "merged/v2/develop/QHDK-9",
+            unmerged: 0,
+            mergeState: "merged",
+            mergedInto: "develop",
+            deletable: true,
+            skipReason: "",
+          }),
+        ]),
+      ],
+      (dryRun) => {
+        if (!dryRun) return [];
+        return new Promise((res) => {
+          resolveDryRun = res;
+        });
+      },
+    );
+    await renderAndSelectRepo();
+    await screen.findByText("merged/v2/develop/QHDK-9");
+
+    fireEvent.click(screen.getByLabelText("merged/v2/develop/QHDK-9"));
+    fireEvent.click(screen.getByRole("button", { name: /删除远端分支/ }));
+    await screen.findByRole("dialog");
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveDryRun([
+        {
+          repo: "HIS",
+          repoPath: "/workspace/HIS",
+          branch: "merged/v2/develop/QHDK-9",
+          targetBranch: "develop",
+          deleted: false,
+          deletable: true,
+          reason: "已完整合入 origin/develop",
+        },
+      ]);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("does not ask for confirmation when nothing passes the delete gate", async () => {

@@ -348,6 +348,43 @@ fn remote_branch_exists(dir: &str, branch: &str) -> Result<bool, String> {
     Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
 }
 
+/// 远端全部分支名（一次 `ls-remote --heads origin`）。`None` = 查询失败（离线 / 无 origin
+/// / 凭据失效），调用方回落本地 upstream 口径——网络问题不能让整张列表静默消失。
+///
+/// `core.quotepath=false`：非 ASCII 分支名（本项目用户普遍用中文分支）不得被转成八进制
+/// 转义，否则 `refs/heads/` 前缀匹配会整体漏掉它们。
+fn list_remote_heads(dir: &str) -> Option<HashSet<String>> {
+    let out = run_git(
+        dir,
+        &["-c", "core.quotepath=false", "ls-remote", "--heads", "origin"],
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut heads = HashSet::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // 行格式：<sha>\t<refname>；refname 不含空白，按 tab 拆即可。
+        if let Some(refname) = line.split('\t').nth(1) {
+            if let Some(name) = refname.strip_prefix("refs/heads/") {
+                heads.insert(name.to_string());
+            }
+        }
+    }
+    Some(heads)
+}
+
+/// git 错误是否表明「远端这个 ref 已经不存在」——幂等删除的成功信号。
+///
+/// 覆盖两类现场：`push --delete` 的 `remote ref does not exist`（exists 检查通过后、
+/// 执行前分支被平台合并自动删除 / 他人删除 / 读写副本滞后），与 fetch 的
+/// `couldn't find remote ref`（同一窗口的更早阶段）。删除的**目标状态**是
+/// 「远端没有这个分支」，错误本身证明目标已达成，不得回执成失败。
+fn stderr_says_remote_ref_missing(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("remote ref does not exist") || s.contains("couldn't find remote ref")
+}
+
 /// 该分支是否已被源分支**完整**包含（远端视角：`origin/target..origin/branch` 为空）。
 fn remote_fully_merged(dir: &str, target: &str, branch: &str) -> Result<bool, String> {
     let target_ref = format!("origin/{target}");
@@ -566,11 +603,19 @@ fn evaluate_branch(
     me: &str,
     platform: Option<&RepoPlatform>,
     git_protected: bool,
+    remote_heads: Option<&HashSet<String>>,
 ) -> BranchCandidate {
     let (target_branch, target_source) =
         infer_target_branch(&meta.name, config_default, known_branches, user_target);
 
-    let pushed = !meta.upstream.is_empty();
+    // 「已推送」以远端现状为准：平台「合并后删除源分支」是常态，只看 upstream 配置会把
+    // 远端已删的行标成「已合并，可删除」，dry-run 再用 live ls-remote 以「远端已无该分支」
+    // 打回——两口径自相矛盾，用户点删除永远进不了确认框（体感：点了没有任何反应）。
+    // `remote_heads = None`（ls-remote 失败）时回落 upstream 口径，不因离线藏掉整张列表。
+    let has_upstream = !meta.upstream.is_empty();
+    let remote_gone = has_upstream
+        && remote_heads.is_some_and(|heads| !heads.contains(&meta.name));
+    let pushed = has_upstream && !remote_gone;
     let platform_protected = platform.is_some_and(|p| p.is_protected(&meta.name));
     let protected = platform_protected || git_protected;
     // 平台侧分支列表可用时以平台为准；否则如实标注回落来源。
@@ -608,7 +653,11 @@ fn evaluate_branch(
     };
 
     if !pushed {
-        candidate.skip_reason = "未推送到远端（无 upstream），不能删除远端分支".to_string();
+        candidate.skip_reason = if remote_gone {
+            "远端已无该分支".to_string()
+        } else {
+            "未推送到远端（无 upstream），不能删除远端分支".to_string()
+        };
         return candidate;
     }
 
@@ -802,6 +851,10 @@ fn scan_repo_blocking(
         let _ = run_git(repo_path, &["fetch", "origin", target.as_str()]);
     }
 
+    // 远端现有分支全量列表（一次 ls-remote，按仓库取）：「已推送 / 可删」的判定必须与
+    // 删除 dry-run 的 live 检查同源。查询失败返回 None，逐行回落 upstream 配置口径。
+    let remote_heads = list_remote_heads(repo_path);
+
     let me = current_user_email(repo_path);
     for meta in &branches {
         let candidate = evaluate_branch(
@@ -814,6 +867,7 @@ fn scan_repo_blocking(
             &me,
             platform,
             crate::build::is_protected_branch(&meta.name, config_default),
+            remote_heads.as_ref(),
         );
         scan.branches.push(candidate);
     }
@@ -897,10 +951,12 @@ pub async fn list_branch_pr_candidates(
 /// 单条远端分支删除的判定 + 执行。
 ///
 /// `platform_protected`：平台侧受保护集合（`None` = 平台不可用，回落 git 口径）。
+/// `config_default`：项目配置的默认分支，回落口径与扫描侧同源。
 fn prune_remote_item_blocking(
     item: &RemoteBranchTarget,
     dry_run: bool,
     platform_protected: Option<&HashSet<String>>,
+    config_default: &str,
 ) -> RemoteBranchPruneItem {
     let mut out = RemoteBranchPruneItem {
         repo: item.repo.clone(),
@@ -919,9 +975,12 @@ fn prune_remote_item_blocking(
         return out;
     }
     // 受保护判定优先用平台口径（覆盖面更广）；平台不可用才回落 git 硬编码口径。
+    // **只判待删分支自身**：目标分支（主干）在平台上几乎总是受保护/默认分支，若一并查
+    // 集合，所有已合并进主干的特性分支都会被误拒——与扫描侧「已合并，可删除」的口径
+    // 自相矛盾。
     let protected = match platform_protected {
-        Some(set) => set.contains(&item.branch) || set.contains(target),
-        None => crate::build::is_protected_branch(&item.branch, target),
+        Some(set) => set.contains(&item.branch),
+        None => crate::build::is_protected_branch(&item.branch, config_default),
     };
     if protected {
         out.reason = "受保护分支，不可删除".to_string();
@@ -931,7 +990,15 @@ fn prune_remote_item_blocking(
     match remote_branch_exists(dir, &item.branch) {
         Ok(true) => {}
         Ok(false) => {
-            out.reason = "远端已无该分支".to_string();
+            if dry_run {
+                out.reason = "远端已无该分支".to_string();
+            } else {
+                // 执行阶段才发现分支已不在远端：先前已删（平台 / 他人 / 上一次点击），
+                // 删除目标已达成——按成功回执，避免红色「删除失败」。
+                out.deletable = true;
+                out.deleted = true;
+                out.reason = "远端已无该分支，删除目标已达成（分支可能已被平台或他人删除）".to_string();
+            }
             return out;
         }
         Err(e) => {
@@ -946,10 +1013,21 @@ fn prune_remote_item_blocking(
         match run_git(dir, &["fetch", "origin", reference]) {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
-                out.reason = format!(
-                    "拉取 {reference} 失败：{}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                );
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                // 拉取待删分支时发现远端已无该 ref：exists 检查与 fetch 之间的窗口被删，
+                // 与 exists=false 同语义（目标达成）；拉取目标分支失败仍是数据问题。
+                if reference == item.branch && stderr_says_remote_ref_missing(&stderr) {
+                    if dry_run {
+                        out.reason = "远端已无该分支".to_string();
+                    } else {
+                        out.deletable = true;
+                        out.deleted = true;
+                        out.reason =
+                            "远端已无该分支，删除目标已达成（分支可能已被平台或他人删除）".to_string();
+                    }
+                    return out;
+                }
+                out.reason = format!("拉取 {reference} 失败：{}", stderr.trim());
                 return out;
             }
             Err(e) => {
@@ -982,7 +1060,17 @@ fn prune_remote_item_blocking(
             out.reason = format!("已删除远端分支（已完整合入 origin/{target}）");
         }
         Ok(o) => {
-            out.reason = format!("删除失败：{}", String::from_utf8_lossy(&o.stderr).trim());
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            // push --delete 报 ref 不存在：exists / fetch 都过了之后分支才被删
+            // （平台合并自动删除、他人先删、读写副本滞后）。目标状态「远端无此分支」
+            // 已由错误本身证明——幂等成功，不得回执成失败。
+            if stderr_says_remote_ref_missing(&stderr) {
+                out.deleted = true;
+                out.reason =
+                    "远端已无该分支，删除目标已达成（分支可能已被平台或他人删除）".to_string();
+            } else {
+                out.reason = format!("删除失败：{}", stderr.trim());
+            }
         }
         Err(e) => out.reason = format!("删除失败：{e}"),
     }
@@ -1036,6 +1124,10 @@ pub async fn prune_remote_branches(
         .map(|i| i.repo_path.clone())
         .collect();
     let protection = fetch_protected_sets(&repo_paths).await;
+    // 回落 git 口径时的默认分支与扫描侧同源（项目配置），保证两侧判定一致。
+    let config_default = crate::config::read_project_config(project_path.clone())
+        .map(|c| c.build.default_branch)
+        .unwrap_or_default();
 
     tauri::async_runtime::spawn_blocking(move || {
         Ok(items
@@ -1045,6 +1137,7 @@ pub async fn prune_remote_branches(
                     item,
                     dry_run,
                     protection.get(&item.repo_path).and_then(|s| s.as_ref()),
+                    &config_default,
                 )
             })
             .collect())
@@ -1454,7 +1547,7 @@ mod tests {
 
         let scan: Vec<RemoteBranchPruneItem> = items
             .iter()
-            .map(|i| prune_remote_item_blocking(i, true, None))
+            .map(|i| prune_remote_item_blocking(i, true, None, ""))
             .collect();
         let find = |list: &[RemoteBranchPruneItem], name: &str| {
             list.iter().find(|i| i.branch == name).unwrap().clone()
@@ -1468,7 +1561,7 @@ mod tests {
         // 执行：只删已完整合并的那条。
         let done: Vec<RemoteBranchPruneItem> = items
             .iter()
-            .map(|i| prune_remote_item_blocking(i, false, None))
+            .map(|i| prune_remote_item_blocking(i, false, None, ""))
             .collect();
         assert!(find(&done, "hotfix/v2.20260901/develop/QHDK-1-x").deleted);
         assert!(!find(&done, "feature/develop/wip").deleted);
@@ -1516,10 +1609,158 @@ mod tests {
             branch: "develop-old".to_string(),
             target_branch: "develop".to_string(),
         };
-        let out = prune_remote_item_blocking(&target, false, Some(&known(&["develop-old"])));
+        let out = prune_remote_item_blocking(&target, false, Some(&known(&["develop-old"])), "");
         assert!(!out.deletable);
         assert!(!out.deleted);
         assert!(remote_branch_exists(repo.dir(), "develop-old").unwrap());
+    }
+
+    // 目标分支受保护不得殃及待删分支：develop 这类主干在云效上几乎总是受保护/默认分支，
+    // 删除门禁若把「目标分支 ∈ 受保护集合」也算进去，所有已合并进主干的特性分支都会被
+    // 误拒——行内「已合并，可删除远端分支」与 dry-run「受保护分支，不可删除」自相矛盾。
+    #[test]
+    fn platform_protected_target_does_not_block_merged_feature_branch() {
+        let (repo, _origin) = repo_with_origin();
+        write_commit(&repo, "fix/v2.20260901/develop/QHDK-1-x", "f1.txt", "f");
+        repo.git(&["push", "-u", "origin", "fix/v2.20260901/develop/QHDK-1-x"]);
+        repo.git(&["checkout", "develop"]);
+        repo.git(&["merge", "--no-edit", "fix/v2.20260901/develop/QHDK-1-x"]);
+        repo.git(&["push", "origin", "develop"]);
+
+        // 平台口径：develop / master 都在受保护集合里——线上仓库的常态。
+        let platform = known(&["develop", "master"]);
+        let target = RemoteBranchTarget {
+            repo_path: repo.dir().to_string(),
+            repo: "HIS".to_string(),
+            branch: "fix/v2.20260901/develop/QHDK-1-x".to_string(),
+            target_branch: "develop".to_string(),
+        };
+
+        // dry-run 必须判为可删（与扫描侧口径一致），且不产生任何远端变更。
+        let out = prune_remote_item_blocking(&target, true, Some(&platform), "");
+        assert!(
+            out.deletable,
+            "目标分支受保护不应阻断特性分支删除，实际原因：{}",
+            out.reason
+        );
+        assert!(!out.deleted, "dry-run 不得真删");
+        assert!(remote_branch_exists(repo.dir(), "fix/v2.20260901/develop/QHDK-1-x").unwrap());
+
+        // 口径收窄不能放过真正的受保护分支：待删分支自身在集合里仍要拒绝。
+        let guarded = RemoteBranchTarget {
+            repo_path: repo.dir().to_string(),
+            repo: "HIS".to_string(),
+            branch: "develop".to_string(),
+            target_branch: "develop".to_string(),
+        };
+        let out = prune_remote_item_blocking(&guarded, true, Some(&platform), "");
+        assert!(!out.deletable, "受保护分支自身必须拒绝");
+    }
+
+    // 远端分支已被删除而本地 upstream / 分支都还在（平台合并后自动删除是常态）：扫描若继续
+    // 标「已合并，可删除」，用户勾选后 dry-run 必然以「远端已无该分支」拒绝——回执面板与
+    // 行内徽标自相矛盾，体感就是「点了删除没反应」。扫描与 dry-run 必须给出同一结论。
+    #[test]
+    fn scan_refuses_branch_already_deleted_on_remote() {
+        let (repo, origin) = repo_with_origin();
+        write_commit(&repo, "fix/v2.20260901/develop/QHDK-30439-x", "f1.txt", "f");
+        repo.git(&["push", "-u", "origin", "fix/v2.20260901/develop/QHDK-30439-x"]);
+        repo.git(&["checkout", "develop"]);
+        repo.git(&["merge", "--no-edit", "fix/v2.20260901/develop/QHDK-30439-x"]);
+        repo.git(&["push", "origin", "develop"]);
+
+        // 只在 bare 端删分支：本地分支、upstream 配置、remote-tracking ref 全部保留——
+        // 精确复刻「平台侧删除、本机尚未 fetch --prune」的线上状态。
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(origin.dir())
+            .args(["update-ref", "-d", "refs/heads/fix/v2.20260901/develop/QHDK-30439-x"])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+
+        let scan = scan(&repo, "");
+        let item = branch_of(&scan, "fix/v2.20260901/develop/QHDK-30439-x");
+        assert!(
+            !item.pushed,
+            "远端已无该分支时不得再按已推送处理（该行应从待办列表消失），skip={}",
+            item.skip_reason
+        );
+        assert!(
+            !item.deletable,
+            "扫描不得承诺 dry-run 做不到的删除，skip={}",
+            item.skip_reason
+        );
+        assert!(
+            item.skip_reason.contains("远端已无该分支"),
+            "skip={}",
+            item.skip_reason
+        );
+
+        // dry-run 同口径拒绝，且与扫描的可删性一致。
+        let target = RemoteBranchTarget {
+            repo_path: repo.dir().to_string(),
+            repo: "HIS".to_string(),
+            branch: "fix/v2.20260901/develop/QHDK-30439-x".to_string(),
+            target_branch: "develop".to_string(),
+        };
+        let out = prune_remote_item_blocking(&target, true, None, "");
+        assert!(!out.deletable);
+        assert_eq!(
+            item.deletable, out.deletable,
+            "扫描与 dry-run 的可删性必须一致"
+        );
+        assert!(out.reason.contains("远端已无该分支"), "reason={}", out.reason);
+    }
+
+    // 非 ASCII 分支名必须能被远端存在性检查识别（用户仓库的分支名普遍含中文）。
+    #[test]
+    fn remote_branch_exists_recognises_chinese_branch_names() {
+        let (repo, _origin) = repo_with_origin();
+        let branch = "fix/v2.20260901/develop/QHDK-30439-消息平台参数未配置静默跳过";
+        write_commit(&repo, branch, "f1.txt", "f");
+        repo.git(&["push", "-u", "origin", branch]);
+        assert!(
+            remote_branch_exists(repo.dir(), branch).unwrap(),
+            "远端确实存在该中文分支，存在性检查不得漏判"
+        );
+    }
+
+    // push --delete 报「远端已无该分支」时，删除的目标状态已经达成（读副本还看得到、
+    // 写路径发现早已被删——平台合并自动删 / 他人先删 / 副本滞后的常态），必须按成功回执，
+    // 绝不能报成红色「删除失败」。用 pushurl 把读写拆到两个仓库复刻这个不一致窗口：
+    // ls-remote / fetch 读 origin（分支在），push 走 pushurl（分支不在）。
+    #[test]
+    fn push_delete_missing_remote_ref_is_treated_as_achieved() {
+        let (repo, origin) = repo_with_origin();
+        let empty = TempBareRemote::new();
+        write_commit(&repo, "feature/develop/doomed", "f.txt", "f");
+        repo.git(&["push", "-u", "origin", "feature/develop/doomed"]);
+        repo.git(&["checkout", "develop"]);
+        repo.git(&["merge", "--no-edit", "feature/develop/doomed"]);
+        repo.git(&["push", "origin", "develop"]);
+        // 读走 origin（分支存在），写走空仓库（分支不存在）。
+        repo.git(&["remote", "set-url", "--push", "origin", empty.dir()]);
+
+        let target = RemoteBranchTarget {
+            repo_path: repo.dir().to_string(),
+            repo: "HIS".to_string(),
+            branch: "feature/develop/doomed".to_string(),
+            target_branch: "develop".to_string(),
+        };
+        let out = prune_remote_item_blocking(&target, false, None, "");
+        assert!(
+            out.deleted,
+            "push 报远端已无该分支时目标已达成，应按成功回执；实际 reason={}",
+            out.reason
+        );
+        assert!(
+            out.reason.contains("删除目标已达成"),
+            "回执应说明目标已达成，实际：{}",
+            out.reason
+        );
+        // 读路径未受影响：origin 上分支仍在（不一致窗口的另一侧）。
+        assert!(remote_branch_exists(repo.dir(), "feature/develop/doomed").unwrap());
     }
 
     // 目标分支不存在时按「数据缺失」降级，而不是让整个列表失败。
@@ -1675,7 +1916,7 @@ mod tests {
             branch: "develop".to_string(),
             target_branch: "  ".to_string(),
         };
-        let out = prune_remote_item_blocking(&item, false, None);
+        let out = prune_remote_item_blocking(&item, false, None, "");
         assert!(!out.deletable);
         assert!(!out.deleted);
         assert!(out.reason.contains("未指定目标分支"));

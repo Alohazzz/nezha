@@ -292,6 +292,7 @@ export function PendingMrView({
 
   const {
     pruneBusy,
+    pruneChecking,
     pruneResults,
     pending,
     startPrune,
@@ -467,7 +468,8 @@ export function PendingMrView({
             targetSource={targetSourceLabel(branch.targetSource)}
             onToggle={(checked) => toggleRow(branch, checked)}
             onTargetChange={(value) => onTargetChange(branch, value)}
-            onPrune={() => void startPrune()}
+            // 行内删除只处理这一行，不依赖（也不改动）勾选集。
+            onPrune={() => void startPrune([branch])}
           />
         ))}
 
@@ -507,6 +509,7 @@ export function PendingMrView({
       <PruneRemoteConfirmDialog
         pending={pending}
         busy={pruneBusy}
+        checking={pruneChecking}
         onCancel={cancelPrune}
         onConfirm={() => void confirmPrune()}
       />
