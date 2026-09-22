@@ -26,6 +26,8 @@ export function YunxiaoIssueList({
   onToggleSelect,
   onDiscuss,
   onDirectStart,
+  onAddToPlan,
+  planNamesByWorkitem,
   onLoadMore,
   yunxiaoProjectId,
 }: {
@@ -44,6 +46,10 @@ export function YunxiaoIssueList({
   onDiscuss: (issue: YunxiaoWorkitem) => void;
   /** 行内单条「直接开始」快捷入口（跳过讨论，直接创建执行任务）。 */
   onDirectStart: (issue: YunxiaoWorkitem) => void;
+  /** 行内单条「加到计划」快捷入口。 */
+  onAddToPlan: (issue: YunxiaoWorkitem) => void;
+  /** workitemId → 所属计划名（单计划归属）；已有计划的议题显示徽标不再提供添加。 */
+  planNamesByWorkitem: ReadonlyMap<string, string>;
   onLoadMore: () => void;
   /** 云效云项目 ID（构建源议题链接；空则不显示链接按钮）。 */
   yunxiaoProjectId: string;
@@ -120,7 +126,11 @@ export function YunxiaoIssueList({
                   <ExternalLink size={12} strokeWidth={2} />
                 </button>
               )}
-              {imported ? (
+              {planNamesByWorkitem.has(issue.id) ? (
+                <span style={s.yunxiaoMetaBadge}>
+                  在计划 {planNamesByWorkitem.get(issue.id)}
+                </span>
+              ) : imported ? (
                 <span style={s.yunxiaoImportedBadge}>
                   <Check size={12} strokeWidth={2.5} />
                   {t("yunxiao.imported")}
@@ -142,6 +152,14 @@ export function YunxiaoIssueList({
                     onClick={() => onDiscuss(issue)}
                   >
                     {t("yunxiao.discussion.start")}
+                  </button>
+                  <button
+                    type="button"
+                    style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
+                    title="添加到计划"
+                    onClick={() => onAddToPlan(issue)}
+                  >
+                    加到计划
                   </button>
                 </>
               ) : null}

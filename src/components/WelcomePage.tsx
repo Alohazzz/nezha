@@ -318,6 +318,8 @@ export function WelcomePage({
             onStartDirectExecution={onStartYunxiaoDirectExecution}
             onCancelPlan={onCancelYunxiaoPlan}
             onSetParentPlan={onSetYunxiaoPlanParent}
+            deliveryPlans={deliveryPlans}
+            onDeliveryPlansChange={onDeliveryPlansChange}
           />
         ) : view === "timeline" ? (
           <TimelineView

@@ -519,6 +519,8 @@ pub fn run() {
             delivery_plan::open_delivery_plan_worktree,
             delivery_plan::delete_delivery_plan,
             delivery_plan::get_delivery_plan_worktree_base,
+            delivery_plan::add_delivery_plan_issues,
+            delivery_plan::remove_delivery_plan_issue,
             codeup::codeup_resolve_repo,
             codeup::codeup_branch_managers,
             codeup::codeup_create_mr,

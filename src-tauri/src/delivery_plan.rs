@@ -758,7 +758,7 @@ pub async fn delete_delivery_plan(
     }
 }
 
-/// 新建 PR 对话框的默认代码目录（配置基路径 / 共享 hub / 项目内默认，实时解析）。
+/// 创建计划对话框的默认代码目录（配置基路径 / 共享 hub / 项目内默认，实时解析）。
 #[tauri::command]
 pub async fn get_delivery_plan_worktree_base(
     project_path: String,
@@ -772,6 +772,67 @@ pub async fn get_delivery_plan_worktree_base(
     })
     .await
     .map_err(|e| format!("Worktree base task panicked: {e}"))?
+}
+
+/// 「添加到计划」：把云效议题加入计划成员（有序追加，重复跳过）。
+/// 单计划归属（S1）：同一议题已在**其它**计划时整体拒绝，不部分写入。
+#[tauri::command]
+pub async fn add_delivery_plan_issues(
+    project_id: String,
+    plan_id: String,
+    issues: Vec<PlanIssue>,
+) -> Result<DeliveryPlan, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut plans = load_project_batches(project_id.clone())?;
+        let taken = |wid: &str| {
+            plans
+                .iter()
+                .any(|p| p.id != plan_id && p.issues.iter().any(|i| i.workitem_id == wid))
+        };
+        if let Some(wid) = issues
+            .iter()
+            .map(|i| i.workitem_id.as_str())
+            .find(|wid| taken(wid))
+        {
+            return Err(format!("议题 {wid} 已属于其它计划，请先移出再添加"));
+        }
+        let plan = plans
+            .iter_mut()
+            .find(|p| p.id == plan_id)
+            .ok_or_else(|| "DeliveryPlan not found".to_string())?;
+        for issue in issues {
+            if !plan.issues.iter().any(|i| i.workitem_id == issue.workitem_id) {
+                plan.issues.push(issue);
+            }
+        }
+        let updated = plan.clone();
+        save_project_batches(project_id, plans)?;
+        Ok(updated)
+    })
+    .await
+    .map_err(|e| format!("Add plan issues task panicked: {e}"))?
+}
+
+/// 「移出计划」：按 workitemId 移除成员（不存在时幂等返回）。
+#[tauri::command]
+pub async fn remove_delivery_plan_issue(
+    project_id: String,
+    plan_id: String,
+    workitem_id: String,
+) -> Result<DeliveryPlan, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut plans = load_project_batches(project_id.clone())?;
+        let plan = plans
+            .iter_mut()
+            .find(|p| p.id == plan_id)
+            .ok_or_else(|| "DeliveryPlan not found".to_string())?;
+        plan.issues.retain(|i| i.workitem_id != workitem_id);
+        let updated = plan.clone();
+        save_project_batches(project_id, plans)?;
+        Ok(updated)
+    })
+    .await
+    .map_err(|e| format!("Remove plan issue task panicked: {e}"))?
 }
 
 fn run_git_head(worktree_path: &str) -> Result<String, String> {
