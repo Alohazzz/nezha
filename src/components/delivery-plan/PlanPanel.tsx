@@ -1,0 +1,365 @@
+import { useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { FolderOpen, Plus, Send, Trash2 } from "lucide-react";
+import { appConfirm } from "../AppConfirmDialog";
+import type {
+  DeliveryPlan,
+  DeliveryPlanStatus,
+  Plan,
+  Project,
+  Task,
+  YunxiaoWorkitem,
+} from "../../types";
+import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
+import s from "../../styles";
+import { CreatePlanDialog } from "../branch-batch/CreatePlanDialog";
+import { SubmitMrDialog } from "../branch-batch/SubmitMrDialog";
+import { DirectLaunchDialog, type DirectLaunchOptions } from "../yunxiao/DirectLaunchDialog";
+import { deriveIssueStatus, type IssueStatus } from "./deriveIssueStatus";
+import { PlanIssueRow } from "./PlanIssueRow";
+
+export const PLAN_STATUS_LABEL: Record<DeliveryPlanStatus, string> = {
+  active: "进行中",
+  review: "待评审",
+  merged: "已合并",
+  closed: "已关闭",
+};
+
+export const ISSUE_STATUS_LABEL: Record<IssueStatus, string> = {
+  not_started: "未开始",
+  discussing: "讨论中",
+  discussed: "讨论完成",
+  executing: "执行中",
+  done: "已完成",
+  aborted: "已结束",
+};
+
+const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** 欢迎页「计划」视图（与云效议题同级）：项目过滤＋左计划列表＋右详情（议题表全自动派生状态）。 */
+export function PlanPanel({
+  projects,
+  tasks,
+  plans,
+  deliveryPlans,
+  onDeliveryPlansChange,
+  onGoYunxiao,
+  onStartDirectExecution,
+  onOpenWorkitem,
+}: {
+  projects: Project[];
+  tasks: Task[];
+  /** 多议题联合方案（方案不动，仅被关联展示）。 */
+  plans: Plan[];
+  deliveryPlans: DeliveryPlan[];
+  onDeliveryPlansChange: (plans: DeliveryPlan[]) => void;
+  /** 「添加议题 / 发起讨论」都去云效议题视图（同一套多选与发起链路）。 */
+  onGoYunxiao: () => void;
+  onStartDirectExecution: (
+    issue: YunxiaoWorkitem,
+    projectId: string,
+    options: DirectLaunchOptions,
+  ) => void | Promise<void>;
+  /** 打开关联方案（方案看板入口）。 */
+  onOpenWorkitem?: (workitemId: string) => void;
+}) {
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [submitPlan, setSubmitPlan] = useState<DeliveryPlan | null>(null);
+  const [directIssue, setDirectIssue] = useState<YunxiaoWorkitem | null>(null);
+  const [yunxiaoSettings, setYunxiaoSettings] = useState<YunxiaoSettings>(EMPTY_YUNXIAO_SETTINGS);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+
+  const scopedPlans = useMemo(
+    () => deliveryPlans.filter((p) => p.projectId === projectId),
+    [deliveryPlans, projectId],
+  );
+  const selected = useMemo(
+    () => scopedPlans.find((p) => p.id === selectedId) ?? scopedPlans[0],
+    [scopedPlans, selectedId],
+  );
+  const project = projects.find((p) => p.id === projectId);
+
+  const issueRows = useMemo(() => {
+    if (!selected) return [];
+    return selected.issues.map((issue) => ({
+      issue,
+      status: deriveIssueStatus(issue.workitemId, tasks, plans),
+      schemes: plans.filter((p) => p.issues.some((i) => i.workitemId === issue.workitemId)),
+    }));
+  }, [selected, tasks, plans]);
+
+  const summary = useMemo(() => {
+    const counts: Record<IssueStatus, number> = {
+      not_started: 0,
+      discussing: 0,
+      discussed: 0,
+      executing: 0,
+      done: 0,
+      aborted: 0,
+    };
+    for (const row of issueRows) counts[row.status] += 1;
+    return counts;
+  }, [issueRows]);
+
+  async function handleOpen() {
+    if (!selected || !project) return;
+    try {
+      await invoke("open_delivery_plan_worktree", {
+        projectPath: project.path,
+        projectId: project.id,
+        planId: selected.id,
+      });
+    } catch (e) {
+      setNotice(String(e));
+    }
+  }
+
+  async function handleDelete() {
+    if (!selected || !project) return;
+    const ok = await appConfirm(`确认删除计划「${selected.name}」？`, {
+      title: "删除计划",
+      kind: "warning",
+    });
+    if (!ok) return;
+    setBusyId(selected.id);
+    setNotice("");
+    try {
+      await invoke("delete_delivery_plan", {
+        projectPath: project.path,
+        projectId: project.id,
+        planId: selected.id,
+        shellOpen: false,
+      });
+      const list = await invoke<DeliveryPlan[]>("list_delivery_plans", {
+        projectId: project.id,
+        projectPath: project.path,
+      });
+      onDeliveryPlansChange([
+        ...deliveryPlans.filter((p) => p.projectId !== project.id),
+        ...list,
+      ]);
+      setSelectedId("");
+    } catch (e) {
+      setNotice(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleStartIssue(rowIssue: { workitemId: string; serialNumber: string; subject: string }) {
+    if (!project) return;
+    try {
+      const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+      const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+      setYunxiaoSettings(yunxiao);
+      if (!yunxiao.token || !yunxiao.organizationId) {
+        setNotice("未连接云效，请先在设置中配置令牌");
+        return;
+      }
+      const issue = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
+        token: yunxiao.token,
+        organizationId: yunxiao.organizationId,
+        workitemId: rowIssue.workitemId,
+      });
+      setDirectIssue(issue);
+    } catch (e) {
+      setNotice(String(e));
+    }
+  }
+
+  return (
+    <div style={s.dpRoot}>
+      <div style={s.dpToolbar}>
+        <select
+          style={s.dpToolbarSelect}
+          value={projectId}
+          onChange={(e) => {
+            setProjectId(e.target.value);
+            setSelectedId("");
+          }}
+        >
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              项目：{p.name}
+            </option>
+          ))}
+        </select>
+        <span style={s.dpSpacer} />
+        <button
+          type="button"
+          style={s.dpBtnPrimary}
+          onClick={() => setShowCreate(true)}
+          disabled={!project}
+        >
+          <Plus size={13} />
+          创建计划
+        </button>
+      </div>
+
+      {notice && <div style={s.dpEmpty}>{notice}</div>}
+
+      <div style={s.dpBody}>
+        <div style={s.dpSide}>
+          {scopedPlans.length === 0 && (
+            <div style={s.dpEmpty}>本项目暂无计划，点「创建计划」开始。</div>
+          )}
+          {scopedPlans.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              style={p.id === selected?.id ? { ...s.dpListItem, ...s.dpListItemActive } : s.dpListItem}
+              onClick={() => setSelectedId(p.id)}
+            >
+              {p.name}
+              <span style={s.dpListItemBranch}>{p.branch}</span>
+            </button>
+          ))}
+        </div>
+
+        <div style={s.dpMain}>
+          {!selected ? (
+            <div style={s.dpEmpty}>从左侧选择一个计划查看议题进展。</div>
+          ) : (
+            <>
+              <div style={s.dpHead}>
+                <span style={s.dpTitle}>{selected.name}</span>
+                <span style={s.dpChip}>{PLAN_STATUS_LABEL[selected.status]}</span>
+                <span style={s.dpChip}>{selected.kind}</span>
+                {!selected.useWorktree && <span style={s.dpChip}>主检出</span>}
+                {selected.worktreeMissing && <span style={s.dpChip}>WorkTree 缺失</span>}
+                {selected.runRootMissing && <span style={s.dpChip}>运行程序缺失</span>}
+                {selected.status !== "merged" &&
+                  selected.status !== "closed" &&
+                  Date.now() - selected.createdAt > OVERDUE_MS && (
+                    <span style={s.dpChip}>超期</span>
+                  )}
+                <span style={s.dpSpacer} />
+                <button type="button" style={s.dpBtn} onClick={() => onGoYunxiao()}>
+                  <Plus size={13} />
+                  添加议题
+                </button>
+                <button
+                  type="button"
+                  style={s.dpBtnPrimary}
+                  disabled={
+                    selected.status !== "active" ||
+                    !selected.targetBranch ||
+                    selected.worktreeMissing
+                  }
+                  onClick={() => setSubmitPlan(selected)}
+                >
+                  <Send size={13} />
+                  提交 MR
+                </button>
+                <button
+                  type="button"
+                  style={s.dpBtn}
+                  disabled={selected.worktreeMissing}
+                  onClick={() => void handleOpen()}
+                >
+                  <FolderOpen size={13} />
+                  打开
+                </button>
+                <button
+                  type="button"
+                  style={s.dpBtn}
+                  disabled={busyId === selected.id}
+                  onClick={() => void handleDelete()}
+                >
+                  <Trash2 size={13} />
+                  删除计划
+                </button>
+              </div>
+
+              <div style={s.dpBranchRow}>
+                {selected.branch} ← {selected.baseBranch} →{" "}
+                {selected.targetBranch || "（未指定合并目标）"}
+              </div>
+
+              <div style={s.dpSummary}>
+                {(Object.keys(summary) as IssueStatus[])
+                  .filter((k) => summary[k] > 0)
+                  .map((k) => (
+                    <span key={k} style={s.dpChip}>
+                      {summary[k]} {ISSUE_STATUS_LABEL[k]}
+                    </span>
+                  ))}
+              </div>
+
+              {issueRows.length === 0 ? (
+                <div style={s.dpEmpty}>
+                  暂无议题
+                  <br />
+                  从云效议题列表「添加到计划」开始组织批次
+                  <br />
+                  <button type="button" style={s.dpBtnPrimary} onClick={() => onGoYunxiao()}>
+                    去添加议题
+                  </button>
+                </div>
+              ) : (
+                <table style={s.dpTable}>
+                  <thead>
+                    <tr>
+                      <th style={s.dpTh}>议题</th>
+                      <th style={s.dpTh}>状态</th>
+                      <th style={s.dpTh}>关联方案</th>
+                      <th style={s.dpTh} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {issueRows.map((row) => (
+                      <PlanIssueRow
+                        key={row.issue.workitemId}
+                        issue={row.issue}
+                        status={row.status}
+                        schemes={row.schemes}
+                        onStart={() => void handleStartIssue(row.issue)}
+                        onOpenWorkitem={onOpenWorkitem}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {showCreate && project && (
+        <CreatePlanDialog
+          projectId={project.id}
+          projectPath={project.path}
+          repoPath={project.path}
+          onCreated={(plan) => onDeliveryPlansChange([...deliveryPlans, plan])}
+          onClose={() => setShowCreate(false)}
+        />
+      )}
+      {submitPlan && project && (
+        <SubmitMrDialog
+          batch={submitPlan}
+          projectId={project.id}
+          projectPath={project.path}
+          onClose={() => setSubmitPlan(null)}
+          onDone={() => setSubmitPlan(null)}
+        />
+      )}
+      {directIssue && project && (
+        <DirectLaunchDialog
+          key={directIssue.id}
+          issue={directIssue}
+          targetProjectId={project.id}
+          projectName={project.name}
+          settings={yunxiaoSettings}
+          onStart={(options) => {
+            void onStartDirectExecution(directIssue, project.id, options);
+            setDirectIssue(null);
+          }}
+          onClose={() => setDirectIssue(null)}
+        />
+      )}
+    </div>
+  );
+}

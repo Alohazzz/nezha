@@ -5,7 +5,6 @@ type RightPanel =
   | "git-changes"
   | "git-history"
   | "build"
-  | "branch-batch"
   | "knowledge"
   | null;
 

@@ -46,7 +46,6 @@ import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { KnowledgePanel } from "./knowledge/KnowledgePanel";
-import { DeliveryPlanView } from "./branch-batch/DeliveryPlanView";
 import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
 import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
 import { TodoTaskView } from "./TodoTaskView";
@@ -1404,21 +1403,6 @@ export function ProjectPage({
                 onFileClick={handleCommitFileClickWithCollapse}
                 width={rightPanelWidth}
                 active={visible}
-              />
-            </ErrorBoundary>
-          )}
-          {rightPanel === "branch-batch" && (
-            <ErrorBoundary label="创建PR">
-              <DeliveryPlanView
-                projectPath={project.path}
-                projectId={project.id}
-                repoPath={subRepoPath}
-                shellOpen={showShellTerminal && shellProjectPath === worktreeScope}
-                tasks={projectTasks}
-                worktreeScope={worktreeScope}
-                onScopeChange={handleScopeChange}
-                onClose={() => handleTogglePanel("branch-batch")}
-                width={rightPanelWidth}
               />
             </ErrorBoundary>
           )}

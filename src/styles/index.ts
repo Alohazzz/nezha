@@ -2,6 +2,7 @@ import type React from "react";
 
 import { common } from "./common";
 import { branchBatch } from "./branch-batch";
+import { deliveryPlan } from "./delivery-plan";
 import { dialogs } from "./dialogs";
 import { font } from "./font";
 import { gitDiff } from "./git-diff";
@@ -35,6 +36,7 @@ const s = {
   ...weeklyReport,
   ...yunxiao,
   ...branchBatch,
+  ...deliveryPlan,
   ...update,
   ...planBoard,
   ...planDeps,

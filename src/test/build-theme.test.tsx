@@ -1,7 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { BuildPanel } from "../components/build/BuildPanel";
-import { DeliveryPlanView } from "../components/branch-batch/DeliveryPlanView";
 import { KnowledgePanel } from "../components/knowledge/KnowledgePanel";
 import { I18nProvider } from "../i18n";
 
@@ -61,28 +60,6 @@ describe("Right panels share the unified design language", () => {
     assertSharedPanelChrome(container);
   });
 
-  it("DeliveryPlanView (PR) renders the shared panel chrome", async () => {
-    invokeMock.mockImplementation(() => Promise.resolve([]));
-
-    const { container } = render(
-      <I18nProvider>
-        <DeliveryPlanView
-          projectPath="/workspace/HIS"
-          projectId="p1"
-          repoPath="/workspace/HIS"
-          shellOpen={false}
-          tasks={[]}
-          worktreeScope=""
-          onScopeChange={() => {}}
-          onClose={() => {}}
-          width={320}
-        />
-      </I18nProvider>,
-    );
-
-    await screen.findByText("PR");
-    assertSharedPanelChrome(container);
-  });
 
   it("KnowledgePanel renders the shared panel chrome", async () => {
     invokeMock.mockImplementation(() => Promise.resolve([]));

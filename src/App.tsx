@@ -3438,6 +3438,8 @@ function App() {
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleRemovePlanRecord}
             plans={plans}
+            deliveryPlans={deliveryPlans}
+            onDeliveryPlansChange={setDeliveryPlans}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}
