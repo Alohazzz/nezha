@@ -3,8 +3,9 @@
 //! 视图回答两个问题：「哪些分支已经推上去、但还没发起合并请求」，以及「哪些远端分支已经
 //! 收尾可以删掉」。两侧数据源完全不同：
 //!
-//! - 本地侧：`git for-each-ref`（分支 + upstream + 作者 + 时间）与逐候选的 `rev-list` /
-//!   `merge-base`（未合并提交数、合并三态）。
+//! - 本地侧：枚举 = 本地 `git for-each-ref`（分支 + upstream + 作者 + 时间）**∪ 远端独有
+//!   分支**（一次 `ls-remote --heads` 减去本地已有的名字，fetch 出 remote-tracking ref 后
+//!   同一套求值），以及逐候选的 `rev-list` / `merge-base`（未合并提交数、合并三态）。
 //! - 平台侧：`codeup` 模块的分支列表（`protected` / `defaultBranch`）与开放 MR 列表，
 //!   一次拉全后在内存里按 `sourceBranch` join（**不逐分支查询**）。
 //!
@@ -95,6 +96,8 @@ pub struct BranchCandidate {
     pub repo_path: String,
     /// 是否有 upstream（即已推送）。
     pub pushed: bool,
+    /// 远端独有（ls-remote 枚举而来，本地无检出）。
+    pub remote_only: bool,
     pub protected: bool,
     pub protected_source: Option<ProtectedSource>,
     /// 相对目标分支的未合并提交数。
@@ -205,6 +208,8 @@ struct BranchMeta {
     upstream: String,
     last_commit_author: String,
     last_commit_at: i64,
+    /// 远端独有（本地无检出）；求值一律以 `origin/<name>` 为 HEAD。
+    remote_only: bool,
 }
 
 fn list_local_branches(dir: &str) -> Result<Vec<BranchMeta>, String> {
@@ -229,9 +234,89 @@ fn list_local_branches(dir: &str) -> Result<Vec<BranchMeta>, String> {
             upstream: parts.next().unwrap_or("").trim().to_string(),
             last_commit_author: parts.next().unwrap_or("").trim().to_string(),
             last_commit_at: parts.next().unwrap_or("").trim().parse::<i64>().unwrap_or(0),
+            remote_only: false,
         });
     }
     Ok(out)
+}
+
+/// 远端独有分支（`ls-remote` 有、本地 `refs/heads` 没有）的元数据——#93 的核心：枚举口径
+/// 与平台分支页对齐，否则「同事推送的分支」在页面上永远不可见。
+///
+/// 先按批 fetch（默认 refspec 会把它们落成 `refs/remotes/origin/<branch>`；整批失败时逐个
+/// 重试，仍拿不到 ref 的分支跳过——没有对象连未合并数都算不了，列出来只会是死行），
+/// 再一次 `for-each-ref` 批量读作者 / 时间。
+///
+/// `only`：增量扫描（行内改目标分支）只求值指定分支——此时也只 fetch 那一条的 ref，
+/// 不为重算一行付出全量远端分支的网络开销（#93 US18「按需」）。
+fn list_remote_only_branches(
+    dir: &str,
+    local_names: &HashSet<String>,
+    remote_heads: Option<&HashSet<String>>,
+    only: Option<&HashSet<String>>,
+) -> Vec<BranchMeta> {
+    let Some(heads) = remote_heads else {
+        return Vec::new();
+    };
+    let mut names: Vec<&String> = heads
+        .iter()
+        .filter(|n| !local_names.contains(*n))
+        .filter(|n| only.is_none_or(|o| o.contains(*n)))
+        .collect();
+    names.sort();
+    if names.is_empty() {
+        return Vec::new();
+    }
+
+    const FETCH_CHUNK: usize = 50;
+    for chunk in names.chunks(FETCH_CHUNK) {
+        let mut args: Vec<&str> = vec!["fetch", "origin"];
+        args.extend(chunk.iter().map(|s| s.as_str()));
+        let ok = run_git(dir, &args).map(|o| o.status.success()).unwrap_or(false);
+        if ok {
+            continue;
+        }
+        // 整批失败（如个别 ref 在 ls-remote 与 fetch 之间被删）：逐个重试，失败的丢弃。
+        for name in chunk {
+            let _ = run_git(dir, &["fetch", "origin", name]);
+        }
+    }
+
+    let Ok(lines) = git_lines(
+        dir,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)\t%(authorname)\t%(committerdate:unix)",
+            "refs/remotes/origin",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    let mut meta_by_branch: HashMap<String, (String, i64)> = HashMap::new();
+    for line in lines {
+        let mut parts = line.split('\t');
+        let Some(refname) = parts.next() else { continue };
+        let Some(branch) = refname.trim().strip_prefix("origin/") else {
+            continue;
+        };
+        let author = parts.next().unwrap_or("").trim().to_string();
+        let at = parts.next().unwrap_or("").trim().parse::<i64>().unwrap_or(0);
+        meta_by_branch.insert(branch.to_string(), (author, at));
+    }
+
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let (author, at) = meta_by_branch.get(name)?;
+            Some(BranchMeta {
+                name: name.clone(),
+                upstream: format!("origin/{name}"),
+                last_commit_author: author.clone(),
+                last_commit_at: *at,
+                remote_only: true,
+            })
+        })
+        .collect()
 }
 
 /// 当前仓库的 git 身份 email（「我的提交」判据）。
@@ -608,6 +693,13 @@ fn evaluate_branch(
     let (target_branch, target_source) =
         infer_target_branch(&meta.name, config_default, known_branches, user_target);
 
+    // 远端独有分支本地没有 ref，一切区间比较以 origin/<name> 为 HEAD；本地分支照旧用自身。
+    let head: String = if meta.remote_only {
+        format!("origin/{}", meta.name)
+    } else {
+        meta.name.clone()
+    };
+
     // 「已推送」以远端现状为准：平台「合并后删除源分支」是常态，只看 upstream 配置会把
     // 远端已删的行标成「已合并，可删除」，dry-run 再用 live ls-remote 以「远端已无该分支」
     // 打回——两口径自相矛盾，用户点删除永远进不了确认框（体感：点了没有任何反应）。
@@ -631,6 +723,7 @@ fn evaluate_branch(
         repo: repo_name.to_string(),
         repo_path: dir.to_string(),
         pushed,
+        remote_only: meta.remote_only,
         protected,
         protected_source: if protected { Some(protected_source) } else { None },
         unmerged: 0,
@@ -669,7 +762,7 @@ fn evaluate_branch(
     }
 
     // 未合并提交数 + 「完全合并」判定：一次 --left-right 拿右侧独有数即可。
-    let unmerged = match left_right_count(dir, &target_ref, &meta.name) {
+    let unmerged = match left_right_count(dir, &target_ref, &head) {
         Ok((_target_only, branch_only)) => branch_only,
         Err(e) => {
             candidate.data_missing = true;
@@ -684,20 +777,20 @@ fn evaluate_branch(
         // 已合并时「合进了哪条分支」就是被判定为源分支的那条。
         candidate.merged_into = Some(target_branch.clone());
         // 已合并时 diff 计量仍按 merge-base 基线给出（该分支自身带来的改动量）。
-        if let Some(fork) = merge_base(dir, &target_ref, &meta.name) {
-            if let Ok((added, deleted)) = diff_line_stats(dir, &fork, &meta.name) {
+        if let Some(fork) = merge_base(dir, &target_ref, &head) {
+            if let Ok((added, deleted)) = diff_line_stats(dir, &fork, &head) {
                 candidate.additions = added;
                 candidate.deletions = deleted;
             }
         }
     } else {
         // 还有独有提交 —— 再看其中是否已有补丁等价物进了源分支（部分合并）。
-        candidate.merge_state = match cherry_contained(dir, &target_ref, &meta.name, unmerged) {
+        candidate.merge_state = match cherry_contained(dir, &target_ref, &head, unmerged) {
             Some(contained) if contained > 0 => MergeState::Partial,
             _ => MergeState::Unmerged,
         };
-        if let Some(fork) = merge_base(dir, &target_ref, &meta.name) {
-            if let Ok((added, deleted)) = diff_line_stats(dir, &fork, &meta.name) {
+        if let Some(fork) = merge_base(dir, &target_ref, &head) {
+            if let Ok((added, deleted)) = diff_line_stats(dir, &fork, &head) {
                 candidate.additions = added;
                 candidate.deletions = deleted;
             }
@@ -708,7 +801,7 @@ fn evaluate_branch(
 
     // 「我的提交」判针对**已合并**的分支同样要算：默认「我的提交」筛选下，
     // 已收尾待删的分支也要留在列表里，否则用户永远看不到可删项。
-    if let Ok(authors) = range_authors(dir, &target_ref, &meta.name) {
+    if let Ok(authors) = range_authors(dir, &target_ref, &head) {
         candidate.mine = !me.is_empty() && authors.iter().any(|a| a == me);
         candidate.authors = authors;
     }
@@ -780,7 +873,11 @@ fn discover_repo_refs_blocking(project_path: &str) -> Result<Vec<BranchRepoRef>,
     Ok(out)
 }
 
-/// 扫描单仓库的本地分支（同步；在 `spawn_blocking` 里跑）。
+/// 扫描单仓库的本地分支与远端独有分支（同步；在 `spawn_blocking` 里跑）。
+///
+/// 枚举口径 = 本地 `refs/heads` ∪ `ls-remote` 独有的远端分支（#93：只列本地的话，同事
+/// 推送的分支与平台分支页对不上账）。远端独有分支在求值前 fetch 出 remote-tracking ref，
+/// 与本地分支走完全相同的逐分支求值。
 ///
 /// `overrides`：用户在行内手动指定的目标分支（`分支名 → 目标分支`）。这些值优先级最高，
 /// 且**会参与所有判定**（未合并数、合并三态、可删性），保证徽标与「N 项可删」计数始终
@@ -807,7 +904,7 @@ fn scan_repo_blocking(
         branches: Vec::new(),
     };
 
-    let branches = match list_local_branches(repo_path) {
+    let local_branches = match list_local_branches(repo_path) {
         Ok(b) => b,
         Err(e) => {
             scan.ok = false;
@@ -815,10 +912,33 @@ fn scan_repo_blocking(
             return scan;
         }
     };
+
+    // 远端现有分支全量列表（一次 ls-remote，按仓库取）：「已推送 / 可删」的判定必须与
+    // 删除 dry-run 的 live 检查同源；同时它也是「远端独有」分支的枚举来源（#93）——
+    // 只列本地分支的话，同事推送的分支在页面上永远不可见，条目与平台分支页对不上账。
+    // 查询失败返回 None：回退纯本地枚举，逐行 pushed 回落 upstream 配置口径。
+    let remote_heads = list_remote_heads(repo_path);
+
+    // 枚举 = 本地 ∪ 远端独有（ls-remote 有、本地没有）。
+    let local_names: HashSet<String> = local_branches.iter().map(|b| b.name.clone()).collect();
+    let mut branches = local_branches;
+    branches.extend(list_remote_only_branches(
+        repo_path,
+        &local_names,
+        remote_heads.as_ref(),
+        only_branches,
+    ));
+
+    // 目标推断要靠「真实存在的分支名」判命名段，本地与远端都算数——远端独有分支的
+    // 命名推断（如 feature/<x>/master/… 的 master 段）不能因本地没检出而失效。
+    let mut known_branches = local_names;
+    if let Some(heads) = remote_heads.as_ref() {
+        known_branches.extend(heads.iter().cloned());
+    }
+
     if branches.is_empty() {
         return scan;
     }
-    let known_branches: HashSet<String> = branches.iter().map(|b| b.name.clone()).collect();
     let branches: Vec<BranchMeta> = match only_branches {
         Some(only) => branches
             .into_iter()
@@ -850,10 +970,6 @@ fn scan_repo_blocking(
     for target in &targets {
         let _ = run_git(repo_path, &["fetch", "origin", target.as_str()]);
     }
-
-    // 远端现有分支全量列表（一次 ls-remote，按仓库取）：「已推送 / 可删」的判定必须与
-    // 删除 dry-run 的 live 检查同源。查询失败返回 None，逐行回落 upstream 配置口径。
-    let remote_heads = list_remote_heads(repo_path);
 
     let me = current_user_email(repo_path);
     for meta in &branches {
@@ -1920,5 +2036,134 @@ mod tests {
         assert!(!out.deletable);
         assert!(!out.deleted);
         assert!(out.reason.contains("未指定目标分支"));
+    }
+
+    // 枚举口径 = 本地 ∪ 远端：ls-remote 独有的分支必须进扫描并给出与本地分支一致的求值
+    // （未合并数、合并三态、目标推断、可删性），否则页面与平台分支页对不上账（#93）。
+    #[test]
+    fn lists_remote_only_branches_from_ls_remote() {
+        let (repo, _origin) = repo_with_origin();
+
+        // ① 远端独有的未合并分支：推送后抹掉本地分支与 remote-tracking ref，
+        //    复刻「同事推送、我这份克隆从未 fetch 过」的常态。
+        write_commit(&repo, "feature/develop/remote-only", "r.txt", "r");
+        repo.git(&["push", "-u", "origin", "feature/develop/remote-only"]);
+        repo.git(&["checkout", "develop"]);
+        repo.git(&["branch", "-D", "feature/develop/remote-only"]);
+        repo.git(&["update-ref", "-d", "refs/remotes/origin/feature/develop/remote-only"]);
+
+        // ② 远端独有的已合并分支：应进入「可删」候选（批量清理要覆盖的对象）。
+        write_commit(&repo, "feature/develop/remote-merged", "m.txt", "m");
+        repo.git(&["push", "-u", "origin", "feature/develop/remote-merged"]);
+        repo.git(&["checkout", "develop"]);
+        repo.git(&["merge", "--no-edit", "feature/develop/remote-merged"]);
+        repo.git(&["push", "origin", "develop"]);
+        repo.git(&["branch", "-D", "feature/develop/remote-merged"]);
+        repo.git(&["update-ref", "-d", "refs/remotes/origin/feature/develop/remote-merged"]);
+
+        // 本地确实没有这两个分支——列表只能来自 ls-remote 枚举。
+        assert!(repo
+            .stdout(&["branch", "--list", "feature/develop/remote-only"])
+            .is_empty());
+
+        let scan = scan(&repo, "");
+        assert!(scan.ok, "{}", scan.message);
+
+        let only = branch_of(&scan, "feature/develop/remote-only");
+        assert!(only.remote_only, "远端独有分支必须带 remote_only 标记");
+        assert!(only.pushed, "远端存在即视为已推送");
+        assert_eq!(only.merge_state, MergeState::Unmerged);
+        assert_eq!(only.unmerged, 1);
+        assert_eq!(only.target_branch, "develop");
+        assert_eq!(only.target_source, TargetSource::Name);
+        assert!(only.mine, "独有提交作者是本人，mine 判定应对远端独有分支同样生效");
+
+        let merged = branch_of(&scan, "feature/develop/remote-merged");
+        assert!(merged.remote_only);
+        assert!(merged.pushed);
+        assert_eq!(merged.merge_state, MergeState::Merged);
+        assert!(merged.deletable, "远端独有的已合并分支应可删");
+        assert!(!merged.protected);
+
+        // ③ 受保护门禁对远端独有分支同样生效（US9）：平台口径把一条已合并的远端独有分支
+        //    标成受保护后，必须拒绝删除——与本地分支的既有门禁测试同一断言。
+        write_commit(&repo, "feature/develop/locked", "k.txt", "k");
+        repo.git(&["push", "-u", "origin", "feature/develop/locked"]);
+        repo.git(&["checkout", "develop"]);
+        repo.git(&["merge", "--no-edit", "feature/develop/locked"]);
+        repo.git(&["push", "origin", "develop"]);
+        repo.git(&["branch", "-D", "feature/develop/locked"]);
+        repo.git(&["update-ref", "-d", "refs/remotes/origin/feature/develop/locked"]);
+
+        let platform = RepoPlatform {
+            protected: known(&["feature/develop/locked"]),
+            default_branch: None,
+            platform_ok: true,
+            mr_ok: true,
+            ..Default::default()
+        };
+        let guarded = scan_repo_blocking(
+            "HIS",
+            repo.dir(),
+            "",
+            &HashMap::new(),
+            Some(&platform),
+            None,
+        );
+        let locked = branch_of(&guarded, "feature/develop/locked");
+        assert!(locked.remote_only);
+        assert!(locked.pushed);
+        assert_eq!(locked.merge_state, MergeState::Merged);
+        assert!(locked.protected, "平台受保护标志对远端独有分支应生效");
+        assert!(!locked.deletable, "受保护的远端独有分支必须拒绝删除");
+
+        // ④ 增量扫描（行内改目标分支通道）对远端独有分支同样只回指定的那一条，
+        //    结论与全量一致——且只 fetch 这一条的 ref（按需网络开销）。
+        let only: HashSet<String> = ["feature/develop/remote-only".to_string()]
+            .into_iter()
+            .collect();
+        let partial =
+            scan_repo_blocking("HIS", repo.dir(), "", &HashMap::new(), None, Some(&only));
+        let names: Vec<&str> = partial.branches.iter().map(|b| b.branch.as_str()).collect();
+        assert_eq!(names, vec!["feature/develop/remote-only"]);
+        let picked = branch_of(&partial, "feature/develop/remote-only");
+        assert!(picked.remote_only);
+        assert_eq!(picked.unmerged, 1);
+        assert_eq!(picked.merge_state, MergeState::Unmerged);
+        assert_eq!(picked.target_source, TargetSource::Name);
+    }
+
+    // ls-remote 不可用（无 origin / 离线）时回退纯本地枚举：不报错、不清空、
+    // 不凭空造远端独有行——与既有 remote_heads=None 的 pushed 回落口径一致。
+    #[test]
+    fn remote_unreachable_falls_back_to_local_branches() {
+        // 完全没有 origin 的仓库。
+        let repo = TempRepo::new();
+        std::fs::write(repo.path.join("a.txt"), "a").unwrap();
+        repo.git(&["add", "a.txt"]);
+        repo.git(&["commit", "-m", "init"]);
+        repo.git(&["branch", "-m", "develop"]);
+
+        let no_remote_scan = scan(&repo, "");
+        assert!(no_remote_scan.ok, "{}", no_remote_scan.message);
+        assert!(no_remote_scan
+            .branches
+            .iter()
+            .any(|b| b.branch == "develop"));
+        assert!(no_remote_scan.branches.iter().all(|b| !b.remote_only));
+
+        // 有本地分支与 upstream 配置、但 origin 已不可达（移除远端 ≈ 离线）。
+        let (offline, _origin) = repo_with_origin();
+        write_commit(&offline, "feature/develop/local", "l.txt", "l");
+        offline.git(&["checkout", "develop"]);
+        offline.git(&["remote", "remove", "origin"]);
+
+        let offline_scan = scan(&offline, "");
+        assert!(offline_scan.ok, "{}", offline_scan.message);
+        assert!(offline_scan
+            .branches
+            .iter()
+            .any(|b| b.branch == "feature/develop/local"));
+        assert!(offline_scan.branches.iter().all(|b| !b.remote_only));
     }
 }

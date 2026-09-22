@@ -256,6 +256,8 @@ export interface PendingBranchCandidate {
   repoPath: string;
   /** 是否有 upstream（即已推送）。 */
   pushed: boolean;
+  /** 远端独有（ls-remote 枚举而来，本地无检出）。 */
+  remoteOnly: boolean;
   protected: boolean;
   protectedSource: PendingProtectedSource | null;
   /** 相对目标分支的未合并提交数。 */

@@ -45,6 +45,7 @@ function candidate(overrides: Partial<PendingBranchCandidate> = {}): PendingBran
     deletable: false,
     skipReason: "未完成合并进 develop，不可删除",
     dataMissing: false,
+    remoteOnly: false,
     ...overrides,
   };
 }
@@ -115,6 +116,16 @@ describe("PendingMrView", () => {
     expect(badgeTexts).toContain("我的提交");
     expect(screen.getByText("按分支名推断")).toBeInTheDocument();
     expect(screen.getByText("+248")).toBeInTheDocument();
+  });
+
+  // #93：远端独有分支要在行上与本地分支区分——用户需要知道本地没有它的工作副本。
+  it("marks remote-only branches with the 仅远端 badge on the card", async () => {
+    mockList([scan([candidate({ branch: "feature/develop/remote-only", remoteOnly: true })])]);
+    await renderAndSelectRepo();
+
+    expect(await screen.findByText("feature/develop/remote-only")).toBeInTheDocument();
+    const badgeTexts = [...document.querySelectorAll(".pm-badge")].map((b) => b.textContent);
+    expect(badgeTexts).toContain("仅远端");
   });
 
   it("shows an explicit empty state when nothing is pending", async () => {
