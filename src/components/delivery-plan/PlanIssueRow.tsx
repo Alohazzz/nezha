@@ -1,18 +1,12 @@
 import { useMemo } from "react";
 import type { Plan, PlanIssue } from "../../types";
 import s from "../../styles";
-import { ISSUE_STATUS_LABEL } from "./PlanPanel";
+import { dpChipToneStyle } from "../../styles/delivery-plan";
+import { ISSUE_STATUS_LABEL, ISSUE_STATUS_TONE, SCHEME_STATUS_LABEL } from "./labels";
 import type { IssueStatus } from "./deriveIssueStatus";
 
-const SCHEME_STATUS_LABEL: Record<string, string> = {
-  draft: "讨论中",
-  finalized: "已定稿",
-  executing: "执行中",
-  completed: "已完成",
-  cancelled: "已取消",
-};
-
-/** 计划详情里的一行议题：派生状态＋关联方案＋启动动作（行组件独立防列表重渲染）。 */
+/** 计划详情里的一行议题（mockup 表格行）：派生状态 chip＋关联方案 chip＋动作。
+ *  行组件独立防列表重渲染。 */
 export function PlanIssueRow({
   issue,
   status,
@@ -35,11 +29,12 @@ export function PlanIssueRow({
   return (
     <tr>
       <td style={s.dpTd}>
-        <span style={s.dpChipMono}>{issue.serialNumber}</span>{" "}
-        {issue.subject}
+        <span style={s.dpChipMono}>{issue.serialNumber}</span> {issue.subject}
       </td>
       <td style={s.dpTd}>
-        <span style={s.dpChip}>{ISSUE_STATUS_LABEL[status]}</span>
+        <span style={dpChipToneStyle[ISSUE_STATUS_TONE[status]]}>
+          {ISSUE_STATUS_LABEL[status]}
+        </span>
       </td>
       <td style={s.dpTd}>
         {ordered.length === 0
@@ -48,24 +43,31 @@ export function PlanIssueRow({
               <button
                 key={sc.id}
                 type="button"
-                style={s.dpChip}
+                style={s.dpChipAc}
                 onClick={() => onOpenWorkitem?.(issue.workitemId)}
               >
-                {sc.name || sc.issues[0]?.serialNumber}·{SCHEME_STATUS_LABEL[sc.status] ?? sc.status}
+                {sc.name || sc.issues[0]?.serialNumber}·
+                {SCHEME_STATUS_LABEL[sc.status] ?? sc.status}
               </button>
             ))}
       </td>
       <td style={s.dpTd}>
-        {(status === "not_started" || status === "aborted") && (
-          <button type="button" style={s.dpBtn} onClick={onStart}>
-            {status === "aborted" ? "重新发起" : "直接开始"}
+        {/* 主动作 primary（mockup 行内动作的实色形态）；移出计划为次级。 */}
+        {status === "not_started" && (
+          <button type="button" style={s.dpBtnPrimary} onClick={onStart}>
+            直接开始
           </button>
         )}
-        {status === "discussing" || status === "discussed" ? (
+        {status === "aborted" && (
+          <button type="button" style={s.dpBtnPrimary} onClick={onStart}>
+            重新发起
+          </button>
+        )}
+        {(status === "discussing" || status === "discussed") && (
           <button type="button" style={s.dpBtn} onClick={onStart}>
             直接开始
           </button>
-        ) : null}
+        )}
         {onRemove && (
           <button type="button" style={s.dpBtn} onClick={onRemove}>
             移出计划

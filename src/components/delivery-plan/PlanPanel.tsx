@@ -4,7 +4,6 @@ import { FolderOpen, Plus, Send, Trash2 } from "lucide-react";
 import { appConfirm } from "../AppConfirmDialog";
 import type {
   DeliveryPlan,
-  DeliveryPlanStatus,
   Plan,
   Project,
   Task,
@@ -12,32 +11,24 @@ import type {
 } from "../../types";
 import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
 import s from "../../styles";
+import { dpChipToneStyle } from "../../styles/delivery-plan";
 import { CreatePlanDialog } from "../branch-batch/CreatePlanDialog";
 import { SubmitMrDialog } from "../branch-batch/SubmitMrDialog";
 import { DirectLaunchDialog, type DirectLaunchOptions } from "../yunxiao/DirectLaunchDialog";
 import { SelectField } from "../yunxiao/SelectField";
 import { deriveIssueStatus, type IssueStatus } from "./deriveIssueStatus";
+import {
+  ISSUE_STATUS_LABEL,
+  ISSUE_STATUS_TONE,
+  PLAN_STATUS_LABEL,
+  PLAN_STATUS_TONE,
+} from "./labels";
 import { PlanIssueRow } from "./PlanIssueRow";
-
-export const PLAN_STATUS_LABEL: Record<DeliveryPlanStatus, string> = {
-  active: "进行中",
-  review: "待评审",
-  merged: "已合并",
-  closed: "已关闭",
-};
-
-export const ISSUE_STATUS_LABEL: Record<IssueStatus, string> = {
-  not_started: "未开始",
-  discussing: "讨论中",
-  discussed: "讨论完成",
-  executing: "执行中",
-  done: "已完成",
-  aborted: "已结束",
-};
 
 const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 
-/** 欢迎页「计划」视图（与云效议题同级）：项目过滤＋左计划列表＋右详情（议题表全自动派生状态）。 */
+/** 欢迎页「计划」视图（mockup ①）：侧栏（项目过滤＋计划列表＋创建）＋详情
+ *  （议题表全自动派生状态）。 */
 export function PlanPanel({
   projects,
   tasks,
@@ -164,7 +155,11 @@ export function PlanPanel({
     }
   }
 
-  async function handleStartIssue(rowIssue: { workitemId: string; serialNumber: string; subject: string }) {
+  async function handleStartIssue(rowIssue: {
+    workitemId: string;
+    serialNumber: string;
+    subject: string;
+  }) {
     if (!project) return;
     try {
       const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
@@ -187,46 +182,44 @@ export function PlanPanel({
 
   return (
     <div style={s.dpRoot}>
-      <div style={s.dpToolbar}>
-        <SelectField
-          value={projectId}
-          onChange={(v) => {
-            setProjectId(v);
-            setSelectedId("");
-          }}
-          options={projects.map((p) => ({ value: p.id, label: `项目：${p.name}` }))}
-          placeholder="选择项目"
-        />
-        <span style={s.dpSpacer} />
-        <button
-          type="button"
-          style={s.dpBtnPrimary}
-          onClick={() => setShowCreate(true)}
-          disabled={!project}
-        >
-          <Plus size={13} />
-          创建计划
-        </button>
-      </div>
-
-      {notice && <div style={s.dpEmpty}>{notice}</div>}
+      {notice && <div style={s.dpNotice}>{notice}</div>}
 
       <div style={s.dpBody}>
         <div style={s.dpSide}>
-          {scopedPlans.length === 0 && (
-            <div style={s.dpEmpty}>本项目暂无计划，点「创建计划」开始。</div>
-          )}
+          <div style={s.dpSideFilter}>
+            <SelectField
+              value={projectId}
+              onChange={(v) => {
+                setProjectId(v);
+                setSelectedId("");
+              }}
+              options={projects.map((p) => ({ value: p.id, label: `项目：${p.name}` }))}
+              placeholder="选择项目"
+            />
+          </div>
+          {scopedPlans.length === 0 && <div style={s.dpEmpty}>本项目暂无计划</div>}
           {scopedPlans.map((p) => (
             <button
               key={p.id}
               type="button"
-              style={p.id === selected?.id ? { ...s.dpListItem, ...s.dpListItemActive } : s.dpListItem}
+              style={p.id === selected?.id ? s.dpListItemActive : s.dpListItem}
               onClick={() => setSelectedId(p.id)}
             >
               {p.name}
               <span style={s.dpListItemBranch}>{p.branch}</span>
             </button>
           ))}
+          <div style={s.dpSideFooter}>
+            <button
+              type="button"
+              style={s.dpBtnPrimaryBlock}
+              onClick={() => setShowCreate(true)}
+              disabled={!project}
+            >
+              <Plus size={13} />
+              创建计划
+            </button>
+          </div>
         </div>
 
         <div style={s.dpMain}>
@@ -236,15 +229,17 @@ export function PlanPanel({
             <>
               <div style={s.dpHead}>
                 <span style={s.dpTitle}>{selected.name}</span>
-                <span style={s.dpChip}>{PLAN_STATUS_LABEL[selected.status]}</span>
+                <span style={dpChipToneStyle[PLAN_STATUS_TONE[selected.status]]}>
+                  {PLAN_STATUS_LABEL[selected.status]}
+                </span>
                 <span style={s.dpChip}>{selected.kind}</span>
                 {!selected.useWorktree && <span style={s.dpChip}>主检出</span>}
-                {selected.worktreeMissing && <span style={s.dpChip}>WorkTree 缺失</span>}
-                {selected.runRootMissing && <span style={s.dpChip}>运行程序缺失</span>}
+                {selected.worktreeMissing && <span style={s.dpChipWarn}>WorkTree 缺失</span>}
+                {selected.runRootMissing && <span style={s.dpChipWarn}>运行程序缺失</span>}
                 {selected.status !== "merged" &&
                   selected.status !== "closed" &&
                   Date.now() - selected.createdAt > OVERDUE_MS && (
-                    <span style={s.dpChip}>超期</span>
+                    <span style={s.dpChipWarn}>超期</span>
                   )}
                 <span style={s.dpSpacer} />
                 <button type="button" style={s.dpBtn} onClick={() => onGoYunxiao()}>
@@ -253,7 +248,7 @@ export function PlanPanel({
                 </button>
                 <button
                   type="button"
-                  style={s.dpBtnPrimary}
+                  style={s.dpBtn}
                   disabled={
                     selected.status !== "active" ||
                     !selected.targetBranch ||
@@ -293,7 +288,7 @@ export function PlanPanel({
                 {(Object.keys(summary) as IssueStatus[])
                   .filter((k) => summary[k] > 0)
                   .map((k) => (
-                    <span key={k} style={s.dpChip}>
+                    <span key={k} style={dpChipToneStyle[ISSUE_STATUS_TONE[k]]}>
                       {summary[k]} {ISSUE_STATUS_LABEL[k]}
                     </span>
                   ))}
@@ -305,34 +300,43 @@ export function PlanPanel({
                   <br />
                   从云效议题列表「添加到计划」开始组织议题
                   <br />
-                  <button type="button" style={s.dpBtnPrimary} onClick={() => onGoYunxiao()}>
+                  <button
+                    type="button"
+                    style={s.dpBtnPrimary}
+                    onClick={() => onGoYunxiao()}
+                  >
                     去添加议题
                   </button>
                 </div>
               ) : (
-                <table style={s.dpTable}>
-                  <thead>
-                    <tr>
-                      <th style={s.dpTh}>议题</th>
-                      <th style={s.dpTh}>状态</th>
-                      <th style={s.dpTh}>关联方案</th>
-                      <th style={s.dpTh} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {issueRows.map((row) => (
-                      <PlanIssueRow
-                        key={row.issue.workitemId}
-                        issue={row.issue}
-                        status={row.status}
-                        schemes={row.schemes}
-                        onStart={() => void handleStartIssue(row.issue)}
-                        onRemove={() => void handleRemoveIssue(row.issue.workitemId)}
-                        onOpenWorkitem={onOpenWorkitem}
-                      />
-                    ))}
-                  </tbody>
-                </table>
+                <>
+                  <table style={s.dpTable}>
+                    <thead>
+                      <tr>
+                        <th style={s.dpTh}>议题</th>
+                        <th style={s.dpTh}>状态</th>
+                        <th style={s.dpTh}>关联方案</th>
+                        <th style={s.dpTh} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {issueRows.map((row) => (
+                        <PlanIssueRow
+                          key={row.issue.workitemId}
+                          issue={row.issue}
+                          status={row.status}
+                          schemes={row.schemes}
+                          onStart={() => void handleStartIssue(row.issue)}
+                          onRemove={() => void handleRemoveIssue(row.issue.workitemId)}
+                          onOpenWorkitem={onOpenWorkitem}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                  <p style={s.dpHint}>
+                    状态与方案关联全自动派生；从计划内议题创建的任务自动绑定本计划分支 / worktree。
+                  </p>
+                </>
               )}
             </>
           )}
