@@ -1686,7 +1686,7 @@ function App() {
     if (isLiveTerminalTaskStatus(task.status)) {
       const project = projects.find((p) => p.id === task.projectId);
       const projectPath = task.worktreePath ?? project?.path ?? "";
-      invoke("complete_task", { taskId, projectPath })
+      invoke("complete_task", { taskId, projectPath, agent: task.agent })
         .then(() => {
           tm.removeTaskBuffers([taskId]);
           scheduleForDoneTask(taskId);

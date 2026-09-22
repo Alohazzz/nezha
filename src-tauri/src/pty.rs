@@ -137,6 +137,41 @@ fn wait_for_session(app: &AppHandle, task_id: &str, is_codex: bool) {
     }
 }
 
+/// done 收尾的共享尾步：按本次启动的产出要求决定是否跑知识沉淀。
+///
+/// **两条收尾路径都必须经过这里**（gather 草稿之后）：
+/// - `finalize_task_exit`——agent 进程自然退出，在阻塞线程上同步 gather。
+/// - `complete_task`——用户点「标记已完成」，在 `spawn_blocking` 里 gather 后 await。
+///
+/// 后者曾经漏调，导致交互式 TUI（codex 一轮结束只发 Stop、进程不退出）**永不沉淀**：
+/// 用户只能点「标记已完成」结束任务，而 `finalize_task_exit` 在 `is_manually_completed`
+/// 分支提前 return，沉淀代码根本到不了。
+///
+/// 只有被要求产出的任务（云效议题的方案执行 / 直接执行）才跑：沉淀侧把
+/// 「产物缺失」判为漏产出并报错、前端据此建云效议题，所以未要求产出的任务
+/// 一旦跑进去就是必然误报。门槛放在调用方而不是 `run_auto_sedimentation` 内部，
+/// 是为了让「要不要产出」与「产出在哪校验」各归其位。
+///
+/// 必须在 gather **之后**调用——否则 worktree 里写的 `knowledge.json` 还没收拢
+/// 到项目根，沉淀读不到产物。
+fn maybe_spawn_sedimentation(
+    app: &AppHandle,
+    task_id: &str,
+    real_project_path: &str,
+    agent: &str,
+    sediment_expected: bool,
+) {
+    if !sediment_expected {
+        return;
+    }
+    crate::knowledge::spawn_auto_sedimentation(
+        app.clone(),
+        task_id.to_string(),
+        real_project_path.to_string(),
+        agent.to_string(),
+    );
+}
+
 fn finalize_task_exit(
     app: &AppHandle,
     task_id: &str,
@@ -158,10 +193,10 @@ fn finalize_task_exit(
     // 本次启动是否要求产出沉淀产物。**在函数入口就取走并移除**，这样 cancel /
     // 手动完成等提前 return 的路径也不会把它留在集合里（同一 task_id 重复启动
     // 会在 run_task / resume_task 里按当次标记覆写，不存在残留脏值）。
+    // 取走即消费：手动完成路径已先取过，这里只会拿到 false，不会双跑沉淀。
     let sediment_expected = {
         let tm = app.state::<TaskManager>();
-        let mut expected = tm.sediment_expected.lock();
-        expected.remove(task_id)
+        tm.take_sediment_marker(task_id)
     };
 
     let had_agent_session;
@@ -223,30 +258,18 @@ fn finalize_task_exit(
     let _ = app.emit("task-status", payload);
     // 任务终态：完成 / 失败发系统通知（cancelled 在前面已提前 return，不通知）。
     if status == "done" {
-        // 收拢 Agent 在有效工作目录（可能是 worktree）下写的草稿到项目根，
-        // 使「回写云效 / 知识沉淀」的读取位置与 worktree 生命周期解耦。
         let real_path = {
             let tm = app.state::<TaskManager>();
             let guard = tm.task_real_paths.lock();
             guard.get(task_id).cloned()
         };
         if let Some(real_path) = real_path {
+            // 收拢 Agent 在有效工作目录（可能是 worktree）下写的草稿到项目根，
+            // 使「回写云效 / 知识沉淀」的读取位置与 worktree 生命周期解耦。
             let _ = crate::drafts::gather_task_drafts(project_path, &real_path, task_id);
-            // 知识沉淀自动处理：任务完成后读会话内产出的候选 → 四层门 → 写入图谱。
+            // 知识沉淀自动处理：读会话内产出的候选 → 四层门 → 写入图谱。
             // 放在 gather 之后（否则 worktree 里写的 knowledge.json 还没收拢到项目根）。
-            //
-            // 只有被要求产出的任务（云效议题的方案执行 / 直接执行）才跑：沉淀侧把
-            // 「产物缺失」判为漏产出并报错、前端据此建云效议题，所以未要求产出的任务
-            // 一旦跑进去就是必然误报。门槛放在这里而不是 `run_auto_sedimentation` 内部，
-            // 是为了让「要不要产出」与「产出在哪校验」各归其位。
-            if sediment_expected {
-                crate::knowledge::spawn_auto_sedimentation(
-                    app.clone(),
-                    task_id.to_string(),
-                    real_path,
-                    agent.to_string(),
-                );
-            }
+            maybe_spawn_sedimentation(app, task_id, &real_path, agent, sediment_expected);
         }
         crate::system_notify::notify_task_event(
             app,
@@ -1596,7 +1619,12 @@ pub async fn complete_task(
     task_manager: State<'_, TaskManager>,
     task_id: String,
     project_path: String,
+    // 任务自身的 agent（前端传 `task.agent`），供收尾时跑知识沉淀的 L3 语义门。
+    agent: String,
 ) -> Result<(), String> {
+    // 与 `finalize_task_exit` 入口同样「取走并移除」：本路径负责沉淀，
+    // 后续 exit monitor 醒来的 `finalize_task_exit` 取到 false 便不会重复跑。
+    let sediment_expected = task_manager.take_sediment_marker(&task_id);
     task_manager
         .manually_completed_tasks
         .lock()
@@ -1621,15 +1649,23 @@ pub async fn complete_task(
     release_claimed_session_paths(&task_manager, &task_id);
 
     // 收拢草稿（Agent 可能写在 worktree 内）到项目根，供回写/沉淀直接读取。
+    // 随后跑沉淀——**这里是交互式任务的唯一收尾路径**（TUI 一轮结束不退出进程，
+    // 用户点「标记已完成」），漏掉它会让沉淀永不触发（见 `maybe_spawn_sedimentation`）。
     let real_path = task_manager.task_real_paths.lock().get(&task_id).cloned();
     if let Some(real_path) = real_path {
         let effective = project_path.clone();
         let task_id_for_gather = task_id.clone();
+        let real_for_gather = real_path.clone();
         tokio::task::spawn_blocking(move || {
-            let _ = crate::drafts::gather_task_drafts(&effective, &real_path, &task_id_for_gather);
+            let _ = crate::drafts::gather_task_drafts(
+                &effective,
+                &real_for_gather,
+                &task_id_for_gather,
+            );
         })
         .await
         .map_err(|e| format!("收拢草稿线程错误: {e}"))?;
+        maybe_spawn_sedimentation(&app, &task_id, &real_path, &agent, sediment_expected);
     }
 
     let _ = app.emit(
