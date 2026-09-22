@@ -1045,7 +1045,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.generate.create": "Generate {count} todo(s)",
     "plan.generate.cancel": "Cancel",
     "plan.preview.title": "Plan",
-    "plan.preview.batchLinked": "batch linked",
+    "plan.preview.batchLinked": "plan linked",
     "plan.preview.none": "No plan to preview.",
     "plan.preview.discussionRunning":
       "Discussion has not produced plan.md yet — finalize after the session completes.",
@@ -2134,7 +2134,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.generate.create": "生成 {count} 个待办",
     "plan.generate.cancel": "取消",
     "plan.preview.title": "方案",
-    "plan.preview.batchLinked": "已挂批",
+    "plan.preview.batchLinked": "已挂计划",
     "plan.preview.none": "暂无可预览的方案。",
     "plan.preview.discussionRunning": "讨论尚未产出方案文档（plan.md），会话完成定稿后可预览。",
     "plan.preview.mdMissing": "方案目录下未找到 plan.md。",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Nezha 操作手册 · 云效议题 / 构建 / 知识图谱 / 创建 PR / 技能管理</title>
+<title>Nezha 操作手册 · 云效议题 / 构建 / 知识图谱 / 计划 / 技能管理</title>
 <script>
   // 嵌入式帮助文档引导：在样式生效前决定主题，避免首帧闪白/闪黑。
   (function () {
@@ -173,7 +173,7 @@
 <body>
 
 <header class="topbar">
-  <div class="brand">Nezha 操作手册<small>云效议题 · 构建 · 知识图谱 · 创建 PR · 技能管理</small></div>
+  <div class="brand">Nezha 操作手册<small>云效议题 · 构建 · 知识图谱 · 计划 · 技能管理</small></div>
   <div class="actions">
     <a class="btn" href="operation-manual.md">Markdown 版</a>
     <a class="btn" href="yunxiao-launch-modes.html">云效议题详解</a>
@@ -188,7 +188,7 @@
   <main>
     <div class="hero">
       <h1>Nezha 操作手册</h1>
-      <p>覆盖六大功能线：<strong>云效议题闭环</strong>、<strong>知识沉淀</strong>、<strong>技能管理</strong>、<strong>构建</strong>、<strong>知识图谱</strong>、<strong>创建 PR 与合并审核</strong>。</p>
+      <p>覆盖六大功能线：<strong>云效议题闭环</strong>、<strong>知识沉淀</strong>、<strong>技能管理</strong>、<strong>构建</strong>、<strong>知识图谱</strong>、<strong>计划与合并审核</strong>。</p>
       <div class="meta">适用 Nezha 桌面端（Tauri 2 + React 19）· 面向使用 Nezha 管理 AI 编程任务并把结果沉淀回云效、代码库与知识库的团队</div>
     </div>
 
@@ -222,7 +222,7 @@
         <li>点「<strong>保存连接</strong>」。成功后视图顶部显示「<code>组织名 · 项目名</code>」。</li>
       </ol>
       <p>后续如需切换账号或项目：顶部「<strong>重新连接</strong>」进连接表单；「<strong>刷新</strong>」重新拉取当前项目议题。</p>
-      <p>连接信息保存在应用级设置（<code>~/.nezha/settings.json</code>），每个项目打开时可直接复用。该令牌同时被「合并审核」「创建 PR」等云效功能复用。</p>
+      <p>连接信息保存在应用级设置（<code>~/.nezha/settings.json</code>），每个项目打开时可直接复用。该令牌同时被「合并审核」「计划」等云效功能复用。</p>
 
       <h3><span class="subnum">1.2</span>浏览与筛选议题</h3>
       <figure>
@@ -692,41 +692,41 @@
     </section>
 
     <section id="sec6">
-      <h2><span class="num">6</span>创建 PR</h2>
-      <p>把一批已完成的议题改动，打包成「批次 + 分支」（可选再带 worktree），再推送成一个云效 Codeup 合并请求（MR）。认证复用「云效议题」里配置的令牌与组织（第 1.1 节），无需单独配置。</p>
-      <p>创建 MR 有两条路径：<strong>批次链路</strong>（6.1–6.2，先有批次记录）与「<strong>发起合并</strong>」视图（6.3，直接为<strong>已存在</strong>的分支发起，并顺带清理已收尾的远端分支）。</p>
+      <h2><span class="num">6</span>计划与合并请求</h2>
+      <p>把一组云效议题组织成一个<strong>计划</strong>（一组有序议题 + 一条分支 + 可选一个 worktree），收尾推送成一个云效 Codeup 合并请求（MR）。认证复用「云效议题」里配置的令牌与组织（第 1.1 节），无需单独配置。</p>
+      <p>创建 MR 有两条路径：<strong>计划链路</strong>（6.1–6.2，先有计划）与「<strong>发起合并</strong>」视图（6.3，直接为<strong>无计划记录</strong>的分支发起，并顺带清理已收尾的远端分支）。</p>
 
-      <h3><span class="subnum">6.1</span>新建 PR</h3>
-      <p>进入项目后，点右侧工具栏「<strong>PR</strong>」图标，展开 PR 面板 → 点「<strong>新建 PR</strong>」：</p>
+      <h3><span class="subnum">6.1</span>创建计划</h3>
+      <p>欢迎页左侧「<strong>计划</strong>」视图（与云效议题同级）或云效议题视图的「<strong>创建计划</strong>」按钮，都能打开「<strong>创建计划</strong>」对话框：</p>
       <figure class="shot-md">
-        <img src="screenshots/module-guide/02-create-pr.png" alt="创建 PR 对话框" />
-        <figcaption>「创建 PR」对话框：批名称、类型、版本、源/基础/目标分支、议题选择与 worktree 开关</figcaption>
+        <img src="screenshots/module-guide/02-create-pr.png" alt="创建计划对话框" />
+        <figcaption>「创建计划」对话框：计划名称、类型、版本、源/基础/目标分支与 worktree 开关</figcaption>
       </figure>
       <table>
         <thead><tr><th>字段</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td><strong>批名称</strong></td><td>如「锁号地址挂号异常问题」</td></tr>
+          <tr><td><strong>计划名称</strong></td><td>如「锁号地址挂号异常问题」</td></tr>
           <tr><td><strong>类型</strong></td><td><code>feature · 日常开发</code> / <code>fix · 缺陷修复</code> / <code>patch · 现场响应</code> / <code>project · 上线验收</code> / <code>hotfix · 补丁</code></td></tr>
           <tr><td><strong>版本</strong></td><td>分支名里的版本段，可取云效版本（如 <code>v2.20260901</code>，自动去掉云效版本名的尾部 <code>.0</code>），也可手输；留空则不生成版本段</td></tr>
           <tr><td><strong>源分支</strong></td><td>按 <code>类型/版本/目标分支/描述</code> 自动生成、可手改（如 <code>fix/v2.20260901/develop/锁号地址挂号异常问题</code>）；点「检测」校验是否与远端 / 本地重名，冲突时可「继续使用远端分支」或「改名」</td></tr>
           <tr><td><strong>基础分支</strong></td><td>从哪个分支切出；默认带出所选仓库的<strong>当前分支</strong>，可手改</td></tr>
-          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标；填了该分支名会同时作为源分支名里的目标段（恒带出）。<strong>允许留空</strong> = 暂不指定合并目标：源分支名不带目标段，批照常创建，但不能提交 MR / 合并回</td></tr>
-          <tr><td><strong>选择议题</strong></td><td>勾选组成该批次的议题（顺序即任务顺序）</td></tr>
-          <tr><td><strong>另建 worktree</strong></td><td><strong>默认不勾选</strong>——批分支直接切在主工作区，任务与提交都落在该分支上；需要并行隔离时才勾选，并填「代码目录」</td></tr>
+          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标；填了该分支名会同时作为源分支名里的目标段（恒带出）。<strong>允许留空</strong> = 暂不指定合并目标：源分支名不带目标段，计划照常创建，但不能提交 MR / 合并回</td></tr>
+          <tr><td><strong>另建 worktree</strong></td><td><strong>默认不勾选</strong>——计划分支直接切在主工作区，任务与提交都落在该分支上；需要并行隔离时才勾选，并填「代码目录」</td></tr>
         </tbody>
       </table>
-      <p>点「<strong>创建批 + 分支</strong>」（未勾选 worktree）或「<strong>创建批 + 分支 + worktree</strong>」完成创建。之后批卡片上可「<strong>打开</strong>」「<strong>删除批次</strong> / <strong>删除 WorkTree</strong>」，或点「<strong>提交 MR</strong>」。</p>
-      <p>不建 worktree 的批显示「主检出」徽标，归到右侧面板的「主检出」作用域。因为此时批分支就是主工作区的当前分支，创建前请先处理主工作区里的未提交改动——有改动时切换分支会被 git 拒绝，Nezha 会给出提示。</p>
+      <p>点「<strong>创建计划 + 分支</strong>」（未勾选 worktree）或「<strong>创建计划 + 分支 + worktree</strong>」完成创建。<strong>成员（云效议题）创建后补</strong>：在云效议题列表多选 →「<strong>添加到计划</strong>」，或行内「<strong>加到计划</strong>」；一个议题同时只属于一个计划。</p>
+      <p>计划详情里可查看每个议题的<strong>状态</strong>（未开始 / 讨论中 / 讨论完成 / 执行中 / 已完成 / 已结束）与<strong>关联方案</strong>（全自动派生）；从计划内议题创建的任务<strong>自动落在计划分支 / worktree</strong> 上。详情动作行可「<strong>添加议题</strong>」「<strong>提交 MR</strong>」「<strong>打开</strong>」「<strong>删除计划</strong>」。</p>
+      <p>不建 worktree 的计划显示「主检出」徽标。此时计划分支就是主工作区的当前分支，创建前请先处理主工作区里的未提交改动——有改动时切换分支会被 git 拒绝，Nezha 会给出提示。</p>
 
       <h3><span class="subnum">6.2</span>提交合并请求</h3>
-      <p>点「<strong>提交 MR</strong>」→「<strong>提交合并请求</strong>」对话框：</p>
+      <p>计划详情里点「<strong>提交 MR</strong>」→「<strong>提交合并请求</strong>」对话框：</p>
       <ul>
         <li>可加「<strong>审核人</strong>」（默认带上目标分支保护规则里的默认评审人，可用成员选择器搜索勾选，也可手输）；</li>
-        <li>确认后点「<strong>提交到 Codeup</strong>」——Nezha 先把批次分支推送到远端，再调用 Codeup 接口创建 MR，并把 MR 状态回写到该批次。</li>
+        <li>确认后点「<strong>提交到 Codeup</strong>」——Nezha 先把计划分支推送到远端，再调用 Codeup 接口创建 MR，并把 MR 状态回写到该计划。</li>
       </ul>
 
       <h3><span class="subnum">6.3</span>发起合并：为已有分支发起 / 清理 MR</h3>
-      <p>批次链路要求先有批次记录；但 agent 用 <code>git checkout -b</code> 自建、或你自己推送的分支没有批次记录，走不了 6.2。这类分支走欢迎页左侧的「<strong>发起合并</strong>」视图——它把本地分支元数据与云效平台数据 join 起来，一次看清「哪些分支还没发起 MR、该合到哪、是否已可收尾」。</p>
+      <p>计划链路要求先有计划；但 agent 用 <code>git checkout -b</code> 自建、或你自己推送的分支没有计划记录，走不了 6.2（「发起合并」候选列表会排除已被计划认领的分支）。这类分支走欢迎页左侧的「<strong>发起合并</strong>」视图——它把本地分支元数据与云效平台数据 join 起来，一次看清「哪些分支还没发起 MR、该合到哪、是否已可收尾」。</p>
       <figure>
         <img src="screenshots/module-guide/07-pending-mr-list-dark.png" alt="发起合并视图：候选分支列表（暗色）" />
         <figcaption>发起合并视图（暗色）：工具条（仓库筛选 / 我的提交 / 搜索 / 刷新）+ 候选分支卡片，每行带合并状态徽标、目标分支下拉与删除按钮</figcaption>
@@ -882,9 +882,9 @@
           <tr><td>「扫描项目」按钮灰着</td><td>图谱未就绪或缺对应适配器脚本；确认图谱「已就绪」，并保证 <code>adapters/&lt;adapter&gt;.py</code> 存在。</td></tr>
           <tr><td>「知识库」提示「技能库未配置」</td><td>先到「应用设置 → 技能库」配置技能仓库来源。</td></tr>
           <tr><td>「分支合并」点不动</td><td>需先对该 MR「拉取代码」。</td></tr>
-          <tr><td>创建 PR 报分支重名</td><td>用「检测」后选「继续使用远端分支」或「改名」。</td></tr>
-          <tr><td>创建 PR 报「主工作区存在未提交改动」</td><td>未勾选「另建 worktree」时批分支直接切在主工作区，需先提交或暂存当前改动；或改为勾选「另建 worktree」用独立代码目录。</td></tr>
-          <tr><td>创建 PR 的「版本」下拉是灰的</td><td>未配云效令牌 / 组织 / 项目，取不到版本列表；直接在版本输入框手输（如 <code>v2.20260901</code>），不影响创建。</td></tr>
+          <tr><td>创建计划报分支重名</td><td>用「检测」后选「继续使用远端分支」或「改名」。</td></tr>
+          <tr><td>创建计划报「主工作区存在未提交改动」</td><td>未勾选「另建 worktree」时批分支直接切在主工作区，需先提交或暂存当前改动；或改为勾选「另建 worktree」用独立代码目录。</td></tr>
+          <tr><td>创建计划的「版本」下拉是灰的</td><td>未配云效令牌 / 组织 / 项目，取不到版本列表；直接在版本输入框手输（如 <code>v2.20260901</code>），不影响创建。</td></tr>
           <tr><td>「发起合并」视图一开始是空的</td><td>分段加载：先选工具条「<strong>仓库</strong>」下拉里的某个仓库，才会扫码分支（一次全扫要几十秒，所以不自动全扫）。</td></tr>
           <tr><td>「发起合并」里看不到我要的分支</td><td>列表只收「已推送 + 有未合并提交 + 无开放 MR」的分支；关掉「<strong>我的提交</strong>」开关看同事的分支，或确认该分支已 <code>push</code> 到远端。</td></tr>
           <tr><td>「发起合并请求」按钮点不动</td><td>勾选的分支里没有符合条件的（未推送 / 已合并 / 已有开放 MR 都会被排除）；勾一条还没发起 MR 的分支再试。</td></tr>
