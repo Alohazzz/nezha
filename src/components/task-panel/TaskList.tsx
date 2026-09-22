@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Plus } from "lucide-react";
-import type { BranchBatch, Task, TaskDisplayWindow } from "../../types";
+import type { DeliveryPlan, Task, TaskDisplayWindow } from "../../types";
 import type { PlanWaitingBadge } from "../../utils/planQueue";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
@@ -55,7 +55,7 @@ export function TaskList({
   onDeleteTask: (id: string) => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
-  batches: BranchBatch[];
+  batches: DeliveryPlan[];
   /** 方案待办的等待角标（taskId → 角标信息）；非等待态任务不在表内。 */
   waitingBadges?: Map<string, PlanWaitingBadge>;
   onCreateTaskInGroup: (groupKey: string) => void;
@@ -118,11 +118,9 @@ export function TaskList({
     const MAIN = "__main__";
     const attention: Task[] = [];
     const groups = new Map<string, { label: string; tasks: Task[] }>();
-    // 批创建时在 batch.taskIds 记录成员，任务自身未写 batchId——用 task.id → 所属批 来归组。
-    const taskToBatch = new Map<string, BranchBatch>();
-    for (const b of batches) {
-      for (const tid of b.taskIds ?? []) taskToBatch.set(tid, b);
-    }
+    // 任务经 deliveryPlanId 绑定计划（迁移已回写遗留成员），据此归组。
+    const planById = new Map<string, DeliveryPlan>();
+    for (const b of batches) planById.set(b.id, b);
     const cutoff =
       taskDisplayWindow === "all"
         ? Number.NEGATIVE_INFINITY
@@ -141,7 +139,7 @@ export function TaskList({
       const bucketAt = task.updatedAt ?? task.createdAt;
       if (bucketAt < cutoff) continue;
       const isWorktree = !!task.worktreePath && !task.worktreeDiscarded;
-      const batch = taskToBatch.get(task.id);
+      const batch = task.deliveryPlanId ? planById.get(task.deliveryPlanId) : undefined;
       let key: string;
       let label: string;
       if (isWorktree) {

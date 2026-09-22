@@ -10,7 +10,7 @@ import type {
 import { EMPTY_YUNXIAO_SETTINGS } from "../app-settings/types";
 import { SelectField } from "../yunxiao/SelectField";
 import type {
-  BranchBatch,
+  DeliveryPlan,
   BranchConflictCheck,
   BranchKind,
   PendingBranchRepoRef,
@@ -32,7 +32,7 @@ export function normalizeVersionSegment(name: string): string {
   return name.trim().replace(/\.0$/, "");
 }
 
-export function CreateBranchBatchDialog({
+export function CreatePlanDialog({
   projectId,
   projectPath,
   repoPath,
@@ -44,7 +44,7 @@ export function CreateBranchBatchDialog({
   projectPath: string;
   repoPath: string;
   tasks: Task[];
-  onCreated: (batch: BranchBatch) => void;
+  onCreated: (batch: DeliveryPlan) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState("");
@@ -127,7 +127,7 @@ export function CreateBranchBatchDialog({
   // 切换仓库后重新取默认值（不同子仓库可配置不同的 worktree 基路径）。
   useEffect(() => {
     let cancelled = false;
-    invoke<string>("get_branch_batch_worktree_base", { projectPath, repoPath: selectedRepo })
+    invoke<string>("get_delivery_plan_worktree_base", { projectPath, repoPath: selectedRepo })
       .then((dir) => {
         if (!cancelled) setWorktreeDir(dir);
       })
@@ -156,12 +156,12 @@ export function CreateBranchBatchDialog({
     };
   }, [projectPath, selectedRepo]);
 
-  // 源分支名由后端统一生成（与 create_branch_batch 同源），前端只做展示。
+  // 源分支名由后端统一生成（与 create_delivery_plan 同源），前端只做展示。
   // 用户手动改过之后不再自动覆盖。
   useEffect(() => {
     if (manualBranchRef.current) return;
     let cancelled = false;
-    invoke<string>("preview_branch_batch_branch", {
+    invoke<string>("preview_delivery_plan_branch", {
       kind,
       version: version.trim() || null,
       targetBranch: targetBranch.trim() || null,
@@ -218,7 +218,7 @@ export function CreateBranchBatchDialog({
     setChecking(true);
     setError("");
     try {
-      const check = await invoke<BranchConflictCheck>("check_branch_batch_branch", {
+      const check = await invoke<BranchConflictCheck>("check_delivery_plan_branch", {
         projectPath,
         repoPath: selectedRepo,
         branch: sourceBranch.trim(),
@@ -267,7 +267,7 @@ export function CreateBranchBatchDialog({
     setBusy(true);
     setError("");
     try {
-      const batch = await invoke<BranchBatch>("create_branch_batch", {
+      const batch = await invoke<DeliveryPlan>("create_delivery_plan", {
         projectPath,
         repoPath: selectedRepo,
         projectId,
@@ -276,7 +276,7 @@ export function CreateBranchBatchDialog({
         kind,
         baseBranch: baseBranch.trim(),
         targetBranch: targetBranch.trim(),
-        taskIds: Array.from(selected),
+        issues: [],
         sourceBranch: sourceBranch.trim(),
         useExistingRemote,
         worktreeDir: useWorktree ? worktreeDir.trim() : null,

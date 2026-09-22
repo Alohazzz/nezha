@@ -159,15 +159,15 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
           return Promise.resolve([]);
         case "read_file_content":
           return Promise.reject(new Error("not found"));
-        case "list_branch_batches":
+        case "list_delivery_plans":
           return Promise.resolve([]);
         case "git_list_branches":
           return Promise.resolve([]);
         case "watch_dir":
           return Promise.resolve(false);
-        case "get_branch_batch_worktree_base":
+        case "get_delivery_plan_worktree_base":
           return Promise.resolve("H:/workspace/worktrees");
-        case "preview_branch_batch_branch":
+        case "preview_delivery_plan_branch":
           return Promise.resolve("feature/v2.20260901/develop/锁号");
         default:
           return Promise.resolve(null);
@@ -208,7 +208,7 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     // 预览命令不再接收 includeTarget：目标分支段由 targetBranch 决定。
     // 目标分支默认留空（允许暂不指定合并目标），此时 preview 收到 null。
     await waitFor(() => {
-      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "preview_branch_batch_branch");
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "preview_delivery_plan_branch");
       const args = call?.[1] as Record<string, unknown> | undefined;
       expect(args?.targetBranch).toBeNull();
       expect(args).not.toHaveProperty("includeTarget");
@@ -219,7 +219,7 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     await user.type(target, "develop");
     await waitFor(() => {
       const calls = invokeMock.mock.calls.filter(
-        ([cmd]) => cmd === "preview_branch_batch_branch",
+        ([cmd]) => cmd === "preview_delivery_plan_branch",
       );
       const args = calls[calls.length - 1]?.[1] as Record<string, unknown> | undefined;
       expect(args?.targetBranch).toBe("develop");

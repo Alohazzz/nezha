@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Send, X } from "lucide-react";
-import type { BranchBatch } from "../../types";
+import type { DeliveryPlan } from "../../types";
 import { ReviewerPicker } from "../codeup/ReviewerPicker";
 
 export function SubmitMrDialog({
@@ -13,7 +13,7 @@ export function SubmitMrDialog({
 }: {
   projectPath: string;
   projectId: string;
-  batch: BranchBatch;
+  batch: DeliveryPlan;
   onDone: () => void;
   onClose: () => void;
 }) {
@@ -49,7 +49,7 @@ export function SubmitMrDialog({
         projectPath,
         repoPath: batch.worktreeRepo ?? null,
         projectId,
-        batchId: batch.id,
+        planId: batch.id,
         reviewers,
       });
       onDone();

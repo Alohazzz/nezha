@@ -159,7 +159,7 @@ describe("ProjectPage fullscreen 新建任务前景层", () => {
           return Promise.resolve([]);
         case "read_file_content":
           return Promise.reject(new Error("not found"));
-        case "list_branch_batches":
+        case "list_delivery_plans":
           return Promise.resolve([]);
         case "git_list_branches":
           return Promise.resolve([]);

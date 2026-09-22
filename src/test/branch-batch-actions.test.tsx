@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
-import type { BranchBatch } from "../types";
-import { BranchBatchView } from "../components/branch-batch/BranchBatchView";
+import type { DeliveryPlan } from "../types";
+import { DeliveryPlanView } from "../components/branch-batch/DeliveryPlanView";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn().mockResolvedValue(true),
 }));
 
-const baseBatch: BranchBatch = {
+const baseBatch: DeliveryPlan = {
   id: "b1",
   projectId: "p1",
   name: "门诊挂号优化",
@@ -20,15 +20,15 @@ const baseBatch: BranchBatch = {
   branch: "feature/门诊挂号优化",
   baseBranch: "develop",
   targetBranch: "develop",
-  taskIds: [],
+  issues: [],
   status: "active",
   createdAt: Date.now(),
   worktreePath: "H:/Project/.nezha/worktrees/b1",
 };
 
-const renderView = (batch: BranchBatch) =>
+const renderView = (batch: DeliveryPlan) =>
   render(
-    <BranchBatchView
+    <DeliveryPlanView
       projectPath="H:/Project"
       projectId="p1"
       repoPath="H:/Project"
@@ -40,7 +40,7 @@ const renderView = (batch: BranchBatch) =>
     />,
   );
 
-describe("BranchBatchView", () => {
+describe("DeliveryPlanView", () => {
   it("only exposes open / submit / delete and hides the worktree path", async () => {
     vi.mocked(invoke).mockResolvedValue([baseBatch]);
     renderView(baseBatch);
@@ -79,7 +79,7 @@ describe("SubmitMrDialog", () => {
   it("prefills reviewers from the target branch rule and submits them as names", async () => {
     const inv = vi.mocked(invoke);
     inv.mockImplementation((command: string) => {
-      if (command === "list_branch_batches") return Promise.resolve([baseBatch]);
+      if (command === "list_delivery_plans") return Promise.resolve([baseBatch]);
       if (command === "codeup_branch_managers") return Promise.resolve(["苏一", "付茂玲"]);
       if (command === "codeup_list_members") {
         return Promise.resolve([
@@ -107,7 +107,7 @@ describe("SubmitMrDialog", () => {
         projectPath: "H:/Project",
         repoPath: null,
         projectId: "p1",
-        batchId: "b1",
+        planId: "b1",
         reviewers: ["苏一", "付茂玲"],
       });
     });
@@ -117,7 +117,7 @@ describe("SubmitMrDialog", () => {
   it("lets the user add a reviewer from the member picker", async () => {
     const inv = vi.mocked(invoke);
     inv.mockImplementation((command: string) => {
-      if (command === "list_branch_batches") return Promise.resolve([baseBatch]);
+      if (command === "list_delivery_plans") return Promise.resolve([baseBatch]);
       if (command === "codeup_branch_managers") return Promise.resolve([]);
       if (command === "codeup_list_members") {
         return Promise.resolve([{ name: "陈学清", userId: "6423f3653cecdaec3a1bf8da" }]);
@@ -146,7 +146,7 @@ describe("SubmitMrDialog", () => {
   it("shows the backend error when the MR cannot be created", async () => {
     const inv = vi.mocked(invoke);
     inv.mockImplementation((command: string) => {
-      if (command === "list_branch_batches") return Promise.resolve([baseBatch]);
+      if (command === "list_delivery_plans") return Promise.resolve([baseBatch]);
       if (command === "codeup_branch_managers") return Promise.resolve([]);
       if (command === "codeup_list_members") return Promise.resolve([]);
       if (command === "codeup_create_mr") {

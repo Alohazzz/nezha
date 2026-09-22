@@ -13,7 +13,7 @@
 //! - MR 详情/动作路径段收 `localId`，传 `mrBizId` 报 `Invalid param value`。
 
 use crate::git::{path_to_string, resolve_repo_path, run_git, validate_project_path};
-use crate::storage::{load_project_batches, load_projects, save_project_batches, Batch};
+use crate::storage::{load_project_batches, load_projects, save_project_batches, DeliveryPlan};
 use crate::yunxiao::{build_client, read_json_body, API_BASE};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -580,11 +580,11 @@ pub struct CodeupMemberEntry {
     pub user_id: String,
 }
 
-fn load_batch(project_id: &str, batch_id: &str) -> Result<Batch, String> {
+fn load_plan(project_id: &str, plan_id: &str) -> Result<DeliveryPlan, String> {
     load_project_batches(project_id.to_string())?
         .into_iter()
-        .find(|b| b.id == batch_id)
-        .ok_or_else(|| "Batch not found".to_string())
+        .find(|b| b.id == plan_id)
+        .ok_or_else(|| "DeliveryPlan not found".to_string())
 }
 
 /// 查询 Codeup 上该 MR 当前是否已合并（状态归一化为含 "MERGED"）。
@@ -929,11 +929,11 @@ pub async fn codeup_create_mr(
     project_path: String,
     repo_path: Option<String>,
     project_id: String,
-    batch_id: String,
+    plan_id: String,
     reviewers: Vec<String>,
-) -> Result<Batch, String> {
+) -> Result<DeliveryPlan, String> {
     let (token, _) = load_creds().await?;
-    let batch = load_batch(&project_id, &batch_id)?;
+    let batch = load_plan(&project_id, &plan_id)?;
     if batch.status != "active" {
         return Err("批次不是进行中状态，无法提交 MR".to_string());
     }
@@ -944,7 +944,7 @@ pub async fn codeup_create_mr(
         &std::path::Path::new(&project_path)
             .join(".nezha")
             .join("worktrees")
-            .join(&batch_id),
+            .join(&plan_id),
     )?;
     // 无 worktree 的批：分支就在主工作区里，push / rev-parse 都在仓库根执行。
     // 脏文件判定跳过——主工作区常驻开发状态，拿 worktree 的「必须干净」标准会误拦。
@@ -1012,8 +1012,8 @@ pub async fn codeup_create_mr(
     let mut batches = load_project_batches(project_id.clone())?;
     let updated = batches
         .iter_mut()
-        .find(|b| b.id == batch_id)
-        .ok_or_else(|| "Batch not found".to_string())?;
+        .find(|b| b.id == plan_id)
+        .ok_or_else(|| "DeliveryPlan not found".to_string())?;
     // mr_id 存 **localId**：云效的 MR 详情/动作路径段收的就是它，删除批次时的
     // 「已合并门禁」也正是拿这个值去查状态（见 batch_mr_is_merged）。
     updated.mr_id = Some(created.local_id.to_string());
@@ -1029,7 +1029,7 @@ pub async fn codeup_create_mr(
 
 /// 批量发起合并请求的单项输入。
 ///
-/// 刻意**不绑定分支批**：`codeup_create_mr` 要求 `batch_id` 存在、批次 active 且带干净
+/// 刻意**不绑定分支批**：`codeup_create_mr` 要求 `plan_id` 存在、批次 active 且带干净
 /// worktree，而「待发起」视图覆盖的正是 agent 用 `git checkout -b` 自建、或用户手推的分支，
 /// 它们没有批次记录。这里只依赖仓库路径 + 源/目标分支，满足「到点发起」的闭环。
 #[derive(Deserialize, Debug, Clone)]

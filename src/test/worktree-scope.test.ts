@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BranchBatch, Task } from "../types";
+import type { DeliveryPlan, Task } from "../types";
 import { buildWorktreeScopeOptions } from "../components/branch-batch/worktreeScope";
 
 const task = {
@@ -20,10 +20,10 @@ const batch = {
   branch: "feature/pr",
   baseBranch: "develop",
   targetBranch: "develop",
-  taskIds: [],
+  issues: [],
   status: "active",
   createdAt: 1,
-} as BranchBatch;
+} as DeliveryPlan;
 
 describe("buildWorktreeScopeOptions", () => {
   it("keeps live task and batch worktrees", () => {

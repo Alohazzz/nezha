@@ -8,7 +8,7 @@ use usage::CodexRpcClient;
 mod agent_assist;
 mod analytics;
 mod app_settings;
-mod batch;
+mod delivery_plan;
 mod build;
 mod codeup;
 mod config;
@@ -509,16 +509,16 @@ pub fn run() {
             storage::save_project_batches,
             storage::load_project_plans,
             storage::save_project_plans,
-            batch::create_branch_batch,
-            batch::preview_branch_batch_branch,
-            batch::list_branch_batches,
-            batch::get_branch_batch,
-            batch::close_branch_batch,
-            batch::merge_branch_batch,
-            batch::check_branch_batch_branch,
-            batch::open_branch_batch_worktree,
-            batch::delete_branch_batch,
-            batch::get_branch_batch_worktree_base,
+            delivery_plan::create_delivery_plan,
+            delivery_plan::preview_delivery_plan_branch,
+            delivery_plan::list_delivery_plans,
+            delivery_plan::get_delivery_plan,
+            delivery_plan::close_delivery_plan,
+            delivery_plan::merge_delivery_plan,
+            delivery_plan::check_delivery_plan_branch,
+            delivery_plan::open_delivery_plan_worktree,
+            delivery_plan::delete_delivery_plan,
+            delivery_plan::get_delivery_plan_worktree_base,
             codeup::codeup_resolve_repo,
             codeup::codeup_branch_managers,
             codeup::codeup_create_mr,

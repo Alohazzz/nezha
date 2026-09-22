@@ -12,7 +12,7 @@ import {
 import type {
   Project,
   Task,
-  BranchBatch,
+  DeliveryPlan,
   ThemeMode,
   ThemeVariant,
   TerminalFontSize,
@@ -91,7 +91,7 @@ export function TaskPanel({
   onDeleteAllTasks: () => void;
   onToggleTaskStar: (id: string) => void;
   onRunTodo: (task: Task) => void;
-  batches: BranchBatch[];
+  batches: DeliveryPlan[];
   /** 方案待办等待角标（taskId → 角标）；透传给 TaskList。 */
   waitingBadges?: Map<string, PlanWaitingBadge>;
   onCreateTaskInGroup: (groupKey: string) => void;

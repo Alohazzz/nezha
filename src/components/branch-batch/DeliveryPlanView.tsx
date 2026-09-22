@@ -2,34 +2,29 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { appConfirm } from "../AppConfirmDialog";
 import { FolderOpen, Plus, Send, Trash2, X } from "lucide-react";
-import type { BranchBatch, BranchBatchStatus, Task } from "../../types";
+import type { DeliveryPlan, DeliveryPlanStatus, Task } from "../../types";
 import { rpRootStyle } from "../../styles/right-panel";
-import { CreateBranchBatchDialog } from "./CreateBranchBatchDialog";
+import { CreatePlanDialog } from "./CreatePlanDialog";
 import { SubmitMrDialog } from "./SubmitMrDialog";
 import { batchScopeKey } from "./worktreeScope";
 
-const STATUS_LABEL: Record<BranchBatchStatus, string> = {
-  draft: "草稿",
+const STATUS_LABEL: Record<DeliveryPlanStatus, string> = {
   active: "进行中",
   review: "待评审",
-  conflict: "冲突",
-  approved: "已通过",
   merged: "已合并",
-  rejected: "已拒绝",
   closed: "已关闭",
 };
 
 const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** 状态 → 徽标色调（pr-badge data-tone），与右侧面板设计语言的语义色一致。 */
-function statusTone(status: BranchBatchStatus): string | undefined {
+function statusTone(status: DeliveryPlanStatus): string | undefined {
   if (status === "active") return "active";
-  if (status === "conflict" || status === "rejected") return "conflict";
-  if (status === "approved" || status === "merged") return "done";
+  if (status === "merged" || status === "closed") return "done";
   return undefined;
 }
 
-export function BranchBatchView({
+export function DeliveryPlanView({
   projectPath,
   projectId,
   repoPath,
@@ -50,16 +45,16 @@ export function BranchBatchView({
   onClose: () => void;
   width?: number;
 }) {
-  const [batches, setBatches] = useState<BranchBatch[]>([]);
+  const [batches, setBatches] = useState<DeliveryPlan[]>([]);
   const [showCreate, setShowCreate] = useState(false);
-  const [submitBatch, setSubmitBatch] = useState<BranchBatch | null>(null);
+  const [submitBatch, setSubmitBatch] = useState<DeliveryPlan | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
 
   const load = useCallback(async (pid: string) => {
     if (!pid) return [];
     try {
-      const list = await invoke<BranchBatch[]>("list_branch_batches", {
+      const list = await invoke<DeliveryPlan[]>("list_delivery_plans", {
         projectId: pid,
         projectPath,
       });
@@ -92,11 +87,11 @@ export function BranchBatchView({
   );
 
   const handleOpen = useCallback(
-    async (batch: BranchBatch) => {
+    async (batch: DeliveryPlan) => {
       setBusyId(batch.id);
       setNotice("");
       try {
-        await invoke("open_branch_batch_worktree", { projectPath, projectId, batchId: batch.id });
+        await invoke("open_delivery_plan_worktree", { projectPath, projectId, batchId: batch.id });
       } catch (e) {
         setNotice(String(e));
       } finally {
@@ -107,7 +102,7 @@ export function BranchBatchView({
   );
 
   const handleDelete = useCallback(
-    async (batch: BranchBatch) => {
+    async (batch: DeliveryPlan) => {
       const inMainCheckout = batch.useWorktree === false;
       const ok = await appConfirm(
         inMainCheckout
@@ -119,7 +114,7 @@ export function BranchBatchView({
       setBusyId(batch.id);
       setNotice("");
       try {
-        await invoke("delete_branch_batch", { projectPath, projectId, batchId: batch.id, shellOpen });
+        await invoke("delete_delivery_plan", { projectPath, projectId, batchId: batch.id, shellOpen });
         onScopeChange("");
         const list = await load(projectId);
         // 远端分支仍存在时后端只关批不移除记录，明示这个结果避免「删了没反应」的困惑。
@@ -135,9 +130,9 @@ export function BranchBatchView({
     [projectPath, projectId, load, onScopeChange, shellOpen],
   );
 
-  const canSubmit = (batch: BranchBatch) => batch.status === "active";
+  const canSubmit = (batch: DeliveryPlan) => batch.status === "active";
 
-  const renderBatchCard = (batch: BranchBatch, missing = false) => {
+  const renderBatchCard = (batch: DeliveryPlan, missing = false) => {
     // 无 worktree 的批分支就在主检出里，只有「打开」的落点不同。
     const inMainCheckout = batch.useWorktree === false;
     return (
@@ -156,18 +151,12 @@ export function BranchBatchView({
           Date.now() - batch.createdAt > OVERDUE_MS && (
             <span className="pr-badge" data-tone="warn">超期</span>
           )}
-        {batch.additions != null && batch.deletions != null && (
-          <span className="pr-metric">
-            <span className="pr-metric-add">+{batch.additions}</span>
-            <span className="pr-metric-del">-{batch.deletions}</span>
-          </span>
-        )}
       </div>
       <div className="pr-card-sub">
         <span className="pr-card-mono">{batch.branch}</span>
         <span>← {batch.baseBranch}</span>
         <span>→ {batch.targetBranch || "（未指定合并目标）"}</span>
-        <span>{(batch.taskIds ?? []).length} 个议题</span>
+        <span>{batch.issues.length} 个议题</span>
       </div>
       <div className="pr-card-actions">
         <button
@@ -247,7 +236,7 @@ export function BranchBatchView({
       </div>
 
       {showCreate && (
-        <CreateBranchBatchDialog
+        <CreatePlanDialog
           projectId={projectId}
           projectPath={projectPath}
           repoPath={repoPath}

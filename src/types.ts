@@ -123,45 +123,40 @@ export type TaskStatus =
  *  project=上线验收/项目分支，hotfix=补丁容器。 */
 export type BranchKind = "feature" | "fix" | "patch" | "project" | "hotfix";
 
-/** 分支批 = 一个可独立验收的 PR（一个批对应一个分支，批内任务顺序共用）。
- *  默认只在主工作区切出批分支；选择另建 worktree 才有独立代码目录。 */
-export interface BranchBatch {
+/** 交付计划（DeliveryPlan）= 一个可独立交付的单元：一组有序云效议题成员＋一条分支
+ *  ＋可选一个 worktree＋至多一个 MR（由「分支批」升维而来）。
+ *  默认只在主工作区切出计划分支；选择另建 worktree 才有独立代码目录。 */
+export interface DeliveryPlan {
   id: string;
   projectId: string;
   name: string;
   kind: BranchKind;
-  /** 批的目标分支名（如 fix/v2.20260901/develop/锁号地址挂号异常问题）。 */
+  /** 计划的源分支名（如 fix/v2.20260901/develop/锁号地址挂号异常问题）。 */
   branch: string;
   /** 基础分支（如 develop / master 的 tag），分支由此切出。 */
   baseBranch: string;
   /** 合并回的目标分支（通常为 develop 或 master）；允许为空 = 暂不指定合并目标（不能提交 MR / 合并回）。 */
   targetBranch: string;
-  /** 该批包含的议题任务 id 列表（顺序即验收批次内任务顺序）。 */
-  taskIds: string[];
-  /** draft | active | review | conflict | merged | closed */
-  status: BranchBatchStatus;
+  /** 成员＝云效议题快照（有序＝任务顺序）。取代旧 taskIds / issueSerialNumbers。 */
+  issues: PlanIssue[];
+  /** active | review | merged | closed */
+  status: DeliveryPlanStatus;
   createdAt: number;
-  /** 批量合并完成（closed）的时间戳。 */
+  /** 计划关闭（closed/merged）时间戳。 */
   closedAt?: number;
-  /** 相对 baseBranch merge-base 的累计新增行数。 */
-  additions?: number;
-  /** 相对 baseBranch merge-base 的累计删除行数。 */
-  deletions?: number;
-  /** 云效议题编号列表，用于 commit 门禁与回写（如 ["QHDK-29312"]）。 */
-  issueSerialNumbers?: string[];
-  /** Codeup 合并请求 id（提交 MR 成功后回填）。 */
+  /** Codeup 合并请求 id（提交 MR 成功后回填；存 localId）。 */
   mrId?: string;
-  /** Codeup 合并请求状态（提交后跟随 MR 状态回填）。 */
+  /** Codeup 合并请求状态（提交后跟随 MR 状态回填，计划详情展示）。 */
   mrStatus?: MrStatus;
   /** 创建时实际落盘的 worktree 路径（优先于硬编码推导，兼容共享 hub / 自定义基路径）。 */
   worktreePath?: string;
   /** worktree 所属 sub-repo 路径（多仓库工作区）。 */
   worktreeRepo?: string;
-  /** 该批是否另建 worktree；false（默认）表示批分支就在主工作区里。 */
+  /** 该计划是否另建 worktree；false（默认）表示计划分支就在主工作区里。 */
   useWorktree?: boolean;
-  /** 列表实时探测：未关闭批次的工作树下缺少运行程序目录（`_run`）时为 true，仅提示不落盘。 */
+  /** 列表实时探测：未关闭计划的工作树下缺少运行程序目录（`_run`）时为 true，仅提示不落盘。 */
   runRootMissing?: boolean;
-  /** 列表实时探测：未关闭批次的 worktree 目录缺失时为 true，仅提示不落盘。 */
+  /** 列表实时探测：未关闭计划的 worktree 目录缺失时为 true，仅提示不落盘。 */
   worktreeMissing?: boolean;
   /** 提交 MR 时源分支 HEAD SHA。 */
   mrSourceSha?: string;
@@ -182,15 +177,8 @@ export type MrStatus =
   | "rejected"
   | "closed";
 
-export type BranchBatchStatus =
-  | "draft"
-  | "active"
-  | "review"
-  | "conflict"
-  | "approved"
-  | "merged"
-  | "rejected"
-  | "closed";
+/** 计划状态机（仅此 4 态有写者）：create→active、create_mr→review、merge→merged、delete/close→closed。 */
+export type DeliveryPlanStatus = "active" | "review" | "merged" | "closed";
 
 /** 跨项目聚合的 Codeup 合并请求（欢迎页合并审核用）。 */
 export interface CodeupMr {
@@ -372,8 +360,9 @@ export interface Task {
   worktreePath?: string;
   worktreeBranch?: string;
   baseBranch?: string;
-  /** 所属分支批 id；非空即该任务属于某个可独立验收批次。 */
-  batchId?: string;
+  /** 所属交付计划 id；非空即该任务强制落在计划分支/worktree 上（不可改）。
+   *  读侧兼容遗留 batchId 键（存量 JSON），后端反序列化时已映射。 */
+  deliveryPlanId?: string;
   /** 该任务所在分支的类型；缺省跟随批或视为 feature。 */
   branchKind?: BranchKind;
   /** worktree 所属的 sub-repo 路径（多仓库工作区中追踪 worktree 归属于哪个 git 根）。

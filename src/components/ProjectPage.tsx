@@ -4,7 +4,7 @@ import { Columns2, Maximize2 } from "lucide-react";
 import type {
   Project,
   Task,
-  BranchBatch,
+  DeliveryPlan,
   AgentType,
   PermissionMode,
   Plan,
@@ -46,7 +46,7 @@ import { ProjectRail } from "./ProjectRail";
 import { SettingsDialog } from "./SettingsDialog";
 import { RightToolbar } from "./RightToolbar";
 import { KnowledgePanel } from "./knowledge/KnowledgePanel";
-import { BranchBatchView } from "./branch-batch/BranchBatchView";
+import { DeliveryPlanView } from "./branch-batch/DeliveryPlanView";
 import { WorktreeScopeSelect } from "./branch-batch/WorktreeScopeSelect";
 import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
 import { TodoTaskView } from "./TodoTaskView";
@@ -329,7 +329,7 @@ export function ProjectPage({
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [taskPanelCollapsed, setTaskPanelCollapsed] = useState(false);
   const [mountedTaskIds, setMountedTaskIds] = useState<Set<string>>(() => new Set());
-  const [batches, setBatches] = useState<BranchBatch[]>([]);
+  const [batches, setBatches] = useState<DeliveryPlan[]>([]);
   const [worktreeScope, setWorktreeScope] = useState<string>("");
   // 方案预览面板当前展示的方案 id（顶栏「方案」按钮 / PlanTaskView 预览入口写入）。
   const [planPreviewId, setPlanPreviewId] = useState<string | null>(null);
@@ -360,7 +360,7 @@ export function ProjectPage({
 
   const loadBatches = useCallback(async () => {
     try {
-      const list = await invoke<BranchBatch[]>("list_branch_batches", {
+      const list = await invoke<DeliveryPlan[]>("list_delivery_plans", {
         projectId: project.id,
         projectPath: project.path,
       });
@@ -1409,7 +1409,7 @@ export function ProjectPage({
           )}
           {rightPanel === "branch-batch" && (
             <ErrorBoundary label="创建PR">
-              <BranchBatchView
+              <DeliveryPlanView
                 projectPath={project.path}
                 projectId={project.id}
                 repoPath={subRepoPath}
