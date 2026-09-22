@@ -82,6 +82,38 @@ impl TaskManager {
         children.remove(id);
     }
 
+    /// 空 `TaskManager`，仅供单元测试构造（生产侧由 Tauri `manage` 组装）。
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        TaskManager {
+            pty_masters: Mutex::new(HashMap::new()),
+            pty_writers: Mutex::new(HashMap::new()),
+            child_handles: Mutex::new(HashMap::new()),
+            cancelled_tasks: Mutex::new(HashSet::new()),
+            manually_completed_tasks: Mutex::new(HashSet::new()),
+            codex_sessions: Mutex::new(HashMap::new()),
+            claude_sessions: Mutex::new(HashMap::new()),
+            dsh_sessions: Mutex::new(HashMap::new()),
+            claimed_session_paths: Mutex::new(HashSet::new()),
+            task_names: Mutex::new(HashMap::new()),
+            task_real_paths: Mutex::new(HashMap::new()),
+            sediment_expected: Mutex::new(HashSet::new()),
+            terminal_ready: Mutex::new(HashMap::new()),
+            codex_rpc: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// 原子取走「本次启动要求产出沉淀产物」标记；只有先到者拿到 `true`。
+    ///
+    /// 两条收尾路径（`finalize_task_exit` 自然退出 / `complete_task` 手动完成）都
+    /// 必须先调它再决定是否跑沉淀——用户点「标记已完成」会 kill 子进程，随后 exit
+    /// monitor 醒来的 `finalize_task_exit` 是第二次收尾。若两边都无条件跑沉淀，
+    /// 同一次的 `knowledge.json` 会被消费两遍：第一遍写图谱、第二遍要么命中去重
+    /// 被判重复，要么在产物已被处理的情况下重复开销。取走即消费，天然幂等。
+    pub(crate) fn take_sediment_marker(&self, task_id: &str) -> bool {
+        self.sediment_expected.lock().remove(task_id)
+    }
+
     /// 退出前终止所有仍在运行的任务/Shell 子进程。
     /// 托盘「退出」走 `app.exit(0)`(即 `std::process::exit`,不跑 Drop),
     /// 没有这一步会把正在跑的 claude/codex 子进程留成孤儿,继续占用 CPU / API 额度。
@@ -616,4 +648,44 @@ pub fn run() {
                 show_main_window(_app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod task_manager_tests {
+    use super::*;
+
+    /// 沉淀标记必须**只被消费一次**。手动完成（`complete_task`）与自然退出
+    /// （`finalize_task_exit`）都会收尾同一个 task_id：用户点「标记已完成」kill 子进程
+    /// 后，exit monitor 还会再跑一次 `finalize_task_exit`。若两条路径都能拿到标记，
+    /// 同一份 `knowledge.json` 会被消费两遍。这里钉住「先到者拿走、后到者拿不到」。
+    #[test]
+    fn sediment_marker_is_consumed_exactly_once() {
+        let tm = TaskManager::empty_for_test();
+        tm.sediment_expected.lock().insert("t1".to_string());
+
+        // 先到的收尾路径（此处模拟手动完成）拿到标记。
+        assert!(tm.take_sediment_marker("t1"), "首个收尾路径应拿到标记");
+        // 后到的收尾路径（exit monitor 的 finalize_task_exit）不得再拿到。
+        assert!(!tm.take_sediment_marker("t1"), "第二个收尾路径不得重复消费");
+        // 标记已移除，不残留脏值（同 id 重启时由 run_task/resume_task 覆写）。
+        assert!(!tm.sediment_expected.lock().contains("t1"));
+    }
+
+    /// 未要求产出的任务从来拿不到标记 ⇒ 收尾时不会跑沉淀（避免「未产出」被误报为漏产出）。
+    #[test]
+    fn sediment_marker_absent_for_non_sediment_tasks() {
+        let tm = TaskManager::empty_for_test();
+        assert!(!tm.take_sediment_marker("plain-task"));
+    }
+
+    /// 标记按 task_id 隔离：一个任务的收尾不得消费掉另一个任务的标记。
+    #[test]
+    fn sediment_marker_is_scoped_per_task() {
+        let tm = TaskManager::empty_for_test();
+        tm.sediment_expected.lock().insert("a".to_string());
+        tm.sediment_expected.lock().insert("b".to_string());
+        assert!(tm.take_sediment_marker("a"));
+        assert!(!tm.take_sediment_marker("a"));
+        assert!(tm.take_sediment_marker("b"), "另一任务的标记不应被连带消费");
+    }
 }
