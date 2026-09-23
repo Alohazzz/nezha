@@ -107,7 +107,7 @@ export function PlanPanel({
       await invoke("open_delivery_plan_worktree", {
         projectPath: project.path,
         projectId: project.id,
-        planId: selected.id,
+        batchId: selected.id,
       });
     } catch (e) {
       setNotice(String(e));
@@ -127,7 +127,7 @@ export function PlanPanel({
       await invoke("delete_delivery_plan", {
         projectPath: project.path,
         projectId: project.id,
-        planId: selected.id,
+        batchId: selected.id,
         shellOpen: false,
       });
       const list = await invoke<DeliveryPlan[]>("list_delivery_plans", {
