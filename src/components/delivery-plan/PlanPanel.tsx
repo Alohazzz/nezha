@@ -4,6 +4,7 @@ import { FolderOpen, Plus, Send, Trash2 } from "lucide-react";
 import { appConfirm } from "../AppConfirmDialog";
 import type {
   DeliveryPlan,
+  DeliveryPlanStatus,
   Plan,
   Project,
   Task,
@@ -56,6 +57,7 @@ export function PlanPanel({
   onOpenWorkitem?: (workitemId: string) => void;
 }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [statusFilter, setStatusFilter] = useState<DeliveryPlanStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<string>("");
   const [showCreate, setShowCreate] = useState(false);
   const [submitPlan, setSubmitPlan] = useState<DeliveryPlan | null>(null);
@@ -65,8 +67,11 @@ export function PlanPanel({
   const [notice, setNotice] = useState("");
 
   const scopedPlans = useMemo(
-    () => deliveryPlans.filter((p) => p.projectId === projectId),
-    [deliveryPlans, projectId],
+    () =>
+      deliveryPlans.filter(
+        (p) => p.projectId === projectId && (statusFilter === "all" || p.status === statusFilter),
+      ),
+    [deliveryPlans, projectId, statusFilter],
   );
   const selected = useMemo(
     () => scopedPlans.find((p) => p.id === selectedId) ?? scopedPlans[0],
@@ -186,6 +191,18 @@ export function PlanPanel({
 
       <div style={s.dpBody}>
         <div style={s.dpSide}>
+          {/* 创建计划置顶（反馈 #2）。 */}
+          <div style={s.dpSideFilter}>
+            <button
+              type="button"
+              style={s.dpBtnPrimaryBlock}
+              onClick={() => setShowCreate(true)}
+              disabled={!project}
+            >
+              <Plus size={13} />
+              创建计划
+            </button>
+          </div>
           <div style={s.dpSideFilter}>
             <SelectField
               value={projectId}
@@ -197,7 +214,25 @@ export function PlanPanel({
               placeholder="选择项目"
             />
           </div>
-          {scopedPlans.length === 0 && <div style={s.dpEmpty}>本项目暂无计划</div>}
+          {/* 状态过滤（反馈 #1）。 */}
+          <div style={s.dpSideFilter}>
+            <SelectField
+              value={statusFilter}
+              onChange={(v) => {
+                setStatusFilter(v as DeliveryPlanStatus | "all");
+                setSelectedId("");
+              }}
+              options={[
+                { value: "all", label: "状态：全部" },
+                { value: "active", label: "状态：进行中" },
+                { value: "review", label: "状态：待评审" },
+                { value: "merged", label: "状态：已合并" },
+                { value: "closed", label: "状态：已关闭" },
+              ]}
+              placeholder="状态：全部"
+            />
+          </div>
+          {scopedPlans.length === 0 && <div style={s.dpEmpty}>无匹配计划</div>}
           {scopedPlans.map((p) => (
             <button
               key={p.id}
@@ -205,21 +240,16 @@ export function PlanPanel({
               style={p.id === selected?.id ? s.dpListItemActive : s.dpListItem}
               onClick={() => setSelectedId(p.id)}
             >
-              {p.name}
+              {/* 状态标识（反馈 #1）：色调同详情头。 */}
+              <span style={s.dpListItemTop}>
+                <span style={s.dpListItemName}>{p.name}</span>
+                <span style={dpChipToneStyle[PLAN_STATUS_TONE[p.status]]}>
+                  {PLAN_STATUS_LABEL[p.status]}
+                </span>
+              </span>
               <span style={s.dpListItemBranch}>{p.branch}</span>
             </button>
           ))}
-          <div style={s.dpSideFooter}>
-            <button
-              type="button"
-              style={s.dpBtnPrimaryBlock}
-              onClick={() => setShowCreate(true)}
-              disabled={!project}
-            >
-              <Plus size={13} />
-              创建计划
-            </button>
-          </div>
         </div>
 
         <div style={s.dpMain}>

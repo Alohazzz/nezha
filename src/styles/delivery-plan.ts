@@ -9,6 +9,10 @@ const deliveryPlan = {
   dpRoot: {
     display: "flex" as const,
     flexDirection: "column" as const,
+    // 撑满 welcomeMain 的剩余宽度：缺 flex:1 会被内容宽度收缩（不自适应全屏）。
+    flex: 1,
+    width: "100%",
+    minWidth: 0,
     height: "100%",
     minHeight: 0,
   },
@@ -70,6 +74,21 @@ const deliveryPlan = {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap" as const,
+  },
+  /** 列表项首行：计划名（省略号）＋ 状态标识 chip。 */
+  dpListItemTop: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    width: "100%",
+  },
+  dpListItemName: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    textAlign: "left" as const,
   },
   dpMain: {
     flex: 1,
