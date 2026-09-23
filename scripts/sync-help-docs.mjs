@@ -29,7 +29,7 @@ const ENTRIES = [
 /** 文档里引用的截图目录，逐图校验可发现断链。 */
 const REQUIRED_ASSETS = [
   "screenshots/module-guide/01-build-panel.png",
-  "screenshots/module-guide/02-create-pr.png",
+  "screenshots/module-guide/02-create-plan-dark.png",
   "screenshots/module-guide/03-merge-hub.png",
   "screenshots/module-guide/04-knowledge-panel.png",
   "screenshots/module-guide/05-knowledge-graph-settings.png",
@@ -41,6 +41,7 @@ const REQUIRED_ASSETS = [
   "screenshots/module-guide/11-pending-mr-create-dialog-light.png",
   "screenshots/module-guide/12-pending-mr-delete-dialog-dark.png",
   "screenshots/module-guide/13-pending-mr-delete-dialog-light.png",
+  "screenshots/module-guide/14-plan-view-dark.png",
   "screenshots/yunxiao-launch-mode/01-issue-list-entries.png",
   "screenshots/yunxiao-launch-mode/02-direct-req-default.png",
   "screenshots/yunxiao-launch-mode/03-direct-req-clarify.png",
