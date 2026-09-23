@@ -162,6 +162,7 @@ export function badgesFor(branch: PendingBranchCandidate, mrOk: boolean): Pendin
   if (branch.openMrConflict) badges.push({ text: "有冲突", tone: "danger" });
   if (branch.mine) badges.push({ text: "我的提交", tone: "accent" });
   if (branch.protected) badges.push({ text: "受保护", tone: "neutral" });
+  if (branch.remoteOnly) badges.push({ text: "仅远端", tone: "neutral" });
   if (!branch.pushed) badges.push({ text: "未推送", tone: "warning" });
   if (branch.dataMissing) badges.push({ text: "数据缺失", tone: "warning" });
   return badges;

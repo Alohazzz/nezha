@@ -10,11 +10,10 @@ import type {
 import { EMPTY_YUNXIAO_SETTINGS } from "../app-settings/types";
 import { SelectField } from "../yunxiao/SelectField";
 import type {
-  BranchBatch,
+  DeliveryPlan,
   BranchConflictCheck,
   BranchKind,
   PendingBranchRepoRef,
-  Task,
   YunxiaoVersion,
 } from "../../types";
 import s from "../../styles";
@@ -32,19 +31,17 @@ export function normalizeVersionSegment(name: string): string {
   return name.trim().replace(/\.0$/, "");
 }
 
-export function CreateBranchBatchDialog({
+export function CreatePlanDialog({
   projectId,
   projectPath,
   repoPath,
-  tasks,
   onCreated,
   onClose,
 }: {
   projectId: string;
   projectPath: string;
   repoPath: string;
-  tasks: Task[];
-  onCreated: (batch: BranchBatch) => void;
+  onCreated: (batch: DeliveryPlan) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState("");
@@ -60,13 +57,12 @@ export function CreateBranchBatchDialog({
   const [useExistingRemote, setUseExistingRemote] = useState(false);
   const [remoteConflict, setRemoteConflict] = useState(false);
   const [localConflict, setLocalConflict] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const manualBranchRef = useRef(false);
 
-  // 多子仓库工作区（主仓库 + .gitmodules）：创建者要能选批分支落在哪个仓库上。
+  // 多子仓库工作区（主仓库 + .gitmodules）：创建者要能选计划分支落在哪个仓库上。
   // repoPath 只在入仓时求值一次，后续切换走本地的 selectedRepo 状态。
   const [repoOptions, setRepoOptions] = useState<PendingBranchRepoRef[]>([]);
   const [selectedRepo, setSelectedRepo] = useState(repoPath);
@@ -127,7 +123,7 @@ export function CreateBranchBatchDialog({
   // 切换仓库后重新取默认值（不同子仓库可配置不同的 worktree 基路径）。
   useEffect(() => {
     let cancelled = false;
-    invoke<string>("get_branch_batch_worktree_base", { projectPath, repoPath: selectedRepo })
+    invoke<string>("get_delivery_plan_worktree_base", { projectPath, repoPath: selectedRepo })
       .then((dir) => {
         if (!cancelled) setWorktreeDir(dir);
       })
@@ -156,12 +152,12 @@ export function CreateBranchBatchDialog({
     };
   }, [projectPath, selectedRepo]);
 
-  // 源分支名由后端统一生成（与 create_branch_batch 同源），前端只做展示。
+  // 源分支名由后端统一生成（与 create_delivery_plan 同源），前端只做展示。
   // 用户手动改过之后不再自动覆盖。
   useEffect(() => {
     if (manualBranchRef.current) return;
     let cancelled = false;
-    invoke<string>("preview_branch_batch_branch", {
+    invoke<string>("preview_delivery_plan_branch", {
       kind,
       version: version.trim() || null,
       targetBranch: targetBranch.trim() || null,
@@ -175,11 +171,6 @@ export function CreateBranchBatchDialog({
       cancelled = true;
     };
   }, [kind, version, targetBranch, name]);
-
-  const projectTasks = useMemo(
-    () => tasks.filter((t) => t.projectId === projectId),
-    [tasks, projectId],
-  );
 
   const versionOptions = useMemo(
     () =>
@@ -199,18 +190,9 @@ export function CreateBranchBatchDialog({
   };
 
   const handleNameChange = (value: string) => {
-    // 改批名即恢复自动生成：源分支跟着批名走（与手改后不覆盖的规则一致）。
+    // 改计划名即恢复自动生成：源分支跟着计划名走（与手改后不覆盖的规则一致）。
     manualBranchRef.current = false;
     setName(value);
-  };
-
-  const toggle = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   const checkRemote = useCallback(async () => {
@@ -218,7 +200,7 @@ export function CreateBranchBatchDialog({
     setChecking(true);
     setError("");
     try {
-      const check = await invoke<BranchConflictCheck>("check_branch_batch_branch", {
+      const check = await invoke<BranchConflictCheck>("check_delivery_plan_branch", {
         projectPath,
         repoPath: selectedRepo,
         branch: sourceBranch.trim(),
@@ -267,7 +249,7 @@ export function CreateBranchBatchDialog({
     setBusy(true);
     setError("");
     try {
-      const batch = await invoke<BranchBatch>("create_branch_batch", {
+      const batch = await invoke<DeliveryPlan>("create_delivery_plan", {
         projectPath,
         repoPath: selectedRepo,
         projectId,
@@ -276,7 +258,7 @@ export function CreateBranchBatchDialog({
         kind,
         baseBranch: baseBranch.trim(),
         targetBranch: targetBranch.trim(),
-        taskIds: Array.from(selected),
+        issues: [],
         sourceBranch: sourceBranch.trim(),
         useExistingRemote,
         worktreeDir: useWorktree ? worktreeDir.trim() : null,
@@ -295,7 +277,7 @@ export function CreateBranchBatchDialog({
   return (
     <div style={s.bbDialogOverlay}>
       <div style={s.bbDialog}>
-        <div style={s.bbDialogTitle}>创建 PR</div>
+        <div style={s.bbDialogTitle}>创建计划</div>
 
         {repoOptions.length > 1 && (
           <div style={s.bbField}>
@@ -317,7 +299,7 @@ export function CreateBranchBatchDialog({
         )}
 
         <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>批名称</span>
+          <span style={s.bbFieldLabel}>计划名称</span>
           <input
             style={s.bbInput}
             value={name}
@@ -465,19 +447,6 @@ export function CreateBranchBatchDialog({
           />
         </div>
 
-        <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>选择议题（构成一个可验收批次，顺序即任务顺序）</span>
-          <div style={s.bbMemberList}>
-            {projectTasks.length === 0 && <div style={s.bbMember}>暂无可选任务</div>}
-            {projectTasks.map((task) => (
-              <label key={task.id} style={s.bbMember}>
-                <input type="checkbox" checked={selected.has(task.id)} onChange={() => toggle(task.id)} />
-                <span style={s.bbCardMono}>{task.name || task.prompt.slice(0, 24)}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
         <label style={s.bbCheckRow}>
           <input
             type="checkbox"
@@ -486,7 +455,7 @@ export function CreateBranchBatchDialog({
           />
           另建 worktree（并行隔离用）
           <span style={s.bbCheckHint}>
-            {useWorktree ? "批分支落在独立代码目录" : "批分支直接切在主工作区"}
+            {useWorktree ? "计划分支落在独立代码目录" : "计划分支直接切在主工作区"}
           </span>
         </label>
 
@@ -532,8 +501,8 @@ export function CreateBranchBatchDialog({
             {busy
               ? "创建中…"
               : useWorktree
-                ? "创建批 + 分支 + worktree"
-                : "创建批 + 分支"}
+                ? "创建计划 + 分支 + worktree"
+                : "创建计划 + 分支"}
           </button>
         </div>
       </div>

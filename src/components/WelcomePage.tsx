@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
-import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, GitPullRequestArrow, BarChart3, BookOpen } from "lucide-react";
+import { Search, FolderOpen, Layers, Plus, Clock, Blocks, Cloud, GitMerge, GitPullRequestArrow, BarChart3, BookOpen, ListChecks } from "lucide-react";
 import type {
+  DeliveryPlan,
   Project,
   Task,
   CodeupMr,
@@ -21,6 +22,7 @@ import type { ProjectRenameResult } from "../projectName";
 import { SidebarFooterActions } from "./SidebarFooterActions";
 import { OPEN_APP_SETTINGS_EVENT } from "./app-settings/types";
 import { TimelineView } from "./TimelineView";
+import { PlanPanel } from "./delivery-plan/PlanPanel";
 import { WeeklyReportView } from "./weekly-report/WeeklyReportView";
 import { YunxiaoView } from "./yunxiao/YunxiaoView";
 import type { DirectLaunchOptions } from "./yunxiao/DirectLaunchDialog";
@@ -117,6 +119,8 @@ export function WelcomePage({
   onCancelYunxiaoPlan,
   onSetYunxiaoPlanParent,
   plans,
+  deliveryPlans,
+  onDeliveryPlansChange,
 }: {
   projects: Project[];
   allProjects: Project[];
@@ -163,10 +167,15 @@ export function WelcomePage({
   /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
   onSetYunxiaoPlanParent: (planId: string, parentPlanId: string | undefined) => void;
   plans: Plan[];
+  /** 交付计划（DeliveryPlan）：欢迎页「计划」视图展示＋任务绑定源。 */
+  deliveryPlans: DeliveryPlan[];
+  onDeliveryPlansChange: (plans: DeliveryPlan[]) => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [view, setView] = useState<"projects" | "timeline" | "skills" | "yunxiao" | "codeup" | "pendingMr" | "weekly" | "help">(
+  const [view, setView] = useState<
+    "projects" | "timeline" | "skills" | "deliveryPlan" | "yunxiao" | "codeup" | "pendingMr" | "weekly" | "help"
+  >(
     "projects",
   );
 
@@ -211,6 +220,12 @@ export function WelcomePage({
               label={t("welcome.skillHub")}
               active={view === "skills"}
               onClick={() => setView("skills")}
+            />
+            <SidebarItem
+              icon={<ListChecks size={15} />}
+              label={t("welcome.plans")}
+              active={view === "deliveryPlan"}
+              onClick={() => setView("deliveryPlan")}
             />
             <SidebarItem
               icon={<Cloud size={15} />}
@@ -281,7 +296,17 @@ export function WelcomePage({
             onStartCodeupTask={onStartCodeupTask}
           />
         ) : view === "pendingMr" ? (
-          <PendingMrView projects={allProjects} onBack={() => setView("projects")} />
+          <PendingMrView projects={allProjects} deliveryPlans={deliveryPlans} onBack={() => setView("projects")} />
+        ) : view === "deliveryPlan" ? (
+          <PlanPanel
+            projects={allProjects}
+            tasks={tasks}
+            plans={plans}
+            deliveryPlans={deliveryPlans}
+            onDeliveryPlansChange={onDeliveryPlansChange}
+            onGoYunxiao={() => setView("yunxiao")}
+            onStartDirectExecution={onStartYunxiaoDirectExecution}
+          />
         ) : view === "yunxiao" ? (
           <YunxiaoView
             projects={allProjects}
@@ -293,6 +318,8 @@ export function WelcomePage({
             onStartDirectExecution={onStartYunxiaoDirectExecution}
             onCancelPlan={onCancelYunxiaoPlan}
             onSetParentPlan={onSetYunxiaoPlanParent}
+            deliveryPlans={deliveryPlans}
+            onDeliveryPlansChange={onDeliveryPlansChange}
           />
         ) : view === "timeline" ? (
           <TimelineView

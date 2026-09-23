@@ -510,7 +510,7 @@ export function RunningView({
           task.worktreePath &&
           task.worktreeBranch &&
           !task.worktreeDiscarded &&
-          !task.batchId &&
+          !task.deliveryPlanId &&
           !isCodeupMrTask &&
           onMergeWorktree && (
             <button
@@ -541,7 +541,7 @@ export function RunningView({
           task.worktreePath &&
           task.worktreeBranch &&
           !task.worktreeDiscarded &&
-          !task.batchId &&
+          !task.deliveryPlanId &&
           onDiscardWorktree && (
           <button
             style={{

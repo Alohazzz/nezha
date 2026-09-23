@@ -1,10 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ProjectPage } from "../components/ProjectPage";
-import { ToastProvider } from "../components/Toast";
-import { NotificationsProvider } from "../hooks/useNotifications";
-import { DEFAULT_APP_SETTINGS } from "../components/app-settings/types";
+import { PlanPanel } from "../components/delivery-plan/PlanPanel";
 import { I18nProvider } from "../i18n";
 import type { Project } from "../types";
 
@@ -14,31 +11,9 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => undefined)),
-}));
-
-vi.mock("@tauri-apps/api/webview", () => ({
-  getCurrentWebview: () => ({
-    onDragDropEvent: () => Promise.resolve(() => undefined),
-  }),
-}));
-
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({
-    isVisible: () => Promise.resolve(true),
-    listen: () => Promise.resolve(() => undefined),
-    onDragDropEvent: () => Promise.resolve(() => undefined),
-  }),
-}));
-
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn().mockResolvedValue(true),
   open: vi.fn().mockResolvedValue(null),
-}));
-
-vi.mock("../components/RunningView", () => ({
-  RunningView: () => <div data-testid="running-view-stub" />,
 }));
 
 const project: Project = {
@@ -49,7 +24,6 @@ const project: Project = {
 };
 
 const settingsWithYunxiao = {
-  ...DEFAULT_APP_SETTINGS,
   yunxiao: {
     token: "pt-test",
     organizationId: "org-1",
@@ -57,86 +31,23 @@ const settingsWithYunxiao = {
   },
 };
 
-function noop() {
-  /* event sink */
-}
-
-function renderPage() {
+function renderPanel() {
   return render(
     <I18nProvider>
-      <NotificationsProvider>
-        <ToastProvider>
-          <ProjectPage
-            project={project}
-            tasks={[]}
-            getTaskRestoreState={() => ({})}
-            taskRunCounts={{}}
-            selectedTaskId={null}
-            isNewTask
-            onNewTask={noop}
-            onSelectTask={noop}
-            onDeleteTask={noop}
-            onDeleteAllTasks={noop}
-            onToggleTaskStar={noop}
-            onRenameTask={noop}
-            onGenerateTaskName={vi.fn().mockResolvedValue(undefined)}
-            onSubmitTask={noop}
-            onRunTodoTask={noop}
-            onUpdateTodo={noop}
-            onStartTodoYunxiaoDiscussion={noop}
-            onStartTodoYunxiaoDirect={noop}
-            todoDiscussionStarting={false}
-            onGenerateWritebackSummary={vi.fn()}
-            onWritebackYunxiao={vi.fn()}
-            onRetryWritebackScoreField={vi.fn()}
-            knowledgeResults={{}}
-            sedimentingTasks={{}}
-            plans={[]}
-            onGeneratePlanTodos={vi.fn()}
-            onRebindTaskPlan={vi.fn()}
-            onDeletePlan={vi.fn()}
-            onCancelTask={noop}
-            onResumeTask={noop}
-            onResumeTaskAndSend={noop}
-            onForkTask={noop}
-            onMergeWorktree={vi.fn()}
-            onDiscardWorktree={vi.fn()}
-            onReconnectTask={noop}
-            onMarkTaskDone={noop}
-            onInput={noop}
-            onResize={noop}
-            onRegisterTerminal={() => 0}
-            onTerminalReady={noop}
-            onSnapshot={noop}
-            onBack={noop}
-            onSwitchProject={noop}
-            onCommitProjectOrder={vi.fn()}
-            onOpen={noop}
-            themeVariant="dark"
-            themeMode="dark"
-            systemPrefersDark
-            onThemeModeChange={noop}
-            onToggleTheme={noop}
-            terminalFontSize={12}
-            onTerminalFontSizeChange={noop}
-            taskDisplayWindow={3}
-            onTaskDisplayWindowChange={noop}
-            attentionBadge={false}
-            onAttentionBadgeChange={noop}
-            terminalScrollback={1000}
-            onTerminalScrollbackChange={noop}
-            uiFontFamily="system-ui"
-            onUiFontFamilyChange={noop}
-            monoFontFamily="monospace"
-            onMonoFontFamilyChange={noop}
-          />
-        </ToastProvider>
-      </NotificationsProvider>
+      <PlanPanel
+        projects={[project]}
+        tasks={[]}
+        plans={[]}
+        deliveryPlans={[]}
+        onDeliveryPlansChange={() => undefined}
+        onGoYunxiao={() => undefined}
+        onStartDirectExecution={() => undefined}
+      />
     </I18nProvider>,
   );
 }
 
-describe("创建 PR 弹窗内的 Radix 下拉", () => {
+describe("创建计划弹窗内的 Radix 下拉", () => {
   beforeEach(() => {
     window.localStorage.clear();
     invokeMock.mockReset();
@@ -149,25 +60,15 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
             { id: "v-1", name: "v2.20260901.0" },
             { id: "v-2", name: "v2.20260501.0" },
           ]);
-        case "read_project_config":
-          return Promise.resolve({ agent: {} });
-        case "get_hook_readiness":
+        case "list_branch_pr_repos":
           return Promise.resolve([]);
-        case "list_project_files":
-          return Promise.resolve([]);
-        case "discover_git_roots":
-          return Promise.resolve([]);
-        case "read_file_content":
-          return Promise.reject(new Error("not found"));
-        case "list_branch_batches":
+        case "list_delivery_plans":
           return Promise.resolve([]);
         case "git_list_branches":
           return Promise.resolve([]);
-        case "watch_dir":
-          return Promise.resolve(false);
-        case "get_branch_batch_worktree_base":
+        case "get_delivery_plan_worktree_base":
           return Promise.resolve("H:/workspace/worktrees");
-        case "preview_branch_batch_branch":
+        case "preview_delivery_plan_branch":
           return Promise.resolve("feature/v2.20260901/develop/锁号");
         default:
           return Promise.resolve(null);
@@ -175,14 +76,13 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     });
   });
 
-  it("点下拉项不会把弹窗（以及面板）关掉", async () => {
+  it("点下拉项不会把弹窗关掉", async () => {
     const user = userEvent.setup();
-    renderPage();
+    renderPanel();
 
-    // 打开右侧 PR 面板（悬浮，未固定 → 外部点击会自动收起）。
-    await user.click(await screen.findByTitle("PR"));
-    await user.click(await screen.findByRole("button", { name: /新建 PR/ }));
-    expect(await screen.findByText("创建 PR")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /创建计划/ }));
+    // 「计划名称」字段出现＝弹窗已开（按钮与标题同名，避免 findByText 撞名）。
+    expect(await screen.findByText("计划名称")).toBeInTheDocument();
 
     // 展开版本下拉（内容 portal 到 body），选一项。
     const picker = await screen.findByRole("button", { name: /选择/ });
@@ -190,25 +90,24 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     await user.click(picker);
     await user.click(await screen.findByText("v2.20260901"));
 
-    // 回归点：点击 portal 出来的下拉项曾被判成「面板外点击」，连带卸载弹窗与面板。
+    // 回归点：点击 portal 出来的下拉项曾被判成「面板外点击」，连带卸载弹窗。
     await waitFor(() => {
-      expect(screen.getByText("创建 PR")).toBeInTheDocument();
+      expect(screen.getByText("计划名称")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /取消/ })).toBeInTheDocument();
     });
   });
 
   it("目标分支段由 targetBranch 决定（留空则不带出），且没有「是否带目标分支段」的开关", async () => {
     const user = userEvent.setup();
-    renderPage();
+    renderPanel();
 
-    await user.click(await screen.findByTitle("PR"));
-    await user.click(await screen.findByRole("button", { name: /新建 PR/ }));
-    await screen.findByText("创建 PR");
+    await user.click(await screen.findByRole("button", { name: /创建计划/ }));
+    await screen.findByText("计划名称");
 
     // 预览命令不再接收 includeTarget：目标分支段由 targetBranch 决定。
     // 目标分支默认留空（允许暂不指定合并目标），此时 preview 收到 null。
     await waitFor(() => {
-      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "preview_branch_batch_branch");
+      const call = invokeMock.mock.calls.find(([cmd]) => cmd === "preview_delivery_plan_branch");
       const args = call?.[1] as Record<string, unknown> | undefined;
       expect(args?.targetBranch).toBeNull();
       expect(args).not.toHaveProperty("includeTarget");
@@ -219,7 +118,7 @@ describe("创建 PR 弹窗内的 Radix 下拉", () => {
     await user.type(target, "develop");
     await waitFor(() => {
       const calls = invokeMock.mock.calls.filter(
-        ([cmd]) => cmd === "preview_branch_batch_branch",
+        ([cmd]) => cmd === "preview_delivery_plan_branch",
       );
       const args = calls[calls.length - 1]?.[1] as Record<string, unknown> | undefined;
       expect(args?.targetBranch).toBe("develop");

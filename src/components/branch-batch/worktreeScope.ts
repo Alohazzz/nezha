@@ -1,4 +1,4 @@
-import type { BranchBatch, Task } from "../../types";
+import type { DeliveryPlan, Task } from "../../types";
 
 export interface WorktreeScopeOption {
   key: string;
@@ -8,12 +8,12 @@ export interface WorktreeScopeOption {
 }
 
 /** 批次未记录 worktree 路径时，按旧版硬编码目录推导，保持历史批次可达。 */
-export function batchWorktreePath(batch: BranchBatch, projectPath: string): string {
+export function batchWorktreePath(batch: DeliveryPlan, projectPath: string): string {
   return batch.worktreePath ?? `${projectPath}/.nezha/worktrees/${batch.id}`;
 }
 
 /** 批归属的作用域：另建 worktree 的批归到 worktree 路径，否则归到主检出（空 key）。 */
-export function batchScopeKey(batch: BranchBatch, projectPath: string): string {
+export function batchScopeKey(batch: DeliveryPlan, projectPath: string): string {
   return batch.useWorktree === false ? "" : batchWorktreePath(batch, projectPath);
 }
 
@@ -24,7 +24,7 @@ export function buildWorktreeScopeOptions({
   projectPath,
 }: {
   tasks: Task[];
-  batches: BranchBatch[];
+  batches: DeliveryPlan[];
   projectPath: string;
 }): WorktreeScopeOption[] {
   const seen = new Set<string>();

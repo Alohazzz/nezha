@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
 import type {
+  DeliveryPlan,
   PendingBranchCandidate,
   PendingBranchRepoRef,
   PendingBranchRepoScan,
@@ -61,10 +62,13 @@ function overrideKey(repoPath: string, branch: string): string {
  */
 export function PendingMrView({
   projects,
+  deliveryPlans = [],
   onBack,
 }: {
   /** 工作区内的全部项目（每个项目下可能还有多个 git 仓库）。 */
   projects: Project[];
+  /** 交付计划已认领的分支不进候选（S6 边界），避免同分支双入口。 */
+  deliveryPlans?: DeliveryPlan[];
   onBack: () => void;
 }) {
   const [projectRepos, setProjectRepos] = useState<ProjectRepos[]>([]);
@@ -247,9 +251,17 @@ export function PendingMrView({
 
   // 目标分支的覆盖值由后端应用（它才知道合并状态与可删性怎么算），前端不再二次改写，
   // 否则会把后端标好的 `targetSource: "user"` 覆写成别的来源。
+  // 计划已认领的分支不在此出现（S6 边界）：有主交付走计划视图的「提交 MR」。
+  const claimedBranches = useMemo(
+    () => new Set(deliveryPlans.map((p) => p.branch)),
+    [deliveryPlans],
+  );
   const visible = useMemo(
-    () => sortCandidates(applyFilters(flattenScans(scans), { mineOnly, query })),
-    [scans, mineOnly, query],
+    () =>
+      sortCandidates(applyFilters(flattenScans(scans), { mineOnly, query })).filter(
+        (b) => !claimedBranches.has(b.branch),
+      ),
+    [scans, mineOnly, query, claimedBranches],
   );
 
   const visibleByKey = useMemo(() => new Map(visible.map((b) => [candidateKey(b), b])), [visible]);

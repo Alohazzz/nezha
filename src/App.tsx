@@ -26,7 +26,9 @@ import type {
   Plan,
   PlanIssue,
   PlanStatus,
+  DeliveryPlan,
 } from "./types";
+import { bindTaskToDeliveryPlan } from "./components/delivery-plan/bindTaskToPlan";
 import {
   isActiveTaskStatus,
   DEFAULT_TERMINAL_FONT_SIZE,
@@ -393,6 +395,7 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   // 多议题联合方案（全项目合并持有，按 projectId 过滤持久化，与 tasks 同构）。
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [deliveryPlans, setDeliveryPlans] = useState<DeliveryPlan[]>([]);
   // 方案依赖（planId → 已解析 deps.json）：看板的依赖摘要 + 运行时门禁用；缺省视为无依赖。
   const [planDeps, setPlanDeps] = useState<Record<string, PlanDeps | undefined>>({});
   // 项目级「方案待办并发上限」缓存（config.toml），缺省回退 DEFAULT_PLAN_MAX_CONCURRENT。
@@ -755,6 +758,21 @@ function App() {
         console.error(`[plans] load failed for ${loadedProjects[i].name}:`, result.reason);
       });
       setPlans(loadedPlans);
+      // 交付计划（DeliveryPlan）与方案同批加载；失败不阻断（不绑计划照常建任务）。
+      const dpResults = await Promise.allSettled(
+        loadedProjects.map((p) =>
+          invoke<DeliveryPlan[]>("list_delivery_plans", { projectId: p.id, projectPath: p.path }),
+        ),
+      );
+      const loadedDps: DeliveryPlan[] = [];
+      dpResults.forEach((result, i) => {
+        if (result.status === "fulfilled") {
+          loadedDps.push(...result.value);
+          return;
+        }
+        console.error(`[delivery-plans] load failed for ${loadedProjects[i].name}:`, result.reason);
+      });
+      setDeliveryPlans(loadedDps);
       // 方案依赖随方案同批加载；失败不阻断（按无依赖处理）。
       void refreshPlanDeps({ plans: loadedPlans, projects: loadedProjects, allPlans: loadedPlans });
       void refreshPlanMaxConcurrent(loadedProjects);
@@ -1298,13 +1316,16 @@ function App() {
     invokeRunTask(worktreeTask, worktreePath, [], [], project.path);
   }
 
-  /** 真正启动一个待办（PTY + 视图切换）。依赖门禁已由调用方判定。 */
+  /** 真正启动一个待办（PTY + 视图切换）。依赖门禁已由调用方判定。
+   *  计划内议题的待办在此强制绑定计划分支/worktree（S10：生成待办/存量导入启动时）。 */
   function beginTaskRun(task: Task, project: Project) {
+    const bound = bindTaskToDeliveryPlan(task, deliveryPlans);
     setTasks((prev) => {
       const next = prev.map((t) =>
         t.id === task.id
           ? {
               ...t,
+              ...bound,
               status: "pending" as TaskStatus,
               updatedAt: Date.now(),
               attentionRequestedAt: undefined,
@@ -1316,7 +1337,7 @@ function App() {
     });
     tm.resetTaskTerminal(task.id);
     updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
-    invokeRunTask(task, task.worktreePath ?? project.path, [], [], project.path);
+    invokeRunTask(bound, bound.worktreePath ?? project.path, [], [], project.path);
   }
 
   /** 把任务置为等待前置（不创建 PTY），用于启动拦截 / 队列。 */
@@ -1845,19 +1866,24 @@ function App() {
     const project = projects.find((p) => p.id === plan.projectId);
     if (!project) return;
     const now = Date.now();
-    const task: Task = {
-      id: `${now}`,
-      projectId: project.id,
-      name: buildPlanTaskName(plan.issues.map((i) => i.serialNumber)),
-      prompt,
-      agent,
-      permissionMode,
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-      planId,
-      yunxiaoPlanDiscussion: true,
-    };
+    // 讨论任务也绑定交付计划（只记归属不进 worktree）；多议题讨论经显式 workitemId 列表命中。
+    const task: Task = bindTaskToDeliveryPlan(
+      {
+        id: `${now}`,
+        projectId: project.id,
+        name: buildPlanTaskName(plan.issues.map((i) => i.serialNumber)),
+        prompt,
+        agent,
+        permissionMode,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+        planId,
+        yunxiaoPlanDiscussion: true,
+      },
+      deliveryPlans,
+      plan.issues.map((i) => i.workitemId),
+    );
     setTasks((prev) => {
       const next = [task, ...prev];
       persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2063,21 +2089,24 @@ function App() {
         instructions,
       });
 
-      // 5) 待办自身转为讨论任务并启动（项目根只读分析，不建 worktree）。
-      const updated: Task = {
-        ...task,
-        name: buildPlanTaskName([detail.serialNumber]),
-        prompt,
-        agent,
-        permissionMode,
-        model: agent === task.agent ? task.model : undefined,
-        reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
-        planId: plan.id,
-        yunxiaoPlanDiscussion: true,
-        status: "pending",
-        updatedAt: Date.now(),
-        attentionRequestedAt: undefined,
-      };
+      // 5) 待办自身转为讨论任务并启动（项目根只读分析，不进 worktree；只记计划归属）。
+      const updated: Task = bindTaskToDeliveryPlan(
+        {
+          ...task,
+          name: buildPlanTaskName([detail.serialNumber]),
+          prompt,
+          agent,
+          permissionMode,
+          model: agent === task.agent ? task.model : undefined,
+          reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
+          planId: plan.id,
+          yunxiaoPlanDiscussion: true,
+          status: "pending",
+          updatedAt: Date.now(),
+          attentionRequestedAt: undefined,
+        },
+        deliveryPlans,
+      );
       setTasks((prev) => {
         const next = prev.map((t) => (t.id === task.id ? updated : t));
         persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2134,19 +2163,23 @@ function App() {
       const now = Date.now();
       const taskId = `${now}`;
       createdTaskId = taskId;
-      const baseTask: Task = {
-        id: taskId,
-        projectId: project.id,
-        name: `${issue.serialNumber} ${issue.subject}`.trim() || undefined,
-        prompt: "",
-        agent,
-        permissionMode,
-        status: "pending",
-        createdAt: now,
-        updatedAt: now,
-        yunxiaoWorkitemId: issue.id,
-        yunxiaoSerialNumber: issue.serialNumber,
-      };
+      // 计划内议题强制绑定计划分支/worktree（S10）。
+      const baseTask: Task = bindTaskToDeliveryPlan(
+        {
+          id: taskId,
+          projectId: project.id,
+          name: `${issue.serialNumber} ${issue.subject}`.trim() || undefined,
+          prompt: "",
+          agent,
+          permissionMode,
+          status: "pending",
+          createdAt: now,
+          updatedAt: now,
+          yunxiaoWorkitemId: issue.id,
+          yunxiaoSerialNumber: issue.serialNumber,
+        },
+        deliveryPlans,
+      );
       setTasks((prev) => {
         const next = [baseTask, ...prev];
         persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2202,7 +2235,7 @@ function App() {
         persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
         return next;
       });
-      invokeRunTask(updated, project.path, [], [], project.path);
+      invokeRunTask(updated, updated.worktreePath ?? project.path, [], [], project.path);
     } catch (e) {
       const reason = String(e);
       showToast(t("yunxiao.direct.startFailed", { error: reason }), "error");
@@ -2291,20 +2324,23 @@ function App() {
         instructions,
       });
 
-      // 4) 待办原地转为直接执行任务并启动（当前工作区，不建 worktree）。
-      const updated: Task = {
-        ...task,
-        name: `${detail.serialNumber} ${detail.subject}`.trim() || task.name,
-        prompt,
-        agent,
-        permissionMode,
-        model: agent === task.agent ? task.model : undefined,
-        reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
-        yunxiaoSerialNumber: detail.serialNumber,
-        status: "pending",
-        updatedAt: Date.now(),
-        attentionRequestedAt: undefined,
-      };
+      // 4) 待办原地转为直接执行任务并启动（计划内议题强制绑定计划分支/worktree）。
+      const updated: Task = bindTaskToDeliveryPlan(
+        {
+          ...task,
+          name: `${detail.serialNumber} ${detail.subject}`.trim() || task.name,
+          prompt,
+          agent,
+          permissionMode,
+          model: agent === task.agent ? task.model : undefined,
+          reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
+          yunxiaoSerialNumber: detail.serialNumber,
+          status: "pending",
+          updatedAt: Date.now(),
+          attentionRequestedAt: undefined,
+        },
+        deliveryPlans,
+      );
       setTasks((prev) => {
         const next = prev.map((t) => (t.id === task.id ? updated : t));
         persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2312,7 +2348,7 @@ function App() {
       });
       updateProjectView(project.id, { selectedTaskId: task.id, isNewTask: false });
       tm.resetTaskTerminal(task.id);
-      invokeRunTask(updated, project.path, [], [], project.path);
+      invokeRunTask(updated, updated.worktreePath ?? project.path, [], [], project.path);
     } catch (e) {
       showToast(t("yunxiao.direct.startFailed", { error: String(e) }), "error");
     } finally {
@@ -3402,6 +3438,8 @@ function App() {
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleRemovePlanRecord}
             plans={plans}
+            deliveryPlans={deliveryPlans}
+            onDeliveryPlansChange={setDeliveryPlans}
             themeVariant={themeVariant}
             themeMode={themeMode}
             systemPrefersDark={systemPrefersDark}

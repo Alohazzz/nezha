@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Search, Sparkles, X } from "lucide-react";
-import type {
+import type { DeliveryPlan,
   AgentType,
   PermissionMode,
   Plan,
@@ -32,6 +32,8 @@ import { YunxiaoIssueList } from "./YunxiaoIssueList";
 import { YunxiaoProjectSelect } from "./YunxiaoProjectSelect";
 import { useYunxiaoCloudProjects } from "./useYunxiaoCloudProjects";
 import { PlanLaunchDialog } from "./plan/PlanLaunchDialog";
+import { AddToPlanDialog } from "../delivery-plan/AddToPlanDialog";
+import { CreatePlanDialog } from "../branch-batch/CreatePlanDialog";
 import { DirectLaunchDialog, type DirectLaunchOptions } from "./DirectLaunchDialog";
 import s from "../../styles";
 
@@ -59,6 +61,8 @@ export function YunxiaoView({
   onStartDirectExecution,
   onCancelPlan,
   onSetParentPlan,
+  deliveryPlans = [],
+  onDeliveryPlansChange = () => undefined,
 }: {
   projects: Project[];
   tasks: Task[];
@@ -81,6 +85,9 @@ export function YunxiaoView({
   onCancelPlan: (planId: string) => void | Promise<void>;
   /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
   onSetParentPlan: (planId: string, parentPlanId: string | undefined) => void;
+  /** 交付计划（DeliveryPlan）：「添加到计划」目标与成员徽标数据源。 */
+  deliveryPlans?: DeliveryPlan[];
+  onDeliveryPlansChange?: (plans: DeliveryPlan[]) => void;
 }) {
   const { t } = useI18n();
   const { showToast } = useToast();
@@ -219,6 +226,8 @@ export function YunxiaoView({
   // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
   const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
   const [launchIssues, setLaunchIssues] = useState<YunxiaoWorkitem[] | null>(null);
+  const [addToPlanIssues, setAddToPlanIssues] = useState<YunxiaoWorkitem[] | null>(null);
+  const [showCreatePlan, setShowCreatePlan] = useState(false);
   // 「直接开始」弹窗的待确认议题（null = 未打开）。
   const [directIssue, setDirectIssue] = useState<YunxiaoWorkitem | null>(null);
 
@@ -474,6 +483,14 @@ export function YunxiaoView({
             </div>
             <div style={s.yunxiaoCount}>{t("yunxiao.count", { count: total })}</div>
           </div>
+          <button
+            type="button"
+            style={s.yunxiaoSelectGhostBtn}
+            disabled={!targetProject}
+            onClick={() => setShowCreatePlan(true)}
+          >
+            创建计划
+          </button>
           <YunxiaoImportBar
             targetProjectId={targetProjectId}
             onTargetProjectChange={setTargetProjectId}
@@ -490,6 +507,14 @@ export function YunxiaoView({
             onToggleSelect={handleToggleSelect}
             onDiscuss={handleDiscussIssue}
             onDirectStart={handleDirectStartIssue}
+            onAddToPlan={(issue) => setAddToPlanIssues([issue])}
+            planNamesByWorkitem={
+              new Map(
+                deliveryPlans.flatMap((p) =>
+                  p.issues.map((i) => [i.workitemId, p.name] as const),
+                ),
+              )
+            }
             yunxiaoProjectId={settings.projectId}
             onLoadMore={() => loadIssues(page + 1, true)}
           />
@@ -505,6 +530,17 @@ export function YunxiaoView({
               >
                 <Sparkles size={12} strokeWidth={2.2} />
                 {t("plan.launchAction")}
+              </button>
+              <button
+                type="button"
+                style={s.yunxiaoSelectGhostBtn}
+                onClick={() =>
+                  setAddToPlanIssues(
+                    issues.filter((i) => selectedIssueIds.has(i.id)),
+                  )
+                }
+              >
+                添加到计划
               </button>
               <button
                 type="button"
@@ -533,6 +569,30 @@ export function YunxiaoView({
           onStartDiscussion={onStartPlanDiscussion}
           onCancelPlan={onCancelPlan}
           onClose={() => setLaunchIssues(null)}
+        />
+      )}
+      {showCreatePlan && targetProject && (
+        <CreatePlanDialog
+          projectId={targetProject.id}
+          projectPath={targetProject.path}
+          repoPath={targetProject.path}
+          onCreated={(plan) => onDeliveryPlansChange([...deliveryPlans, plan])}
+          onClose={() => setShowCreatePlan(false)}
+        />
+      )}
+      {addToPlanIssues && targetProject && (
+        <AddToPlanDialog
+          issues={addToPlanIssues}
+          projectId={targetProject.id}
+          deliveryPlans={deliveryPlans}
+          onAdded={(plan) => {
+            onDeliveryPlansChange([
+              ...deliveryPlans.filter((p) => p.id !== plan.id),
+              plan,
+            ]);
+            setSelectedIssueIds(new Set());
+          }}
+          onClose={() => setAddToPlanIssues(null)}
         />
       )}
       {directIssue && targetProject && (

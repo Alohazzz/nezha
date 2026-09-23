@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeVersionSegment } from "../components/branch-batch/CreateBranchBatchDialog";
+import { normalizeVersionSegment } from "../components/branch-batch/CreatePlanDialog";
 
 describe("normalizeVersionSegment", () => {
   it("strips the trailing .0 that Yunxiao version names carry", () => {

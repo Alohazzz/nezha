@@ -40,6 +40,7 @@ function branch(overrides: Partial<PendingBranchCandidate> = {}): PendingBranchC
     deletable: false,
     skipReason: "未完成合并进 develop，不可删除",
     dataMissing: false,
+    remoteOnly: false,
     ...overrides,
   };
 }
@@ -121,6 +122,13 @@ describe("pending-mr badges", () => {
     expect(badgesFor(branch({ protected: true }), true).map((b) => b.text)).toContain("受保护");
     expect(badgesFor(branch({ pushed: false }), true).map((b) => b.text)).toContain("未推送");
   });
+
+  // #93：远端独有的分支要能与本地分支在行上区分，否则用户不知道本地没有工作副本。
+  it("marks remote-only branches so they are distinguishable from local ones", () => {
+    const badges = badgesFor(branch({ remoteOnly: true }), true).map((b) => b.text);
+    expect(badges).toContain("仅远端");
+    expect(badgesFor(branch(), true).map((b) => b.text)).not.toContain("仅远端");
+  });
 });
 
 describe("pending-mr helpers", () => {
@@ -179,6 +187,29 @@ describe("pending-mr helpers", () => {
       },
     ]);
     expect(unknown).toHaveLength(1);
+
+    // #93：远端独有的分支走同一套可见性规则——未合并的可发起、已合并的可清理。
+    const remoteOnly = flattenScans([
+      {
+        name: "HIS",
+        path: "/a",
+        ok: true,
+        message: "",
+        platformOk: true,
+        mrOk: true,
+        branches: [
+          branch({ branch: "feature/develop/remote-only", remoteOnly: true }),
+          branch({
+            branch: "feature/develop/remote-merged",
+            remoteOnly: true,
+            unmerged: 0,
+            mergeState: "merged",
+            deletable: true,
+          }),
+        ],
+      },
+    ]);
+    expect(remoteOnly).toHaveLength(2);
   });
 
   it("keys branches by repo path so same-named branches stay distinct", () => {
