@@ -42,3 +42,10 @@ vite.config.d.ts
 .scratch/
 .zcode/
 pnpm-workspace.yaml
+
+# PPT 本地渲染校验产物（headless 截图 / 量版副本）
+ppt/.shots/
+
+# guizang-ppt-skill 以 AGPL-3.0 分发，模板快照不随本仓库再分发；
+# 由 ppt/tools/build.py 从已安装的 skill 自动回落解析
+ppt/tools/template-swiss.pristine.html

@@ -1,0 +1,630 @@
+<!-- ============================================================
+     Nezha 内部交付汇报 · 瑞士国际主义风（风格 B）
+     data-layout 严格取自 references/swiss-layout-lock.md 的 S01-S22
+     主题色：🔵 克莱因蓝 IKB（template 默认）
+     14 页 / 20 分钟 · 成果数据不单独成页，收尾一笔带过
+     ============================================================ -->
+
+<!-- 01 · Cover · SWISS-COVER-ASCII · 全 IKB + ASCII 呼吸场 -->
+<section class="slide accent" data-animate="hero" data-layout="SWISS-COVER-ASCII" data-slide-id="cover">
+  <div class="canvas-card">
+    <canvas class="ascii-bg" aria-hidden="true"></canvas>
+    <div class="chrome-min">
+      <div class="l">NEZHA · 内部交付汇报</div>
+      <div class="r">SS · 2026.09.23 · 01 / 14</div>
+    </div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr auto;gap:2.6vh">
+      <div data-anim="kicker" class="t-meta" style="color:rgba(255,255,255,.78);letter-spacing:.22em">TASK ORCHESTRATION &amp; DELIVERY LOOP</div>
+      <h1 data-anim="title" style="align-self:center;font-family:var(--sans),var(--sans-zh);font-weight:200;line-height:.96;letter-spacing:-.03em;color:#fff;display:flex;flex-direction:column;gap:1.6vh">
+        <span style="font-size:min(8.6vw,14.8vh)">哪吒 <span style="font-style:italic;font-weight:300">Nezha</span></span>
+        <span style="font-size:min(4.6vw,7.8vh);font-weight:300;letter-spacing:-.02em">三头六臂，并发编程</span>
+      </h1>
+      <div data-anim="bottom" style="display:grid;grid-template-rows:auto auto;gap:1.6vh;border-top:1px solid rgba(255,255,255,.22);padding-top:2vh">
+        <div data-anim="lead" class="lead" style="max-width:56ch;color:rgba(255,255,255,.88);font-weight:300">面向 AI 编程智能体的任务编排与交付闭环 —— 轻量、原生、可并发。</div>
+        <div style="display:flex;justify-content:space-between;align-items:end">
+          <div class="t-meta" style="color:rgba(255,255,255,.6)">内部研发团队 + 领导交付汇报 · 20 分钟</div>
+          <div class="t-meta" style="color:rgba(255,255,255,.6)">→ swipe / arrow keys</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 02 · Split Statement · S03 · 立产品身份，转问题 -->
+<section class="slide split" data-animate="statement" data-layout="S03" data-slide-id="why-nezha">
+  <div class="canvas-card">
+    <div class="split-half">
+      <div class="half" style="padding:5.6vh 3.6vw 4.4vh;justify-content:space-between">
+        <div class="chrome-min"><div class="l">02 · WHY NEZHA</div><div class="r">02 / 14</div></div>
+        <div data-anim="left" style="display:flex;flex-direction:column;gap:2.4vh">
+          <div class="t-cat accent">THE SHIFT</div>
+          <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5.6vw,9.6vh);line-height:1.04;letter-spacing:-.03em">能并发，<br/>不等于能交付。</h2>
+        </div>
+        <div class="t-meta" style="color:var(--text-helper)">→ 先看人写的代码为什么变少</div>
+      </div>
+      <div class="half b-grey" style="padding:5.6vh 3.6vw 4.4vh;justify-content:space-between;border-left:1px solid var(--border-subtle)">
+        <div class="chrome-min"><div class="l">CONTEXT</div><div class="r">READING</div></div>
+        <div data-anim="right" style="display:flex;flex-direction:column;gap:3vh">
+          <p class="lead" style="max-width:36ch;font-weight:400">「人写的代码越来越少，AI 写的代码越来越多，写代码本身开始变成一件可以并行的事。」</p>
+          <div class="rule"></div>
+          <div style="display:flex;flex-direction:column;gap:1.4vh">
+            <div class="t-cat">NEZHA 的答案</div>
+            <p class="t-body">Agent 优先设计——内置终端直接跑原生 Claude Code / Codex，并在此之上集成任务系统、Git、Worktree、终端、代码编辑器。</p>
+          </div>
+        </div>
+        <div class="callout">但「能并发」不等于「能交付」——议题在云效、代码在 Git、审查在线下、知识在会话里，四套东西全靠人肉搬运。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 03 · Four Cards · S19 · 流程断裂（总纲核心页） -->
+<section class="slide dark" data-animate="four-cards" data-layout="S19" data-slide-id="broken-chain">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">03 · THE BREAK</div><div class="r">03 / 14</div></div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr auto;gap:4.4vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.6vh">
+        <div class="rule accent" style="width:80px;height:2px"></div>
+        <div class="t-cat">流程断裂 · 四条断点</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5.2vw,9.2vh);line-height:1.04;letter-spacing:-.03em">四套东西，四个地方，<br/>全靠人肉搬运。</h2>
+      </div>
+      <div data-anim="up" class="grid-12">
+        <div class="span-3 nz-cell">
+          <div class="t-meta">01</div>
+          <h3 class="nz-cell-ttl">结论不留痕</h3>
+          <p class="t-body-sm">议题在云效，方案讨论散在聊天与口头——执行时反复确认、返工。</p>
+          <div class="t-meta nz-cell-tag">→ ① 议题闭环</div>
+        </div>
+        <div class="span-3 nz-cell">
+          <div class="t-meta">02</div>
+          <h3 class="nz-cell-ttl">顺序靠人记</h3>
+          <p class="t-body-sm">多条议题谁先谁后全靠人记，串行执行经常排错序——前置没做完就开跑。</p>
+          <div class="t-meta nz-cell-tag">→ ① 依赖门禁</div>
+        </div>
+        <div class="span-3 nz-cell">
+          <div class="t-meta">03</div>
+          <h3 class="nz-cell-ttl">合并要人工盯</h3>
+          <p class="t-body-sm">云效有分支合并的界面，但<em class="nz-em">审核与冲突处理仍要人逐个手动做</em>——平台给了入口，没给把关。</p>
+          <div class="t-meta nz-cell-tag">→ ② ③ Agent 审核与合并</div>
+        </div>
+        <div class="span-3 nz-cell">
+          <div class="t-meta">04</div>
+          <h3 class="nz-cell-ttl">审查与知识流失</h3>
+          <p class="t-body-sm">审查意见散在本地，讨论中确认的知识随会话流失——下次换个 Agent 还得重讲。</p>
+          <div class="t-meta nz-cell-tag">→ ③ 合并审核 / ④ 知识沉淀</div>
+        </div>
+      </div>
+      <div class="t-body" style="color:var(--text-helper)">Nezha 要做的，就是把这条链路接成一条闭环。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 04 · Loop Form · S14 · 闭环全景（含「发现问题回到方案讨论」的反向闭环） -->
+<section class="slide light" data-animate="loop-form" data-layout="S14" data-slide-id="closed-loop">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">04 · THE LOOP</div><div class="r">04 / 14</div></div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr;gap:5.4vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.2vh">
+        <div class="t-cat">闭环全景 · 正向链路 + 反向补录</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(4.8vw,8.6vh);line-height:1.04;letter-spacing:-.03em">把六个动作，接成一条闭环</h2>
+      </div>
+      <div data-anim="up" class="grid-2-6-6" style="align-items:center">
+        <div class="nz-steps">
+          <div class="nz-step"><span class="nz-step-no">01</span><span class="nz-step-name">议题</span><span class="nz-step-desc">云效议题进入工作区</span></div>
+          <div class="nz-step"><span class="nz-step-no">02</span><span class="nz-step-name">方案讨论</span><span class="nz-step-desc">先出方案，不写代码</span></div>
+          <div class="nz-step"><span class="nz-step-no">03</span><span class="nz-step-name">并行执行</span><span class="nz-step-desc">按依赖拓扑串行放行</span></div>
+          <div class="nz-step"><span class="nz-step-no">04</span><span class="nz-step-name">合并审核</span><span class="nz-step-desc">Agent 先读一遍代码</span></div>
+          <div class="nz-step"><span class="nz-step-no">05</span><span class="nz-step-name">回写云效</span><span class="nz-step-desc">开发向 / 测试向双评论</span></div>
+          <div class="nz-step"><span class="nz-step-no">06</span><span class="nz-step-name">知识沉淀</span><span class="nz-step-desc">结论回到模块卡片</span></div>
+          <div class="nz-step nz-step-reentry">
+            <span class="nz-step-no accent">↺</span>
+            <span class="nz-step-name accent">补录议题</span>
+            <span class="nz-step-desc accent">执行中发现问题 → 发起议题 → 回到 02 方案讨论</span>
+          </div>
+        </div>
+        <div class="nz-loop-stage">
+          <svg viewBox="0 0 400 400" aria-hidden="true" style="width:100%;max-width:44vh;height:auto;display:block">
+            <defs>
+              <marker id="nzArrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+            <circle cx="200" cy="200" r="160" fill="none" stroke="var(--grey-2)" stroke-width="1"/>
+            <circle cx="200" cy="200" r="112" fill="none" stroke="var(--grey-2)" stroke-width="1" stroke-dasharray="4 6"/>
+            <!-- 正向链路：01→06 顺时针均匀分布 -->
+            <rect x="354" y="194" width="12" height="12" fill="var(--ink)"/>
+            <rect x="274" y="332.6" width="12" height="12" fill="var(--ink)"/>
+            <rect x="114" y="332.6" width="12" height="12" fill="var(--ink)"/>
+            <rect x="34" y="194" width="12" height="12" fill="var(--ink)"/>
+            <rect x="114" y="55.4" width="12" height="12" fill="var(--ink)"/>
+            <rect x="274" y="55.4" width="12" height="12" fill="var(--ink)"/>
+            <!-- 反向闭环：03 并行执行 → 回到 02 方案讨论 -->
+            <path d="M135,312.6 A130,130 0 0 1 265,312.6" fill="none"
+                  stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 5"
+                  marker-end="url(#nzArrow)"/>
+          </svg>
+          <div class="nz-loop-center">
+            <div class="t-cat accent">CLOSED LOOP</div>
+            <div class="nz-loop-center-ttl">六个动作</div>
+            <div class="t-meta">＋ 反向补录回到 02</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 05 · Manifesto + Ink Banner · S12 · ①云效议题闭环（权重 30%） -->
+<section class="slide light" data-animate="manifesto" data-layout="S12" data-slide-id="fn1-value">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">05 · ① 云效议题闭环</div><div class="r">05 / 14</div></div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto auto auto 1fr;gap:4vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.4vh">
+        <div class="t-cat accent">权重 30% · 全篇最重</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5.6vw,9.8vh);line-height:1.02;letter-spacing:-.03em">从一条议题，<br/>到一个可交付的方案</h2>
+      </div>
+      <div class="nz-two-col">
+        <p class="t-body">旧流程：在云效看到一条 bug，想交给 AI 修——复制议题描述、手动提炼成提示词、开终端、等它跑完、再回云效手写一版「改了啥」的评论。中途想先出个方案看看？没有地方放。</p>
+        <p class="t-body">Nezha 把它压成一条链路：议题行右侧直接起任务或发起讨论，方案、待办、依赖、回写全部落在同一条链路上，产物是两份可移交的文件——<span class="mono">plan.md</span>（人读）与 <span class="mono">deps.json</span>（机器读）。</p>
+      </div>
+      <div class="grid-3" style="align-self:start;gap:2.4vh 2.4vw;margin-top:2vh">
+        <div class="nz-cell">
+          <div class="t-meta">NEXT · 06</div>
+          <h3 class="nz-cell-ttl">两个入口</h3>
+          <p class="t-body-sm">议题行右侧「直接开始」或「发起讨论」，界面上一眼可见。</p>
+        </div>
+        <div class="nz-cell">
+          <div class="t-meta">NEXT · 07</div>
+          <h3 class="nz-cell-ttl">五步放行</h3>
+          <p class="t-body-sm">方案定稿 → 生成待办 → 依赖门禁 → 并行执行 → 回写云效。</p>
+        </div>
+        <div class="nz-cell">
+          <div class="t-meta">ALSO</div>
+          <h3 class="nz-cell-ttl">方案看板</h3>
+          <p class="t-body-sm"><span class="mono">Alt+K</span> 打开「方案」标签页，左栏方案列表、右栏依赖关系图。</p>
+        </div>
+      </div>
+      <div data-anim="up" class="nz-ink-full">
+        <div class="grid-2-6-6">
+          <div style="display:flex;flex-direction:column;gap:1.6vh">
+            <div class="t-cat" style="color:rgba(255,255,255,.66)">连接与浏览</div>
+            <p class="t-body" style="color:var(--paper)">填云效令牌（<span class="mono">pt-xxxx</span>）→ 获取组织 → 选项目 → 保存。议题区支持类别 Tab（全部 / 需求 / 任务 / 缺陷）、项目切换、状态多选、只看我负责的、搜索、分页每页 100。</p>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:1.6vh">
+            <div class="t-cat" style="color:rgba(255,255,255,.66)">反向闭环 · 补录议题</div>
+            <p class="t-body" style="color:var(--paper)">执行中发现新问题 → 调 <span class="mono">yunxiao-backfill-issue</span> 技能 → Agent 盘问（先问「缺陷还是需求」）→ 人工确认 → 由持有令牌的后端调 <span class="mono">CreateWorkitem</span> 建议题，回到方案讨论链路，不自动启动。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 · Image Hero · S22 · ①两个入口 + 三类自动路由 -->
+<section class="slide light" data-animate="image-hero" data-layout="S22" data-slide-id="fn1-entries">
+  <div class="canvas-card" style="padding:0;display:flex;flex-direction:column;overflow:hidden">
+    <div data-anim="img" style="position:relative;flex:0 0 56%;overflow:hidden;background:var(--paper)">
+      <img src="images/06-yunxiao-entries-21x9.png" alt="云效议题列表：每行右侧「直接开始」与「发起讨论」两个入口" loading="eager" data-image-slot="s22-hero-21x9" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center center">
+      <div data-anim="title-block" style="position:absolute;left:5vw;top:11vh;background:var(--paper);padding:2.6vh 2.2vw;max-width:30vw">
+        <div style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(3.8vw,6.4vh);line-height:1.02;letter-spacing:-.035em;color:var(--text-primary);display:flex;flex-direction:column;gap:.8vh">
+          <span>两个入口</span>
+          <span style="font-weight:300;font-size:.58em">直接开始 / 发起讨论</span>
+        </div>
+      </div>
+    </div>
+    <div data-anim="kpi" class="image-hero-body" style="position:relative">
+      <div class="chrome-min nz-marker-body"><div class="r">06 · ① 云效议题闭环 · 06 / 14</div></div>
+      <div style="max-width:44ch;font-family:var(--sans),var(--sans-zh);font-size:max(15px,1.25vw);line-height:1.6;font-weight:400;color:var(--text-primary);display:flex;flex-direction:column;gap:1.4vh">
+        <p>「直接开始」跳过讨论，议题描述即 spec；「发起讨论」先出方案再执行——打开对话框即已创建 draft 方案，议题详情与图片归档到 <span class="mono">.nezha/plans/&lt;planId&gt;/</span>，讨论阶段先不写代码。行尾「已导入」只是去重标记，不是一个可点的导入操作。</p>
+      </div>
+      <div class="image-hero-stats" style="gap:2.6vw">
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--ink)"></div>
+          <div class="t-meta">缺陷 · Bug</div>
+          <div class="nz-s22-num">01</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">复选框不出现：先 <span class="mono">diagnosing-bugs</span> 定位根因（要有可复现证据），再 <span class="mono">implement</span></p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--ink)"></div>
+          <div class="t-meta">需求 / 任务 · 默认</div>
+          <div class="nz-s22-num">02</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">直接 <span class="mono">implement</span>，议题描述即 spec，不需要人做判断</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--accent)"></div>
+          <div class="t-cat accent">需求 / 任务 · 勾选澄清</div>
+          <div class="nz-s22-num accent">03</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">先 <span class="mono">grilling</span> 一次一问澄清，达成共识后立即 <span class="mono">implement</span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 07 · Horizontal Timeline · S11 · ①执行链路 + 依赖门禁 -->
+<section class="slide light" data-animate="timeline-walk" data-layout="S11" data-slide-id="fn1-board">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">07 · ① 执行链路与依赖门禁</div><div class="r">07 / 14</div></div>
+    <div style="flex:1;padding:0;display:flex;flex-direction:column;gap:4.2vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.2vh">
+        <div class="t-cat">方案定稿之后 · 五步放行</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(4.8vw,8.6vh);line-height:1.04;letter-spacing:-.03em">等待不空转 · 失败不静默 · 成环不死锁</h2>
+      </div>
+      <div class="timeline-h" data-anim="up">
+        <div class="tl-row">
+          <div class="th-node up">
+            <span class="dot"></span>
+            <span class="label"><span class="yr">01</span><span class="name">方案定稿</span><span class="desc">plan.md + deps.json 落盘</span></span>
+          </div>
+          <div class="th-node down">
+            <span class="dot"></span>
+            <span class="label"><span class="yr">02</span><span class="name">生成待办</span><span class="desc">只生成 todo，人工把关后再跑</span></span>
+          </div>
+          <div class="th-node up accent">
+            <span class="dot"></span>
+            <span class="label"><span class="yr">03</span><span class="name">依赖门禁</span><span class="desc">拓扑排序串行放行</span></span>
+          </div>
+          <div class="th-node down">
+            <span class="dot"></span>
+            <span class="label"><span class="yr">04</span><span class="name">并行执行</span><span class="desc">受 [plan] max_concurrent 约束</span></span>
+          </div>
+          <div class="th-node up">
+            <span class="dot"></span>
+            <span class="label"><span class="yr">05</span><span class="name">回写云效</span><span class="desc">任务完成后出现回写按钮</span></span>
+          </div>
+        </div>
+      </div>
+      <div class="grid-3" style="gap:2.4vh 2.4vw">
+        <div class="nz-fact">
+          <div class="t-cat accent">等待不空转</div>
+          <p class="t-body-sm">前置未全部 <span class="mono">done</span> 的待办停在 <span class="mono">waiting_deps</span>，完成后自动放行；等待中<span class="nz-em">不创建 PTY</span>。</p>
+        </div>
+        <div class="nz-fact">
+          <div class="t-cat">失败不静默</div>
+          <p class="t-body-sm">前置失败 / 取消 / 中断 / 缺失时标红 + <span class="nz-em">只通知一次</span>，由人决定「忽略依赖，仍然开始」——门禁只作用于方案待办。</p>
+        </div>
+        <div class="nz-fact">
+          <div class="t-cat">成环不死锁</div>
+          <p class="t-body-sm">解析刻意宽松：文件损坏只是少一道护栏；依赖成环时<span class="nz-em">环上的边全部丢弃</span>。放行受 <span class="mono">max_concurrent</span>（默认 1 = 串行）约束。</p>
+        </div>
+      </div>
+      <div class="t-meta">方案看板：Alt+K / ⌘+K →「方案」标签页 · 左栏方案列表，右栏依赖关系图（左→右 = 执行顺序）</div>
+    </div>
+  </div>
+</section>
+
+<!-- 08 · Three Forces · S13 · ②计划与合并请求（权重 25%） -->
+<section class="slide light" data-animate="three-forces" data-layout="S13" data-slide-id="fn2-plan">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">08 · ② 计划与合并请求</div><div class="r">08 / 14</div></div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr;gap:5.4vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.2vh">
+        <div class="t-cat accent">权重 25%</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5.2vw,9.2vh);line-height:1.04;letter-spacing:-.03em">把散落的分支，收口成一个 MR</h2>
+      </div>
+      <div data-anim="up" class="grid-2-4-8">
+        <div class="nz-ink-hero">
+          <div class="dots" style="position:absolute;inset:0;opacity:.14"></div>
+          <div class="t-cat">PLAN · MERGE REQUEST</div>
+          <p class="t-body" style="color:var(--paper);margin-top:auto">以前要先在云效创建分支，再回到本地切到对应分支改内容——但<span class="nz-em">哪些议题改在什么分支上，没有地方能查看和规划</span>。</p>
+        </div>
+        <div style="display:grid;grid-template-rows:repeat(3,1fr);gap:1.6vh">
+          <article class="card-fill" style="padding:2.2vh 1.6vw;display:grid;grid-template-columns:auto minmax(0,1fr);gap:1.6vw;align-items:start">
+            <div class="nz-force-num">01</div>
+            <div>
+              <h4 class="nz-force-ttl">计划是什么</h4>
+              <p class="t-body-sm">一组有序议题 + 一条分支 +（可选）一个 worktree。类型 <span class="mono">feature/fix/patch/project/hotfix</span>；源分支按「类型/版本/目标分支/描述」自动生成，可手改并「检测」重名。</p>
+            </div>
+          </article>
+          <article class="card-fill" style="padding:2.2vh 1.6vw;display:grid;grid-template-columns:auto minmax(0,1fr);gap:1.6vw;align-items:start">
+            <div class="nz-force-num">02</div>
+            <div>
+              <h4 class="nz-force-ttl">议题与分支的关系可查</h4>
+              <p class="t-body-sm">议题表状态与方案关联全自动派生（已完成 / 执行中 / 已结束 / 讨论完成 / 讨论中 / 未开始），自上而下取第一个命中，没有手动维护入口——「哪个议题在哪条分支」变成一个可看的视图。</p>
+            </div>
+          </article>
+          <article class="card-fill" style="padding:2.2vh 1.6vw;display:grid;grid-template-columns:auto minmax(0,1fr);gap:1.6vw;align-items:start">
+            <div class="nz-force-num">03</div>
+            <div>
+              <h4 class="nz-force-ttl">四级目标分支推断</h4>
+              <p class="t-body-sm">手动指定（跨会话记住）&gt; 项目配置 &gt; 按分支名推断（<span class="mono">hotfix/…/master/…</span> → <span class="mono">master</span>）&gt; 默认值。改一行只重算该分支——系统按你们的命名规范替你判断，不用每次手选。</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 09 · Image Hero · S22 · ③合并审核（权重 15%） -->
+<section class="slide light" data-animate="image-hero" data-layout="S22" data-slide-id="fn3-review">
+  <div class="canvas-card" style="padding:0;display:flex;flex-direction:column;overflow:hidden">
+    <div data-anim="img" style="position:relative;flex:0 0 56%;overflow:hidden;background:var(--paper)">
+      <img src="images/09-review-comments-21x9.png" alt="逐行评论抽屉：Agent 审查报告以行内评论形式落在代码 diff 上，可整批发送" loading="eager" data-image-slot="s22-hero-21x9" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center center">
+      <div data-anim="title-block" style="position:absolute;left:5vw;top:10vh;background:var(--paper);padding:2.4vh 2.2vw;max-width:31vw">
+        <div style="display:flex;flex-direction:column;gap:1.1vh">
+          <span class="t-cat accent">权重 15%</span>
+          <div style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(3.8vw,6.4vh);line-height:1.02;letter-spacing:-.035em;color:var(--text-primary);display:flex;flex-direction:column;gap:.8vh">
+            <span>Agent 先替你</span>
+            <span style="font-weight:300;font-size:.58em">读一遍代码</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-anim="kpi" class="image-hero-body" style="position:relative">
+      <div class="chrome-min nz-marker-body"><div class="r">09 · ③ 合并审核 · 09 / 14</div></div>
+      <div style="max-width:44ch;font-family:var(--sans),var(--sans-zh);font-size:max(15px,1.25vw);line-height:1.6;font-weight:400;color:var(--text-primary);display:flex;flex-direction:column;gap:1.4vh">
+        <p>云效只提供了合并入口，审核和冲突仍需人工逐个处理。Nezha 把这一步也集成进来：欢迎页左侧「合并审核」进入集中列表，拉取代码 → 代码审查 → 分支合并 → 查看审查结果，合并前必须先拉取。</p>
+        <p class="t-meta" style="color:var(--text-helper)">诚实说明：「代码审查」「分支合并」都是启动真实 Agent 任务，不是一键调平台 API</p>
+      </div>
+      <div class="image-hero-stats" style="gap:2.6vw">
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--ink)"></div>
+          <div class="t-meta">Operations</div>
+          <div class="nz-s22-num">04</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">拉取代码 · 代码审查 · 分支合并 · 查看审查结果</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--ink)"></div>
+          <div class="t-meta">Push mode</div>
+          <div class="nz-s22-num">–ff</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">合并由 Agent 在本地 git 推送，默认 fast-forward，不 force</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--accent)"></div>
+          <div class="t-cat accent">Write-back</div>
+          <div class="nz-s22-num accent">01</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">报告一键回写成云效 MR 评论——审查意见不再散在本地、不用手动复制粘贴</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 10 · Six Cells · S04 · ④知识沉淀 + 知识图谱（权重 20%） -->
+<section class="slide light" data-animate="grid-reveal" data-layout="S04" data-slide-id="fn4-knowledge">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">10 · ④ 知识沉淀 + 知识图谱</div><div class="r">10 / 14</div></div>
+    <div style="flex:1;padding:0;display:flex;flex-direction:column;gap:4.2vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.2vh">
+        <div class="t-cat accent">权重 20% · 沉淀与图谱合并为一节</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5vw,8.8vh);line-height:1.04;letter-spacing:-.03em">知识不随会话流失</h2>
+      </div>
+      <div class="sub-grid-3-2 nz-subgrid-tight" style="margin-top:0">
+        <div class="sub-card">
+          <i data-lucide="log-in" class="lucide"></i>
+          <span class="nb-corner">01</span>
+          <h4 class="ttl">入口</h4>
+          <p class="desc">任务 <span class="mono">done</span> 且云效绑定时，详情头部出现「沉淀知识」按钮。</p>
+        </div>
+        <div class="sub-card">
+          <i data-lucide="file-search" class="lucide"></i>
+          <span class="nb-corner">02</span>
+          <h4 class="ttl">生成候选</h4>
+          <p class="desc">读取 <span class="mono">knowledge-sedimentation</span> 技能，按「卡片六段骨架」判优先级；门槛 = 有依据（代码 / 文档 / 用户确认）。</p>
+        </div>
+        <div class="sub-card">
+          <i data-lucide="list-checks" class="lucide"></i>
+          <span class="nb-corner">03</span>
+          <h4 class="ttl">预览与编辑</h4>
+          <p class="desc">逐条可改内容、依据、标题、置信度，可勾选要创建的候选；无有效候选时可重新生成。</p>
+        </div>
+        <div class="sub-card">
+          <i data-lucide="ticket-check" class="lucide"></i>
+          <span class="nb-corner">04</span>
+          <h4 class="ttl">创建审核议题</h4>
+          <p class="desc">逐条创建到「知识库图谱」项目，标题 <span class="mono">【知识沉淀】&lt;模块id&gt;-&lt;知识点摘要&gt;</span>，创建前按标题关键词去重。</p>
+        </div>
+        <div class="sub-card">
+          <i data-lucide="shield-check" class="lucide"></i>
+          <span class="nb-corner">05</span>
+          <h4 class="ttl">自动回写（默认关）</h4>
+          <p class="desc">开启后过质量门 → <span class="nz-em">只增不改</span>地追加进模块卡片、推送技能库、议题置「已完成」；不覆盖未提交的手工改动。</p>
+        </div>
+        <div class="sub-card">
+          <i data-lucide="git-branch" class="lucide"></i>
+          <span class="nb-corner">06</span>
+          <h4 class="ttl">图谱由 git 管理</h4>
+          <p class="desc"><span class="mono">knowledge-graphs/&lt;图谱ID&gt;/graph.toml</span> + <span class="mono">data/modules/*.md</span>，可 <span class="mono">revert</span> 回滚；项目绑定写在 <span class="mono">.nezha/config.toml [knowledge] graph_id</span>。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 11 · System Diagram · S17 · ④喂养与回收是同一个池子 -->
+<section class="slide dark" data-animate="system-diagram" data-layout="S17" data-slide-id="fn4-pool">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">11 · ④ 认知底座</div><div class="r">11 / 14</div></div>
+    <div style="flex:1;padding:0;display:grid;grid-template-rows:auto 1fr;gap:5.4vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.2vh">
+        <div class="t-cat accent">图谱 = Agent 的认知底座</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5.2vw,9.2vh);line-height:1.04;letter-spacing:-.03em">喂养与回收，是同一个池子</h2>
+      </div>
+      <div data-anim="up" class="grid-2-6-6" style="align-items:center">
+        <div class="nz-layer-list">
+          <div class="nz-layer">
+            <span class="nz-layer-key accent"></span>
+            <div>
+              <div class="t-cat accent">内核 · CORE</div>
+              <h4 class="nz-force-ttl">模块卡片</h4>
+              <p class="t-body-sm">讨论前 Agent 先看项目知识；沉淀完再把新结论回填到卡片——喂进去的和收回来的是同一份数据。</p>
+            </div>
+          </div>
+          <div class="nz-layer">
+            <span class="nz-layer-key"></span>
+            <div>
+              <div class="t-cat">中间层 · 项目侧</div>
+              <h4 class="nz-force-ttl">会话与任务</h4>
+              <p class="t-body-sm">知识从会话里提取（约 8000 字摘要 + 议题字段 + 图谱 data 现场比对 + 项目根代码用于 <span class="mono">rg</span> 验证依据）。</p>
+            </div>
+          </div>
+          <div class="nz-layer">
+            <span class="nz-layer-key"></span>
+            <div>
+              <div class="t-cat">外圈 · 维护侧</div>
+              <h4 class="nz-force-ttl">技能仓库与审核议题</h4>
+              <p class="t-body-sm">卡片随技能仓库统一 git 管理；新增知识先落成云效审核议题，有审核人把关才入库。</p>
+            </div>
+          </div>
+        </div>
+        <div class="nz-loop-stage">
+          <svg viewBox="0 0 400 400" aria-hidden="true" style="width:100%;max-width:44vh;height:auto;display:block">
+            <circle cx="200" cy="200" r="168" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1"/>
+            <circle cx="200" cy="200" r="112" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1"/>
+            <circle cx="200" cy="200" r="58" fill="none" stroke="var(--accent-bright)" stroke-width="2"/>
+            <line x1="200" y1="32" x2="200" y2="142" stroke="rgba(255,255,255,.18)" stroke-width="1" stroke-dasharray="4 6"/>
+            <line x1="368" y1="200" x2="258" y2="200" stroke="rgba(255,255,255,.18)" stroke-width="1" stroke-dasharray="4 6"/>
+            <line x1="32" y1="200" x2="142" y2="200" stroke="rgba(255,255,255,.18)" stroke-width="1" stroke-dasharray="4 6"/>
+            <rect x="194" y="26" width="12" height="12" fill="var(--accent-bright)"/>
+            <rect x="362" y="194" width="12" height="12" fill="rgba(255,255,255,.55)"/>
+            <rect x="26" y="194" width="12" height="12" fill="rgba(255,255,255,.55)"/>
+          </svg>
+          <div class="nz-loop-center">
+            <div class="t-cat" style="color:rgba(255,255,255,.7)">ONE POOL</div>
+            <div class="nz-loop-center-ttl" style="color:var(--paper)">模块卡片</div>
+            <div class="t-meta" style="color:rgba(255,255,255,.6)">越用越懂你们的项目</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 12 · Three Layers · S05 · ⑤工程支撑：技能管理（权重 10%） -->
+<section class="slide light" data-animate="stack-build" data-layout="S05" data-slide-id="fn5-skills">
+  <div class="canvas-card">
+    <div class="chrome-min"><div class="l">12 · ⑤ 工程支撑：技能管理</div><div class="r">12 / 14</div></div>
+    <div style="flex:1;padding:0;display:flex;flex-direction:column;gap:4.2vh">
+      <div data-anim="line" style="display:flex;flex-direction:column;gap:1.2vh">
+        <div class="t-cat accent">权重 10% · 所有 Agent 能力的地基</div>
+        <h2 style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(5vw,8.8vh);line-height:1.04;letter-spacing:-.03em">一处维护，处处最新</h2>
+      </div>
+      <div class="stack-row" style="margin-top:0">
+        <div class="stack-block b-grey">
+          <div class="layer-nb">01 · SOURCE</div>
+          <i data-lucide="cloud-download" class="lucide"></i>
+          <h3 class="layer-ttl">来源与同步</h3>
+          <p class="layer-desc">本地目录或 git 远端（仅 <span class="mono">https://</span> / <span class="mono">git@</span>）。首次完整 <span class="mono">git clone</span>，不用浅克隆；已存在则 <span class="mono">git fetch</span> 探测，<span class="nz-em">有变更才</span> <span class="mono">--ff-only</span> 拉取（不 reset、不覆盖本地改动）。</p>
+          <div class="layer-tag">每 15 分钟自动拉取 · 失败静默沿用缓存并退避</div>
+        </div>
+        <div class="stack-block b-accent">
+          <div class="layer-nb">02 · INSTALL</div>
+          <i data-lucide="link" class="lucide"></i>
+          <h3 class="layer-ttl">安装 = 软链</h3>
+          <p class="layer-desc">装到项目 / 全局的技能是指向 Hub 内目录的软链——Hub 更新后已安装技能自动跟随，无需重装。健康标记 <span class="mono">ok</span> / <span class="mono">broken</span>（目标丢失）/ <span class="mono">diverged</span>（路径被外部修改）。</p>
+          <div class="layer-tag">清理失效安装只删软链与安装记录</div>
+        </div>
+        <div class="stack-block b-grey">
+          <div class="layer-nb">03 · DATA</div>
+          <i data-lucide="database" class="lucide"></i>
+          <h3 class="layer-ttl">数据与项目化</h3>
+          <p class="layer-desc">带数据目录的技能可打开文件夹 / 备份 / 重新构建，由 <span class="mono">NEZHA_SKILL_DATA_DIR</span> 注入并随仓库 git 管理。SkillHub 本身注册为一个特殊项目，可在普通任务 / 文件 / 终端视图里编辑技能内容。</p>
+          <div class="layer-tag">删除技能有二次确认</div>
+        </div>
+      </div>
+      <div class="t-meta">构建一句带过：面向 HIS 这类 .NET Framework 大解决方案的一键多仓库拉取 + 依赖拓扑编译面板 · 本轮不单独成节</div>
+    </div>
+  </div>
+</section>
+
+<!-- 13 · Image Hero · S22 · 三大亮点（核心页） -->
+<section class="slide light" data-animate="image-hero" data-layout="S22" data-slide-id="highlights">
+  <div class="canvas-card" style="padding:0;display:flex;flex-direction:column;overflow:hidden">
+    <div data-anim="img" style="position:relative;flex:0 0 56%;overflow:hidden;background:var(--paper)">
+      <img src="images/13-dep-chain-21x9.png" alt="方案看板的依赖关系图：多条议题按依赖串成链，已完成 / 运行中 / 等待前置 / 失败四种状态同屏" loading="eager" data-image-slot="s22-hero-21x9" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center center">
+      <div data-anim="title-block" style="position:absolute;left:5vw;top:10vh;background:var(--paper);padding:2.6vh 2.2vw;max-width:30vw">
+        <div style="font-family:var(--sans),var(--sans-zh);font-weight:200;font-size:min(3.8vw,6.4vh);line-height:1.02;letter-spacing:-.035em;color:var(--text-primary);display:flex;flex-direction:column;gap:.8vh">
+          <span>三大亮点</span>
+          <span style="font-weight:300;font-size:.58em">方法论 + 可被证实的结果</span>
+        </div>
+      </div>
+    </div>
+    <div data-anim="kpi" class="image-hero-body" style="position:relative">
+      <div class="chrome-min nz-marker-body"><div class="r">13 · 亮点 · 13 / 14</div></div>
+      <div style="max-width:46ch;font-family:var(--sans),var(--sans-zh);font-size:max(15px,1.25vw);line-height:1.6;font-weight:400;color:var(--text-primary)">
+        <p>前两条是方法论——编排 + 把关；第三条是可被数据证实的结果：那 73 条，就是第三条链路产出的物理形态。</p>
+      </div>
+      <div class="image-hero-stats" style="gap:2.6vw">
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--ink)"></div>
+          <div class="t-cat">方案双契约</div>
+          <div class="nz-s22-num">02</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">讨论阶段不写代码，产出两份可移交文件：<span class="mono">plan.md</span>（人读）+ <span class="mono">deps.json</span>（机器读的依赖契约）</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:1px;background:var(--ink)"></div>
+          <div class="t-cat">回写闭环</div>
+          <div class="nz-s22-num">73</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">开发向 / 测试向双评论，事实骨架带 commit 短哈希与变更统计；AI 失败回退模板，幂等不重复回写</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:.6vh">
+          <div style="height:2px;background:var(--accent)"></div>
+          <div class="t-cat accent">依赖门禁 · 最亮</div>
+          <div class="nz-s22-phrase">等待不空转<br/>失败不静默<br/>成环不死锁</div>
+          <div style="height:1px;background:var(--border-subtle);margin-top:auto"></div>
+          <p class="t-body-sm">编排与批处理的分界线：等待中不创建 PTY（停 <span class="mono">waiting_deps</span>），前置失败标红 + 只通知一次 + 由人决定忽略或等待</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 · Split Closing · SWISS-CLOSING-ASCII · 收尾（成果一笔带过） -->
+<section class="slide split" data-animate="split-statement" data-layout="SWISS-CLOSING-ASCII" data-slide-id="closing">
+  <div class="canvas-card">
+    <div class="split-half">
+      <div class="half b-accent" style="padding:5.6vh 3.6vw 4.4vh;justify-content:space-between;position:relative;overflow:hidden">
+        <canvas class="ascii-bg" aria-hidden="true"></canvas>
+        <div class="chrome-min" style="margin-bottom:0;position:relative;z-index:1">
+          <div class="l">14 / 14</div>
+          <div class="r">CLOSING</div>
+        </div>
+        <div data-anim="manifesto" style="display:flex;flex-direction:column;gap:2vh;position:relative;z-index:1">
+          <div class="t-meta" style="color:rgba(255,255,255,.78);letter-spacing:.22em">采用号召</div>
+          <h2 style="font-family:var(--sans),var(--sans-zh);font-size:min(5vw,8.8vh);line-height:1.06;letter-spacing:-.03em;font-weight:200;color:#fff">已有 11 人用 4 周<br/>跑通 73 条，<br/>路径已验证。</h2>
+          <div style="font-family:var(--sans),var(--sans-zh);font-size:max(16px,1.05vw);line-height:1.6;color:rgba(255,255,255,.86);font-weight:400;max-width:34ch;margin-top:1.4vh">请各业务线把云效议题交给 Nezha 走闭环——欢迎把你的议题也带进来。</div>
+        </div>
+        <div data-anim="signature" style="display:flex;justify-content:space-between;align-items:end;border-top:1px solid rgba(255,255,255,.22);padding-top:2vh;position:relative;z-index:1">
+          <div class="t-meta" style="color:rgba(255,255,255,.62)">哪吒 Nezha · 内部交付汇报</div>
+          <div class="t-meta" style="color:rgba(255,255,255,.62)">2026.09.23</div>
+        </div>
+      </div>
+      <div class="half" style="padding:5.6vh 3.6vw 4.4vh;justify-content:space-between">
+        <div class="chrome-min"><div class="l">TAKEAWAYS</div><div class="r">03 RULES</div></div>
+        <div data-anim="rules" style="display:flex;flex-direction:column;gap:0">
+          <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle)">
+            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--text-primary)">01</div>
+            <div>
+              <h3 class="nz-take-ttl">成果回顾（一笔带过）</h3>
+              <p class="t-body-sm">4 周 · 73 条闭环议题 · 11 人参与 · 81% 已闭环，周度从 5 涨到 33 且仍在上升。</p>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle)">
+            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--text-primary)">02</div>
+            <div>
+              <h3 class="nz-take-ttl">从一条议题开始</h3>
+              <p class="t-body-sm">议题行右侧「直接开始」或「发起讨论」即可上手，不需要装额外东西。</p>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle);border-bottom:2px solid var(--accent)">
+            <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--accent)">03</div>
+            <div>
+              <h3 class="nz-take-ttl accent">一句轻量规划</h3>
+              <p class="t-body-sm">知识沉淀从「默认关闭」切到逐步铺开——有依据、有人审才入库，节奏可控。</p>
+            </div>
+          </div>
+        </div>
+        <div data-anim="foot" class="t-meta" style="color:var(--text-helper)">→ 完 · END OF REPORT</div>
+      </div>
+    </div>
+  </div>
+</section>
