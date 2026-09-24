@@ -1,4 +1,11 @@
-import type { AgentType, PermissionMode, Plan, Task, YunxiaoWorkitem } from "../types";
+import type {
+  AgentType,
+  PermissionMode,
+  Plan,
+  PlanIssue,
+  Task,
+  YunxiaoWorkitem,
+} from "../types";
 
 const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
 const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
@@ -18,6 +25,24 @@ export function buildYunxiaoIssueLink(projectId: string, workitemId: string): st
   const workitem = workitemId.trim();
   if (!project || !workitem) return "";
   return `${YUNXIAO_WORKITEM_BASE}/project/${project}/workitem/${workitem}`;
+}
+
+/**
+ * 计划成员快照（PlanIssue）→ 讨论链路需要的云效议题壳。
+ *
+ * 计划详情里的行只有快照字段，而发起讨论的入口（`PlanLaunchDialog`）要的是
+ * `YunxiaoWorkitem`：它只用 id/编号/标题/类别做展示与方案快照，详情正文与图片
+ * 打开弹窗后再现拉（`yunxiao_get_workitem` / `yunxiao_prepare_issue_images`），
+ * 所以这里不必伪造 description / customFieldValues。
+ */
+export function planIssueToWorkitem(issue: PlanIssue): YunxiaoWorkitem {
+  return {
+    id: issue.workitemId,
+    serialNumber: issue.serialNumber,
+    subject: issue.subject,
+    categoryId: issue.category,
+    customFieldValues: [],
+  };
 }
 
 /** 读取某项目上次选择的云效 Agent（无记忆或值非法时返回 null）。 */

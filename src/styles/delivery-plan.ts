@@ -189,6 +189,21 @@ const deliveryPlan = {
     color: "var(--text-hint)",
     fontWeight: 500,
     borderBottom: "1px solid var(--border-dim)",
+    // 表头都是短词（议题/状态/关联方案），窄面板下不许折行成「关联方/案」。
+    whiteSpace: "nowrap" as const,
+  },
+  // 勾选列：窄列居中（表头与单元格共用），让勾选框与议题文字对齐。
+  dpThCheck: {
+    width: 28,
+    padding: "7px 0 7px 6px",
+    borderBottom: "1px solid var(--border-dim)",
+    whiteSpace: "nowrap" as const,
+  },
+  dpTdCheck: {
+    width: 28,
+    padding: "7px 0 7px 6px",
+    borderBottom: "1px solid var(--border-dim)",
+    verticalAlign: "top" as const,
   },
   dpTd: {
     padding: "7px 8px",
@@ -196,6 +211,76 @@ const deliveryPlan = {
     borderBottom: "1px solid var(--border-dim)",
     verticalAlign: "top" as const,
     color: "var(--text-primary)",
+  },
+  /** 议题单元格：编号 chip + 标题 + 云效链接按钮同行，标题可换行。 */
+  dpIssueCell: {
+    display: "flex" as const,
+    alignItems: "flex-start" as const,
+    gap: 6,
+  },
+  dpIssueSubject: {
+    flex: 1,
+    minWidth: 0,
+    lineHeight: 1.5,
+  },
+  // 行内「在云效打开」：默认隐形，hover 行/按钮时才亮（避免每行多一个实心按钮抢视线）。
+  dpIssueLinkBtn: {
+    flexShrink: 0,
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    width: 22,
+    height: 22,
+    padding: 0,
+    borderRadius: 5,
+    border: "1px solid transparent",
+    background: "transparent",
+    color: "var(--text-hint)",
+    cursor: "pointer",
+    opacity: 0.55,
+    transition: "background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s",
+  },
+  dpIssueLinkBtnHover: {
+    flexShrink: 0,
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    width: 22,
+    height: 22,
+    padding: 0,
+    borderRadius: 5,
+    border: "1px solid var(--border-medium)",
+    background: "var(--bg-hover)",
+    color: "var(--text-primary)",
+    cursor: "pointer",
+    opacity: 1,
+    transition: "background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s",
+  },
+  /** 动作列：主操作＋「…」菜单贴右对齐（列窄，动作与正文拉开距离，静止态更安静）。 */
+  dpTdActions: {
+    padding: "7px 8px",
+    fontSize: 12.5,
+    borderBottom: "1px solid var(--border-dim)",
+    verticalAlign: "top" as const,
+    color: "var(--text-primary)",
+    textAlign: "right" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  /** 多选动作条（贴在议题表上方）：与云效议题列表的底栏同语义，位置改顶部避免遮挡表尾。 */
+  dpSelectBar: {
+    display: "flex" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    padding: "6px 10px",
+    marginBottom: 8,
+    borderRadius: 8,
+    border: "1px solid var(--border-dim)",
+    background: "var(--bg-hover)",
+  },
+  dpSelectCount: {
+    fontSize: 12,
+    color: "var(--text-secondary)",
+    fontVariantNumeric: "tabular-nums" as const,
   },
   dpEmpty: {
     color: "var(--text-hint)",

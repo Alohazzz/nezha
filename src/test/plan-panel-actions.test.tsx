@@ -43,6 +43,17 @@ const renderView = (batch: DeliveryPlan) =>
       onDeliveryPlansChange={() => undefined}
       onGoYunxiao={() => undefined}
       onStartDirectExecution={() => undefined}
+      onCreatePlan={() => ({
+        id: "draft",
+        projectId: "p1",
+        name: "",
+        issues: [],
+        status: "draft",
+        createdAt: 0,
+      })}
+      onStartPlanDiscussion={() => undefined}
+      onCancelPlan={() => undefined}
+      onSetParentPlan={() => undefined}
     />,
   );
 
