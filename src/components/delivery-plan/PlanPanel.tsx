@@ -31,10 +31,22 @@ import {
   PLAN_STATUS_TONE,
 } from "./labels";
 import { PlanIssueList } from "./PlanIssueList";
+import { TargetBranchEditor } from "./TargetBranchEditor";
 
 const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 /** 合并讨论的软上限：与云效议题列表同口径（讨论上下文与图片量的现实约束）。 */
 const MERGE_SELECT_SOFT_LIMIT = 10;
+
+/** 「提交 MR」被禁用的原因（null = 可提交）。
+ *
+ *  同一套判据给按钮 `disabled` 与悬停提示共用：此前禁用是静默的，用户点了没反应也无法
+ *  区分「操作错了」和「缺前置条件」。空目标这一条额外指向补记入口。 */
+function submitMrBlockReason(plan: DeliveryPlan): string | null {
+  if (plan.status !== "active") return "计划不在进行中状态，无法提交 MR";
+  if (!plan.targetBranch) return "未指定合并回目标分支，无法提交 MR；请先在上方分支行补记目标分支";
+  if (plan.worktreeMissing) return "WorkTree 缺失，无法提交 MR；请先恢复计划代码目录";
+  return null;
+}
 
 /** 欢迎页「计划」视图（mockup ①）：侧栏（项目过滤＋计划列表＋创建）＋详情
  *  （议题表全自动派生状态）。
@@ -262,6 +274,11 @@ export function PlanPanel({
     }
   }
 
+  /** 补记 / 修改合并目标分支成功后，用后端返回的记录替换本地项（不做乐观更新）。 */
+  function handleTargetUpdated(updated: DeliveryPlan) {
+    onDeliveryPlansChange(deliveryPlans.map((p) => (p.id === updated.id ? updated : p)));
+  }
+
   async function handleRemoveIssue(workitemId: string) {
     if (!selected || !project) return;
     try {
@@ -392,19 +409,19 @@ export function PlanPanel({
                   <Plus size={13} />
                   添加议题
                 </button>
-                <button
-                  type="button"
-                  style={s.dpBtn}
-                  disabled={
-                    selected.status !== "active" ||
-                    !selected.targetBranch ||
-                    selected.worktreeMissing
-                  }
-                  onClick={() => setSubmitPlan(selected)}
-                >
-                  <Send size={13} />
-                  提交 MR
-                </button>
+                {/* 禁用时用外层 span 承载 title：按钮 disabled 后自身不派发 hover 事件，
+                    直接把 title 挂在 button 上会给不出提示（「点了没反应」）。 */}
+                <span style={s.dpBtnWrap} title={submitMrBlockReason(selected) ?? undefined}>
+                  <button
+                    type="button"
+                    style={s.dpBtn}
+                    disabled={submitMrBlockReason(selected) !== null}
+                    onClick={() => setSubmitPlan(selected)}
+                  >
+                    <Send size={13} />
+                    提交 MR
+                  </button>
+                </span>
                 <button
                   type="button"
                   style={s.dpBtn}
@@ -427,7 +444,16 @@ export function PlanPanel({
 
               <div style={s.dpBranchRow}>
                 {selected.branch} ← {selected.baseBranch} →{" "}
-                {selected.targetBranch || "（未指定合并目标）"}
+                {/* 项目缺失（脏数据）时退回静态文本，保留原有展示语义。 */}
+                {project ? (
+                  <TargetBranchEditor
+                    plan={selected}
+                    projectPath={project.path}
+                    onUpdated={handleTargetUpdated}
+                  />
+                ) : (
+                  selected.targetBranch || "（未指定合并目标）"
+                )}
               </div>
 
               <div style={s.dpSummary}>

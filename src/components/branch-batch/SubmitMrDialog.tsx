@@ -22,6 +22,8 @@ export function SubmitMrDialog({
   const [recommended, setRecommended] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 目标分支留空：弹层虽打不开此路径，仍给出可见原因（兜底，不做静默 return）。 */
+  const missingTarget = !batch.targetBranch.trim();
 
   useEffect(() => {
     // 目标分支留空的批不能提交 MR（后端同口径拦截）；按钮禁用并给出提示。
@@ -41,7 +43,11 @@ export function SubmitMrDialog({
   }, [projectPath, batch.worktreeRepo, batch.targetBranch]);
 
   const submit = useCallback(async () => {
-    if (!batch.targetBranch.trim() || busy) return;
+    if (missingTarget) {
+      setError("未指定合并回目标分支，无法提交 MR；请先在计划详情补记目标分支");
+      return;
+    }
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -59,7 +65,7 @@ export function SubmitMrDialog({
     } finally {
       setBusy(false);
     }
-  }, [busy, reviewers, projectPath, projectId, batch.id, batch.targetBranch, batch.worktreeRepo, onDone, onClose]);
+  }, [busy, missingTarget, reviewers, projectPath, projectId, batch.id, batch.worktreeRepo, onDone, onClose]);
 
   return (
     <div className="build-dialog-overlay">

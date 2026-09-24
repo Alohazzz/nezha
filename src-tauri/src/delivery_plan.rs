@@ -393,6 +393,98 @@ pub fn get_delivery_plan(project_id: String, batch_id: String) -> Result<Option<
         .find(|b| b.id == batch_id))
 }
 
+/// 补记目标分支的纯校验（不碰盘 / 不跑 git）：`Err` 即应拒绝写入。
+///
+/// 抽成纯函数是为了给这条路径留下测试接缝——命令本体要做读盘与分支存在性探测，单测里
+/// 无法只跑校验逻辑。
+fn validate_target_branch_update(
+    status: &str,
+    source_branch: &str,
+    target_branch: &str,
+) -> Result<(), String> {
+    let target_branch = target_branch.trim();
+    if target_branch.is_empty() {
+        return Err("目标分支不能为空".to_string());
+    }
+    if status != "active" {
+        return Err("只有进行中的计划才能修改合并目标分支".to_string());
+    }
+    if source_branch == target_branch {
+        return Err("源分支不能与目标分支相同".to_string());
+    }
+    Ok(())
+}
+
+/// 补记 / 修改计划的「合并回目标分支」。
+///
+/// 计划创建时允许留空目标分支（见 `create_delivery_plan`），但空目标会让提交 MR / 合并回
+/// 全部拦截，而创建之后此前没有任何写入入口——存量计划因此永久锁死。本命令补上这条路径。
+///
+/// 只改 `target_branch`：**不**重命名分支、**不** push、**不**动 worktree。分支名里的目标段
+/// 是创建时的产物（见 `delivery_plan_branch_name`），事后改目标只影响 MR 目标。
+#[tauri::command]
+pub async fn update_delivery_plan_target(
+    project_id: String,
+    project_path: String,
+    repo_path: Option<String>,
+    plan_id: String,
+    target_branch: String,
+) -> Result<DeliveryPlan, String> {
+    let target_branch = target_branch.trim().to_string();
+    // 读盘校验放 spawn_blocking：同步文件 I/O 不占 Tokio 运行时。
+    let read_project = project_id.clone();
+    let read_plan = plan_id.clone();
+    let existing = tokio::task::spawn_blocking(move || {
+        load_project_batches_sync(read_project)?
+            .into_iter()
+            .find(|b| b.id == read_plan)
+            .ok_or_else(|| "DeliveryPlan not found".to_string())
+    })
+    .await
+    .map_err(|e| format!("Update plan target task panicked: {e}"))??;
+    validate_target_branch_update(&existing.status, &existing.branch, &target_branch)?;
+    // 目标分支必须真实存在，把拼写错误挡在写入前。与提交 MR 同一仓库口径（计划记录的
+    // worktree_repo 优先，缺省回落调用方传入的仓库路径）。
+    let repo = existing.worktree_repo.clone().or(repo_path);
+    // 本地存在即可放行——查本地 ref 不需要网络，离线也能补记本地分支。
+    if !local_branch_exists(project_path.clone(), repo.clone(), target_branch.clone())
+        .await
+        .unwrap_or(false)
+    {
+        // 本地没有 → 用 live ls-remote 判远端。这里**判不了即拒绝**：放行会让拼写错误悄悄
+        // 写进去，把问题推迟到 push 时变成一条发不出的 MR；本地校验失败（路径/仓库异常）
+        // 也走这条路径报错，而不是静默接受。
+        match remote_branch_exists(project_path, repo, target_branch.clone()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(format!(
+                    "目标分支「{target_branch}」在本地与远端都不存在，请检查分支名"
+                ))
+            }
+            Err(e) => {
+                return Err(format!(
+                    "无法校验目标分支「{target_branch}」是否存在（{e}）；请确认分支名与网络后重试"
+                ))
+            }
+        }
+    }
+
+    // 读-改-写整段进 spawn_blocking，缩短临界区并让磁盘 I/O 离开运行时。
+    tokio::task::spawn_blocking(move || -> Result<DeliveryPlan, String> {
+        let mut batches = load_project_batches_sync(project_id.clone())?;
+        let updated = batches
+            .iter_mut()
+            .find(|b| b.id == plan_id)
+            .ok_or_else(|| "DeliveryPlan not found".to_string())?;
+        updated.target_branch = target_branch;
+        let result = updated.clone();
+        save_project_batches_sync(project_id, batches)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("Update plan target task panicked: {e}"))?
+}
+
 /// 从 batches.json 整条移除批次记录（区别于关计划：记录不保留）。
 fn remove_batch_record(project_id: String, batch_id: &str) -> Result<(), String> {
     let mut batches = load_project_batches_sync(project_id.clone())?;
@@ -965,6 +1057,25 @@ mod tests {
             "hotfix/v2.20260901/master/收费端"
         );
         assert_eq!(delivery_plan_branch_name("fix", "", "develop", "挂号"), "fix/develop/挂号");
+    }
+
+    #[test]
+    fn target_branch_update_accepts_a_real_branch_on_an_active_plan() {
+        assert!(validate_target_branch_update("active", "fix/develop/挂号", "master").is_ok());
+        // 首尾空白要先 trim 再比对（用户从别处粘贴常带空格）。
+        assert!(validate_target_branch_update("active", "fix/develop/挂号", "  master  ").is_ok());
+    }
+
+    #[test]
+    fn target_branch_update_rejects_empty_status_and_self_reference() {
+        // 空目标：补记的本质是让空目标变得可用，写入空值没有意义。
+        assert!(validate_target_branch_update("active", "fix/develop/挂号", "   ").is_err());
+        // 已提交 MR / 已合并 / 已关闭的计划目标已固化，改了会与 MR 记录不一致。
+        assert!(validate_target_branch_update("review", "fix/develop/挂号", "master").is_err());
+        assert!(validate_target_branch_update("merged", "fix/develop/挂号", "master").is_err());
+        assert!(validate_target_branch_update("closed", "fix/develop/挂号", "master").is_err());
+        // 源 = 目标会造出畸形 MR；trim 后的值参与比对。
+        assert!(validate_target_branch_update("active", "master", " master ").is_err());
     }
 
     #[test]

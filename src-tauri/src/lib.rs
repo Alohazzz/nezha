@@ -513,6 +513,7 @@ pub fn run() {
             delivery_plan::preview_delivery_plan_branch,
             delivery_plan::list_delivery_plans,
             delivery_plan::get_delivery_plan,
+            delivery_plan::update_delivery_plan_target,
             delivery_plan::close_delivery_plan,
             delivery_plan::merge_delivery_plan,
             delivery_plan::check_delivery_plan_branch,

@@ -345,6 +345,55 @@ const deliveryPlan = {
     fontSize: 12,
     cursor: "pointer",
   },
+  // 分支行里的「合并回目标分支」可编辑控件（空目标计划补记入口）。
+  dpTargetBtn: {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: 4,
+    padding: "0 4px",
+    border: "none",
+    background: "transparent",
+    color: "var(--text-hint)",
+    fontFamily: "var(--font-mono)",
+    fontSize: 11.5,
+    cursor: "pointer",
+  },
+  // 未指定目标时强调「这里可点」：accent 文字 + 虚线底边，与普通灰字区分开。
+  dpTargetBtnEmpty: {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: 4,
+    padding: "0 4px",
+    border: "none",
+    borderBottom: "1px dashed var(--accent)",
+    background: "transparent",
+    color: "var(--accent)",
+    fontFamily: "var(--font-mono)",
+    fontSize: 11.5,
+    cursor: "pointer",
+  },
+  dpTargetEdit: {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    gap: 6,
+  },
+  dpTargetSelectTrigger: {
+    minWidth: 140,
+    height: 22,
+    padding: "0 8px",
+    borderRadius: 6,
+    border: "1px solid var(--border-dim)",
+    background: "var(--bg-hover)",
+    color: "var(--text-primary)",
+    fontSize: 11.5,
+    fontFamily: "var(--font-mono)",
+  },
+  dpTargetError: {
+    color: "var(--danger-fg)",
+    fontSize: 11,
+  },
+  // 禁用按钮的悬停提示载体：disabled 的 button 不派发 hover，title 只能挂在包裹层上。
+  dpBtnWrap: { display: "inline-flex" as const },
   dpSpacer: { flex: 1 },
 } satisfies Record<string, React.CSSProperties>;
 

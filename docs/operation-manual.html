@@ -716,8 +716,8 @@
       <ul>
         <li><strong>状态徽标</strong>全自动流转：<code>进行中</code>（创建即此）→ <code>待评审</code>（提交 MR 后）→ <code>已合并</code>（MR 合并后）；删除 / 关闭落 <code>已关闭</code>。</li>
         <li>按实际情况附带徽标：<strong>主检出</strong>（未建 worktree 的计划）、<strong>WorkTree 缺失</strong>、<strong>运行程序缺失</strong>、<strong>超期</strong>（创建超过 14 天且未合并 / 未关闭）。</li>
-        <li><strong>动作行</strong>：「<strong>添加议题</strong>」（跳云效议题视图补员）、「<strong>提交 MR</strong>」（见 6.3；计划非进行中、未指定目标分支或 WorkTree 缺失时禁用）、「<strong>打开</strong>」（在文件管理器中打开计划的代码目录）、「<strong>删除计划</strong>」。</li>
-        <li><strong>分支行</strong>：<code>源分支 ← 基础分支 → 目标分支</code>，未指定合并目标时显示「（未指定合并目标）」。</li>
+        <li><strong>动作行</strong>：「<strong>添加议题</strong>」（跳云效议题视图补员）、「<strong>提交 MR</strong>」（见 6.3；计划非进行中、未指定目标分支或 WorkTree 缺失时禁用——<strong>禁用时悬停会说明原因</strong>，未指定目标分支会指向下方分支行的补记入口）、「<strong>打开</strong>」（在文件管理器中打开计划的代码目录）、「<strong>删除计划</strong>」。</li>
+        <li><strong>分支行</strong>：<code>源分支 ← 基础分支 → 目标分支</code>，未指定合并目标时显示「（未指定合并目标）」。<strong>目标分支可点开补记 / 修改</strong>（仅<strong>进行中</strong>的计划；已提交 MR / 已合并的计划目标已固化，不再可改）：点击后从该仓库的本地 ∪ 远端分支里选择，选中即回写——补记后「提交 MR」随即可用。</li>
       </ul>
       <h4>议题表与派生状态</h4>
       <p>详情顶部的<strong>状态汇总条</strong>先给出各状态计数；下方议题表逐行列出议题、<strong>状态</strong>、<strong>关联方案</strong>与行内动作。<strong>状态与方案关联全自动派生</strong>，无手动维护入口，判定自上而下取第一个命中：</p>
@@ -780,7 +780,7 @@
           <tr><td><strong>版本</strong></td><td>分支名里的版本段，可取云效版本（如 <code>v2.20260901</code>，自动去掉云效版本名的尾部 <code>.0</code>），也可手输；留空则不生成版本段</td></tr>
           <tr><td><strong>源分支</strong></td><td>按 <code>类型/版本/目标分支/描述</code> 自动生成、可手改（如 <code>fix/v2.20260901/develop/锁号地址挂号异常问题</code>）；点「检测」校验是否与远端 / 本地重名，冲突时可「继续使用远端分支」或「改名」</td></tr>
           <tr><td><strong>基础分支</strong></td><td>从哪个分支切出；默认带出所选仓库的<strong>当前分支</strong>，可手改</td></tr>
-          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标；填了该分支名会同时作为源分支名里的目标段（恒带出）。<strong>允许留空</strong> = 暂不指定合并目标：源分支名不带目标段，计划照常创建，但不能提交 MR / 合并回</td></tr>
+          <tr><td><strong>合并回目标分支</strong></td><td>MR 的合并目标；填了该分支名会同时作为源分支名里的目标段（恒带出）。<strong>允许留空</strong> = 暂不指定合并目标：源分支名不带目标段，计划照常创建，但不能提交 MR / 合并回；<strong>留空后可在计划详情分支行点开补记</strong>，不必删掉重建（重建会生成另一个分支名，已完成的提交仍留在原分支上）</td></tr>
           <tr><td><strong>另建 worktree</strong></td><td><strong>默认不勾选</strong>——计划分支直接切在主工作区，任务与提交都落在该分支上；需要并行隔离时才勾选，并填「代码目录」</td></tr>
         </tbody>
       </table>
