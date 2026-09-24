@@ -1,0 +1,84 @@
+/* 列表行内动作（云效议题列表 / 计划议题表共用）
+ *
+ * 行内动作一律是可直接点击的文字按钮——不做二级菜单（多一层会多一次点击）。
+ * 压低视觉重量靠三件事：
+ *   1. 无填充、无描边，默认只用文字色（主操作 accent、次级 muted），hover 才给底；
+ *   2. 主操作常驻，次级动作（讨论 / 移到计划 / 移出计划）行悬停或行内聚焦时才现身
+ *      （`visibility`，占位不塌陷、不产生点击热区，避免误触看不见的按钮）；
+ *   3. 破坏性动作平时不飘红，只在自身 hover 时转 danger 色。
+ */
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex-wrap: nowrap;
+}
+
+.row-actions-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+
+/* 主操作：accent 文字、无填充——行内一眼可辨，但不与议题标题抢视线。 */
+.row-actions-btn[data-tone="primary"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.row-actions-btn[data-tone="secondary"] {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* 破坏性动作平时与次级同色，只在自身 hover 时转 danger，避免每行都飘红。 */
+.row-actions-btn[data-tone="danger"] {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.row-actions-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-dim);
+  color: var(--text-primary);
+}
+
+.row-actions-btn[data-tone="danger"]:hover {
+  color: var(--danger-fg);
+}
+
+.row-actions-btn:disabled {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-hint);
+  cursor: not-allowed;
+}
+
+.row-actions-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 次级动作：静止态收起（占位保留，避免行高/列宽跳动）。 */
+.row-actions-secondary {
+  visibility: hidden;
+}
+
+.row-actions-host:hover .row-actions-secondary,
+.row-actions-host:focus-within .row-actions-secondary {
+  visibility: visible;
+}

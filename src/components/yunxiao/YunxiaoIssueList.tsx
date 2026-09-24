@@ -86,6 +86,7 @@ export function YunxiaoIssueList({
           return (
             <div
               key={issue.id}
+              className="row-actions-host"
               style={
                 checked ? s.yunxiaoIssueCardSelected : hover ? s.yunxiaoIssueCardHover : s.yunxiaoIssueCard
               }
@@ -136,32 +137,36 @@ export function YunxiaoIssueList({
                   {t("yunxiao.imported")}
                 </span>
               ) : !selectionMode ? (
-                <>
+                /* 顺序：次级动作在左（收起时不占视觉），主操作永远在最右——悬停现身时主操作不位移。 */
+                <div className="row-actions" data-testid={`yunxiao-issue-actions-${issue.id}`}>
                   <button
                     type="button"
-                    style={hover ? s.yunxiaoDirectBtnHover : s.yunxiaoDirectBtn}
-                    title={t("yunxiao.direct.rowHint")}
-                    onClick={() => onDirectStart(issue)}
-                  >
-                    <Zap size={12} strokeWidth={2.2} fill="currentColor" />
-                    {t("yunxiao.direct.start")}
-                  </button>
-                  <button
-                    type="button"
-                    style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
+                    className="row-actions-btn row-actions-secondary"
+                    data-tone="secondary"
                     onClick={() => onDiscuss(issue)}
                   >
                     {t("yunxiao.discussion.start")}
                   </button>
                   <button
                     type="button"
-                    style={hover ? s.yunxiaoImportBtnHover : s.yunxiaoImportBtn}
+                    className="row-actions-btn row-actions-secondary"
+                    data-tone="secondary"
                     title="添加到计划"
                     onClick={() => onAddToPlan(issue)}
                   >
                     加到计划
                   </button>
-                </>
+                  <button
+                    type="button"
+                    className="row-actions-btn"
+                    data-tone="primary"
+                    title={t("yunxiao.direct.rowHint")}
+                    onClick={() => onDirectStart(issue)}
+                  >
+                    <Zap size={12} strokeWidth={2.2} fill="currentColor" />
+                    {t("yunxiao.direct.start")}
+                  </button>
+                </div>
               ) : null}
             </div>
           );

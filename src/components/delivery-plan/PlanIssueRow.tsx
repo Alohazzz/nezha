@@ -1,11 +1,10 @@
 import { useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, MessagesSquare, Trash2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import type { Plan, PlanIssue } from "../../types";
 import { buildYunxiaoIssueLink } from "../../utils/yunxiao";
 import s from "../../styles";
 import { dpChipToneStyle } from "../../styles/delivery-plan";
-import { RowActionsMenu } from "../row-actions/RowActionsMenu";
 import { ISSUE_STATUS_LABEL, ISSUE_STATUS_TONE, SCHEME_STATUS_LABEL } from "./labels";
 import type { IssueStatus } from "./deriveIssueStatus";
 
@@ -18,9 +17,9 @@ export interface PlanIssueRowData {
 /** 计划详情里的一行议题（mockup 表格行）：勾选框＋派生状态 chip＋关联方案 chip＋动作。
  *  行组件独立防列表重渲染。
  *
- *  行内动作分两层：常驻一个低调「主操作」文字按钮（未开始 / 已结束的「直接开始」「重新
- *  发起」，讨论中 / 讨论完成的中性「直接开始」），其余（「单条讨论」「移出计划」）收进行尾
- *  「…」菜单——整行静止态不再是一排实心按钮（见 `styles/row-actions.css`）。
+ *  行内动作都是一次点击直达的文字按钮（无二级菜单）：主操作（「直接开始」/「重新发起」）
+ *  常驻，次级动作（「单条讨论」「移出计划」）行悬停时才现身——整行静止态不再是一排实心
+ *  按钮（见 `styles/row-actions.css`）。
  *
  *  「单条讨论」与「在云效打开」跟云效议题列表同一口径。已被任务或存活方案占用的议题
  *  （`occupied`）不再提供讨论入口：再发起会为同一议题多造一份方案，与云效列表的
@@ -118,8 +117,29 @@ export function PlanIssueRow({
             ))}
       </td>
       <td style={s.dpTdActions}>
+        {/* 顺序：次级动作在左（收起时不占视觉），主操作永远在最右——悬停现身时主操作不位移。 */}
         <div className="row-actions" data-testid={`plan-issue-actions-${issue.workitemId}`}>
-          {/* 主操作常驻（低饱和 accent 文字按钮）；讨论与移出计划收进「…」菜单。 */}
+          {!occupied && (
+            <button
+              type="button"
+              className="row-actions-btn row-actions-secondary"
+              data-tone="secondary"
+              title="只讨论这一条议题（与合并讨论同一链路）"
+              onClick={() => onDiscuss(issue)}
+            >
+              单条讨论
+            </button>
+          )}
+          {onRemove && (
+            <button
+              type="button"
+              className="row-actions-btn row-actions-secondary"
+              data-tone="danger"
+              onClick={onRemove}
+            >
+              移出计划
+            </button>
+          )}
           {status === "not_started" && (
             <button type="button" className="row-actions-btn" data-tone="primary" onClick={onStart}>
               直接开始
@@ -135,33 +155,6 @@ export function PlanIssueRow({
               直接开始
             </button>
           )}
-          <RowActionsMenu
-            label={`${issue.serialNumber} 更多操作`}
-            items={[
-              ...(occupied
-                ? []
-                : [
-                    {
-                      key: "discuss",
-                      label: "单条讨论",
-                      icon: <MessagesSquare size={13} strokeWidth={2.1} />,
-                      title: "只讨论这一条议题（与合并讨论同一链路）",
-                      onSelect: () => onDiscuss(issue),
-                    },
-                  ]),
-              ...(onRemove
-                ? [
-                    {
-                      key: "remove",
-                      label: "移出计划",
-                      icon: <Trash2 size={13} strokeWidth={2.1} />,
-                      danger: true,
-                      onSelect: onRemove,
-                    },
-                  ]
-                : []),
-            ]}
-          />
         </div>
       </td>
     </tr>

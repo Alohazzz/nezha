@@ -119,11 +119,6 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
     });
   });
 
-  /** 次级行内动作收在行尾「…」菜单里，先展开再断言 / 点击。 */
-  async function openRowMenu(user: ReturnType<typeof userEvent.setup>, serialNumber: string) {
-    await user.click(await screen.findByLabelText(`${serialNumber} 更多操作`));
-  }
-
   it("每行给出跳云效原议题的链接", async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -136,24 +131,39 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
     );
   });
 
-  it("行内默认只保留一个低调主操作，次级动作收进「…」菜单", async () => {
+  it("行内动作是一次点击直达的文字按钮，不做二级菜单", async () => {
+    const onCreatePlan = vi.fn<(projectId: string, issues: PlanIssue[]) => Plan>(
+      () => makeDraftPlan(),
+    );
     const user = userEvent.setup();
-    renderPanel();
+    renderPanel({ onCreatePlan });
 
-    // 静止态没有常驻的次级按钮（曾经的「单条讨论 / 移出计划」实心按钮）。
-    expect(screen.queryByRole("button", { name: "单条讨论" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "移出计划" })).toBeNull();
+    const cell = screen.getByTestId("plan-issue-actions-w-9");
+    // 每行「次级动作 + 主操作」全在行内，没有「…」触发器 / 弹出菜单。
+    const buttons = within(cell).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual([
+      "单条讨论",
+      "移出计划",
+      "直接开始",
+    ]);
+    expect(screen.queryByRole("button", { name: /更多操作/ })).toBeNull();
 
-    // 每行动作区只有「主操作 + …触发器」两个按钮（无任务/方案时三行皆未开始）。
-    for (const workitemId of ["w-9", "w-8", "w-0"]) {
-      const cell = screen.getByTestId(`plan-issue-actions-${workitemId}`);
-      expect(within(cell).getAllByRole("button")).toHaveLength(2);
-      expect(within(cell).getByRole("button", { name: "直接开始" })).toBeTruthy();
+    // 前两个是次级（行悬停才现身），最后一个是常驻主操作且必须压在最右——
+    // 悬停让次级现身时主操作不位移。
+    for (const secondary of buttons.slice(0, 2)) {
+      expect(secondary.className).toContain("row-actions-secondary");
     }
+    expect(buttons[2].className).toBe("row-actions-btn");
+    expect(buttons[2].dataset.tone).toBe("primary");
+    expect(cell.lastElementChild).toBe(buttons[2]);
+    expect(buttons[1].dataset.tone).toBe("danger");
 
-    await openRowMenu(user, "QHDK-30439");
-    expect(await screen.findByRole("menuitem", { name: "单条讨论" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "移出计划" })).toBeTruthy();
+    // 次级动作无需先展开菜单，直接点即可发起。
+    await user.click(within(cell).getByRole("button", { name: "单条讨论" }));
+    await waitFor(() => expect(onCreatePlan).toHaveBeenCalledTimes(1));
+    expect(onCreatePlan.mock.calls[0][1]).toEqual([
+      { workitemId: "w-9", serialNumber: "QHDK-30439", subject: "议题 9", category: "" },
+    ]);
   });
 
   it("单条讨论走与云效议题列表同一条发起链路（N=1）", async () => {
@@ -163,8 +173,8 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
     const user = userEvent.setup();
     renderPanel({ onCreatePlan });
 
-    await openRowMenu(user, "QHDK-30439");
-    await user.click(await screen.findByRole("menuitem", { name: "单条讨论" }));
+    const discussButtons = await screen.findAllByRole("button", { name: "单条讨论" });
+    await user.click(discussButtons[0]);
 
     // 对话框打开即落 draft 方案，议题快照只含这一条。
     await waitFor(() => expect(onCreatePlan).toHaveBeenCalledTimes(1));
@@ -176,14 +186,14 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
     expect(await screen.findByText("讨论补充（可选）")).toBeTruthy();
   });
 
-  it("移出计划从行内菜单触发", async () => {
+  it("移出计划由行内破坏性按钮直接触发", async () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await openRowMenu(user, "QHDK-30438");
-    await user.click(await screen.findByRole("menuitem", { name: "移出计划" }));
+    const cell = screen.getByTestId("plan-issue-actions-w-8");
+    await user.click(within(cell).getByRole("button", { name: "移出计划" }));
 
-    // 菜单项接上了既有的移出链路（后端移除后回吐更新过的计划）。
+    // 直接接上既有的移出链路（后端移除后回吐更新过的计划）。
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith(
         "remove_delivery_plan_issue",
@@ -218,7 +228,7 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
     await waitFor(() => expect(screen.queryByText("已选 2 项")).toBeNull());
   });
 
-  it("已被任务或存活方案占用的议题：勾选框禁用且菜单里不提供讨论入口", async () => {
+  it("已被任务或存活方案占用的议题：勾选框禁用且不提供讨论入口", async () => {
     const occupiedTask = {
       id: "t1",
       projectId: "p1",
@@ -229,19 +239,19 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
       createdAt: 1,
       yunxiaoWorkitemId: "w-9",
     } as Task;
-    const user = userEvent.setup();
     renderPanel({ tasks: [occupiedTask] });
 
     const box = (await screen.findByLabelText("选择议题 QHDK-30439")) as HTMLInputElement;
     expect(box).toBeDisabled();
 
-    // 被占用行只剩「移出计划」，讨论入口收起。
-    await openRowMenu(user, "QHDK-30439");
-    expect(await screen.findByRole("menuitem", { name: "移出计划" })).toBeTruthy();
-    expect(screen.queryByRole("menuitem", { name: "单条讨论" })).toBeNull();
-
-    // 自由议题的菜单里仍有讨论入口。
-    await openRowMenu(user, "QHDK-30438");
-    expect(await screen.findByRole("menuitem", { name: "单条讨论" })).toBeTruthy();
+    // 被占用行派生出「执行中」，没有主操作，只剩「移出计划」；讨论入口收起。
+    const occupiedCell = screen.getByTestId("plan-issue-actions-w-9");
+    expect(
+      within(occupiedCell)
+        .getAllByRole("button")
+        .map((b) => b.textContent?.trim()),
+    ).toEqual(["移出计划"]);
+    // 自由议题仍有讨论入口。
+    expect(screen.getAllByRole("button", { name: "单条讨论" })).toHaveLength(2);
   });
 });
