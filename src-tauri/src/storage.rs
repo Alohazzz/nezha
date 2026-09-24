@@ -169,6 +169,11 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub yunxiao_plan_discussion: Option<bool>,
+    /// 无人值守执行：agent 一轮结束（hook `Stop` → awaiting_review）时，前端自动
+    /// 调 `complete_task` 收尾，使下游依赖满足、整链无人接续。
+    /// 后端据此抑制「需要你的确认」系统通知（见 `event_watcher::emit_active_status`）。
+    #[serde(rename = "unattended", default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<bool>,
 }
 
 /// 多议题联合方案（Plan）里的议题快照：发起时从云效列表抄录，预览/确认页离线可用。
@@ -648,6 +653,7 @@ mod tests {
         assert_eq!(task.branch_kind, None);
         assert_eq!(task.plan_id, None);
         assert_eq!(task.yunxiao_plan_discussion, None);
+        assert_eq!(task.unattended, None);
     }
 
     #[test]

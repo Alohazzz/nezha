@@ -11,7 +11,9 @@ import {
   isDependencySatisfied,
   orderWaitingQueue,
   resolveMaxConcurrent,
+  resolvePlanTodoLaunch,
   selectAutoStart,
+  shouldAutoCompleteOnStop,
 } from "../utils/planQueue";
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -458,5 +460,62 @@ describe("buildWaitingBadges", () => {
       {},
     );
     expect(badges.size).toBe(0);
+  });
+});
+
+describe("shouldAutoCompleteOnStop", () => {
+  it("无人值守 + awaiting_review → true（一轮结束自动收尾）", () => {
+    expect(shouldAutoCompleteOnStop({ unattended: true }, "awaiting_review")).toBe(true);
+  });
+
+  it("未开启无人值守 → 永不自动收尾（即便停在 awaiting_review）", () => {
+    expect(shouldAutoCompleteOnStop({}, "awaiting_review")).toBe(false);
+    expect(shouldAutoCompleteOnStop({ unattended: false }, "awaiting_review")).toBe(false);
+  });
+
+  it("无人值守但非 awaiting_review → false（只在 Stop 收尾，其他状态不碰）", () => {
+    const others: TaskStatus[] = [
+      "todo",
+      "pending",
+      "waiting_deps",
+      "running",
+      "input_required",
+      "detached",
+      "interrupted",
+      "done",
+      "failed",
+      "cancelled",
+    ];
+    for (const status of others) {
+      expect(shouldAutoCompleteOnStop({ unattended: true }, status)).toBe(false);
+    }
+  });
+});
+
+describe("resolvePlanTodoLaunch", () => {
+  it("无人值守 → waiting_deps（整链交调度器）+ 强制 full_access", () => {
+    expect(
+      resolvePlanTodoLaunch({ unattended: true, permissionMode: "ask" }),
+    ).toEqual({ initialStatus: "waiting_deps", permissionMode: "full_access" });
+  });
+
+  it("无人值守覆盖「生成待办」入口的选择：不再停在 todo，也不再沿用用户的 auto_edit", () => {
+    expect(
+      resolvePlanTodoLaunch({ unattended: true, autoStart: false, permissionMode: "auto_edit" }),
+    ).toEqual({ initialStatus: "waiting_deps", permissionMode: "full_access" });
+  });
+
+  it("autoStart 无无人值守 → waiting_deps + 权限原样（现状不变）", () => {
+    expect(resolvePlanTodoLaunch({ autoStart: true, permissionMode: "ask" })).toEqual({
+      initialStatus: "waiting_deps",
+      permissionMode: "ask",
+    });
+  });
+
+  it("普通「生成待办」→ todo + 权限原样（不自动跑）", () => {
+    expect(resolvePlanTodoLaunch({ permissionMode: "auto_edit" })).toEqual({
+      initialStatus: "todo",
+      permissionMode: "auto_edit",
+    });
   });
 });

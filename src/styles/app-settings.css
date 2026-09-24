@@ -76,3 +76,41 @@
 .app-settings-toggle[data-checked="true"] .app-settings-toggle-knob {
   transform: translateX(16px);
 }
+
+/* 紧凑变体：塞进方案对话框的设置行（不占满整行、无边框卡片观感）。 */
+.app-settings-toggle.plan-unattended-toggle {
+  width: auto;
+  gap: 8px;
+  padding: 4px 8px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.app-settings-toggle.plan-unattended-toggle .app-settings-toggle-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.app-settings-toggle.plan-unattended-toggle .app-settings-toggle-track {
+  width: 32px;
+  height: 19px;
+  padding: 2px;
+}
+
+.app-settings-toggle.plan-unattended-toggle .app-settings-toggle-knob {
+  width: 15px;
+  height: 15px;
+}
+
+.app-settings-toggle.plan-unattended-toggle[data-checked="true"] .app-settings-toggle-knob {
+  transform: translateX(13px);
+}
+
+/* 无人值守强制 YOLO 的提示行（随勾选出现）。 */
+.plan-unattended-hint {
+  flex-basis: 100%;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}

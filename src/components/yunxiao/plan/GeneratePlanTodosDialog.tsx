@@ -17,6 +17,7 @@ import {
   setLastYunxiaoPermission,
 } from "../../../utils/yunxiao";
 import { useI18n } from "../../../i18n";
+import { UnattendedHint, UnattendedToggle } from "./UnattendedToggle";
 import s from "../../../styles";
 
 interface RowState {
@@ -46,6 +47,7 @@ export function GeneratePlanTodosDialog({
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
+    unattended?: boolean;
   }) => Promise<boolean>;
   onClose: () => void;
 }) {
@@ -67,6 +69,8 @@ export function GeneratePlanTodosDialog({
     () => getLastYunxiaoPermission(plan.projectId) ?? "ask",
   );
   const [creating, setCreating] = useState(false);
+  /** 无人值守：不弹确认即刻起跑，权限强制 YOLO。 */
+  const [unattended, setUnattended] = useState(false);
 
   useEffect(() => {
     invoke<AgentEnabledState>("load_app_settings")
@@ -135,17 +139,20 @@ export function GeneratePlanTodosDialog({
         issues: activeRows.map((row) => row.issue),
         agent,
         permissionMode: permission,
+        unattended,
       });
       if (!ok) setCreating(false);
     } catch {
       setCreating(false);
     }
-  }, [canCreate, onCreateTodos, plan.id, activeRows, agent, permission]);
+  }, [canCreate, onCreateTodos, plan.id, activeRows, agent, permission, unattended]);
 
+  // 无人值守强制 full_access（生成侧 resolvePlanTodoLaunch 同样覆盖），此处仅同步显示。
+  const effectivePermission: PermissionMode = unattended ? "full_access" : permission;
   const permissionLabel =
-    permission === "full_access"
+    effectivePermission === "full_access"
       ? t("yunxiao.discussion.permYolo")
-      : permission === "auto_edit"
+      : effectivePermission === "auto_edit"
         ? t("yunxiao.discussion.permAuto")
         : t("yunxiao.discussion.permAsk");
 
@@ -229,10 +236,18 @@ export function GeneratePlanTodosDialog({
             {agentLabel(agent)}
           </button>
           {agent !== "dsh" && (
-            <button type="button" style={s.yunxiaoAgentBadge} onClick={cyclePermission}>
+            <button
+              type="button"
+              style={s.yunxiaoAgentBadge}
+              disabled={unattended}
+              title={unattended ? t("plan.unattended.forcedYolo") : undefined}
+              onClick={cyclePermission}
+            >
               {permissionLabel}
             </button>
           )}
+          <UnattendedToggle checked={unattended} onChange={setUnattended} />
+          {unattended && <UnattendedHint />}
         </div>
 
         <div style={s.bbDialogActions}>

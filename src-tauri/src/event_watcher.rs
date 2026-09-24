@@ -283,6 +283,11 @@ fn emit_active_status(app: &AppHandle, ev: &HookEvent, status: &str) {
         serde_json::json!({ "task_id": ev.task_id, "status": status }),
     );
     // Agent 需要用户介入（权限审批 / 提问 / 本轮结束待验收）时触发系统通知。
+    // 无人值守任务例外：它的一轮结束由前端自动收尾（`Stop` → 自动 `complete_task`），
+    // 弹「需要你的确认」与无人值守语义相悖，故只发状态、不通知。
+    if status == "awaiting_review" && tm.unattended_tasks.lock().contains(&ev.task_id) {
+        return;
+    }
     if status == "input_required" || status == "awaiting_review" {
         crate::system_notify::notify_task_event(
             app,

@@ -1296,6 +1296,7 @@ export const yunxiao = {
   planLaunchSettings: {
     display: "flex",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
     padding: "10px 18px",
     borderTop: "1px solid var(--border-dim)",
