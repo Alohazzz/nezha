@@ -11,7 +11,7 @@
  *   （被删除 / 生成时被剔除）——不自静默放行，交由用户决定是否越过；
  * - **槽位** = 项目级并发上限（默认 1，串行）；前置全部满足但无槽位时任务排队等待。
  */
-import type { Plan, PlanIssue, Task, TaskStatus } from "../types";
+import type { PermissionMode, Plan, PlanIssue, Task, TaskStatus } from "../types";
 import { isActiveTaskStatus } from "../types";
 import { topoSortPlanIssues, type PlanDeps, type PlanDepGraph } from "./planDeps";
 
@@ -266,4 +266,56 @@ export function planIssueSubjects(plan: Plan | null | undefined): Map<string, Pl
   const map = new Map<string, PlanIssue>();
   for (const issue of plan?.issues ?? []) map.set(issue.serialNumber, issue);
   return map;
+}
+
+/**
+ * 无人值守任务是否该在「一轮结束」时自动收尾。
+ *
+ * `Stop` 的语义是 agent 自认为本轮做完了（`event_watcher` 映射为 `awaiting_review`，
+ * 进程仍存活、不退出）。交互式任务正常情况下要等用户点「标记已完成」；无人值守
+ * 任务没有这个人，故此判定为真时前端自动调 `complete_task`（杀进程 → 收拢草稿 →
+ * 跑沉淀）并发出 `done`，让下游依赖满足、整链无人接续。
+ *
+ * 只认 `unattended` 显式开启的任务：普通任务、方案讨论任务一律不自动收尾。
+ */
+export function shouldAutoCompleteOnStop(
+  task: Pick<Task, "unattended">,
+  status: TaskStatus,
+): boolean {
+  return task.unattended === true && status === "awaiting_review";
+}
+
+export interface PlanTodoLaunchInput {
+  /** 「开始」（一键）路径：不弹确认页，任务直接进等待队列由调度器放行。 */
+  autoStart?: boolean;
+  /** 无人值守：勾选后整链自动接续（并强制 full_access）。 */
+  unattended?: boolean;
+  /** 用户选择的权限模式（无人值守时被覆盖）。 */
+  permissionMode: PermissionMode;
+}
+
+export interface PlanTodoLaunch {
+  /** 生成待办时的初始状态。 */
+  initialStatus: TaskStatus;
+  /** 实际生效的权限模式（无人值守强制 full_access）。 */
+  permissionMode: PermissionMode;
+}
+
+/**
+ * 方案待办生成时的启动参数推导（「开始」与「生成待办」两条入口共用）。
+ *
+ * - 无人值守 → 一律 `waiting_deps`：整链交给串行调度器按依赖逐个放行，即便是
+ *   「生成待办」这种非 autoStart 的入口也不再停在 `todo` 等人点开始。
+ * - 无人值守 → 强制 `full_access`：没人点审批、没人答问题，`ask`/`auto_edit`
+ *   一遇审批就停在 `input_required` 挂死，无人值守链路直接断掉。
+ * - 其余情况维持现状：`autoStart` 进等待队列，否则 `todo`；权限原样保留。
+ */
+export function resolvePlanTodoLaunch(input: PlanTodoLaunchInput): PlanTodoLaunch {
+  if (input.unattended) {
+    return { initialStatus: "waiting_deps", permissionMode: "full_access" };
+  }
+  return {
+    initialStatus: input.autoStart ? "waiting_deps" : "todo",
+    permissionMode: input.permissionMode,
+  };
 }

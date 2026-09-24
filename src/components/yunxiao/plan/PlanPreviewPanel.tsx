@@ -14,6 +14,7 @@ import { firstEnabledAgent, isAgentEnabled } from "../../../types";
 import { getLastYunxiaoAgent, getLastYunxiaoPermission } from "../../../utils/yunxiao";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
+import { UnattendedToggle } from "./UnattendedToggle";
 import { useI18n } from "../../../i18n";
 import s from "../../../styles";
 
@@ -52,6 +53,7 @@ export function PlanPreviewPanel({
     agent: AgentType;
     permissionMode: PermissionMode;
     autoStart?: boolean;
+    unattended?: boolean;
   }) => Promise<boolean>;
   onDeletePlan: (planId: string) => void | Promise<void>;
   onClose: () => void;
@@ -64,6 +66,8 @@ export function PlanPreviewPanel({
   const [images, setImages] = useState<PlanImage[]>([]);
   const [showGenerate, setShowGenerate] = useState(false);
   const [starting, setStarting] = useState(false);
+  /** 无人值守：整链自动接续（勾选后生成待办不再停在 todo 等人点开始）。 */
+  const [unattended, setUnattended] = useState(false);
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
 
   const linkedTasks = useMemo(
@@ -89,6 +93,7 @@ export function PlanPreviewPanel({
   /**
    * 「开始」不弹确认页：沿用方案议题顺序与 `deps.json` 既有依赖，Agent/权限取该项目
    * 上次选择。任务创建后交给串行调度依前置依赖顺序放行（具体分配在 App 侧）。
+   * 勾选无人值守时：任务跑完一轮自动收尾，整链无需点击（权限被强制为 YOLO）。
    */
   const handleStart = useCallback(async () => {
     if (!canStart) return;
@@ -103,13 +108,14 @@ export function PlanPreviewPanel({
           : firstEnabledAgent(agentSettings),
         permissionMode: getLastYunxiaoPermission(plan.projectId) ?? "ask",
         autoStart: true,
+        unattended,
       });
       // 开始后关闭预览：任务已在跑，用户应看到工作区/终端而不是方案正文。
       if (ok) onClose();
     } finally {
       setStarting(false);
     }
-  }, [canStart, plan, agentSettings, onCreateTodos, onClose]);
+  }, [canStart, plan, agentSettings, onCreateTodos, onClose, unattended]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -211,6 +217,7 @@ export function PlanPreviewPanel({
             </div>
           </div>
           <div style={s.planPreviewHeadSide}>
+            <UnattendedToggle checked={unattended} disabled={starting} onChange={setUnattended} />
             <button
               type="button"
               style={canStart ? s.bbBtnPrimary : s.bbBtnPrimaryDisabled}

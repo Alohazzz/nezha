@@ -399,6 +399,15 @@ export interface Task {
   planDepsIgnored?: boolean;
   /** 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree） */
   yunxiaoPlanDiscussion?: boolean;
+  /**
+   * 无人值守执行：方案执行任务勾选后，agent 一轮结束（`Stop` → `awaiting_review`）
+   * 即自动走一次「标记完成」收尾（`complete_task`：杀进程 → 收拢草稿 → 跑沉淀），
+   * 使下游任务的硬依赖自动满足、整链无人接续。默认关闭（`undefined`/`false`）。
+   *
+   * 代价：agent 中途反问也会被判完成；因此生成时权限被强制为 `full_access`
+   * （`ask`/`auto_edit` 会停在 `input_required` 挂死）。见 `planQueue.resolvePlanTodoLaunch`。
+   */
+  unattended?: boolean;
 }
 
 /** 多议题联合方案（Plan）的议题快照：发起时从云效列表抄录，预览/确认页离线可用。 */

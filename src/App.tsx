@@ -76,7 +76,9 @@ import {
   buildWaitingBadges,
   evaluateTaskGate,
   hasFreeSlot,
+  resolvePlanTodoLaunch,
   selectAutoStart,
+  shouldAutoCompleteOnStop,
   type PlanWaitingBadge,
 } from "./utils/planQueue";
 import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "./components/app-settings/types";
@@ -1045,6 +1047,8 @@ function App() {
       rows: tm.terminalSizeRef.current.rows,
       // 只有云效执行类任务要求产出知识沉淀产物（后端据此注入产出要求并跑沉淀）。
       requireSediment: requiresSedimentation(task),
+      // 无人值守：后端据此抑制「需要你的确认」系统通知（前端仍靠 awaiting_review 自动收尾）。
+      unattended: task.unattended === true,
       onOutput: tm.createOutputChannel(task.id),
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1585,6 +1589,8 @@ function App() {
       reasoningEffort: task.reasoningEffort,
       // 见 invokeRunTask：恢复后的任务同样会在收尾时走沉淀，标记要一并带上。
       requireSediment: requiresSedimentation(task),
+      // 无人值守：恢复后同样抑制「需要你的确认」通知。
+      unattended: task.unattended === true,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -1753,22 +1759,33 @@ function App() {
     handleResumeTask(taskId);
   }
 
+  /**
+   * 对一个仍有存活进程的任务执行「标记完成」收尾：后端杀子进程 → 收拢草稿 → 跑知识沉淀，
+   * 随后发 `done`（前端由 `task-status` 监听统一落状态）。
+   *
+   * 两条调用方：用户点「标记已完成」（`handleMarkTaskDone`）与无人值守的自动收尾
+   * （agent 一轮结束 `Stop` → `awaiting_review`，见 `shouldAutoCompleteOnStop`）。
+   */
+  function completeLiveTask(task: Task) {
+    const project = projects.find((p) => p.id === task.projectId);
+    const projectPath = task.worktreePath ?? project?.path ?? "";
+    invoke("complete_task", { taskId: task.id, projectPath, agent: task.agent })
+      .then(() => {
+        tm.removeTaskBuffers([task.id]);
+        scheduleForDoneTask(task.id);
+      })
+      .catch((e: unknown) => {
+        showToast(t("toast.completeTaskFailed", { error: String(e) }));
+      });
+  }
+
   function handleMarkTaskDone(taskId: string) {
     delete pendingResumeStartsRef.current[taskId];
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
 
     if (isLiveTerminalTaskStatus(task.status)) {
-      const project = projects.find((p) => p.id === task.projectId);
-      const projectPath = task.worktreePath ?? project?.path ?? "";
-      invoke("complete_task", { taskId, projectPath, agent: task.agent })
-        .then(() => {
-          tm.removeTaskBuffers([taskId]);
-          scheduleForDoneTask(taskId);
-        })
-        .catch((e: unknown) => {
-          showToast(t("toast.completeTaskFailed", { error: String(e) }));
-        });
+      completeLiveTask(task);
       return;
     }
 
@@ -2433,6 +2450,8 @@ function App() {
     permissionMode: PermissionMode;
     /** 预览页「开始」：生成待办后立即交给串行调度启动（无需确认页）。 */
     autoStart?: boolean;
+    /** 无人值守：整链自动接续（强制 full_access，由串行调度驱动）。 */
+    unattended?: boolean;
   }): Promise<boolean> {
     const plan = plans.find((p) => p.id === input.planId);
     if (!plan) return false;
@@ -2440,20 +2459,21 @@ function App() {
     if (!project) return false;
 
     // 「一键开始」没有确认页，冲突议题（该议题已有任务）在此剔除，避免同议题重复建待办。
-    const issues = input.autoStart
+    // 无人值守同样是「全自动」路径，同样要剔除冲突议题，否则调度器会放到一个已有任务上。
+    const issues = input.autoStart || input.unattended
       ? input.issues.filter(
           (issue) => !tasks.some((task) => task.yunxiaoWorkitemId === issue.workitemId),
         )
       : input.issues;
     if (issues.length === 0) {
-      if (input.autoStart) showToast(t("plan.start.noNewIssues"), "warning");
+      if (input.autoStart || input.unattended) showToast(t("plan.start.noNewIssues"), "warning");
       return false;
     }
 
-    // 「一键开始」由串行调度放行，门禁判定必须基于最新 deps.json：先刷新缓存，
+    // 「一键开始」/ 无人值守都由串行调度放行，门禁判定必须基于最新 deps.json：先刷新缓存，
     // 否则新方案的依赖未知会被当成无依赖，按创建顺序直接起跑。
     let freshDeps: PlanDeps | undefined;
-    if (input.autoStart) {
+    if (input.autoStart || input.unattended) {
       freshDeps = await readPlanDepsFor(plan, project.path, plans);
       setPlanDeps((prev) => ({ ...prev, [plan.id]: freshDeps }));
     }
@@ -2521,8 +2541,15 @@ function App() {
       }),
     );
 
-    // autoStart 的待办先入 waiting_deps，由串行调度按依赖顺序放行；其余保持 todo 待用户手动开始。
-    const initialStatus: TaskStatus = input.autoStart ? "waiting_deps" : "todo";
+    // 启动参数（初始状态 + 权限）：autoStart 进 waiting_deps 由调度器放行、否则 todo；
+    // 无人值守一律 waiting_deps + 强制 full_access。推导集中在上面的纯函数里。
+    const launch = resolvePlanTodoLaunch({
+      autoStart: input.autoStart,
+      unattended: input.unattended,
+      permissionMode: input.permissionMode,
+    });
+    const initialStatus = launch.initialStatus;
+    const permissionMode = launch.permissionMode;
     // 追加子方案：执行 prompt 附上游方案文档路径，让执行者能查证统筹节里引用的上游议题。
     const upstreamPlan = plan.parentPlanId
       ? (plans.find((p) => p.id === plan.parentPlanId) ?? null)
@@ -2558,13 +2585,14 @@ function App() {
         name: `${issue.serialNumber} ${issue.subject}`.trim(),
         prompt,
         agent: input.agent,
-        permissionMode: input.permissionMode,
+        permissionMode,
         status: initialStatus,
         createdAt: stamp,
         updatedAt: stamp,
         yunxiaoWorkitemId: issue.workitemId,
         yunxiaoSerialNumber: issue.serialNumber,
         planId: plan.id,
+        unattended: input.unattended ? true : undefined,
       });
     }
 
@@ -2585,8 +2613,9 @@ function App() {
     mountProject(project.id);
 
     // 选中「刚建好即可开工」的那个议题（无未满足前置），让用户直接看到第一个跑起来的任务。
+    // 无人值守同样会在下一拍由调度器起跑，选中逻辑与「开始」一致。
     const bySerialAfterCreate = buildTaskBySerial([...tasksToCreate, ...tasks]);
-    const firstStartable = input.autoStart
+    const firstStartable = input.autoStart || input.unattended
       ? tasksToCreate.find(
           (task) =>
             !freshDeps ||
@@ -2599,9 +2628,11 @@ function App() {
       isNewTask: false,
     });
     showToast(
-      input.autoStart
-        ? t("plan.start.created", { count: tasksToCreate.length })
-        : t("plan.todosCreated", { count: tasksToCreate.length }),
+      input.unattended
+        ? t("plan.unattended.created", { count: tasksToCreate.length })
+        : input.autoStart
+          ? t("plan.start.created", { count: tasksToCreate.length })
+          : t("plan.todosCreated", { count: tasksToCreate.length }),
       "success",
     );
     return true;
@@ -2728,6 +2759,28 @@ function App() {
       autoStartRunRef.current(id);
     }
   }, [tasks, planDeps, plans]);
+
+  // 无人值守自动收尾：任务被勾选无人值守时，agent 一轮结束（hook `Stop` →
+  // `awaiting_review`，进程仍存活）即自动走一次「标记完成」收尾，使下游依赖满足、
+  // 整链无人接续。只认 `awaiting_review`（`shouldAutoCompleteOnStop`），
+  // `input_required` 不碰——那时 agent 是真在等人回答，自动完成会吞掉问题。
+  // 用 ref 持有收尾函数，避免把每次渲染都变化的函数纳入 deps。
+  const autoCompleteInFlightRef = useRef<Set<string>>(new Set());
+  const autoCompleteRunRef = useRef<(task: Task) => void>(() => {});
+  autoCompleteRunRef.current = (task: Task) => completeLiveTask(task);
+  useEffect(() => {
+    const pending = tasks.filter((task) => shouldAutoCompleteOnStop(task, task.status));
+    // 已不在待收尾集合中的 id 剔除，任务重新回到 awaiting_review 时能再次触发。
+    const pendingIds = new Set(pending.map((task) => task.id));
+    for (const id of [...autoCompleteInFlightRef.current]) {
+      if (!pendingIds.has(id)) autoCompleteInFlightRef.current.delete(id);
+    }
+    for (const task of pending) {
+      if (autoCompleteInFlightRef.current.has(task.id)) continue;
+      autoCompleteInFlightRef.current.add(task.id);
+      autoCompleteRunRef.current(task);
+    }
+  }, [tasks]);
 
   // 前置异常（失败/取消/中断/被删除）：等待任务保持等待 + 标红 + 只通知一次，
   // 不自动放行（等于白做依赖分析），也不静默永久等待。

@@ -185,6 +185,8 @@ fn finalize_task_exit(
         let tm = app.state::<TaskManager>();
         let mut cancelled = tm.cancelled_tasks.lock();
         let mut manually_completed = tm.manually_completed_tasks.lock();
+        // 无人值守标记也在入口消费掉：任务已到终态，不再需要为它抑制通知。
+        tm.unattended_tasks.lock().remove(task_id);
         (
             cancelled.remove(task_id),
             manually_completed.remove(task_id),
@@ -1284,6 +1286,8 @@ pub async fn run_task(
     // 本次启动是否要求产出知识沉淀产物（前端按任务类型判定：云效议题的方案执行 /
     // 直接执行任务为真）。决定是否注入产出要求，以及任务收尾时是否跑沉淀。
     require_sediment: Option<bool>,
+    // 无人值守：为真时 event_watcher 抑制「需要你的确认」系统通知（一轮结束由前端自动收尾）。
+    unattended: Option<bool>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1306,6 +1310,16 @@ pub async fn run_task(
             .insert(task_id.clone());
     } else {
         task_manager.sediment_expected.lock().remove(&task_id);
+    }
+    // 无人值守标记同样无条件覆写：为真时 event_watcher 跳过「需要你的确认」通知
+    // （该通知语义是「等人确认」，而无人值守正是「没人来确认」的场景）。
+    if unattended.unwrap_or(false) {
+        task_manager
+            .unattended_tasks
+            .lock()
+            .insert(task_id.clone());
+    } else {
+        task_manager.unattended_tasks.lock().remove(&task_id);
     }
     task_manager
         .task_names
@@ -1587,6 +1601,8 @@ pub async fn cancel_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
+    // 取消是终态：无人值守标记一并清掉，避免残留。
+    task_manager.unattended_tasks.lock().remove(&task_id);
     release_terminal_ready(&task_manager, &task_id);
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
@@ -1630,6 +1646,9 @@ pub async fn complete_task(
         .lock()
         .insert(task_id.clone());
     task_manager.cancelled_tasks.lock().remove(&task_id);
+    // 收尾即消费无人值守标记：本路径就是无人值守任务自动收尾的落点，
+    // 之后再无「需要抑制通知的等待窗口」。
+    task_manager.unattended_tasks.lock().remove(&task_id);
     release_terminal_ready(&task_manager, &task_id);
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
@@ -1731,6 +1750,8 @@ pub async fn resume_task(
     rows: Option<u16>,
     // 见 `run_task`：恢复后的任务同样会在收尾时走沉淀，故也要带着这个标记。
     require_sediment: Option<bool>,
+    // 见 `run_task`：恢复后同样抑制「需要你的确认」通知。
+    unattended: Option<bool>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1765,6 +1786,15 @@ pub async fn resume_task(
             .insert(task_id.clone());
     } else {
         task_manager.sediment_expected.lock().remove(&task_id);
+    }
+    // 见 `run_task`：恢复路径同样按本次标记覆写无人值守集合。
+    if unattended.unwrap_or(false) {
+        task_manager
+            .unattended_tasks
+            .lock()
+            .insert(task_id.clone());
+    } else {
+        task_manager.unattended_tasks.lock().remove(&task_id);
     }
 
     let pair = pty_system()
