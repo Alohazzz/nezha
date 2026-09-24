@@ -959,6 +959,22 @@ pub async fn codeup_create_mr(
                 "提交 MR 前 worktree 仍有未提交内容，请先处理：{dirty}"
             ));
         }
+    } else {
+        // 无 worktree 的批只在创建时切过一次分支，之后主检出可能漂移（改名 / 人工切换）。
+        // push 按 batch.branch 推本地 ref，但用户实际提交可能落在别的分支上——HEAD 不是
+        // 批分支时提前拦下，避免把「批分支指针推上去但内容为空」的 MR 建出来。
+        let head = crate::git::current_branch_name(&push_dir)?;
+        if head != batch.branch {
+            let shown = if head.is_empty() {
+                "游离 HEAD".to_string()
+            } else {
+                head
+            };
+            return Err(format!(
+                "当前检出分支是「{shown}」，不是计划分支「{}」；请先切到计划分支再提交 MR",
+                batch.branch
+            ));
+        }
     }
 
     // 创建代码评审的前提：源分支相对目标分支必须有改动，否则云效会回

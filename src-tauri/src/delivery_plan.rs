@@ -517,6 +517,19 @@ pub struct BranchConflictCheck {
     pub local_exists: bool,
 }
 
+/// HEAD 与期望批次分支的比对结果：`matches` 为真表示主检出正停在计划分支上。
+#[derive(serde::Serialize)]
+pub struct PlanBranchCheckout {
+    #[serde(rename = "currentBranch")]
+    pub current_branch: String,
+    #[serde(rename = "expectedBranch")]
+    pub expected_branch: String,
+    #[serde(rename = "matches")]
+    pub matches: bool,
+    #[serde(rename = "detached")]
+    pub detached: bool,
+}
+
 /// 新建 PR 前检查源分支是否在远端/本地已存在（live remote，避免 stale remote-tracking）。
 #[tauri::command]
 pub async fn check_delivery_plan_branch(
@@ -535,6 +548,49 @@ pub async fn check_delivery_plan_branch(
         remote_exists,
         local_exists,
     })
+}
+
+/// HEAD 与期望批次分支的比对结果（游离 HEAD 时 `current_branch` 为空串）。
+/// 兼容两种入参：`rev-parse --abbrev-ref HEAD` 的原始输出（游离 HEAD 时字面量 "HEAD"）
+/// 与已归一化的空串。
+pub(crate) fn compare_head_to_branch(head: &str, branch: &str) -> PlanBranchCheckout {
+    let head = head.trim();
+    let detached = head.is_empty() || head == "HEAD";
+    PlanBranchCheckout {
+        matches: !detached && head == branch.trim(),
+        current_branch: if detached {
+            String::new()
+        } else {
+            head.to_string()
+        },
+        expected_branch: branch.trim().to_string(),
+        detached,
+    }
+}
+
+/// 「主检出」计划（无 worktree）的启动前断言：批分支就在主工作区里，任务只能跑在该分支上。
+///
+/// 计划创建时只在主工作区 `git checkout -b` 一次，之后没有任何环节把它兑现成「当前分支」——
+/// 主检出漂移（分支被改名、人工切换、并行 agent 切走）会让任务落在别的分支上，提交也随之
+/// 落错地方。此命令把那条隐式假设变成显式校验，供前端在启动任务前拦下。
+/// 有 worktree 的批由 worktree 路径钉死分支，调用方无需查。
+#[tauri::command]
+pub async fn check_plan_branch_checkout(
+    project_path: String,
+    repo_path: Option<String>,
+    branch: String,
+) -> Result<PlanBranchCheckout, String> {
+    if branch.trim().is_empty() {
+        return Err("期望分支不能为空".to_string());
+    }
+    let cwd = resolve_repo_path(&project_path, repo_path.as_deref()).await?;
+    tokio::task::spawn_blocking(move || -> Result<PlanBranchCheckout, String> {
+        // current_branch_name 已把游离 HEAD 归一为空串。
+        let head = crate::git::current_branch_name(&cwd)?;
+        Ok(compare_head_to_branch(&head, &branch))
+    })
+    .await
+    .map_err(|e| format!("Plan branch check task panicked: {e}"))?
 }
 
 /// 打开批次代码目录：启用 worktree 的批打开 worktree 目录，否则打开仓库（主工作区）根。
@@ -925,5 +981,45 @@ mod tests {
         assert!(merge_allows_kind("patch"));
         assert!(merge_allows_kind("project"));
         assert!(!merge_allows_kind("hotfix"));
+    }
+
+    #[test]
+    fn head_compare_matches_only_exact_branch() {
+        // rev-parse 输出带结尾换行，比对前必须 trim。
+        let ok = compare_head_to_branch(
+            "fix/v2.20260901/处方打印问题修复\n",
+            "fix/v2.20260901/处方打印问题修复",
+        );
+        assert!(ok.matches);
+        assert_eq!(ok.current_branch, "fix/v2.20260901/处方打印问题修复");
+        assert_eq!(ok.expected_branch, "fix/v2.20260901/处方打印问题修复");
+        assert!(!ok.detached);
+    }
+
+    #[test]
+    fn head_compare_flags_renamed_branch_as_drift() {
+        // 事故实况：计划分支被 Agent 改名成别的分支名，HEAD 与期望不一致。
+        let drift = compare_head_to_branch(
+            "fix/v2.20260901/QHDK-30486-处方打印医保类别勾选报错",
+            "fix/v2.20260901/处方打印问题修复",
+        );
+        assert!(!drift.matches);
+        assert_eq!(
+            drift.current_branch,
+            "fix/v2.20260901/QHDK-30486-处方打印医保类别勾选报错"
+        );
+        assert!(!drift.detached);
+    }
+
+    #[test]
+    fn head_compare_never_matches_detached_head() {
+        // 游离 HEAD 时 rev-parse 返回字面量 "HEAD"，期望分支恰好叫 HEAD 也不能算命中。
+        let detached = compare_head_to_branch("HEAD\n", "fix/develop/收费端");
+        assert!(!detached.matches);
+        assert!(detached.detached);
+        assert_eq!(detached.current_branch, "");
+        let literal = compare_head_to_branch("HEAD", "HEAD");
+        assert!(!literal.matches);
+        assert!(literal.detached);
     }
 }

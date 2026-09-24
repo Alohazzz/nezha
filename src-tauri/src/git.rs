@@ -261,6 +261,16 @@ fn git_has_head(worktree_root: &str) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
+/// 当前检出的分支名；游离 HEAD 时返回空串（`--abbrev-ref HEAD` 会给出字面量 "HEAD"）。
+pub(crate) fn current_branch_name(cwd: &str) -> Result<String, String> {
+    let output = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(if name == "HEAD" { String::new() } else { name })
+}
+
 const PROTECTED_FIRST_SEGMENTS: &[&str] = &[".git", ".nezha"];
 
 fn is_protected_project_relative_path(relative_path: &str) -> bool {
