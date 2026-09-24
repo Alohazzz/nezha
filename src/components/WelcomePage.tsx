@@ -306,6 +306,10 @@ export function WelcomePage({
             onDeliveryPlansChange={onDeliveryPlansChange}
             onGoYunxiao={() => setView("yunxiao")}
             onStartDirectExecution={onStartYunxiaoDirectExecution}
+            onCreatePlan={onCreateYunxiaoPlan}
+            onStartPlanDiscussion={onStartYunxiaoPlanDiscussion}
+            onCancelPlan={onCancelYunxiaoPlan}
+            onSetParentPlan={onSetYunxiaoPlanParent}
           />
         ) : view === "yunxiao" ? (
           <YunxiaoView

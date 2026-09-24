@@ -1,21 +1,27 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FolderOpen, Plus, Send, Trash2 } from "lucide-react";
 import { appConfirm } from "../AppConfirmDialog";
 import type {
+  AgentType,
   DeliveryPlan,
   DeliveryPlanStatus,
+  PermissionMode,
   Plan,
+  PlanIssue,
   Project,
   Task,
   YunxiaoWorkitem,
 } from "../../types";
 import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "../app-settings/types";
+import { collectOccupiedYunxiaoWorkitemIds, planIssueToWorkitem } from "../../utils/yunxiao";
+import { useToast } from "../Toast";
 import s from "../../styles";
 import { dpChipToneStyle } from "../../styles/delivery-plan";
 import { CreatePlanDialog } from "../branch-batch/CreatePlanDialog";
 import { SubmitMrDialog } from "../branch-batch/SubmitMrDialog";
 import { DirectLaunchDialog, type DirectLaunchOptions } from "../yunxiao/DirectLaunchDialog";
+import { PlanLaunchDialog } from "../yunxiao/plan/PlanLaunchDialog";
 import { SelectField } from "../yunxiao/SelectField";
 import { deriveIssueStatus, type IssueStatus } from "./deriveIssueStatus";
 import {
@@ -24,12 +30,17 @@ import {
   PLAN_STATUS_LABEL,
   PLAN_STATUS_TONE,
 } from "./labels";
-import { PlanIssueRow } from "./PlanIssueRow";
+import { PlanIssueList } from "./PlanIssueList";
 
 const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
+/** 合并讨论的软上限：与云效议题列表同口径（讨论上下文与图片量的现实约束）。 */
+const MERGE_SELECT_SOFT_LIMIT = 10;
 
 /** 欢迎页「计划」视图（mockup ①）：侧栏（项目过滤＋计划列表＋创建）＋详情
- *  （议题表全自动派生状态）。 */
+ *  （议题表全自动派生状态）。
+ *
+ *  议题表对齐云效议题列表：行内可勾选做「合并讨论」（N 条合成一份方案），也有
+ *  「单条讨论」快捷入口（N=1，同一链路），以及跳云效原议题的链接。 */
 export function PlanPanel({
   projects,
   tasks,
@@ -38,6 +49,10 @@ export function PlanPanel({
   onDeliveryPlansChange,
   onGoYunxiao,
   onStartDirectExecution,
+  onCreatePlan,
+  onStartPlanDiscussion,
+  onCancelPlan,
+  onSetParentPlan,
   onOpenWorkitem,
 }: {
   projects: Project[];
@@ -46,16 +61,28 @@ export function PlanPanel({
   plans: Plan[];
   deliveryPlans: DeliveryPlan[];
   onDeliveryPlansChange: (plans: DeliveryPlan[]) => void;
-  /** 「添加议题 / 发起讨论」都去云效议题视图（同一套多选与发起链路）。 */
+  /** 「添加议题」去云效议题视图（同一套多选与发起链路）。 */
   onGoYunxiao: () => void;
   onStartDirectExecution: (
     issue: YunxiaoWorkitem,
     projectId: string,
     options: DirectLaunchOptions,
   ) => void | Promise<void>;
+  /** 发起讨论第一步：落一份 draft 方案（与云效议题视图共用同一链路）。 */
+  onCreatePlan: (targetProjectId: string, issues: PlanIssue[]) => Plan;
+  onStartPlanDiscussion: (
+    planId: string,
+    prompt: string,
+    agent: AgentType,
+    permissionMode: PermissionMode,
+  ) => void;
+  onCancelPlan: (planId: string) => void | Promise<void>;
+  /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
+  onSetParentPlan: (planId: string, parentPlanId: string | undefined) => void;
   /** 打开关联方案（方案看板入口）。 */
   onOpenWorkitem?: (workitemId: string) => void;
 }) {
+  const { showToast } = useToast();
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [statusFilter, setStatusFilter] = useState<DeliveryPlanStatus | "all">("all");
   const [selectedId, setSelectedId] = useState<string>("");
@@ -65,6 +92,34 @@ export function PlanPanel({
   const [yunxiaoSettings, setYunxiaoSettings] = useState<YunxiaoSettings>(EMPTY_YUNXIAO_SETTINGS);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  /** 合并讨论的勾选集合：存议题本体，顺序 = 勾选顺序（与云效议题列表一致）。 */
+  const [selectedIssuesById, setSelectedIssuesById] = useState<
+    ReadonlyMap<string, PlanIssue>
+  >(new Map());
+  /** 发起讨论对话框的议题（null = 未打开；单条与合并共用）。 */
+  const [launchIssues, setLaunchIssues] = useState<YunxiaoWorkitem[] | null>(null);
+
+  // 链接与发起讨论都要 token/组织；进视图即预热一次（拿云项目 id 拼链接），
+  // 点击动作时若还没拿到再兜底读一次盘（沿用原有按需加载语义）。
+  useEffect(() => {
+    let cancelled = false;
+    invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings")
+      .then((appSettings) => {
+        if (!cancelled) setYunxiaoSettings(appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const ensureYunxiaoSettings = useCallback(async (): Promise<YunxiaoSettings> => {
+    if (yunxiaoSettings.token && yunxiaoSettings.organizationId) return yunxiaoSettings;
+    const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
+    const next = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
+    setYunxiaoSettings(next);
+    return next;
+  }, [yunxiaoSettings]);
 
   const scopedPlans = useMemo(
     () =>
@@ -79,6 +134,12 @@ export function PlanPanel({
   );
   const project = projects.find((p) => p.id === projectId);
 
+  // 切换计划时清空勾选：勾选只在本计划议题范围内有意义。
+  const selectedPlanId = selected?.id ?? "";
+  useEffect(() => {
+    setSelectedIssuesById(new Map());
+  }, [selectedPlanId]);
+
   const issueRows = useMemo(() => {
     if (!selected) return [];
     return selected.issues.map((issue) => ({
@@ -87,6 +148,12 @@ export function PlanPanel({
       schemes: plans.filter((p) => p.issues.some((i) => i.workitemId === issue.workitemId)),
     }));
   }, [selected, tasks, plans]);
+
+  // 已被任务/存活方案占用的议题：不能再发起讨论（与云效议题列表的已导入守卫同源）。
+  const occupiedIds = useMemo(
+    () => collectOccupiedYunxiaoWorkitemIds(tasks, plans),
+    [tasks, plans],
+  );
 
   const summary = useMemo(() => {
     const counts: Record<IssueStatus, number> = {
@@ -100,6 +167,55 @@ export function PlanPanel({
     for (const row of issueRows) counts[row.status] += 1;
     return counts;
   }, [issueRows]);
+
+  const selectedIds = useMemo(
+    () => new Set(selectedIssuesById.keys()),
+    [selectedIssuesById],
+  );
+
+  const handleToggleSelect = useCallback(
+    (issue: PlanIssue) => {
+      if (occupiedIds.has(issue.workitemId)) {
+        showToast("该议题已被占用（已有任务或方案），请先到云效议题视图查看", "warning");
+        return;
+      }
+      setSelectedIssuesById((prev) => {
+        const next = new Map(prev);
+        if (next.has(issue.workitemId)) {
+          next.delete(issue.workitemId);
+          return next;
+        }
+        if (next.size >= MERGE_SELECT_SOFT_LIMIT) {
+          showToast(`单次合并讨论最多选 ${MERGE_SELECT_SOFT_LIMIT} 个议题`, "warning");
+          return prev;
+        }
+        next.set(issue.workitemId, issue);
+        return next;
+      });
+    },
+    [occupiedIds, showToast],
+  );
+
+  const clearSelection = useCallback(() => setSelectedIssuesById(new Map()), []);
+
+  /** 打开发起讨论对话框：不建任务、不下图，先确认再启动（与云效议题列表同链路）。 */
+  const openDiscussion = useCallback(
+    async (issues: PlanIssue[]) => {
+      if (issues.length === 0) return;
+      try {
+        const settings = await ensureYunxiaoSettings();
+        if (!settings.token || !settings.organizationId) {
+          setNotice("未连接云效，请先在设置中配置令牌");
+          return;
+        }
+      } catch (e) {
+        setNotice(String(e));
+        return;
+      }
+      setLaunchIssues(issues.map(planIssueToWorkitem));
+    },
+    [ensureYunxiaoSettings],
+  );
 
   async function handleOpen() {
     if (!selected || !project) return;
@@ -155,28 +271,28 @@ export function PlanPanel({
         workitemId,
       });
       onDeliveryPlansChange(deliveryPlans.map((p) => (p.id === plan.id ? plan : p)));
+      setSelectedIssuesById((prev) => {
+        if (!prev.has(workitemId)) return prev;
+        const next = new Map(prev);
+        next.delete(workitemId);
+        return next;
+      });
     } catch (e) {
       setNotice(String(e));
     }
   }
 
-  async function handleStartIssue(rowIssue: {
-    workitemId: string;
-    serialNumber: string;
-    subject: string;
-  }) {
+  async function handleStartIssue(rowIssue: PlanIssue) {
     if (!project) return;
     try {
-      const appSettings = await invoke<{ yunxiao?: YunxiaoSettings }>("load_app_settings");
-      const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
-      setYunxiaoSettings(yunxiao);
-      if (!yunxiao.token || !yunxiao.organizationId) {
+      const settings = await ensureYunxiaoSettings();
+      if (!settings.token || !settings.organizationId) {
         setNotice("未连接云效，请先在设置中配置令牌");
         return;
       }
       const issue = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
-        token: yunxiao.token,
-        organizationId: yunxiao.organizationId,
+        token: settings.token,
+        organizationId: settings.organizationId,
         workitemId: rowIssue.workitemId,
       });
       setDirectIssue(issue);
@@ -340,29 +456,24 @@ export function PlanPanel({
                 </div>
               ) : (
                 <>
-                  <table style={s.dpTable}>
-                    <thead>
-                      <tr>
-                        <th style={s.dpTh}>议题</th>
-                        <th style={s.dpTh}>状态</th>
-                        <th style={s.dpTh}>关联方案</th>
-                        <th style={s.dpTh} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {issueRows.map((row) => (
-                        <PlanIssueRow
-                          key={row.issue.workitemId}
-                          issue={row.issue}
-                          status={row.status}
-                          schemes={row.schemes}
-                          onStart={() => void handleStartIssue(row.issue)}
-                          onRemove={() => void handleRemoveIssue(row.issue.workitemId)}
-                          onOpenWorkitem={onOpenWorkitem}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
+                  <PlanIssueList
+                    rows={issueRows}
+                    occupiedIds={occupiedIds}
+                    selectedIds={selectedIds}
+                    selectionMode={selectedIssuesById.size > 0}
+                    yunxiaoProjectId={yunxiaoSettings.projectId}
+                    onToggleSelect={handleToggleSelect}
+                    onDiscuss={(issue) => void openDiscussion([issue])}
+                    onMergeDiscuss={() => {
+                      const issues = [...selectedIssuesById.values()];
+                      clearSelection();
+                      void openDiscussion(issues);
+                    }}
+                    onClearSelection={clearSelection}
+                    onStart={(issue) => void handleStartIssue(issue)}
+                    onRemove={(workitemId) => void handleRemoveIssue(workitemId)}
+                    onOpenWorkitem={onOpenWorkitem}
+                  />
                   <p style={s.dpHint}>
                     状态与方案关联全自动派生；从计划内议题创建的任务自动绑定本计划分支 / worktree。
                   </p>
@@ -389,6 +500,23 @@ export function PlanPanel({
           projectPath={project.path}
           onClose={() => setSubmitPlan(null)}
           onDone={() => setSubmitPlan(null)}
+        />
+      )}
+      {launchIssues && project && (
+        <PlanLaunchDialog
+          key={launchIssues.map((issue) => issue.id).join(",")}
+          issues={launchIssues}
+          plans={plans}
+          tasks={tasks}
+          targetProjectId={project.id}
+          projectPath={project.path}
+          projectName={project.name}
+          settings={yunxiaoSettings}
+          onCreatePlan={onCreatePlan}
+          onSetParentPlan={onSetParentPlan}
+          onStartDiscussion={onStartPlanDiscussion}
+          onCancelPlan={onCancelPlan}
+          onClose={() => setLaunchIssues(null)}
         />
       )}
       {directIssue && project && (

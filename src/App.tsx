@@ -30,6 +30,10 @@ import type {
 } from "./types";
 import { bindTaskToDeliveryPlan } from "./components/delivery-plan/bindTaskToPlan";
 import {
+  planBranchDrift,
+  planNeedsBranchCheckout,
+} from "./components/delivery-plan/planBranchGuard";
+import {
   isActiveTaskStatus,
   DEFAULT_TERMINAL_FONT_SIZE,
   clampTerminalFontSize,
@@ -1316,10 +1320,58 @@ function App() {
     invokeRunTask(worktreeTask, worktreePath, [], [], project.path);
   }
 
+  /** 已提示过「计划分支漂移」的任务 id：自动接续每次状态变化都会重试启动，同一任务只提示一次。 */
+  const planBranchWarnedRef = useRef<Set<string>>(new Set());
+
+  /** 「主检出」计划的分支断言（S10 补充）：批分支只在创建计划时 `git checkout -b` 一次，
+   *  之后没有任何环节把它兑现成「当前分支」——分支被改名 / 人工切换 / 并行任务切走都会让
+   *  任务落到别的分支上，提交随之落错地方。启动前查一次 HEAD，不一致就地拦下并提示。
+   *  有 worktree 的批由 worktree 路径钉死分支，讨论任务在项目根只读分析，都不校验。
+   *  查询本身失败时放行（不因 git 探测问题挡住正常启动）。返回 true = 放行。
+   *  同一任务只提示一次（自动接续会反复尝试，避免刷屏）；修好分支后的重试静默放行。 */
+  async function planBranchAllowsStart(task: Task, project: Project): Promise<boolean> {
+    if (task.yunxiaoPlanDiscussion) return true;
+    const plan = task.deliveryPlanId
+      ? deliveryPlans.find((p) => p.id === task.deliveryPlanId)
+      : undefined;
+    if (!planNeedsBranchCheckout(plan)) return true;
+    let currentBranch: string;
+    try {
+      const head = await invoke<{ currentBranch: string }>("check_plan_branch_checkout", {
+        projectPath: project.path,
+        repoPath: plan!.worktreeRepo ?? null,
+        branch: plan!.branch,
+      });
+      currentBranch = head.currentBranch;
+    } catch {
+      return true;
+    }
+    const drift = planBranchDrift(plan, currentBranch);
+    if (!drift) {
+      planBranchWarnedRef.current.delete(task.id);
+      return true;
+    }
+    if (!planBranchWarnedRef.current.has(task.id)) {
+      planBranchWarnedRef.current.add(task.id);
+      showToast(
+        drift.currentBranch
+          ? t("plan.branch.drift", {
+              current: drift.currentBranch,
+              expected: drift.expectedBranch,
+            })
+          : t("plan.branch.detached", { expected: drift.expectedBranch }),
+        "error",
+      );
+    }
+    return false;
+  }
+
   /** 真正启动一个待办（PTY + 视图切换）。依赖门禁已由调用方判定。
-   *  计划内议题的待办在此强制绑定计划分支/worktree（S10：生成待办/存量导入启动时）。 */
-  function beginTaskRun(task: Task, project: Project) {
+   *  计划内议题的待办在此强制绑定计划分支/worktree（S10：生成待办/存量导入启动时）。
+   *  返回 false = 被分支断言拦下（未启动），自动接续据此释放在途标记以便修好后重试。 */
+  async function beginTaskRun(task: Task, project: Project): Promise<boolean> {
     const bound = bindTaskToDeliveryPlan(task, deliveryPlans);
+    if (!(await planBranchAllowsStart(bound, project))) return false;
     setTasks((prev) => {
       const next = prev.map((t) =>
         t.id === task.id
@@ -1338,6 +1390,7 @@ function App() {
     tm.resetTaskTerminal(task.id);
     updateProjectView(task.projectId, { selectedTaskId: task.id, isNewTask: false });
     invokeRunTask(bound, bound.worktreePath ?? project.path, [], [], project.path);
+    return true;
   }
 
   /** 把任务置为等待前置（不创建 PTY），用于启动拦截 / 队列。 */
@@ -1391,7 +1444,7 @@ function App() {
       showToast(t("plan.deps.queuedStarted"), "warning");
       return;
     }
-    beginTaskRun(task, project);
+    void beginTaskRun(task, project);
   }
 
   /** 该方案待办所在项目是否还有空闲并发槽位（与自动接续共用同一上限）。 */
@@ -1445,7 +1498,7 @@ function App() {
       showToast(t("plan.deps.queuedStarted"), "warning");
       return;
     }
-    beginTaskRun(marked, project);
+    void beginTaskRun(marked, project);
   }
 
   function markTaskWorktreeDiscarded(taskId: string) {
@@ -2180,6 +2233,8 @@ function App() {
         },
         deliveryPlans,
       );
+      // 分支漂移就地拦下，且**在任务落地前**：不产生 pending 半态任务，用户切回分支即可重来。
+      if (!(await planBranchAllowsStart(baseTask, project))) return;
       setTasks((prev) => {
         const next = [baseTask, ...prev];
         persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2341,6 +2396,8 @@ function App() {
         },
         deliveryPlans,
       );
+      // 分支漂移就地拦下：待办保持 todo 原样（不落 pending 半态），切回分支后可重试。
+      if (!(await planBranchAllowsStart(updated, project))) return;
       setTasks((prev) => {
         const next = prev.map((t) => (t.id === task.id ? updated : t));
         persistProjectTasks(project.id, next, showToast, formatSaveTasksError);
@@ -2641,7 +2698,12 @@ function App() {
   autoStartRunRef.current = (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     const project = task && projects.find((p) => p.id === task.projectId);
-    if (task && project) beginTaskRun(task, project);
+    if (!task || !project) return;
+    void beginTaskRun(task, project).then((started) => {
+      // 被分支断言拦下（未启动）：释放在途标记，避免自动接续误判为「已启动」而永久搁置；
+      // 分支修好后由后续任意 tasks 变化触发的重跑再尝试（提示只发一次，见 planBranchWarnedRef）。
+      if (!started) autoStartInFlightRef.current.delete(taskId);
+    });
   };
   useEffect(() => {
     const planById = new Map(plans.map((p) => [p.id, p]));

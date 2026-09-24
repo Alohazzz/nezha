@@ -516,6 +516,7 @@ pub fn run() {
             delivery_plan::close_delivery_plan,
             delivery_plan::merge_delivery_plan,
             delivery_plan::check_delivery_plan_branch,
+            delivery_plan::check_plan_branch_checkout,
             delivery_plan::open_delivery_plan_worktree,
             delivery_plan::delete_delivery_plan,
             delivery_plan::get_delivery_plan_worktree_base,

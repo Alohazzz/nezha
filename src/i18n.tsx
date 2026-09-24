@@ -788,6 +788,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.deps.waitingBadge": "Waiting {count}",
     "plan.deps.waitingSlotBadge": "Queued",
     "plan.deps.waitingStarted": "Waiting for {count} prerequisite task(s); it starts automatically once they finish.",
+    "plan.branch.drift":
+      "The main working tree is on “{current}”, not the plan branch “{expected}” — this task would commit to the wrong branch. Switch back to the plan branch, then start again.",
+    "plan.branch.detached":
+      "The main working tree is on a detached HEAD, not the plan branch “{expected}” — this task would commit to the wrong branch. Check out the plan branch, then start again.",
     "plan.deps.queuedStarted":
       "Another task in this project is already running — queued; it starts as soon as a slot frees up.",
     "plan.deps.queueTitle": "Queued",
@@ -1889,6 +1893,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.deps.waitingBadge": "等 {count} 项",
     "plan.deps.waitingSlotBadge": "排队中",
     "plan.deps.waitingStarted": "正在等待 {count} 个前置任务，完成后会自动开始。",
+    "plan.branch.drift":
+      "主工作区当前在「{current}」分支上，不是计划分支「{expected}」——本任务的提交会落到错误的分支。请切回计划分支后重试。",
+    "plan.branch.detached":
+      "主工作区处于游离 HEAD，不在计划分支「{expected}」上——本任务的提交会落到错误的分支。请检出计划分支后重试。",
     "plan.deps.queuedStarted": "同项目已有任务在运行，本任务已排队，槽位空出后自动开始。",
     "plan.deps.queueTitle": "排队中",
     "plan.deps.queuedHint": "前置已全部满足，本任务在等本项目空出并发槽位。",
