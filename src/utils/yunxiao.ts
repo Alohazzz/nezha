@@ -86,26 +86,70 @@ export function setLastYunxiaoPermission(projectId: string, mode: PermissionMode
 /**
  * 云效议题描述 → 可读纯文本（与后端 normalize_issue_description 逻辑一致，双保险）：
  * 富文本 JSON（TipTap/Notion 风格）按段落提取文本；HTML 标签与实体剥离；其余原样返回。
+ * 内联图片数据（`data:…;base64,…`）不是正文——图片已由后端下载到方案目录并按路径注入
+ * 讨论 prompt；不剥离会把 prompt 撑到 16 万字符级，撞 Windows 命令行 32,767 上限。
  */
 export function normalizeIssueDescription(raw: string | undefined | null): string {
   if (!raw) return "";
   const trimmed = raw.trim();
   if (!trimmed) return "";
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(trimmed);
-      const text = extractRichText(parsed);
-      if (text.trim()) return text.trim();
+      parsed = JSON.parse(trimmed);
     } catch {
-      // 不是 JSON，落到 HTML 剥离
+      // 不是 JSON，落到下面的 HTML 剥离
+      return stripInlineImageData(stripHtmlTags(trimmed)).trim();
+    }
+    // JSON 解析成功即信任结构化提取。正文可能为空（纯图片描述——图片已按路径注入 prompt），
+    // 此时**不能**回退成原文：否则 `{htmlValue, jsonMLValue}` 会原样进 prompt（回归 QHDK-30368）。
+    return extractRichText(parsed).trim();
+  }
+  return stripInlineImageData(stripHtmlTags(trimmed)).trim();
+}
+
+/** 内联图片数据（`data:image/…`、`data:…;base64,…`）替换为占位，避免把图片字节当正文。 */
+function stripInlineImageData(input: string): string {
+  if (!input.includes("data:")) return input;
+  return input
+    .replace(/data:[^\s"')\]}]*;base64,[^\s"')\]}]*/g, "[图片]")
+    .replace(/data:image\/[^\s"')\]}]*/g, "[图片]");
+}
+
+/** jsonML 块/行节点：`[标签名, 属性对象, …子节点]`。用于把它与普通数组区分开。 */
+function looksLikeJsonML(items: unknown[]): boolean {
+  return (
+    items.length >= 2 &&
+    typeof items[0] === "string" &&
+    items[1] !== null &&
+    typeof items[1] === "object" &&
+    !Array.isArray(items[1])
+  );
+}
+
+/**
+ * jsonML 富文本树（`["root",{},["p",{},["span",{…},TEXT]]]`）的内容文本：
+ * 第 0 位是标签名、第 1 位（对象）是属性，都不是正文，只递归第 2 位起的子节点。
+ * 直接扁平化整棵树会把节点名（root/p/span/leaf）与 img 的 data URI 当正文。
+ */
+function jsonMLContentText(node: unknown[]): string {
+  const lines: string[] = [];
+  for (const child of node.slice(2)) {
+    if (typeof child === "string") {
+      const text = stripInlineImageData(child).trim();
+      if (text) lines.push(text);
+    } else {
+      const text = extractRichText(child).trim();
+      if (text) lines.push(text);
     }
   }
-  return stripHtmlTags(trimmed).trim();
+  return lines.join("\n");
 }
 
 function extractRichText(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return stripInlineImageData(value);
   if (Array.isArray(value)) {
+    if (looksLikeJsonML(value)) return jsonMLContentText(value);
     const lines = value
       .map(extractRichText)
       .map((s) => s.trim())
@@ -114,6 +158,17 @@ function extractRichText(value: unknown): string {
   }
   if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
+    // 云效 RICHTEXT 描述是 {htmlValue, jsonMLValue}：htmlValue 是阅读态 HTML（正文文本 + 图片
+    // 标签），jsonMLValue 是结构化树。优先取 htmlValue——两者都扁平化会把 jsonML 的节点名与
+    // 内联 base64 当正文（回归 QHDK-30368）。
+    if (typeof obj.htmlValue === "string") {
+      const text = stripInlineImageData(stripHtmlTags(obj.htmlValue)).trim();
+      if (text) return text;
+    }
+    if (obj.jsonMLValue !== undefined) {
+      const text = extractRichText(obj.jsonMLValue).trim();
+      if (text) return text;
+    }
     for (const key of ["text", "content", "value"]) {
       if (key in obj) {
         const text = extractRichText(obj[key]).trim();

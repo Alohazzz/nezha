@@ -348,20 +348,107 @@ fn merge_status_lists(lists: Vec<Vec<YunxiaoStatus>>) -> Vec<YunxiaoStatus> {
     merged
 }
 
+/// 内联图片数据（`data:image/…;base64,…`）不是描述正文：图片由
+/// `yunxiao_prepare_issue_images` 下载到方案目录、以**路径**注入讨论 prompt，正文只留占位。
+/// 不剥离会把 prompt 撑到 16 万字符级，`CreateProcessW` 撞 Windows 命令行 32,767 上限
+/// （os error 206，回归 QHDK-30368）。
+fn strip_inline_image_data(input: &str) -> String {
+    const PREFIX: &str = "data:";
+    if !input.contains(PREFIX) {
+        return input.to_string();
+    }
+    // URI 终止于空白或 JSON/HTML/Markdown 的常见分隔符。
+    let is_delimiter = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ')' | ']' | '}' | '>');
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find(PREFIX) {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + PREFIX.len()..];
+        let end = after.find(is_delimiter).unwrap_or(after.len());
+        let tail = &after[..end];
+        if tail.starts_with("image/") || tail.contains("base64,") {
+            out.push_str("[图片]");
+            rest = &after[end..];
+        } else {
+            // 不是内联图片数据，原样保留并越过 `data:` 继续扫描。
+            out.push_str(PREFIX);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// jsonML 富文本树（`["root",{},["p",{},["span",{…},TEXT]]]`）的内容文本：
+/// 第 0 位是标签名、第 1 位（对象）是属性，都不是正文，只递归第 2 位起的子节点。
+/// 直接扁平化整棵树会把节点名（root/p/span/leaf）与 img 的 data URI 当正文。
+fn jsonml_content_text(value: &serde_json::Value) -> String {
+    fn walk(node: &serde_json::Value, out: &mut Vec<String>) {
+        let serde_json::Value::Array(items) = node else {
+            return;
+        };
+        for child in items.iter().skip(2) {
+            match child {
+                serde_json::Value::String(s) => {
+                    let cleaned = strip_inline_image_data(s);
+                    let trimmed = cleaned.trim();
+                    if !trimmed.is_empty() {
+                        out.push(trimmed.to_string());
+                    }
+                }
+                other => walk(other, out),
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    walk(value, &mut lines);
+    lines.join("\n")
+}
+
+/// jsonML 块/行节点：`[标签名, 属性对象, …子节点]`。用于把它与「普通数组」区分开。
+fn is_jsonml_node(items: &[serde_json::Value]) -> bool {
+    items.len() >= 2 && items[0].is_string() && items[1].is_object()
+}
+
 /// 云效描述可能是富文本 JSON（TipTap/Notion 风格）或 HTML：
 /// 递归提取字符串叶子（优先 text/content/value 字段），块级数组按行拼接，
 /// 普通字符串剥离 HTML 标签；非文本值返回 None。
+///
+/// 云效自有的 RICHTEXT 描述是 `{htmlValue, jsonMLValue}`：htmlValue 是阅读态 HTML（正文文本 +
+/// 图片标签），jsonMLValue 是结构化树。**优先取 htmlValue**——两者都扁平化会把 jsonML 的节点名
+/// 与内联 base64 当正文注入 prompt（回归 QHDK-30368）。
 fn normalize_issue_description(value: serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(s) => {
-            let stripped = strip_html_tags(&s);
+            // 接口可能把 RICHTEXT 描述作为**序列化 JSON 字符串**返回：先解析再归一化，
+            // 否则 jsonML 的节点名会作为正文残留（与前端 normalizeIssueDescription 同一逻辑）。
+            let trimmed = s.trim();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    // 解析成功即信任结构化提取。正文可能为空（纯图片描述——图片已按路径注入
+                    // prompt），此时**不能**回退成原文，否则 `{htmlValue, jsonMLValue}` 会原样
+                    // 进 prompt（回归 QHDK-30368）。
+                    return normalize_issue_description(parsed);
+                }
+            }
+            let stripped = strip_inline_image_data(&strip_html_tags(&s));
+            let stripped = stripped.trim();
             if stripped.is_empty() {
                 None
             } else {
-                Some(stripped)
+                Some(stripped.to_string())
             }
         }
         serde_json::Value::Array(items) => {
+            if is_jsonml_node(&items) {
+                let text = jsonml_content_text(&serde_json::Value::Array(items));
+                let text = text.trim();
+                return if text.is_empty() {
+                    None
+                } else {
+                    Some(text.to_string())
+                };
+            }
             let lines: Vec<String> = items
                 .iter()
                 .filter_map(|v| normalize_issue_description(v.clone()))
@@ -375,6 +462,22 @@ fn normalize_issue_description(value: serde_json::Value) -> Option<String> {
             }
         }
         serde_json::Value::Object(map) => {
+            if let Some(html) = map.get("htmlValue").and_then(serde_json::Value::as_str) {
+                let cleaned = strip_inline_image_data(&strip_html_tags(html));
+                let cleaned = cleaned.trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+            if let Some(jsonml) = map.get("jsonMLValue") {
+                if is_jsonml_node(jsonml.as_array().map(Vec::as_slice).unwrap_or(&[])) {
+                    let text = jsonml_content_text(jsonml);
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        return Some(text.to_string());
+                    }
+                }
+            }
             for key in ["text", "content", "value"] {
                 if let Some(v) = map.get(key) {
                     if let Some(text) = normalize_issue_description(v.clone()) {
@@ -2327,6 +2430,111 @@ mod tests {
         let json = r#"{"description": {"document": "对象描述"}, "id": "x", "subject": "s"}"#;
         let item: YunxiaoWorkitem = serde_json::from_str(json).expect("parses");
         assert_eq!(item.description.as_deref(), Some("对象描述"));
+    }
+
+    /// 云效 RICHTEXT 描述是 `{htmlValue, jsonMLValue}`：正文里可能带内联 base64 图片。归一化必须
+    /// 只留可读文本——jsonML 节点名（root/span/leaf）与 `data:` 图片数据都不得进入正文，否则讨论
+    /// prompt 被撑到 165KB，`CreateProcessW` 撞 Windows 32,767 命令行上限（os error 206）。
+    /// 回归：QHDK-30368。
+    fn richtext_fixture() -> serde_json::Value {
+        let b64 = format!(
+            "iVBORw0KGgoAAAANSUhEUgAAB4AAAAPnCAIAAABBfsZgAAAA{}",
+            "A".repeat(164_230)
+        );
+        let text = "复现步骤：患者开立住院证后按身份证查询。";
+        let data_uri = format!("data:image/png;base64,{b64}");
+        let html =
+            format!(r#"<article class="4ever-article"><p>{text}</p><img src="{data_uri}"></article>"#);
+        let jsonml = serde_json::json!([
+            "root", {},
+            ["p", {}, ["span", {"data-type": "text"},
+                ["span", {"data-type": "leaf"}, text]]],
+            ["img", {"src": data_uri},
+                ["span", {"data-type": "text"}, ["span", {"data-type": "leaf"}, data_uri]]]
+        ]);
+        serde_json::json!({"htmlValue": html, "jsonMLValue": jsonml})
+    }
+
+    fn assert_readable_description(normalized: &str) {
+        assert!(
+            !normalized.contains("base64"),
+            "内联 base64 不进正文（实际 {} 字）",
+            normalized.chars().count()
+        );
+        assert!(!normalized.contains("leaf"), "jsonML 节点名不进正文");
+        assert!(!normalized.contains("span"), "jsonML 节点名不进正文");
+        assert!(normalized.contains("复现步骤"), "正文文本必须保留：{normalized}");
+        assert!(
+            normalized.chars().count() < 2000,
+            "正文应回到可读量级，实际 {} 字",
+            normalized.chars().count()
+        );
+    }
+
+    /// 生产实际形态：description 是 JSON 对象 `{htmlValue, jsonMLValue}`。
+    #[test]
+    fn richtext_object_description_drops_inline_base64_and_node_names() {
+        let normalized = normalize_issue_description(richtext_fixture()).expect("正文非空");
+        assert_readable_description(&normalized);
+    }
+
+    /// 同一内容的**序列化字符串**形态（部分接口把 RICHTEXT 描述作为字符串返回）。
+    #[test]
+    fn richtext_serialized_string_description_is_readable() {
+        let normalized =
+            normalize_issue_description(serde_json::json!(richtext_fixture().to_string()))
+                .expect("正文非空");
+        assert_readable_description(&normalized);
+    }
+
+    /// 只有 jsonMLValue（无 htmlValue）时也要走 jsonML 内容提取，不能扁平化出节点名。
+    #[test]
+    fn jsonml_only_description_is_readable() {
+        let fixture = richtext_fixture();
+        let jsonml = fixture.get("jsonMLValue").cloned().expect("有 jsonMLValue");
+        let normalized =
+            normalize_issue_description(serde_json::json!({ "jsonMLValue": jsonml })).expect("正文非空");
+        assert_readable_description(&normalized);
+    }
+
+    /// 与上面同源的「接口响应」路径：`parse_workitem_response` 反序列化即应得到干净正文。
+    #[test]
+    fn workitem_response_richtext_description_is_readable() {
+        let raw = serde_json::json!({
+            "id": "c5a4f0de1a8b9ec12d9d1dfada",
+            "serialNumber": "QHDK-30368",
+            "subject": "【住院收费】入院登记",
+            "description": richtext_fixture(),
+        })
+        .to_string();
+        let item = parse_workitem_response(raw.as_bytes()).expect("解析成功");
+        let description = item.description.expect("有正文");
+        assert_readable_description(&description);
+    }
+
+    /// 纯图片描述（`htmlValue` 为空、jsonML 只有 img 节点）：正文为空可以接受，但**绝不能**
+    /// 回退成原始 `{htmlValue, jsonMLValue}` JSON——那会让结构串进讨论 prompt（回归 QHDK-30368）。
+    #[test]
+    fn image_only_richtext_description_does_not_leak_json() {
+        let fixture = serde_json::json!({
+            "htmlValue": "",
+            "jsonMLValue": ["root", {},
+                ["p", {},
+                    ["span", {"data-type": "text"}, ["span", {"data-type": "leaf"}, ""]],
+                    ["img", {"id": "dcibqp", "name": "image.png", "size": 259847,
+                             "src": "https://devops.aliyun.com/projex/api/workitem/file/url?fileIdentifier=x"},
+                        ["span", {"data-type": "text"}, ["span", {"data-type": "leaf"}, ""]]]]]
+        });
+        // 序列化字符串形态（接口/任务记录里的实际形态）。
+        let normalized =
+            normalize_issue_description(serde_json::json!(fixture.to_string()));
+        let text = normalized.unwrap_or_default();
+        assert!(!text.contains("jsonMLValue"), "不得回退成原始 JSON：{text}");
+        assert!(!text.contains("htmlValue"), "不得回退成原始 JSON：{text}");
+        assert!(!text.contains("data-type"), "不得泄漏 jsonML 属性：{text}");
+        // 对象形态同样处理。
+        let object_form = normalize_issue_description(fixture).unwrap_or_default();
+        assert!(!object_form.contains("jsonMLValue"));
     }
 
     #[test]
