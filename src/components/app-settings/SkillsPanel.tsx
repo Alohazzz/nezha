@@ -203,8 +203,9 @@ export function SkillsPanel() {
       setMissingFlowSkills([]);
       return;
     }
-    // 直接执行链路恒引用 yunxiao-direct-execution；batch-grill-me 仅在开关打开时被引用。
-    const required = ["yunxiao-direct-execution"];
+    // 执行链路（直接开始 / 按方案执行）恒引用 yunxiao-issue-execution；
+    // batch-grill-me 仅在批量盘问开关打开时被引用。
+    const required = ["yunxiao-issue-execution"];
     if (batchGrill === true) required.push("batch-grill-me");
     let cancelled = false;
     Promise.all(

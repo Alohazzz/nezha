@@ -111,7 +111,7 @@ describe("SkillsPanel — 被引用技能未安装的提示", () => {
     });
   }
 
-  const BOTH = ["yunxiao-direct-execution", "batch-grill-me"];
+  const BOTH = ["yunxiao-issue-execution", "batch-grill-me"];
   function allInstalled(): Record<string, Array<{ agent: string }>> {
     return Object.fromEntries(
       BOTH.map((s) => [s, [{ agent: "claude" }, { agent: "codex" }, { agent: "dsh" }]]),
@@ -133,7 +133,7 @@ describe("SkillsPanel — 被引用技能未安装的提示", () => {
     renderPanel();
 
     const warn = await screen.findByRole("status");
-    expect(warn).toHaveTextContent("yunxiao-direct-execution");
+    expect(warn).toHaveTextContent("yunxiao-issue-execution");
     expect(warn).toHaveTextContent("Claude Code");
     // 开关关闭时 batch-grill-me 不会被引用，不提示。
     expect(warn).not.toHaveTextContent("batch-grill-me");
@@ -144,14 +144,14 @@ describe("SkillsPanel — 被引用技能未安装的提示", () => {
     renderPanel();
 
     const warn = await screen.findByRole("status");
-    expect(warn).toHaveTextContent("yunxiao-direct-execution");
+    expect(warn).toHaveTextContent("yunxiao-issue-execution");
     expect(warn).toHaveTextContent("batch-grill-me");
   });
 
   it("仅在缺失该技能的 Agent 上提示", async () => {
     // claude 缺 direct-execution，codex/dsh 已装 → 只提示 Claude Code。
     mockBackendWithInstalls({}, {
-      "yunxiao-direct-execution": [{ agent: "codex" }, { agent: "dsh" }],
+      "yunxiao-issue-execution": [{ agent: "codex" }, { agent: "dsh" }],
       "batch-grill-me": [{ agent: "claude" }, { agent: "codex" }, { agent: "dsh" }],
     });
     renderPanel();
@@ -163,7 +163,7 @@ describe("SkillsPanel — 被引用技能未安装的提示", () => {
 
   it("broken 安装不算已安装（仍提示）", async () => {
     const installs = allInstalled() as Record<string, Array<{ agent: string; health?: string }>>;
-    installs["yunxiao-direct-execution"] = [
+    installs["yunxiao-issue-execution"] = [
       { agent: "claude", health: "broken" },
       { agent: "codex" },
       { agent: "dsh" },

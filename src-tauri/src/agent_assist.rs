@@ -488,22 +488,6 @@ pub async fn generate_task_name(
     Ok(sanitized)
 }
 
-// ── 讨论指令公共片段（联合分析讨论 / 方案执行共用）──────────────────────────
-
-/// 价值评分技能指令：讨论/分析得出结论后，用 issue-value-scoring 技能产出「价值评分」
-/// 小节写入 discussion.md（放在「修改方案汇总」之后、「影响范围与测试」之前），
-/// 随开发向评论一起回写，数值同时写入议题「价值评分」字段（Req 核心指数 / Bug 优先指数）。
-const VALUE_SCORE_INSTRUCTION: &str = r#"另外，在讨论/分析得出结论后，使用 issue-value-scoring 技能对议题做价值评分，并把 `## 价值评分` 小节写入 discussion.md（放在「修改方案汇总」小节之后、「影响范围与测试」小节之前，随开发向评论一起回写；数值同时写入议题「价值评分」字段，Req 写核心指数、Bug 写优先指数）。评分小节固定格式如下（按议题类别只输出对应的一行指数，其余行不要输出）：
-## 价值评分
-- 议题类别：Req（或 Bug）
-- 核心指数：**50** = (价值 4 × 机会 5 × 影响 5) ÷ 工作量等级 2
-- 优先指数：**54** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0
-- 一句话结论：高价值低成本，值得立即做。"#;
-
-/// 补录议题技能指令：讨论/执行中发现需要新立项的问题时，提示用户手工调用
-/// `yunxiao-backfill-issue` 技能补录议题（Skill 负责盘问，Nezha 持有 token 创建）。
-const BACKFILL_SKILL_INSTRUCTION: &str = "此外，在讨论/执行过程中，如果发现一个不属于当前议题、需要单独新立项的问题，可以提示用户手工调用 yunxiao-backfill-issue 技能补录议题：它会总结上下文、判定缺陷/需求、按模板盘问并生成预览，确认后由 Nezha 创建云效议题并自动生成绑定待办。不要未经用户确认就自动立项。\n写补录请求文件 backfill-issue.json 时，目录名必须是你当前任务 id（读取环境变量 $NEZHA_TASK_ID，禁止自造 task_id），即 `.nezha/drafts/{NEZHA_TASK_ID}/backfill-issue.json`，与 discussion.md / knowledge.json 放同一目录；否则 Nezha 的补录侦测匹配不到本任务，不会创建议题与待办。只需写入一次；Nezha 消费后会自动清理该文件，若你随后发现文件消失属正常，不要重复写入或重新落盘。";
-
 /// 技能里承载沉淀契约的参考文件（相对技能目录）。
 pub(crate) const SEDIMENTATION_CONTRACT_REFERENCE: &str = "references/sedimentation.md";
 /// 承载契约的技能名。
@@ -592,8 +576,10 @@ section 必须是该卡片中已存在的标题，且限于：职责 / 关键实
 /// 互相矛盾（技能写「一次只问一个问题」、注入指令写「不要逐条」），导致提问节律间歇失效。
 const PLAN_DISCUSSION_SKILL: &str = "yunxiao-plan-discussion";
 
-/// 「直接开始」的流程与产物契约技能（同样由 SkillHub 维护，Nezha 只传参数）。
-const DIRECT_EXECUTION_SKILL: &str = "yunxiao-direct-execution";
+/// 议题执行的流程与产物契约技能（SkillHub 维护，Nezha 只传参数）。
+/// 一个技能覆盖两种「方案来源」：已定稿（讨论产出，按方案直接执行）与自动生成
+/// （由议题整理，可按需先澄清/取证）——两者的产物契约与执行动作一致。
+const ISSUE_EXECUTION_SKILL: &str = "yunxiao-issue-execution";
 
 /// 默认提问技能：逐条盘问（一次只问一个问题）。技能正文按任务参数取值选择节律。
 const GRILLING_SKILL: &str = "grilling";
@@ -612,9 +598,12 @@ fn question_skill(batch_grill: bool) -> &'static str {
     }
 }
 
-/// 议题类型参数：由方案/议题的类别快照推导（前端传入 has_bug）。
-fn issue_kind(has_bug: bool) -> &'static str {
-    if has_bug {
+/// 议题类型参数（是否要求本任务做 Bug 根因取证）。
+/// 已定稿方案的执行任务不做取证——根因与方案已在讨论阶段确定，执行阶段重跑会与方案打架。
+fn issue_kind(has_bug: bool, from_plan: bool) -> &'static str {
+    if from_plan {
+        "已定稿方案（根因与修改方案已在讨论阶段确定，本任务不再做 Bug 根因取证）"
+    } else if has_bug {
         "含 Bug 缺陷类议题（按技能「Bug 根因诊断」取证后再产出）"
     } else {
         "不含 Bug 类议题（可跳过技能中的「Bug 根因诊断」）"
@@ -637,7 +626,7 @@ pub fn plan_discussion_instructions(
 - 依赖文件（绝对路径，schema 与产出要求见技能「方案依赖文件」节）：{deps_json_path}",
         skill = PLAN_DISCUSSION_SKILL,
         question_skill = question_skill(batch_grill),
-        issue_kind = issue_kind(has_bug),
+        issue_kind = issue_kind(has_bug, false),
         plan_md_path = plan_md_path,
         deps_json_path = deps_json_path,
     )
@@ -687,47 +676,50 @@ async fn batch_grill_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// 方案执行流程：方案已定稿，直接执行；发现方案与代码现实冲突即停。
-/// 执行动作统一走 implement 技能（把「本议题方案」当作 spec/工单落地）。
-const PLAN_EXECUTION_FLOW: &str = "方案优先：本议题的修改方案已在「本议题方案（已定稿）」中定稿（来自多云题联合讨论），按方案直接执行改动，不要再把用户盘问一轮。请使用 implement 技能执行本次改动：把「本议题方案」当作 spec/工单，按该技能的流程落地实现并自验。执行中发现方案与代码现实冲突（文件/函数不存在、方案假设错误、影响面比方案判断更大）时，停下来在会话中说明冲突点并给出建议，等用户决策后再继续；不要擅自偏离方案。";
-
-/// 方案讨论/执行共用的知识认知指令：直接让 Agent 调用 knowledge-graph 技能建立模块认知
-///（图谱选择由技能按项目 graph.toml 自行解析，不在此注入具体图谱 id）。
-const PLAN_KNOWLEDGE_INSTRUCTION: &str = "另外，开始前先使用 knowledge-graph 技能：按技能说明查询本项目绑定的知识图谱，建立对相关模块的认知（职责、代码位置、关键实体、跨模块依赖），并用实际代码验证。";
-
-/// 方案执行任务的产物落盘：评分与影响范围进任务自己的 discussion.md；
-/// 「修改方案汇总」由方案文档提供（回写时自动合并），不在此重复维护。
-fn plan_execution_draft_instructions(task_id: &str) -> String {
+/// 议题执行任务的完整指令：**技能指针 + 任务参数**。
+///
+/// 流程（澄清与取证 / knowledge-graph 认知 / implement 执行 / 冲突停下）与产物契约
+/// （discussion.md 三段结构、价值评分、补录议题）全部由 `yunxiao-issue-execution`
+/// 技能承载——改技能即可热更新，Nezha 只传本次会话的动态参数。
+///
+/// `from_plan`（方案来源）：true = 按已定稿方案执行（方案节由前端内联，方案全文路径亦在
+/// 提示词里），false = 议题自动整理成方案后执行。
+///
+/// Bug 路径优先于 clarify_first（Bug 的澄清由 diagnosing-bugs 取证循环承担，两者叠加会
+/// 互相打架），故先把 clarify_first 归零再决定「先澄清」与「提问技能」参数。
+pub fn issue_execution_instructions(
+    task_id: &str,
+    has_bug: bool,
+    clarify_first: bool,
+    batch_grill: bool,
+    from_plan: bool,
+) -> String {
+    // 已定稿方案不重复盘问：方案已由讨论定稿（讨论阶段已问过），执行阶段再澄清会与方案打架。
+    let clarify = clarify_first && !has_bug && !from_plan;
     format!(
-        r#"── 工作产物落盘（必须执行）────────────────────────────
-本任务的工作产物写入当前工作目录（cwd）下的 `.nezha/drafts/{task_id}/` 目录（目录不存在就先创建）：
-
-1. `.nezha/drafts/{task_id}/discussion.md` —— 回写云效的素材（只写本议题执行增量）：
-   - 结构固定两段（按顺序）：
-     a. `## 价值评分`：见上方价值评分指令，Req 写核心指数、Bug 写优先指数，附一句话结论；回写云效时与方案文档的「修改方案汇总」合并为开发向评论，数值同时写入议题「价值评分」字段。
-     b. `## 影响范围与测试（测试向）`：字段固定三行，**字段名加粗**（与开发向评论的小标题一致，不要用列表符号）——`**修改分支**`（本任务改动所在分支，如 master）、`**修改文件**`（受影响的项目/工程名，从实际改动文件路径归纳，如 Nto.His.Register.UI，多个用顿号分隔）、`**测试步骤**`（可执行的测试步骤与回归点）；若执行与方案一致，可基于方案文档对应节整理。
-   - 「修改方案汇总」不在本文件维护（由方案文档 plan.md 提供，回写时自动合并），不要在此重复。
-   - 任务收尾（结束对话前）再检查并更新一次，确保包含最终状态。
-   （知识沉淀候选另见任务提示词末尾的知识沉淀契约，格式不要在这里重复约定。）"#,
+        "## 工作流程\n请读取并遵循 `{skill}` 技能，按其中的流程与产物契约完成本次改动。\n\n\
+## 任务参数\n\
+- 方案来源：{plan_source}\n\
+- 议题类型：{issue_kind}\n\
+- 先澄清：{clarify}\n\
+- 提问技能：`{question_skill}`\n\
+- 工作产物目录（相对项目根）：.nezha/drafts/{task_id}/",
+        skill = ISSUE_EXECUTION_SKILL,
+        plan_source = if from_plan {
+            "已定稿（讨论产出；修改方案见提示词的「本议题方案」节，方案全文路径亦在提示词里）"
+        } else {
+            "自动生成（由议题原文整理，未经过讨论；本议题内容即本次改动的 spec）"
+        },
+        issue_kind = issue_kind(has_bug, from_plan),
+        clarify = if clarify { "是" } else { "否" },
+        question_skill = question_skill(clarify && batch_grill),
         task_id = task_id,
     )
 }
 
-/// 方案执行任务的完整指令：流程（implement 执行 + knowledge-graph 认知）+ 评分 + 补录 + 产物落盘。
+/// 方案执行任务（已定稿方案 → 按方案逐议题执行）。
 pub fn plan_execution_instructions(task_id: &str) -> String {
-    let knowledge_graph = PLAN_KNOWLEDGE_INSTRUCTION;
-    format!(
-        "## 工作流程\n{flow}{knowledge_graph}\n\n## 输出与产物\n{value_score}\n\n{backfill}\n\n{draft}",
-        flow = PLAN_EXECUTION_FLOW,
-        knowledge_graph = if knowledge_graph.is_empty() {
-            String::new()
-        } else {
-            format!("\n\n{knowledge_graph}")
-        },
-        value_score = VALUE_SCORE_INSTRUCTION,
-        backfill = BACKFILL_SKILL_INSTRUCTION,
-        draft = plan_execution_draft_instructions(task_id),
-    )
+    issue_execution_instructions(task_id, false, false, false, true)
 }
 
 /// 前端在「立即运行」方案执行待办前调用（prompt 已在生成待办时定稿，此命令仅供预览/重建）。
@@ -738,35 +730,14 @@ pub async fn get_plan_execution_instructions(task_id: String) -> Result<String, 
 
 // ── 直接执行链路（跳过讨论，议题即 spec）──────────────────────────────────────
 
-/// 直接执行任务的完整指令：**技能指针 + 任务参数**。
-///
-/// 流程（议题即工单 / 澄清与取证 / knowledge-graph 认知 / 冲突停下）与产物契约
-/// （discussion.md 三段结构、价值评分、补录议题）全部由 `yunxiao-direct-execution`
-/// 技能承载——改技能即可热更新，Nezha 只传本次会话的动态参数。
-///
-/// has_bug 由议题类别推导（categoryId == bug）；Bug 路径优先于 clarify_first
-/// （Bug 的澄清由 diagnosing-bugs 取证循环承担，两者叠加会互相打架），故此处把
-/// clarify_first 归零后再决定「先澄清」与「提问技能」参数。
+/// 直接执行任务（议题自动整理成方案 → 执行）；见 [`issue_execution_instructions`]。
 pub fn direct_execution_instructions(
     task_id: &str,
     has_bug: bool,
     clarify_first: bool,
     batch_grill: bool,
 ) -> String {
-    let clarify = clarify_first && !has_bug;
-    format!(
-        "## 工作流程\n请读取并遵循 `{skill}` 技能，按其中的流程与产物契约完成本次改动。\n\n\
-## 任务参数\n\
-- 议题类型：{issue_kind}\n\
-- 先澄清：{clarify}\n\
-- 提问技能：`{question_skill}`\n\
-- 工作产物目录（相对项目根）：.nezha/drafts/{task_id}/",
-        skill = DIRECT_EXECUTION_SKILL,
-        issue_kind = issue_kind(has_bug),
-        clarify = if clarify { "是" } else { "否" },
-        question_skill = question_skill(clarify && batch_grill),
-        task_id = task_id,
-    )
+    issue_execution_instructions(task_id, has_bug, clarify_first, batch_grill, false)
 }
 
 /// 直接执行链路：议题列表 / 绑定待办「直接开始」时由前端调用组装 prompt。
@@ -1637,8 +1608,9 @@ mod tests {
     fn direct_execution_instructions_compose_flow_and_drafts() {
         let prompt = direct_execution_instructions("9001", true, false, false);
         // 技能指针 + 任务参数：流程与产物契约由技能承载，不在提示词里复述。
-        assert!(prompt.contains("`yunxiao-direct-execution` 技能"));
+        assert!(prompt.contains("`yunxiao-issue-execution` 技能"));
         assert!(prompt.contains("## 任务参数"));
+        assert!(prompt.contains("方案来源：自动生成"));
         assert!(prompt.contains("议题类型：含 Bug 缺陷类议题"));
         assert!(prompt.contains(".nezha/drafts/9001/"));
         // 流程散文已外移：不再内联技能引用与产物小节标题。
@@ -1682,6 +1654,26 @@ mod tests {
         assert!(bug.contains("议题类型：含 Bug 缺陷类议题"));
         assert!(bug.contains("先澄清：否"));
         assert!(bug.contains("提问技能：`grilling`"));
+    }
+
+    /// 两个执行入口共用同一技能指针与参数块，只差「方案来源」等取值——收敛的核心保证。
+    #[test]
+    fn execution_entries_share_one_skill_pointer() {
+        let from_plan = plan_execution_instructions("9010");
+        let auto = direct_execution_instructions("9010", false, false, false);
+        assert!(from_plan.contains("`yunxiao-issue-execution` 技能"));
+        assert!(auto.contains("`yunxiao-issue-execution` 技能"));
+        assert!(from_plan.contains("方案来源：已定稿"));
+        assert!(auto.contains("方案来源：自动生成"));
+        // 已定稿方案不重复盘问、不重跑 Bug 取证（讨论阶段已定）。
+        assert!(from_plan.contains("先澄清：否"));
+        assert!(from_plan.contains("已定稿方案（根因与修改方案已在讨论阶段确定"));
+        // 两条路径都不内联旧的流程散文。
+        for prompt in [&from_plan, &auto] {
+            assert!(!prompt.contains("方案优先：本议题的修改方案"));
+            assert!(!prompt.contains("此外，在讨论/执行过程中"));
+            assert!(!prompt.contains("── 工作产物落盘"));
+        }
     }
 
     #[test]
