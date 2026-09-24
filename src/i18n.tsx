@@ -81,6 +81,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.batchGrillToggle": "Ask the whole question frontier at once",
     "appSettings.batchGrillHint":
       "Experimental skill. When enabled, Yunxiao issue discussions (\"start directly with clarification\" and \"plan discussion\") use the batch-grill-me skill: every question on the current design-tree frontier is asked in one round with a recommended answer, instead of one question at a time. The skill must be installed from the skill library first.",
+    "appSettings.missingFlowSkill":
+      "The {skill} skill is not installed for {agents}; Yunxiao tasks will not be able to read its contract. Install it from the Skill Library.",
     "appSettings.terminalScrollback": "Terminal Scrollback",
     "appSettings.terminalScrollbackUnit": "lines",
     "appSettings.terminalScrollbackHint":
@@ -1211,6 +1213,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.batchGrillToggle": "一轮抛出当前前沿的全部问题",
     "appSettings.batchGrillHint":
       "测试技能。开启后，云效议题讨论（「直接开始（先澄清）」与「方案讨论」）改用 batch-grill-me 技能：把设计树当前前沿能确定的问题一轮全部抛出（每题附推荐答案），而不是一次只问一个；技能需先在技能库中安装。",
+    "appSettings.missingFlowSkill":
+      "{agents} 尚未安装 {skill} 技能，云效任务将读不到该技能契约。请在技能库中安装。",
     "appSettings.terminalScrollback": "终端滚动缓冲",
     "appSettings.terminalScrollbackUnit": "行",
     "appSettings.terminalScrollbackHint":

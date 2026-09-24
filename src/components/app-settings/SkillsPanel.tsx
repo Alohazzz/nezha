@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, GitBranch, RotateCcw } from "lucide-react";
+import { AlertTriangle, FolderOpen, GitBranch, RotateCcw } from "lucide-react";
 import { useI18n } from "../../i18n";
-import type { Project, SkillHubConfig, SetSkillHubResult } from "../../types";
+import type { AgentType, Project, SkillHubConfig, SkillInstallation, SetSkillHubResult } from "../../types";
+import { enabledAgentTypes } from "../../types";
 import { SKILL_HUB_CHANGED_EVENT, type AppSettings } from "./types";
 import s from "../../styles";
 
 function formatSyncTime(ts?: number): string {
   if (!ts) return "";
   return new Date(ts).toLocaleString();
+}
+
+function agentLabel(agent: AgentType): string {
+  if (agent === "claude") return "Claude Code";
+  if (agent === "codex") return "Codex";
+  return "DSH";
 }
 
 /** 技能库来源配置：本地目录 / git 远端（URL + 可选分支）。 */
@@ -26,6 +33,10 @@ export function SkillsPanel() {
   const [writebackBusy, setWritebackBusy] = useState(true);
   const [batchGrill, setBatchGrill] = useState<boolean | null>(null);
   const [batchGrillBusy, setBatchGrillBusy] = useState(true);
+  /** 云效任务提示词会引用、但启用 Agent 上缺健康安装的技能（技能名 → 缺哪些 Agent）。 */
+  const [missingFlowSkills, setMissingFlowSkills] = useState<Array<{ skill: string; agents: AgentType[] }>>([]);
+  /** 启用中的 Agent：云效任务只在启用的 Agent 上跑，提示据此收敛。 */
+  const [enabledAgents, setEnabledAgents] = useState<AgentType[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,12 +45,14 @@ export function SkillsPanel() {
         if (!cancelled) {
           setKnowledgeEnabled(settings.knowledge?.enabled ?? true);
           setBatchGrill(settings.batch_grill_enabled ?? false);
+          setEnabledAgents(enabledAgentTypes(settings));
         }
       })
       .catch(() => {
         if (!cancelled) {
           setKnowledgeEnabled(true);
           setBatchGrill(false);
+          setEnabledAgents([]);
         }
       })
       .finally(() => {
@@ -182,7 +195,41 @@ export function SkillsPanel() {
     }
   }, [batchGrillBusy, batchGrill]);
 
+  // 云效任务提示词会按名引用技能；未安装时 Agent 读不到契约，流程静默降级
+  // （直接执行丢产物契约 / 批量盘问退回逐条）。Nezha 不做自动安装，改在设置页提示。
   const hubPath = config?.hubPath ?? "";
+  useEffect(() => {
+    if (!hubPath) {
+      setMissingFlowSkills([]);
+      return;
+    }
+    // 执行链路（直接开始 / 按方案执行）恒引用 yunxiao-issue-execution；
+    // batch-grill-me 仅在批量盘问开关打开时被引用。
+    const required = ["yunxiao-issue-execution"];
+    if (batchGrill === true) required.push("batch-grill-me");
+    let cancelled = false;
+    Promise.all(
+      required.map(async (skill) => {
+        const installs =
+          (await invoke<SkillInstallation[]>("list_skill_installations", { skillName: skill })) ?? [];
+        const installed = new Set(
+          installs.filter((ins) => ins.health === "ok").map((ins) => ins.agent),
+        );
+        return { skill, agents: enabledAgents.filter((agent) => !installed.has(agent)) };
+      }),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        setMissingFlowSkills(results.filter((r) => r.agents.length > 0));
+      })
+      .catch(() => {
+        if (!cancelled) setMissingFlowSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hubPath, batchGrill, enabledAgents]);
+
   const lastSyncedAt = config?.lastSyncedAt;
   const commit = config?.lastSyncedCommit;
   const syncError = config?.lastSyncError;
@@ -365,6 +412,22 @@ export function SkillsPanel() {
         </button>
         <span style={s.settingFieldHint}>{t("appSettings.batchGrillHint")}</span>
       </div>
+
+      {missingFlowSkills.length > 0 ? (
+        <div style={s.skillsPanelWarn} role="status">
+          <AlertTriangle size={13} strokeWidth={2} />
+          <span>
+            {missingFlowSkills.map(({ skill, agents }) => (
+              <div key={skill}>
+                {t("appSettings.missingFlowSkill", {
+                  skill,
+                  agents: agents.map(agentLabel).join("、"),
+                })}
+              </div>
+            ))}
+          </span>
+        </div>
+      ) : null}
 
       {error ? <div style={s.skillsPanelError}>{error}</div> : null}
     </div>

@@ -124,6 +124,19 @@ export const skillHub = {
     fontSize: 12,
     color: "var(--danger)",
   },
+  /** 设置项下方的非阻断提示（如「批量盘问」引用的技能尚未安装）。 */
+  skillsPanelWarn: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 6,
+    padding: "6px 10px",
+    background: "var(--warning-subtle, var(--bg-hover))",
+    border: "1px solid var(--warning, var(--border))",
+    borderRadius: 8,
+    fontSize: 12,
+    lineHeight: 1.5,
+    color: "var(--text-secondary)",
+  },
 
   // ── SkillHubView (welcome page main area) ─────────────────────────────────
   skillHubBody: {
