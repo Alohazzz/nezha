@@ -501,6 +501,72 @@ fn normalize_issue_description(value: serde_json::Value) -> Option<String> {
     }
 }
 
+/// 议题原文的 Markdown 存档（写入 `<planDir>/issues/<workitemId>.md` 或任务附件目录）。
+///
+/// 只含 Agent 修复/实现所必需的字段：编号、标题、类型、状态、负责人、链接、正文（已归一化，
+/// 内联 base64 图片被剥离，改为占位）。**不含**原始 RICHTEXT 信封与 jsonML 节点名——正文
+/// 进 prompt/文件前必须已归一化（回归 QHDK-30368）。
+fn issue_text_markdown(json: &serde_json::Value, description: &serde_json::Value) -> String {
+    let text_field = |key: &str| {
+        json.get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .trim()
+    };
+    let serial = text_field("serialNumber");
+    let subject = text_field("subject");
+    let mut out = String::new();
+    out.push_str(&format!("# {serial} {subject}\n\n"));
+
+    let mut meta: Vec<String> = Vec::new();
+    let category = json
+        .get("categoryId")
+        .or_else(|| json.get("category"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if !category.is_empty() {
+        meta.push(format!("- 类型：{category}"));
+    }
+    if let Some(status) = json
+        .get("status")
+        .and_then(|s| {
+            s.get("displayName")
+                .or_else(|| s.get("name"))
+                .and_then(serde_json::Value::as_str)
+        })
+    {
+        if !status.trim().is_empty() {
+            meta.push(format!("- 状态：{status}"));
+        }
+    }
+    if let Some(assignee) = json
+        .get("assignedTo")
+        .and_then(|a| a.get("name"))
+        .and_then(serde_json::Value::as_str)
+    {
+        if !assignee.trim().is_empty() {
+            meta.push(format!("- 负责人：{assignee}"));
+        }
+    }
+    if !meta.is_empty() {
+        out.push_str(&meta.join("\n"));
+        out.push_str("\n\n");
+    }
+
+    match normalize_issue_description(description.clone()) {
+        Some(body) if !body.trim().is_empty() => {
+            out.push_str("## 描述\n\n");
+            out.push_str(body.trim());
+            out.push('\n');
+        }
+        _ => {
+            out.push_str("## 描述\n\n（议题未提供描述正文，或描述仅含图片。）\n");
+        }
+    }
+    out
+}
+
 /// 剥离 HTML 标签（不处理属性内 `>` 的极端情况，够用于描述展示）。
 fn strip_html_tags(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -782,9 +848,13 @@ pub async fn yunxiao_get_workitem(
 
 // ── 议题图片提取 / 下载（识图）────────────────────────────────────────────────
 
-/// 图片提取结果：下载成功的本地路径 + 统计（供前端提示部分失败/全部失败）。
+/// 议题材料准备结果：议题原文落盘路径 + 图片本地路径与统计（供前端提示部分/全部失败）。
 #[derive(Serialize, Clone, Debug, Default)]
 pub struct IssueImagesPrepared {
+    /// 议题原文（编号/标题/描述）落盘路径：正文可能很长，一律写文件、由提示词给路径，
+    /// 避免把大段正文塞进命令行（Windows 32,767 字符上限，os error 206）。
+    #[serde(rename = "issueTextPath", skip_serializing_if = "Option::is_none")]
+    pub issue_text_path: Option<String>,
     pub paths: Vec<String>,
     pub total: usize,
     pub downloaded: usize,
@@ -1100,24 +1170,35 @@ pub async fn yunxiao_prepare_issue_images(
             && !value.contains('/')
             && !value.contains('\\')
     };
-    let archive_dir = match plan_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    // 归档位置：图片与议题原文分列，均在项目内（read_file_content 要求路径在项目内）。
+    // - 方案链路（planId）：`<planDir>/images/<workitemId>/` 与 `<planDir>/issues/<workitemId>.md`
+    // - 任务链路（taskId）：`.nezha/attachments/<taskId>/`（图片与原文同目录）
+    let (archive_dir, issue_text_path) = match plan_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(plan) => {
             if !is_simple_id(plan) {
                 return Err("非法的方案 ID".to_string());
             }
-            crate::storage::plan_dir(&project_path, plan)
-                .join("images")
-                .join(&workitem_id)
+            let dir = crate::storage::plan_dir(&project_path, plan);
+            (
+                dir.join("images").join(&workitem_id),
+                Some(
+                    dir.join("issues")
+                        .join(format!("{}.md", workitem_id)),
+                ),
+            )
         }
         None => match task_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            Some(task_id) if is_simple_id(task_id) => Path::new(&project_path)
-                .join(".nezha")
-                .join("attachments")
-                .join(task_id),
+            Some(task_id) if is_simple_id(task_id) => {
+                let dir = Path::new(&project_path)
+                    .join(".nezha")
+                    .join("attachments")
+                    .join(task_id);
+                (dir.clone(), Some(dir.join("issue.md")))
+            }
             _ => return Err("非法的任务 ID".to_string()),
         },
     };
@@ -1152,18 +1233,28 @@ pub async fn yunxiao_prepare_issue_images(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
+    // 议题原文落盘：先于图片早退——没有图片时，讨论/执行同样需要完整原文。
+    // 正文写文件、提示词只给路径，避免大段正文进命令行（Windows 32,767 上限）。
+    let mut result = IssueImagesPrepared::default();
+    if let Some(path) = &issue_text_path {
+        let text = issue_text_markdown(&json, &description);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建议题原文目录失败: {e}"))?;
+        }
+        std::fs::write(path, text).map_err(|e| format!("写入议题原文失败: {e}"))?;
+        result.issue_text_path = Some(path.to_string_lossy().into_owned());
+    }
+
     let mut urls: Vec<String> = Vec::new();
     extract_issue_description_urls(&description, &mut urls);
     if urls.is_empty() {
-        return Ok(IssueImagesPrepared::default());
+        return Ok(result);
     }
 
     // 2) 逐张下载（先用令牌换签名直链，再下载），序号命名
     let download_client = build_download_client()?;
-    let mut result = IssueImagesPrepared {
-        total: urls.len(),
-        ..Default::default()
-    };
+    result.total = urls.len();
     for (i, url) in urls.into_iter().enumerate() {
         if i >= MAX_ISSUE_IMAGES {
             result.skipped += 1;
@@ -2535,6 +2626,54 @@ mod tests {
         // 对象形态同样处理。
         let object_form = normalize_issue_description(fixture).unwrap_or_default();
         assert!(!object_form.contains("jsonMLValue"));
+    }
+
+    #[test]
+    fn issue_text_markdown_has_fields_and_normalized_body() {
+        // 描述是 RICHTEXT 信封 + 内联 base64：落盘正文必须是归一化后的可读文本。
+        let b64 = format!("data:image/png;base64,{}", "A".repeat(20_000));
+        let json = serde_json::json!({
+            "id": "w1",
+            "serialNumber": "QHDK-30368",
+            "subject": "【住院收费】入院登记",
+            "categoryId": "bug",
+            "status": {"displayName": "待确认"},
+            "assignedTo": {"name": "潘山精"},
+            "description": format!(
+                r#"{{"htmlValue":"<article class=\"4ever-article\"><p>复现步骤：身份证查询后医师为空。</p><img src=\"{b64}\"></article>","jsonMLValue":["root",{{}}]}}"#
+            ),
+        });
+        let description = json.get("description").cloned().unwrap();
+        let md = issue_text_markdown(&json, &description);
+
+        // 头部字段齐备（Agent 需要编号/标题定位）。
+        assert!(md.starts_with("# QHDK-30368 【住院收费】入院登记"));
+        assert!(md.contains("- 类型：bug"));
+        assert!(md.contains("- 状态：待确认"));
+        assert!(md.contains("- 负责人：潘山精"));
+        // 正文归一化：可读文本在、base64/节点名不在。
+        assert!(md.contains("复现步骤：身份证查询后医师为空。"));
+        assert!(!md.contains("base64"));
+        assert!(!md.contains("jsonMLValue"));
+        assert!(!md.contains("data-type"));
+        // 整篇回到可读量级（此前 165KB 级）。
+        assert!(md.len() < 1000, "issue text 应短小，实际 {} 字节", md.len());
+    }
+
+    #[test]
+    fn issue_text_markdown_handles_image_only_description() {
+        // 纯图片描述：正文为空也要有占位，不能回退成原始 JSON 信封。
+        let json = serde_json::json!({
+            "serialNumber": "QHDK-1",
+            "subject": "只有图片",
+            "description": r#"{"htmlValue":"","jsonMLValue":["root",{},["p",{},["img",{"src":"https://x/y.png"}]]]}"#,
+        });
+        let description = json.get("description").cloned().unwrap();
+        let md = issue_text_markdown(&json, &description);
+        assert!(md.contains("# QHDK-1 只有图片"));
+        assert!(md.contains("仅含图片"));
+        assert!(!md.contains("jsonMLValue"));
+        assert!(!md.contains("htmlValue"));
     }
 
     #[test]

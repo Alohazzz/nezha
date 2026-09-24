@@ -556,8 +556,10 @@ export interface YunxiaoPage<T> {
   perPage: number;
 }
 
-/** 云效议题图片准备结果（发起讨论时后端下载到附件目录） */
+/** 云效议题材料准备结果（后端把议题原文与图片落盘到项目内，路径写进提示词） */
 export interface YunxiaoIssueImagesPrepared {
+  /** 议题原文（编号/标题/描述）落盘路径；正文不进 prompt，只给路径 */
+  issueTextPath?: string;
   paths: string[];
   total: number;
   downloaded: number;

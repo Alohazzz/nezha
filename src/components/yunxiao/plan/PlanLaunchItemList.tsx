@@ -11,6 +11,8 @@ export interface PlanLaunchItem {
   status: PlanLaunchItemStatus;
   detail?: YunxiaoWorkitem;
   imagePaths: string[];
+  /** 议题原文落盘路径（正文不进 prompt，只给路径）。 */
+  issueTextPath?: string;
   imageWarning?: string;
   error?: string;
 }

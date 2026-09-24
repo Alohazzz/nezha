@@ -170,6 +170,7 @@ export function PlanLaunchDialog({
             status: "done",
             detail,
             imagePaths: images.paths,
+            issueTextPath: images.issueTextPath,
             imageWarning:
               images.failed > 0
                 ? t("plan.launch.imagePartial", {
@@ -262,6 +263,9 @@ export function PlanLaunchDialog({
       });
       const prompt = buildPlanDiscussionPrompt({
         issues: doneItems.map((item) => item.detail!),
+        issueTextPathByIssue: Object.fromEntries(
+          doneItems.map((item) => [item.issue.id, item.issueTextPath ?? ""]),
+        ),
         imagePathsByIssue: Object.fromEntries(
           doneItems.map((item) => [item.issue.id, item.imagePaths]),
         ),

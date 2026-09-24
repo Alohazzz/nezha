@@ -80,9 +80,12 @@ function categoryLabel(categoryId?: string): string {
   return "未知类型";
 }
 
-/** 方案讨论提示词：议题清单（含描述）+ 附件图片 + 发起人补充 + 后端注入的联合讨论指令。 */
+/** 方案讨论提示词：议题清单（编号/标题/元信息 + 原文文件路径）+ 附件图片 + 发起人补充 + 后端注入的联合讨论指令。 */
 export function buildPlanDiscussionPrompt(input: {
   issues: YunxiaoWorkitem[];
+  /** 议题原文落盘路径（后端 `yunxiao_prepare_issue_images` 产出）：正文可能很长且含图片占位，
+   *  一律写文件、prompt 只给路径——避免大段正文进命令行（Windows 32,767 上限，os error 206）。 */
+  issueTextPathByIssue: Record<string, string>;
   imagePathsByIssue: Record<string, string[]>;
   linksByIssue: Record<string, string>;
   /** 发起人在对话框手动补充的内容（背景描述/参考资料/已有修改方案等），可空。 */
@@ -95,13 +98,14 @@ export function buildPlanDiscussionPrompt(input: {
   // 单议题与多议题共用 plan 链路，但框架口吻按议题数自适应，避免单议题被「跨议题统筹」带偏。
   pieces.push(
     input.issues.length === 1
-      ? "你是「议题方案讨论助手」。请完整读懂下方议题，再按指定流程完成方案讨论。目标：产出该议题的方案文档（含修改方案与测试向内容），写入指令中指定的位置，供后续生成待办执行与回写云效。"
-      : "你是「多云题联合方案讨论助手」。请先完整读懂下方全部议题，再按指定流程联合分析。目标：产出一份覆盖全部议题的统一方案文档（含跨议题统筹与每议题方案），写入指令中指定的位置，供后续逐议题生成待办执行与回写云效。",
+      ? "你是「议题方案讨论助手」。请先读取下方每个议题的原文文件，完整读懂议题，再按指定流程完成方案讨论。目标：产出该议题的方案文档（含修改方案与测试向内容），写入指令中指定的位置，供后续生成待办执行与回写云效。"
+      : "你是「多云题联合方案讨论助手」。请先读取下方每个议题的原文文件，完整读懂全部议题，再按指定流程联合分析。目标：产出一份覆盖全部议题的统一方案文档（含跨议题统筹与每议题方案），写入指令中指定的位置，供后续逐议题生成待办执行与回写云效。",
   );
 
   const listLines: string[] = [`## 议题清单（共 ${input.issues.length} 项）`];
   input.issues.forEach((issue, index) => {
     const link = input.linksByIssue[issue.id] ?? "";
+    const textPath = input.issueTextPathByIssue[issue.id] ?? "";
     listLines.push(`### ${index + 1}. ${issue.serialNumber} ${issue.subject}`);
     listLines.push(`- 类型：${categoryLabel(issue.categoryId)}`);
     if (issue.status) {
@@ -117,9 +121,9 @@ export function buildPlanDiscussionPrompt(input: {
     if (link) {
       listLines.push(`- 云效链接：${link}`);
     }
-    const description = normalizeIssueDescription(issue.description);
-    if (description) {
-      listLines.push("", "描述：", description);
+    if (textPath) {
+      // 议题原文（含完整描述）落盘，正文不进 prompt；务必先读取再讨论。
+      listLines.push(`- 议题原文（必须先读取）：${textPath}`);
     }
     listLines.push("");
   });

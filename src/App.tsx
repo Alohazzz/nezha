@@ -2093,8 +2093,9 @@ function App() {
         },
       ]);
 
-      // 3) 议题图片：全部失败阻断（与发起对话框一致），失败清理 draft 方案。
+      // 3) 议题图片与原文：全部失败阻断（与发起对话框一致），失败清理 draft 方案。
       let imagePaths: string[] = [];
+      let issueTextPath = "";
       try {
         const images = await invoke<YunxiaoIssueImagesPrepared>("yunxiao_prepare_issue_images", {
           token: yunxiao.token,
@@ -2120,6 +2121,7 @@ function App() {
           showToast(t("yunxiao.images.prepared", { count: images.downloaded }), "success");
         }
         imagePaths = images.paths;
+        issueTextPath = images.issueTextPath ?? "";
       } catch (e) {
         showToast(t("yunxiao.images.allFailed", { error: String(e) }), "error");
         await handleRemovePlanRecord(plan.id);
@@ -2136,6 +2138,7 @@ function App() {
       const link = yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "";
       const prompt = buildPlanDiscussionPrompt({
         issues: [detail],
+        issueTextPathByIssue: { [detail.id]: issueTextPath },
         imagePathsByIssue: { [detail.id]: imagePaths },
         linksByIssue: { [detail.id]: link },
         userNotes: notes,

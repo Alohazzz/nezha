@@ -48,14 +48,15 @@ function issueWithInlineImage(id = "c5a4f0de1a8b9ec12d9d1dfada", serial = "QHDK-
 
 const IMAGE_PATH =
   "H:\\Project\\Company\\HIS\\.nezha\\plans\\1790243003440\\images\\c5a4f0de1a8b9ec12d9d1dfada\\image-01.png";
+const TEXT_PATH =
+  "H:\\Project\\Company\\HIS\\.nezha\\plans\\1790243003440\\issues\\c5a4f0de1a8b9ec12d9d1dfada.md";
 
-/** 所有 builder 共用断言：无 base64 / 无 jsonML 节点名 / 正文可读 / 远低于命令行上限。 */
-function expectReadablePrompt(prompt: string): void {
+/** 所有 builder 共用断言：无 base64 / 无 jsonML 节点名 / 远低于命令行上限。 */
+function expectCleanPrompts(prompt: string): void {
   expect(prompt).not.toContain("base64");
   expect(prompt).not.toMatch(/^leaf$/m);
   expect(prompt).not.toMatch(/^span$/m);
   expect(prompt).not.toMatch(/^root$/m);
-  expect(prompt).toContain(BODY);
   expect(prompt.length).toBeLessThan(4000);
   expect(prompt.length).toBeLessThan(32767);
 }
@@ -116,21 +117,30 @@ describe("buildPlanDiscussionPrompt — 单条 / 合并 / 待办讨论共用链�
   function build(issues: YunxiaoWorkitem[]): string {
     return buildPlanDiscussionPrompt({
       issues,
+      issueTextPathByIssue: Object.fromEntries(issues.map((i) => [i.id, TEXT_PATH])),
       imagePathsByIssue: Object.fromEntries(issues.map((i) => [i.id, [IMAGE_PATH]])),
       linksByIssue: { [issues[0].id]: "https://devops.aliyun.com/projex/project/p/workitem/1" },
       instructions: "## 工作流程\n请先读取并遵循 `yunxiao-plan-discussion` 技能。",
     });
   }
 
-  it("单条讨论：提示词保持可读量级", () => {
-    expectReadablePrompt(build([issueWithInlineImage()]));
+  it("单条讨论：只给议题原文路径，正文不进 prompt", () => {
+    const prompt = build([issueWithInlineImage()]);
+    expectCleanPrompts(prompt);
+    expect(prompt).toContain(TEXT_PATH);
+    // 正文（含图片占位）已落盘，不再内联。
+    expect(prompt).not.toContain(BODY);
   });
 
-  it("合并讨论（多云题）：合计仍远低于命令行上限", () => {
+  it("合并讨论（多云题）：列出每议题的原文路径，合计远低于命令行上限", () => {
     const issues = Array.from({ length: 5 }, (_, i) =>
       issueWithInlineImage(`w-${i}`, `QHDK-304${i}`),
     );
-    expectReadablePrompt(build(issues));
+    const prompt = build(issues);
+    expectCleanPrompts(prompt);
+    // 每个议题都有原文路径（同一夹具路径，按现值断言至少一次）。
+    expect(prompt).toContain(TEXT_PATH);
+    expect(prompt).not.toContain(BODY);
   });
 });
 
@@ -144,7 +154,9 @@ describe("buildDirectExecutionPrompt — 直接开始（列表行 / 待办）", 
     });
   }
 
-  it("直接开始：提示词保持可读量级", () => {
-    expectReadablePrompt(build(issueWithInlineImage()));
+  it("直接开始：正文已归一化且可读（本入口仍内联，Step 3 再随方案统一改为路径）", () => {
+    const prompt = build(issueWithInlineImage());
+    expectCleanPrompts(prompt);
+    expect(prompt).toContain(BODY);
   });
 });
