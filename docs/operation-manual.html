@@ -238,10 +238,10 @@
       </ul>
 
       <h3><span class="subnum">1.3</span>把议题变成任务：两个入口</h3>
-      <p>议题列表每一行右侧有两个按钮（未勾选任何议题时可见）：</p>
+      <p>议题列表每一行右侧有文字按钮（未勾选任何议题时可见），都是一次点击直达、<strong>没有二级菜单 / 「…」折叠</strong>：</p>
       <ul>
-        <li>「<strong>直接开始</strong>」（实心蓝）——跳过讨论，直接执行该议题。</li>
-        <li>「<strong>发起讨论</strong>」（描边）——进入方案讨论链路，N=1 的单条快捷入口。</li>
+        <li>「<strong>直接开始</strong>」（accent 文字色）——跳过讨论，直接执行该议题。行内主操作，常驻显示。</li>
+        <li>「<strong>发起讨论</strong>」「<strong>加到计划</strong>」（灰色次级）——进入方案讨论链路（N=1 的单条快捷入口）／把该议题加进某个交付计划。这两个次级动作<strong>平时收起，鼠标悬停该行</strong>（或键盘聚焦行内按钮）时才现身，行内静止态因此不会被一排按钮占满。</li>
       </ul>
       <p>议题列表上方的「<strong>导入到项目</strong>」下拉用于选择这两个入口的目标本地项目（会记住上次选择）。</p>
       <div class="callout warn">
@@ -734,19 +734,30 @@
       </table>
       <ul>
         <li><strong>关联方案</strong>：议题挂过的方案按创建时间倒序列成 chip，点击跳转方案看板；已取消方案展示但不计入「讨论完成」。</li>
-        <li><strong>行内动作</strong>：未开始 →「直接开始」（实色主按钮）；讨论中 / 讨论完成 →「直接开始」；已结束 →「重新发起」；任何状态都可「<strong>移出计划</strong>」。</li>
+        <li><strong>行内动作</strong>：与云效议题列表同口径，都是一次点击直达的文字按钮（<strong>没有二级菜单</strong>）。主操作常驻——未开始 / 讨论中 / 讨论完成 →「<strong>直接开始</strong>」，已结束 →「<strong>重新发起</strong>」；次级动作「<strong>单条讨论</strong>」「<strong>移出计划</strong>」平时收起，<strong>悬停该行</strong>（或键盘聚焦行内按钮）时才现身。主操作为 accent 文字色、次级为灰色，且主操作固定压在最右，悬停让次级现身时不会位移；「移出计划」是破坏性动作，只在鼠标悬到它自己时转红。</li>
         <li>从计划内议题创建的任务<strong>自动绑定计划分支 / worktree</strong>，详情底部提示常驻。</li>
         <li><strong>删除计划有门禁</strong>：仍有未完成任务、嵌入式 Shell 占用、worktree 有未提交内容、MR 未合并、或提交 MR 后源分支新增提交，都会被拒绝并给出原因。</li>
       </ul>
 
       <h4>议题操作：单条讨论、合并讨论与云效链接</h4>
       <p>议题表的行内动作与云效议题列表同口径——可以直接从计划里发起讨论，不必先回云效议题视图挑一遍。</p>
+      <p>行内动作都是<strong>一次点击直达的文字按钮</strong>：主操作（「直接开始」/「重新发起」）常驻，次级动作（「单条讨论」「移出计划」）<strong>悬停该行时才现身</strong>，且主操作固定压在最右，悬停时不会位移。</p>
+      <p>静止态每行只有一个「直接开始」文字按钮（暗色）：</p>
+      <figure>
+        <img src="screenshots/module-guide/15-plan-issue-actions-dark.png" alt="计划议题表静止态：每行只留一个主操作（暗色）" />
+        <figcaption>静止态（暗色）：行内只剩主操作「直接开始」，不再是一排按钮抢视线</figcaption>
+      </figure>
+      <p>悬停该行后，次级动作「单条讨论」「移出计划」才现身（暗色 / 亮色）：</p>
+      <figure>
+        <img src="screenshots/module-guide/21-plan-issue-actions-hover-dark.png" alt="计划议题表悬停态：次级动作现身（暗色）" />
+        <figcaption>悬停态（暗色）：次级动作「单条讨论」「移出计划」现身，主操作「直接开始」始终在最右</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/18-plan-issue-actions-light.png" alt="计划议题表悬停态：次级动作现身（亮色）" />
+        <figcaption>同一状态（亮色）</figcaption>
+      </figure>
       <p><strong>单条讨论</strong>：任意议题行内的「<strong>单条讨论</strong>」按钮，只针对这一条议题发起一次讨论（等价于云效议题列表的行内「发起讨论」，N=1），点开的是与多选发起同一个「<strong>发起讨论</strong>」对话框。</p>
       <p><strong>合并讨论</strong>：勾选多行议题左侧的复选框后，表格上方出现动作条，点「<strong>合并讨论</strong>」把这批议题<strong>合成一份方案</strong>发起一次讨论。勾选顺序＝方案里的议题顺序；单选软上限 10 条（讨论上下文与图片量的现实约束）。点「<strong>清空</strong>」取消全部勾选。</p>
-      <figure>
-        <img src="screenshots/module-guide/15-plan-issue-actions-dark.png" alt="合并讨论：勾选后出现动作条（暗色）" />
-        <figcaption>合并讨论（暗色）：勾选两条议题后表格上方出现动作条，行内另有「单条讨论」与每行标题右侧的云效链接按钮</figcaption>
-      </figure>
       <figure class="shot-md">
         <img src="screenshots/module-guide/16-plan-discussion-dialog-dark.png" alt="发起讨论对话框：拉取议题详情与图片后确认启动（暗色）" />
         <figcaption>「发起讨论」对话框（暗色）：本次这批议题的拉取结果、关联方案、讨论补充与 agent / 权限</figcaption>

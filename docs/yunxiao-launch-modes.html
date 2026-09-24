@@ -333,18 +333,30 @@
 
     <section id="s1">
       <h2><span class="num">1</span>两个入口长什么样</h2>
-      <p>进入「云效议题」视图（欢迎页左侧云朵图标），每一行议题右侧都是这一组按钮。</p>
+      <p>进入「云效议题」视图（欢迎页左侧云朵图标），每一行议题右侧都是这一组文字按钮。</p>
+      <p>静止态每行只留一个主操作（暗色）：</p>
       <figure>
-        <img src="screenshots/yunxiao-launch-mode/01-issue-list-entries.png" alt="议题列表行内的两个入口" />
-        <figcaption>议题列表行内的「直接开始」（实心蓝）与「发起讨论」（描边）</figcaption>
+        <img src="screenshots/module-guide/19-yunxiao-issue-actions-dark.png" alt="议题列表静止态：只留一个主操作（暗色）" />
+        <figcaption>静止态（暗色）：行内只剩主操作「直接开始」，不再是一排按钮抢视线</figcaption>
+      </figure>
+      <p>鼠标悬停该行后，次级动作「发起讨论」「加到计划」才现身（暗色 / 亮色）：</p>
+      <figure>
+        <img src="screenshots/yunxiao-launch-mode/01-issue-list-entries.png" alt="议题列表行内的入口（悬停态，暗色）" />
+        <figcaption>悬停态（暗色）：次级动作「发起讨论」「加到计划」（灰色）现身，主操作「直接开始」始终在最右</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/22-yunxiao-issue-actions-light.png" alt="议题列表行内入口（悬停态，亮色）" />
+        <figcaption>同一状态（亮色）</figcaption>
       </figure>
       <ul>
-        <li><strong>直接开始</strong>——跳过讨论，直接执行该议题。</li>
+        <li><strong>直接开始</strong>——跳过讨论，直接执行该议题。行内主操作，常驻显示。</li>
         <li><strong>发起讨论</strong>——进入方案讨论链路，N=1 的单条快捷入口，和「多选后底部统一发起」是同一条链路。</li>
+        <li><strong>加到计划</strong>——把该议题加进某个交付计划。</li>
       </ul>
+      <p>行内动作都是一次点击直达，<strong>没有「…」二级菜单</strong>。次级动作平时收起，<strong>鼠标悬停该行</strong>（或键盘聚焦行内按钮）时才现身，静止态行内只留一个主操作，避免一排按钮抢视线；主操作固定压在最右，悬停让次级现身时不会位移。</p>
       <div class="callout warn">
         <span class="label">多选</span>
-        勾选议题进入多选模式后，行内按钮隐藏，改为底部统一的「发起讨论」批量入口。
+        勾选议题进入多选模式后，行内按钮隐藏，改为底部统一的「发起讨论」「添加到计划」批量入口。
         多选<strong>只支持发起讨论</strong>，不支持批量直接开始——直接执行是「一议题一任务」，不适合批量。
       </div>
     </section>
