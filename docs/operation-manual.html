@@ -702,6 +702,10 @@
         <img src="screenshots/module-guide/14-plan-view-dark.png" alt="计划视图：列表与详情（暗色）" />
         <figcaption>计划视图（暗色）：左列项目 / 状态过滤与状态徽标列表，右列详情头部徽标、动作行、状态汇总与议题表</figcaption>
       </figure>
+      <figure>
+        <img src="screenshots/module-guide/17-plan-view-light.png" alt="计划视图：列表与详情（亮色）" />
+        <figcaption>计划视图（亮色）：勾选两条议题后表格上方出现「合并讨论」动作条</figcaption>
+      </figure>
       <h4>左列：过滤与列表</h4>
       <ul>
         <li>顶部「<strong>创建计划</strong>」按钮置顶，点击打开 6.2 的创建对话框。</li>
@@ -734,6 +738,22 @@
         <li>从计划内议题创建的任务<strong>自动绑定计划分支 / worktree</strong>，详情底部提示常驻。</li>
         <li><strong>删除计划有门禁</strong>：仍有未完成任务、嵌入式 Shell 占用、worktree 有未提交内容、MR 未合并、或提交 MR 后源分支新增提交，都会被拒绝并给出原因。</li>
       </ul>
+
+      <h4>议题操作：单条讨论、合并讨论与云效链接</h4>
+      <p>议题表的行内动作与云效议题列表同口径——可以直接从计划里发起讨论，不必先回云效议题视图挑一遍。</p>
+      <p><strong>单条讨论</strong>：任意议题行内的「<strong>单条讨论</strong>」按钮，只针对这一条议题发起一次讨论（等价于云效议题列表的行内「发起讨论」，N=1），点开的是与多选发起同一个「<strong>发起讨论</strong>」对话框。</p>
+      <p><strong>合并讨论</strong>：勾选多行议题左侧的复选框后，表格上方出现动作条，点「<strong>合并讨论</strong>」把这批议题<strong>合成一份方案</strong>发起一次讨论。勾选顺序＝方案里的议题顺序；单选软上限 10 条（讨论上下文与图片量的现实约束）。点「<strong>清空</strong>」取消全部勾选。</p>
+      <figure>
+        <img src="screenshots/module-guide/15-plan-issue-actions-dark.png" alt="合并讨论：勾选后出现动作条（暗色）" />
+        <figcaption>合并讨论（暗色）：勾选两条议题后表格上方出现动作条，行内另有「单条讨论」与每行标题右侧的云效链接按钮</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/16-plan-discussion-dialog-dark.png" alt="发起讨论对话框：拉取议题详情与图片后确认启动（暗色）" />
+        <figcaption>「发起讨论」对话框（暗色）：本次这批议题的拉取结果、关联方案、讨论补充与 agent / 权限</figcaption>
+      </figure>
+      <p><strong>云效议题链接</strong>：每行议题标题右侧有一个「在云效打开」图标按钮，点击在浏览器打开该议题的云效 Projex 详情页。需要在项目「设置 → 云效议题」里配好令牌 / 组织 / 项目，链接才能拼出。</p>
+      <p><strong>已占用的议题不能再发起讨论</strong>：议题一旦被任务绑定或被存活方案引用，它的勾选框会置灰、「单条讨论」按钮收起（悬停提示「已被任务或方案占用」）。这是与云效议题列表同源的重复发起守卫——同一议题重复讨论会多造一份方案。「直接开始 / 重新发起」不受影响，仍可用。</p>
+      <blockquote>在计划里发起讨论，与在云效议题列表里发起讨论走的是<strong>同一条链路</strong>：都是落一份 <code>draft</code> 方案 → 并发拉取议题详情与图片 → 确认 agent / 权限后启动讨论任务。从计划内议题创建的任务会自动绑定本计划分支 / worktree。</blockquote>
 
       <h3><span class="subnum">6.2</span>创建计划</h3>
       <p>计划视图左栏顶部的「<strong>创建计划</strong>」按钮或云效议题视图的「<strong>创建计划</strong>」按钮，都能打开「<strong>创建计划</strong>」对话框：</p>
