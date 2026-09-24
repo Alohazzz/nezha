@@ -224,14 +224,25 @@ export function YunxiaoView({
   );
 
   // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
-  const [selectedIssueIds, setSelectedIssueIds] = useState<ReadonlySet<string>>(new Set());
+  // 存议题本体而非仅 id：列表是分页/可过滤的，勾选后一旦重查、切分类或翻页，
+  // 已勾选议题就可能不在当前 issues 里；只存 id 会让后续动作退化成
+  // 「已勾选 ∩ 当前列表」，静默丢掉勾选项（表现为「已选 N 项」但只加入 1 个）。
+  // Map 保持插入顺序 = 勾选顺序，与弹窗「顺序＝当前勾选顺序」的语义一致。
+  const [selectedIssuesById, setSelectedIssuesById] = useState<
+    ReadonlyMap<string, YunxiaoWorkitem>
+  >(new Map());
   const [launchIssues, setLaunchIssues] = useState<YunxiaoWorkitem[] | null>(null);
   const [addToPlanIssues, setAddToPlanIssues] = useState<YunxiaoWorkitem[] | null>(null);
   const [showCreatePlan, setShowCreatePlan] = useState(false);
   // 「直接开始」弹窗的待确认议题（null = 未打开）。
   const [directIssue, setDirectIssue] = useState<YunxiaoWorkitem | null>(null);
 
-  const selectionMode = selectedIssueIds.size > 0;
+  const selectionMode = selectedIssuesById.size > 0;
+
+  const selectedIssueIds = useMemo(
+    () => new Set(selectedIssuesById.keys()),
+    [selectedIssuesById],
+  );
 
   const handleToggleSelect = useCallback(
     (issue: YunxiaoWorkitem) => {
@@ -239,8 +250,8 @@ export function YunxiaoView({
         showToast(t("yunxiao.importDuplicate"), "warning");
         return;
       }
-      setSelectedIssueIds((prev) => {
-        const next = new Set(prev);
+      setSelectedIssuesById((prev) => {
+        const next = new Map(prev);
         if (next.has(issue.id)) {
           next.delete(issue.id);
           return next;
@@ -252,16 +263,19 @@ export function YunxiaoView({
           );
           return prev;
         }
-        next.add(issue.id);
+        next.set(issue.id, issue);
         return next;
       });
     },
     [tasks, plans, showToast, t],
   );
 
+  const clearSelection = useCallback(() => setSelectedIssuesById(new Map()), []);
+
+  // 已勾选议题本体（与当前列表解耦），顺序 = 勾选顺序。
   const selectedIssues = useMemo(
-    () => issues.filter((issue) => selectedIssueIds.has(issue.id)),
-    [issues, selectedIssueIds],
+    () => [...selectedIssuesById.values()],
+    [selectedIssuesById],
   );
 
   const targetProject = projects.find((p) => p.id === targetProjectId) ?? null;
@@ -274,9 +288,9 @@ export function YunxiaoView({
     }
     if (!targetProject) return;
     setLaunchIssues(selectedIssues);
-    setSelectedIssueIds(new Set());
+    clearSelection();
     localStorage.setItem(YUNXIAO_LAST_PROJECT_KEY, targetProjectId);
-  }, [selectedIssues, targetProjectId, targetProject, showToast, t]);
+  }, [selectedIssues, targetProjectId, targetProject, showToast, t, clearSelection]);
 
   /** 行内「发起讨论」：单条快捷入口，与多选发起同一对话框同一链路（N=1）。 */
   const handleDiscussIssue = useCallback(
@@ -534,18 +548,14 @@ export function YunxiaoView({
               <button
                 type="button"
                 style={s.yunxiaoSelectGhostBtn}
-                onClick={() =>
-                  setAddToPlanIssues(
-                    issues.filter((i) => selectedIssueIds.has(i.id)),
-                  )
-                }
+                onClick={() => setAddToPlanIssues(selectedIssues)}
               >
                 添加到计划
               </button>
               <button
                 type="button"
                 style={s.yunxiaoSelectGhostBtn}
-                onClick={() => setSelectedIssueIds(new Set())}
+                onClick={clearSelection}
               >
                 <X size={12} strokeWidth={2.2} />
                 {t("yunxiao.clear")}
@@ -590,7 +600,7 @@ export function YunxiaoView({
               ...deliveryPlans.filter((p) => p.id !== plan.id),
               plan,
             ]);
-            setSelectedIssueIds(new Set());
+            clearSelection();
           }}
           onClose={() => setAddToPlanIssues(null)}
         />
