@@ -287,8 +287,15 @@ pub fn spawn_auto_sedimentation(
 /// 手工触发沉淀（会话中调用 `knowledge-sediment-now` 技能产出 `knowledge.json` 后由前端发起）。
 ///
 /// 与自动路径**共用同一套门与暂存逻辑**，仅 `trigger` 不同（用于指标区分来源）。
-/// 本命令**等待沉淀跑完**（前端轮询已是异步、且有在途去重），成功后写消费标记并清理
-/// 产物，使随后的任务收尾自动路径不再重复处理、也不误报「漏产出」。
+/// 本命令**等待沉淀跑完**（前端轮询已是异步、且有在途去重），随后按结果分叉：
+///
+/// - **有写入**（知识被接受）：写消费标记并清理产物，任务收尾自动路径不再重复处理、
+///   也不误报「漏产出」；
+/// - **全部被拒**：**保留 `knowledge.json`**，写拒绝标记（含逐条原因）。不写消费标记——
+///   那会把失败固化成终态（候选被删、无法重跑）；用户修正草稿后（mtime 晚于拒绝标记）
+///   前端轮询会再次检出重试；
+/// - **跳过**（无候选 / 显式 skipped）：与旧版一致写消费标记并清理——前端每 4 秒轮询
+///   `list_knowledge_drafts`，不终结就会对同一份 skipped 草稿无限重跑。
 #[tauri::command]
 pub async fn knowledge_manual_sediment(
     app: tauri::AppHandle,
@@ -297,13 +304,40 @@ pub async fn knowledge_manual_sediment(
     agent: String,
 ) -> Result<(), String> {
     let result = run_sedimentation_report(app, task_id.clone(), project_path.clone(), agent, "manual").await;
-    if result.is_ok() {
-        // 消费标记 + 清理产物：标记让收尾自动路径判定「已人工消费」而跳过；
-        // 删除产物避免下一次轮询重复触发。标记先写，避免删除后到收尾之间出现空窗。
-        let _ = crate::drafts::write_knowledge_consumed(&project_path, &task_id);
-        let _ = crate::drafts::remove_draft_file(&project_path, &task_id, "knowledge.json");
+    match result {
+        Ok(outcome) => {
+            // 终局处置涉及多个小标记文件的读写，整体挪到阻塞线程（规范：async 命令不做文件 I/O）。
+            let finalize = {
+                let project_path = project_path.clone();
+                let task_id = task_id.clone();
+                let rejected_payload = if outcome.written_count == 0 && !outcome.items.is_empty() {
+                    serde_json::to_string_pretty(&rejected_item_details(&outcome.items)).ok()
+                } else {
+                    None
+                };
+                tokio::task::spawn_blocking(move || {
+                    if rejected_payload.is_some() {
+                        // 全部被拒：留证据、留草稿，等待人工修正后重试。不写消费标记。
+                        let _ = crate::drafts::write_knowledge_rejected(
+                            &project_path,
+                            &task_id,
+                            rejected_payload.as_deref().unwrap_or_default(),
+                        );
+                    } else {
+                        // 有写入（接受）或跳过：消费标记 + 清理产物，终结本轮；
+                        // 标记先写，避免删除后到收尾之间出现空窗。
+                        let _ = crate::drafts::write_knowledge_consumed(&project_path, &task_id);
+                        let _ = crate::drafts::remove_draft_file(&project_path, &task_id, "knowledge.json");
+                        // 本批已全部接受，此前的拒绝记录随之作废（草稿也没了，留着只会误导）。
+                        let _ = crate::drafts::clear_knowledge_rejected(&project_path, &task_id);
+                    }
+                })
+            };
+            let _ = finalize.await;
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
-    result.map(|_| ())
 }
 
 /// 沉淀执行体：按 `trigger` 记录来源，跑门 + 暂存，经事件上报结果。
@@ -361,6 +395,7 @@ async fn run_sedimentation_report(
                     },
                     written: outcome.written_count,
                     rejected_by_layer: rejected_by_layer(&outcome.items),
+                    rejected_items: rejected_item_details(&outcome.items),
                     error: None,
                 };
                 let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
@@ -388,6 +423,7 @@ async fn run_sedimentation_report(
                     status: "failed".to_string(),
                     written: 0,
                     rejected_by_layer: HashMap::new(),
+                    rejected_items: Vec::new(),
                     error: Some(error.clone()),
                 };
                 let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
@@ -423,6 +459,19 @@ pub async fn list_knowledge_drafts(project_path: String) -> Result<Vec<Knowledge
         .collect())
 }
 
+/// 逐条拒绝明细（指标记录体）：保留门的原文 reason，供事后区分
+/// 「真实判定拒绝」与「超时 / 输出不可解析 / 双跑不一致」等执行层失败。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectedItemDetail {
+    pub module: String,
+    pub section: String,
+    /// 判定发生的层次：`L0` 结构 / `L1` 依据 / `L2` 去重 / `L3` 语义 / `write` 写入。
+    pub layer: String,
+    /// 门的原文拒绝理由（已结构化，未改写）。
+    pub reason: String,
+}
+
 /// 一次沉淀运行的指标记录（提案 §9.2 的自动指标数据源）。
 ///
 /// 以 JSONL 追加到 `~/.nezha/knowledge-metrics.jsonl`：单文件、追加写、无需迁移，
@@ -443,6 +492,9 @@ pub struct KnowledgeMetricRecord {
     pub written: usize,
     /// 各层拒绝条数（L0 / L1 / L2 / L3 / write）。
     pub rejected_by_layer: HashMap<String, usize>,
+    /// 逐条拒绝明细。旧记录无此字段（回落为空），新增字段不破坏既有 JSONL 的读取。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_items: Vec<RejectedItemDetail>,
     /// 失败原因（status=failed 时）。
     pub error: Option<String>,
 }
@@ -543,6 +595,20 @@ fn rejected_by_layer(items: &[KnowledgeWritebackItem]) -> HashMap<String, usize>
         *counts.entry(item.layer.clone()).or_insert(0) += 1;
     }
     counts
+}
+
+/// 从逐条结果收集拒绝明细（module / section / layer / 原文 reason）。
+fn rejected_item_details(items: &[KnowledgeWritebackItem]) -> Vec<RejectedItemDetail> {
+    items
+        .iter()
+        .filter(|item| !item.passed)
+        .map(|item| RejectedItemDetail {
+            module: item.module.clone(),
+            section: item.section.clone(),
+            layer: item.layer.clone(),
+            reason: item.reason.clone(),
+        })
+        .collect()
 }
 
 /// 跑一次自动沉淀：读会话内候选 → 分层门 → 写入 + 提交推送。
@@ -2142,6 +2208,7 @@ commit_prompt = \"x\"
                 status: "ok".into(),
                 written: 2,
                 rejected_by_layer: HashMap::from([("L2".to_string(), 1)]),
+                rejected_items: Vec::new(),
                 error: None,
             },
             KnowledgeMetricRecord {
@@ -2152,6 +2219,7 @@ commit_prompt = \"x\"
                 status: "skipped".into(),
                 written: 0,
                 rejected_by_layer: HashMap::new(),
+                rejected_items: Vec::new(),
                 error: None,
             },
             KnowledgeMetricRecord {
@@ -2162,6 +2230,7 @@ commit_prompt = \"x\"
                 status: "failed".into(),
                 written: 0,
                 rejected_by_layer: HashMap::new(),
+                rejected_items: Vec::new(),
                 error: Some("未产出知识沉淀产物".into()),
             },
         ];
@@ -2186,6 +2255,12 @@ commit_prompt = \"x\"
             status: "ok".into(),
             written: 1,
             rejected_by_layer: HashMap::from([("L3".to_string(), 2)]),
+            rejected_items: vec![RejectedItemDetail {
+                module: "M".into(),
+                section: "业务规则 / 已知坑".into(),
+                layer: "L3".into(),
+                reason: "质量门判定不通过：内容只是复述代码实现".into(),
+            }],
             error: None,
         };
         let line = serde_json::to_string(&record).unwrap();
@@ -2195,15 +2270,33 @@ commit_prompt = \"x\"
         assert_eq!(back.task_id, "t");
         assert_eq!(back.rejected_by_layer.get("L3"), Some(&2));
         assert_eq!(back.trigger, "auto");
+        assert_eq!(back.rejected_items.len(), 1);
+        assert_eq!(back.rejected_items[0].layer, "L3");
+        assert!(back.rejected_items[0].reason.contains("复述代码实现"));
     }
 
-    /// 旧记录没有 `trigger` 字段（历史记录都来自自动路径），必须回落为 `auto`，
-    /// 否则读取既有 JSONL 会整体反序列化失败、指标清零。
+    /// 旧记录没有 `trigger` / `rejectedItems` 字段，必须能读（指标不能因新字段清零）。
     #[test]
     fn legacy_metric_record_without_trigger_defaults_to_auto() {
         let legacy = r#"{"at":1,"taskId":"t1","graphId":"HIS","status":"ok","written":1,"rejectedByLayer":{},"error":null}"#;
         let record: KnowledgeMetricRecord = serde_json::from_str(legacy).expect("旧记录应可读");
         assert_eq!(record.trigger, "auto");
+        assert!(record.rejected_items.is_empty());
+    }
+
+    #[test]
+    fn rejected_item_details_keeps_only_failures_with_reason() {
+        let mut passed = item("L1", true);
+        passed.reason = "依据核验通过".into();
+        let mut failed = item("L3", false);
+        failed.module = "Nto.His.Radt".into();
+        failed.section = "业务规则 / 已知坑".into();
+        failed.reason = "与既有条目重复".into();
+        let details = rejected_item_details(&[passed, failed]);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].module, "Nto.His.Radt");
+        assert_eq!(details[0].layer, "L3");
+        assert_eq!(details[0].reason, "与既有条目重复");
     }
 
     #[test]
