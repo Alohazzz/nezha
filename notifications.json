@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.27.0",
+      "level": "info",
+      "title": "Nezha v0.27.0 released",
+      "body": "1. 知识沉淀回写改为「暂存 → 审核发布」：门通过的条目只写入工作区、不再自动 commit / push，统一在右侧「知识库」面板确认发布（提交并推送）或全部丢弃（还原）；发布前先同步远端。写入为「读当前 → 末尾追加」，不覆盖人工改动，重复由 L2/L3 去重兜底。\n2. 待确认状态全程可见：右侧工具条知识库图标红点（面板关闭也提醒，10 秒轮询 + 沉淀/技能仓库变更事件即时刷新）、卡片「已改」徽标、卡片预览态高亮新增条目（编辑态保持原始文本）。\n3. 新增技能 knowledge-sediment-now：会话中手工触发知识沉淀，与任务收尾的自动产出共用同一份 sedimentation.md 契约；写入格式收敛到模板单一事实源 sedimentation-template.md（读不到回退内嵌默认）。\n4. 「知识沉淀」设置重定义为发布方式选择器：开启（默认）= 确认发布直接提交并推送图谱；关闭 = 确认发布创建云效审核议题，人工审核后更新图谱。设置不再参与产出判定——绑定图谱即产出。\n5. 退役清理：删除 push_pending_commits、自动 commit + push 尾段、pushed_pending 字段链、RunningView 沉淀结果按钮与结果弹窗、save_knowledge_auto_writeback 等死路径；命令 knowledge_auto_writeback 改名 knowledge_stage_writeback；指标 pushed_pending → trigger: auto|manual（旧记录回落 auto）；删除会把候选误拒的 dirty_module_cards 脏卡检测。\n6. 帮助中心同步知识沉淀审核发布流程并更新截图。",
+      "body_zh": "1. 知识沉淀回写改为「暂存 → 审核发布」：门通过的条目只写入工作区、不再自动 commit / push，统一在右侧「知识库」面板确认发布（提交并推送）或全部丢弃（还原）；发布前先同步远端。写入为「读当前 → 末尾追加」，不覆盖人工改动，重复由 L2/L3 去重兜底。\n2. 待确认状态全程可见：右侧工具条知识库图标红点（面板关闭也提醒，10 秒轮询 + 沉淀/技能仓库变更事件即时刷新）、卡片「已改」徽标、卡片预览态高亮新增条目（编辑态保持原始文本）。\n3. 新增技能 knowledge-sediment-now：会话中手工触发知识沉淀，与任务收尾的自动产出共用同一份 sedimentation.md 契约；写入格式收敛到模板单一事实源 sedimentation-template.md（读不到回退内嵌默认）。\n4. 「知识沉淀」设置重定义为发布方式选择器：开启（默认）= 确认发布直接提交并推送图谱；关闭 = 确认发布创建云效审核议题，人工审核后更新图谱。设置不再参与产出判定——绑定图谱即产出。\n5. 退役清理：删除 push_pending_commits、自动 commit + push 尾段、pushed_pending 字段链、RunningView 沉淀结果按钮与结果弹窗、save_knowledge_auto_writeback 等死路径；命令 knowledge_auto_writeback 改名 knowledge_stage_writeback；指标 pushed_pending → trigger: auto|manual（旧记录回落 auto）；删除会把候选误拒的 dirty_module_cards 脏卡检测。\n6. 帮助中心同步知识沉淀审核发布流程并更新截图。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.27.0",
+      "created_at": "2026-09-28",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.26.0",
       "level": "info",
       "title": "Nezha v0.26.0 released",
