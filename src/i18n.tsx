@@ -1009,8 +1009,6 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "yunxiao.knowledge.resultFailed": "Sedimentation did not complete",
     "yunxiao.knowledge.resultFailedHint": "See the log for details.",
     "yunxiao.knowledge.resultEmpty": "No candidates this time (the agent explicitly reported no new knowledge, or nothing passed the gate).",
-    "yunxiao.knowledge.resultPushedPending": "Also pushed local commits left over from an earlier failed push.",
-    "yunxiao.knowledge.running": "Sedimenting knowledge in the background…",
     "yunxiao.images.hint":
       "Issue contains {count} image(s); they will be downloaded for the agent when the discussion starts.",
     "yunxiao.images.prepared": "{count} issue image(s) downloaded for the agent",
@@ -2121,8 +2119,6 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "yunxiao.knowledge.resultFailed": "沉淀未完成",
     "yunxiao.knowledge.resultFailedHint": "详见日志。",
     "yunxiao.knowledge.resultEmpty": "本次没有候选（agent 显式表态无新知识，或全部未通过质量门）。",
-    "yunxiao.knowledge.resultPushedPending": "同时补推了此前推送失败留下的本地提交。",
-    "yunxiao.knowledge.running": "正在后台沉淀知识…",
     "yunxiao.images.hint": "议题含 {count} 张图片，发起讨论时自动下载给 Agent。",
     "yunxiao.images.prepared": "已为 Agent 下载 {count} 张议题图片",
     "yunxiao.images.partial": "{failed} 张图片下载失败已跳过，{downloaded} 张已就绪",

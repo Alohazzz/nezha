@@ -585,7 +585,7 @@ append 到 knowledge-graphs/<id>/data/modules/<module>.md
 | 状态来源 | 监听 `knowledge-sedimentation` 事件（`running` / `ok` / `failed`）；**前端不猜**是否绑定图谱——后端在前置条件成立时才发 `running` |
 | 总开关 UI | 文案由「知识沉淀自动回写 / 提交后经质量门自动写入技能库」改为「知识沉淀 / 任务完成后自动写入知识图谱」，提示说明改为新语义（关闭则不沉淀、也不要求产出） |
 | 清理 | 删除 13 个失去引用的 i18n 键 + 8 个失去引用的样式块 |
-| 截图 | `docs/screenshots/kg-sedimentation-step5/`：暗色/亮色 × 开关开/关四张 + 状态对比图 |
+| 截图 | ~~`docs/screenshots/kg-sedimentation-step5/`~~（已随该版开关退役删除；现行截图见 `docs/screenshots/module-guide/23~25-*.png`） |
 
 **验证不只截图**：开关点击后确认 `~/.nezha/settings.json` 实际写入 `{"enabled": false}`，再切回
 `{"enabled": true}`——即截图反映的是真实持久化行为，不是静态外观。
