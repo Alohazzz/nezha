@@ -484,6 +484,14 @@
         <li>面板顶部两个动作：<strong>提交并推送</strong>（确认发布，落库方式见 2.3）与<strong>全部丢弃</strong>（还原所有未发布的卡片改动）。</li>
       </ul>
       <p>面板同时展示「<strong>最近一次判定结果</strong>」只读明细（写了哪些、拒了哪些及逐条理由）。</p>
+      <figure class="shot-xs">
+        <img src="screenshots/module-guide/23-knowledge-pending-panel.png" alt="有待确认变更的知识库面板" />
+        <figcaption>有待发布内容时的「知识库」面板：待处理数量、卡片「已改」标记，以及「提交并推送 / 全部丢弃」</figcaption>
+      </figure>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/24-knowledge-preview-highlight.png" alt="卡片预览高亮新增条目" />
+        <figcaption>打开卡片：预览态高亮本批新增条目（浅底 + 左竖线）；切到编辑态即为可改的原始文本</figcaption>
+      </figure>
 
       <h3><span class="subnum">2.3</span>「知识沉淀」设置 = 发布方式选择器</h3>
       <p>「应用设置 → 技能库」中的「<strong>知识沉淀</strong>」开关只决定<strong>审核通过后如何落库</strong>，不再决定是否产出：</p>
@@ -491,6 +499,10 @@
         <li><strong>开启</strong>（默认）：点「提交并推送」即<strong>直接提交并推送图谱</strong>。</li>
         <li><strong>关闭</strong>：点「提交并推送」改为<strong>创建云效审核议题</strong>（标题 <code>【知识沉淀待审核】&lt;图谱&gt; 图谱有新条目</code>），交由人工审核后更新图谱；创建后本地未发布改动会被丢弃（内容已随议题留痕）。需在应用设置中配置云效令牌 / 组织。</li>
       </ul>
+      <figure class="shot-md">
+        <img src="screenshots/module-guide/25-knowledge-setting.png" alt="知识沉淀设置" />
+        <figcaption>应用设置 → 技能库 →「知识沉淀」：开启=确认发布即提交推送图谱，关闭=改走云效审批</figcaption>
+      </figure>
       <div class="callout">
         <span class="label">发布前同步</span>
         Nezha 会先同步远端（fetch + 落后则 <code>--ff-only</code> 拉取）；若本地已分叉则<strong>拒绝发布</strong>并提示，不硬写。
@@ -653,14 +665,15 @@
       </ul>
       <figure class="shot-xs">
         <img src="screenshots/module-guide/04-knowledge-panel.png" alt="知识库面板" />
-        <figcaption>「知识库」面板：卡片数量、搜索与「提交并推送」</figcaption>
+        <figcaption>「知识库」面板：卡片数量、搜索、「提交并推送」与「全部丢弃」</figcaption>
       </figure>
 
-      <h3><span class="subnum">5.2</span>面板：浏览、编辑与推送</h3>
+      <h3><span class="subnum">5.2</span>面板：浏览、编辑与审核发布</h3>
       <ul>
-        <li>顶部显示卡片数量与「<strong>提交并推送（N）</strong>」；有未提交改动时卡片带「<strong>已改</strong>」标记。</li>
+        <li>顶部显示卡片数量与「<strong>提交并推送（N）</strong>」「<strong>全部丢弃</strong>」；有未提交改动时卡片带「<strong>已改</strong>」标记，工具条图标同时显示<strong>红点</strong>。</li>
         <li>「<strong>搜索模块卡片</strong>」按模块名过滤。</li>
-        <li>点某张卡片会在主窗口以 Markdown 页签打开，可直接编辑（自动保存），也可提交推送。</li>
+        <li>点某张卡片会在主窗口以 Markdown 页签打开，可直接编辑（自动保存）；<strong>预览态高亮本批新增条目</strong>，编辑态为可改的原始文本。</li>
+        <li>沉淀写入、人工编辑、审核发布都在此面板完成（详见第 2 节）：沉淀候选经质量门后仅<strong>暂存</strong>到卡片，由你确认后再「提交并推送」。</li>
         <li>未绑定图谱时提示「当前项目未绑定知识库，请到项目设置中配置。」</li>
       </ul>
 

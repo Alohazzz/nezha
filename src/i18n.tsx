@@ -319,7 +319,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "settings.knowledge": "Knowledge",
     "settings.knowledgeTarget": "Knowledge Graph",
     "settings.knowledgeTargetHint":
-      "Used by discussion context, sedimentation, quality gate, and auto write-back. Leave empty to disable it.",
+      "Discussion context, sedimentation, the quality gate, and review/publish all use this target. Leave empty to disable it.",
     "settings.knowledgeTargetNone": "Not configured",
     "settings.knowledgeBinding": "Graph Binding",
     "settings.knowledgeCreate": "Create Graph",
@@ -1450,7 +1450,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "settings.knowledge": "知识库",
     "settings.knowledgeTarget": "知识图谱",
     "settings.knowledgeTargetHint":
-      "讨论上下文、知识沉淀、质量门和自动回写都使用该目标。留空表示不启用。",
+      "讨论上下文、知识沉淀、质量门与审核发布都使用该目标。留空表示不启用。",
     "settings.knowledgeTargetNone": "未配置",
     "settings.knowledgeBinding": "图谱绑定",
     "settings.knowledgeCreate": "新建图谱",
