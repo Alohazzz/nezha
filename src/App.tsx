@@ -3538,6 +3538,13 @@ function App() {
             onSetYunxiaoPlanParent={handleSetPlanParent}
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleRemovePlanRecord}
+            onDeleteYunxiaoPlan={handleDeletePlan}
+            onLocateTask={(taskId) => {
+              const task = tasks.find((t) => t.id === taskId);
+              if (!task) return;
+              const project = projects.find((p) => p.id === task.projectId);
+              if (project) enterProjectFromKanban(project, task.id);
+            }}
             plans={plans}
             deliveryPlans={deliveryPlans}
             onDeliveryPlansChange={setDeliveryPlans}

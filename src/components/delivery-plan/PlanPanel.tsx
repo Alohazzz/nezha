@@ -24,6 +24,7 @@ import { DirectLaunchDialog, type DirectLaunchOptions } from "../yunxiao/DirectL
 import { PlanLaunchDialog } from "../yunxiao/plan/PlanLaunchDialog";
 import { SelectField } from "../yunxiao/SelectField";
 import { deriveIssueStatus, type IssueStatus } from "./deriveIssueStatus";
+import { schemeChipsForIssue } from "./planSchemes";
 import {
   ISSUE_STATUS_LABEL,
   ISSUE_STATUS_TONE,
@@ -32,6 +33,7 @@ import {
 } from "./labels";
 import { PlanIssueList } from "./PlanIssueList";
 import { TargetBranchEditor } from "./TargetBranchEditor";
+import { PlanPreviewPanel } from "../yunxiao/plan/PlanPreviewPanel";
 
 const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 /** 合并讨论的软上限：与云效议题列表同口径（讨论上下文与图片量的现实约束）。 */
@@ -66,6 +68,8 @@ export function PlanPanel({
   onCancelPlan,
   onSetParentPlan,
   onOpenWorkitem,
+  onDeletePlan,
+  onLocateSchemeTask,
 }: {
   projects: Project[];
   tasks: Task[];
@@ -91,8 +95,12 @@ export function PlanPanel({
   onCancelPlan: (planId: string) => void | Promise<void>;
   /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
   onSetParentPlan: (planId: string, parentPlanId: string | undefined) => void;
-  /** 打开关联方案（方案看板入口）。 */
-  onOpenWorkitem?: (workitemId: string) => void;
+  /** 点击方案 chip：打开该方案的预览弹窗（缺省 = 本面板内嵌预览）。 */
+  onOpenWorkitem?: (planId: string) => void;
+  /** 删除方案（预览弹窗内的删除按钮走这条链路）。 */
+  onDeletePlan?: (planId: string) => void | Promise<void>;
+  /** 定位到方案最新执行任务的窗口（从欢迎页直达项目工作区）。 */
+  onLocateSchemeTask?: (taskId: string) => void;
 }) {
   const { showToast } = useToast();
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
@@ -157,9 +165,16 @@ export function PlanPanel({
     return selected.issues.map((issue) => ({
       issue,
       status: deriveIssueStatus(issue.workitemId, tasks, plans),
-      schemes: plans.filter((p) => p.issues.some((i) => i.workitemId === issue.workitemId)),
+      schemes: schemeChipsForIssue(issue.workitemId, plans, tasks),
     }));
   }, [selected, tasks, plans]);
+
+  /** 预览中的方案 id（chip 点击弹出；null = 关闭）。 */
+  const [previewPlanId, setPreviewPlanId] = useState<string | null>(null);
+  const previewPlan = useMemo(
+    () => plans.find((p) => p.id === previewPlanId) ?? null,
+    [plans, previewPlanId],
+  );
 
   // 已被任务/存活方案占用的议题：不能再发起讨论（与云效议题列表的已导入守卫同源）。
   const occupiedIds = useMemo(
@@ -498,7 +513,10 @@ export function PlanPanel({
                     onClearSelection={clearSelection}
                     onStart={(issue) => void handleStartIssue(issue)}
                     onRemove={(workitemId) => void handleRemoveIssue(workitemId)}
-                    onOpenWorkitem={onOpenWorkitem}
+                    onOpenWorkitem={
+                      onOpenWorkitem ?? ((planId: string) => setPreviewPlanId(planId))
+                    }
+                    onLocateSchemeTask={onLocateSchemeTask}
                   />
                   <p style={s.dpHint}>
                     状态与方案关联全自动派生；从计划内议题创建的任务自动绑定本计划分支 / worktree。
@@ -543,6 +561,22 @@ export function PlanPanel({
           onStartDiscussion={onStartPlanDiscussion}
           onCancelPlan={onCancelPlan}
           onClose={() => setLaunchIssues(null)}
+        />
+      )}
+      {previewPlan && project && (
+        <PlanPreviewPanel
+          plan={previewPlan}
+          tasks={tasks}
+          projectPath={project.path}
+          onCreateTodos={async () => {
+            // 计划视图的预览只读：生成待办仍走方案看板/云效链路，这里不做入口。
+            return false;
+          }}
+          onDeletePlan={async (planId) => {
+            await onDeletePlan?.(planId);
+            setPreviewPlanId(null);
+          }}
+          onClose={() => setPreviewPlanId(null)}
         />
       )}
       {directIssue && project && (

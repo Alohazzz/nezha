@@ -118,6 +118,8 @@ export function WelcomePage({
   onStartYunxiaoDirectExecution,
   onCancelYunxiaoPlan,
   onSetYunxiaoPlanParent,
+  onDeleteYunxiaoPlan,
+  onLocateTask,
   plans,
   deliveryPlans,
   onDeliveryPlansChange,
@@ -166,6 +168,10 @@ export function WelcomePage({
   onCancelYunxiaoPlan: (planId: string) => void | Promise<void>;
   /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
   onSetYunxiaoPlanParent: (planId: string, parentPlanId: string | undefined) => void;
+  /** 计划详情方案预览里的「删除方案」（带二次确认，App 侧实现）。 */
+  onDeleteYunxiaoPlan?: (planId: string) => void | Promise<void>;
+  /** 定位到某个任务的窗口（taskId 为任务 id）：进入其项目工作区并选中该任务。 */
+  onLocateTask?: (taskId: string) => void;
   plans: Plan[];
   /** 交付计划（DeliveryPlan）：欢迎页「计划」视图展示＋任务绑定源。 */
   deliveryPlans: DeliveryPlan[];
@@ -310,6 +316,8 @@ export function WelcomePage({
             onStartPlanDiscussion={onStartYunxiaoPlanDiscussion}
             onCancelPlan={onCancelYunxiaoPlan}
             onSetParentPlan={onSetYunxiaoPlanParent}
+            onDeletePlan={onDeleteYunxiaoPlan}
+            onLocateSchemeTask={onLocateTask}
           />
         ) : view === "yunxiao" ? (
           <YunxiaoView

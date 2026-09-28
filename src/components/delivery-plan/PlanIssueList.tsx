@@ -21,6 +21,7 @@ export function PlanIssueList({
   onStart,
   onRemove,
   onOpenWorkitem,
+  onLocateSchemeTask,
 }: {
   rows: readonly PlanIssueRowData[];
   /** 已被任务/存活方案占用的议题 id：勾选框禁用、讨论入口收起。 */
@@ -38,7 +39,10 @@ export function PlanIssueList({
   onClearSelection: () => void;
   onStart: (issue: PlanIssue) => void;
   onRemove: (workitemId: string) => void;
-  onOpenWorkitem?: (workitemId: string) => void;
+  /** 点击方案 chip：打开该方案的预览弹窗。 */
+  onOpenWorkitem?: (planId: string) => void;
+  /** 点击方案旁定位按钮：跳到该方案最新执行任务的窗口。 */
+  onLocateSchemeTask?: (taskId: string) => void;
 }) {
   return (
     <>
@@ -81,6 +85,7 @@ export function PlanIssueList({
               onStart={() => onStart(row.issue)}
               onRemove={() => onRemove(row.issue.workitemId)}
               onOpenWorkitem={onOpenWorkitem}
+              onLocateSchemeTask={onLocateSchemeTask}
             />
           ))}
         </tbody>
