@@ -17,6 +17,10 @@ const BACKFILL_CONSUMED_FILE: &str = "backfill-issue.consumed";
 /// 知识沉淀消费标记（幂等去重）：手工触发的沉淀消费掉 `knowledge.json` 后写入，
 /// 使任务收尾的自动路径不再重复处理，也不会把「已被手工消费」误报为漏产出。
 const KNOWLEDGE_CONSUMED_FILE: &str = "knowledge.consumed";
+/// 知识沉淀拒绝标记：手工沉淀**全部候选被拒**时写入（记录逐条拒绝原因），
+/// 草稿保留——用户修正 `knowledge.json` 后（mtime 晚于标记）可再次被检出重试。
+/// 只写 `consumed` 会把失败固化成终态（候选被删、无法重跑）。
+const KNOWLEDGE_REJECTED_FILE: &str = "knowledge.rejected.json";
 
 /// task_id 会拼进草稿目录名：拒绝路径分隔符与 `..`，防目录穿越。
 fn validate_task_id(task_id: &str) -> Result<(), String> {
@@ -268,6 +272,10 @@ pub(crate) fn list_knowledge_drafts(project_path: &str) -> Result<Vec<(String, S
         if entry.path().join(KNOWLEDGE_CONSUMED_FILE).exists() {
             continue;
         }
+        // 被拒且用户尚未修正（`knowledge.json` 未被改写）⇒ 跳过，避免轮询反复重跑质量门。
+        if !knowledge_draft_revisable(project_path, &task_id) {
+            continue;
+        }
         let meta =
             fs::metadata(&file).map_err(|e| format!("Failed to read draft metadata: {}", e))?;
         if meta.len() > MAX_DRAFT_READ_BYTES {
@@ -309,6 +317,65 @@ pub(crate) fn write_knowledge_consumed(project_path: &str, task_id: &str) -> Res
     }
     fs::write(&target, b"1").map_err(|e| format!("Failed to write consumed marker: {}", e))?;
     Ok(())
+}
+
+/// 知识沉淀拒绝标记路径：`<project>/.nezha/drafts/<task_id>/knowledge.rejected.json`。
+fn knowledge_rejected_path(project_path: &str, task_id: &str) -> Result<PathBuf, String> {
+    validate_task_id(task_id)?;
+    let root = Path::new(project_path);
+    if !root.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project root: {}", e))?;
+    Ok(task_drafts_dir(&canonical_root, task_id).join(KNOWLEDGE_REJECTED_FILE))
+}
+
+/// 写入知识沉淀拒绝标记（内容为逐条拒绝原因）。同批重复写直接覆盖（保留最新一次）。
+pub(crate) fn write_knowledge_rejected(
+    project_path: &str,
+    task_id: &str,
+    rejected_items: &str,
+) -> Result<(), String> {
+    let target = knowledge_rejected_path(project_path, task_id)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create draft dir: {}", e))?;
+    }
+    fs::write(&target, rejected_items)
+        .map_err(|e| format!("Failed to write rejected marker: {}", e))?;
+    Ok(())
+}
+
+/// 草稿是否可再次被手工沉淀检出：无拒绝标记时可见性由 `list_knowledge_drafts` 决定；
+/// 有拒绝标记时，仅当 `knowledge.json` 的修改时间**晚于**标记（用户修正过候选）才可重试，
+/// 避免前端 4 秒轮询对同一份被拒草稿反复触发质量门。
+pub(crate) fn knowledge_draft_revisable(project_path: &str, task_id: &str) -> bool {
+    let Ok(rejected_path) = knowledge_rejected_path(project_path, task_id) else {
+        return false;
+    };
+    let Ok(rejected_time) = fs::metadata(&rejected_path).and_then(|m| m.modified()) else {
+        return true; // 无拒绝标记 ⇒ 不受此判定约束。
+    };
+    let Some(draft_dir) = rejected_path.parent() else {
+        return false;
+    };
+    match fs::metadata(draft_dir.join("knowledge.json")) {
+        // 任一侧拿不到 mtime 时宁可放行（人工修正后应可重试），交给质量门把关。
+        Ok(draft_meta) => draft_meta.modified().map(|t| t > rejected_time).unwrap_or(true),
+        // 草稿已不存在（用户删除）：无可重试，也不该再报「漏产出」。
+        Err(_) => false,
+    }
+}
+
+/// 清除拒绝标记（重试通过后调用；不存在时静默成功）。
+pub(crate) fn clear_knowledge_rejected(project_path: &str, task_id: &str) -> Result<(), String> {
+    let target = knowledge_rejected_path(project_path, task_id)?;
+    match fs::remove_file(&target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to clear rejected marker: {}", e)),
+    }
 }
 
 /// 任务收尾时把 Agent 写在「有效工作目录」（可能是 worktree）下的草稿收拢到项目根。
@@ -546,6 +613,62 @@ mod tests {
     fn list_knowledge_drafts_missing_root_returns_empty() {
         let proj = temp_project("list_knowledge_empty");
         assert!(list_knowledge_drafts(proj.to_str().unwrap()).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    /// 被拒草稿在用户修正（改写 knowledge.json）前不可重试，改写后恢复可见；
+    /// 该判定不受 consumed 标记影响（被拒时本就不写 consumed）。
+    #[test]
+    fn knowledge_draft_revisable_requires_newer_mtime_than_rejected_marker() {
+        let proj = temp_project("knowledge_rejected");
+        let dir = task_drafts_dir(proj.to_str().unwrap(), "t1");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("knowledge.json"), r#"{"version":1,"candidates":[]}"#).unwrap();
+
+        // 无拒绝标记：不受判定约束（可见性由 list_knowledge_drafts 的其它规则决定）。
+        assert!(knowledge_draft_revisable(proj.to_str().unwrap(), "t1"));
+
+        write_knowledge_rejected(proj.to_str().unwrap(), "t1", r#"[{"reason":"x"}]"#).unwrap();
+        assert!(
+            !knowledge_draft_revisable(proj.to_str().unwrap(), "t1"),
+            "刚被拒、草稿未动 ⇒ 不可重试"
+        );
+        // 被拒草稿不再被前端轮询检出。
+        let entries = list_knowledge_drafts(proj.to_str().unwrap()).unwrap();
+        assert!(entries.iter().all(|(id, _)| id != "t1"));
+
+        // mtime 分辨率可能是秒级：显式把草稿 mtime 推到标记之后，模拟「用户改写」。
+        let revised = dir.join("knowledge.json");
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+        let file = fs::OpenOptions::new().append(true).open(&revised).unwrap();
+        file.set_modified(future).unwrap();
+        assert!(
+            knowledge_draft_revisable(proj.to_str().unwrap(), "t1"),
+            "草稿晚于拒绝标记（用户修正过）⇒ 可重试"
+        );
+
+        // 清除后回到无标记状态。
+        clear_knowledge_rejected(proj.to_str().unwrap(), "t1").unwrap();
+        assert!(knowledge_draft_revisable(proj.to_str().unwrap(), "t1"));
+        // 清除是幂等的。
+        clear_knowledge_rejected(proj.to_str().unwrap(), "t1").unwrap();
+
+        // 非法 task_id 一律不可重试（路径穿越防护）。
+        assert!(!knowledge_draft_revisable(proj.to_str().unwrap(), "../t1"));
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    /// 草稿被用户删除后：拒绝标记仍在 ⇒ 不可重试（也不该被检出后误报漏产出）。
+    #[test]
+    fn knowledge_draft_revisable_false_when_draft_deleted() {
+        let proj = temp_project("knowledge_rejected_gone");
+        let dir = task_drafts_dir(proj.to_str().unwrap(), "t1");
+        fs::create_dir_all(&dir).unwrap();
+        write_knowledge_rejected(proj.to_str().unwrap(), "t1", "[]").unwrap();
+        assert!(
+            !knowledge_draft_revisable(proj.to_str().unwrap(), "t1"),
+            "草稿已删 ⇒ 无可重试"
+        );
         let _ = fs::remove_dir_all(&proj);
     }
 }
