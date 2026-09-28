@@ -923,6 +923,84 @@ async fn source_branch_ahead_count(
 const NO_CHANGES_HINT: &str =
     "源分支相对目标分支没有改动，无法创建代码评审（请先在该分支上提交改动）";
 
+/// 推送源分支前的「本地 vs 远端」分叉预检结果。
+#[derive(Debug)]
+enum PushFreshness {
+    /// 本地与远端一致，或远端还没有该分支（首次推送）、或判不了（离线 / 缺 ref）——放行。
+    Ok,
+    /// 本地落后远端：push 必被 non-fast-forward 拒绝，拦下并告知落后多少。
+    Behind(u64),
+    /// 本地与远端各有提交：拦下并要求先拉取整合。
+    Diverged(u64, u64),
+}
+
+/// 推送源分支前预检「本地源分支 vs 远端源分支」。
+///
+/// 发起 MR 会先把本地源分支非 force 推到远端（保证 MR 引用的提交在远端存在）。对
+/// master / develop 这类多人共用的长驻分支，本地若落后或分叉，push 必被
+/// non-fast-forward 拒绝——此前用户拿到的是一段英文 git stderr，且要等推送失败后才看到。
+/// 这里先 `fetch` 远端源分支再比 ahead/behind，把失败提前变成可操作的中文提示。
+///
+/// 与 `source_branch_ahead_count` 同一取舍：判不了（fetch 失败 / 缺 ref）时**放行**，
+/// 让真正的 push 做最终裁决，避免离线场景误拦。
+async fn check_push_freshness(dir: &str, branch: &str) -> PushFreshness {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return PushFreshness::Ok;
+    }
+    // 远端源分支取最新；失败不阻断（离线 / 无权限时放行交给真实 push 裁决）。
+    let _ = crate::git::run_git_with_timeout(
+        dir.to_string(),
+        vec!["fetch".into(), "origin".into(), branch.to_string()],
+        std::time::Duration::from_secs(300),
+    )
+    .await;
+    let (dir, branch) = (dir.to_string(), branch.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        // 远端没有该分支：首次推送，不存在分叉问题。
+        if !ref_exists(&dir, &format!("origin/{branch}")) {
+            return PushFreshness::Ok;
+        }
+        // 本地没有该 ref（理论上 push 前必存在；缺了就放行让 push 报真实错误）。
+        if !ref_exists(&dir, &branch) {
+            return PushFreshness::Ok;
+        }
+        let out = match run_git(&dir, &["rev-list", "--left-right", "--count", &format!(
+            "{branch}...origin/{branch}"
+        )]) {
+            Ok(o) if o.status.success() => o,
+            _ => return PushFreshness::Ok,
+        };
+        let counts = String::from_utf8_lossy(&out.stdout);
+        let mut parts = counts.split_whitespace();
+        let (Some(ahead), Some(behind)) = (parts.next(), parts.next()) else {
+            return PushFreshness::Ok;
+        };
+        match (ahead.parse::<u64>(), behind.parse::<u64>()) {
+            (Ok(0), Ok(0)) | (Ok(_), Ok(0)) => PushFreshness::Ok,
+            (Ok(0), Ok(behind)) => PushFreshness::Behind(behind),
+            (Ok(ahead), Ok(behind)) => PushFreshness::Diverged(ahead, behind),
+            _ => PushFreshness::Ok,
+        }
+    })
+    .await
+    .unwrap_or(PushFreshness::Ok)
+}
+
+/// 把 push stderr 里的 non-fast-forward 拒绝翻译成可操作提示。
+///
+/// 预检和推送之间远端仍可能前进（竞态窗口），所以推送失败分支还要兜底：识别得出来
+/// 就给中文指引，识别不出来保持原文——原始报文始终比「未知错误」有用。
+fn translate_push_failure(stderr: &str) -> String {
+    let text = stderr.trim();
+    if text.contains("non-fast-forward") || text.contains("[rejected]") {
+        return "推送源分支失败（不会 force push）：本地分支落后或分叉于远端，请先在该仓库执行 \
+            git pull --ff-only 同步后再发起"
+            .to_string();
+    }
+    format!("推送源分支失败（不会 force push）：{text}")
+}
+
 /// 在 Codeup 上创建合并请求；仅提交（不合并）。成功后回写批的 mrId/mrStatus，status=review。
 #[tauri::command]
 pub async fn codeup_create_mr(
@@ -999,12 +1077,28 @@ pub async fn codeup_create_mr(
     let reviewers = resolve_reviewer_ids(&reviewers, &fetch_org_members().await?)?;
 
     // 非 force push 源分支，保证 MR 引用远端已有提交；再取提交时的 HEAD。
+    // 推送前先做本地 vs 远端分叉预检：落后/分叉的分支推上去必被拒（non-fast-forward），
+    // 提前拦下能让用户在产生任何副作用前看到「先 pull 同步」的指引。
+    match check_push_freshness(&push_dir, &batch.branch).await {
+        PushFreshness::Ok => {}
+        PushFreshness::Behind(behind) => {
+            return Err(format!(
+                "推送源分支已取消：本地 {branch} 落后远端 {behind} 个提交，请先执行 \
+                 git pull --ff-only 同步后再发起（不会 force push）",
+                branch = batch.branch
+            ));
+        }
+        PushFreshness::Diverged(ahead, behind) => {
+            return Err(format!(
+                "推送源分支已取消：本地 {branch} 与远端分叉（本地多 {ahead} 个提交、\
+                 落后 {behind} 个），请先执行 git pull 整合后再发起（不会 force push）",
+                branch = batch.branch
+            ));
+        }
+    }
     let push = run_git(&push_dir, &["push", "origin", &batch.branch])?;
     if !push.status.success() {
-        return Err(format!(
-            "推送源分支失败（不会 force push）：{}",
-            String::from_utf8_lossy(&push.stderr).trim()
-        ));
+        return Err(translate_push_failure(&String::from_utf8_lossy(&push.stderr)));
     }
     let head_out = run_git(&push_dir, &["rev-parse", "HEAD"])?;
     if !head_out.status.success() {
@@ -1238,8 +1332,28 @@ pub async fn codeup_create_mrs_batch(
         };
 
         // 非 force push 源分支：MR 必须引用远端已有提交。
+        // 推送前先做本地 vs 远端分叉预检（同 codeup_create_mr）：落后/分叉的分支推上去
+        // 必被拒，提前拦下并给可操作的中文原因，不透传英文 git stderr。
         let dir_for_push = resolved.dir.clone();
         let source_branch = item.source_branch.clone();
+        let freshness = check_push_freshness(&resolved.dir, &source_branch).await;
+        if let PushFreshness::Behind(behind) | PushFreshness::Diverged(_, behind) = &freshness {
+            let behind = *behind;
+            let diverged = matches!(freshness, PushFreshness::Diverged(..));
+            receipt.reason = if diverged {
+                format!(
+                    "推送源分支已取消：本地 {source_branch} 与远端分叉（落后 {behind} 个提交），\
+                     请先执行 git pull 整合后再发起（不会 force push）"
+                )
+            } else {
+                format!(
+                    "推送源分支已取消：本地 {source_branch} 落后远端 {behind} 个提交，\
+                     请先执行 git pull --ff-only 同步后再发起（不会 force push）"
+                )
+            };
+            out.push(receipt);
+            continue;
+        }
         let push = tauri::async_runtime::spawn_blocking(move || {
             run_git(&dir_for_push, &["push", "origin", &source_branch])
         })
@@ -1248,10 +1362,7 @@ pub async fn codeup_create_mrs_batch(
         match push {
             Ok(o) if o.status.success() => {}
             Ok(o) => {
-                receipt.reason = format!(
-                    "推送源分支失败（不会 force push）：{}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                );
+                receipt.reason = translate_push_failure(&String::from_utf8_lossy(&o.stderr));
                 out.push(receipt);
                 continue;
             }
@@ -2755,6 +2866,101 @@ mod tests {
             false,
         ));
         assert_eq!(count, None);
+    }
+
+    // ── 推送前分叉预检（真实 git）──────────────────────────────────────────────
+
+    /// 给仓库挂一个 bare 远端，返回其路径（测试结束时自行清理）。
+    fn add_bare_origin(repo: &TempRepo) -> std::path::PathBuf {
+        let remote = temp_base().join(format!("nezha-codeup-remote-{}", uuid::Uuid::new_v4()));
+        let o = std::process::Command::new("git")
+            .args(["init", "--bare", "-q"])
+            .arg(&remote)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        repo.git(&["remote", "add", "origin", &remote.to_string_lossy()]);
+        remote
+    }
+
+    /// 本地与远端一致 → 放行（Ok）。
+    #[test]
+    fn push_freshness_ok_when_local_matches_remote() {
+        let repo = TempRepo::new();
+        let remote = add_bare_origin(&repo);
+        repo.commit_file("a.txt", 1, "base");
+        repo.git(&["push", "-q", "origin", "master"]);
+        let verdict =
+            tauri::async_runtime::block_on(check_push_freshness(&repo.dir(), "master"));
+        assert!(matches!(verdict, PushFreshness::Ok));
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// 本地落后远端（复现用户报的 master → develop 场景）→ Behind，并给出落后数。
+    #[test]
+    fn push_freshness_behind_when_remote_advanced() {
+        let repo = TempRepo::new();
+        let remote = add_bare_origin(&repo);
+        repo.commit_file("a.txt", 1, "base");
+        repo.git(&["push", "-q", "origin", "master"]);
+        // 远端前进一个提交，本地回退：等价于「同事先推了 master，本机没拉」。
+        repo.commit_file("a.txt", 2, "remote-advance");
+        repo.git(&["push", "-q", "origin", "master"]);
+        repo.git(&["reset", "--hard", "HEAD~1"]);
+        let verdict =
+            tauri::async_runtime::block_on(check_push_freshness(&repo.dir(), "master"));
+        assert!(matches!(verdict, PushFreshness::Behind(1)), "{verdict:?}");
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// 本地与远端各有提交 → Diverged（ahead, behind）。
+    #[test]
+    fn push_freshness_diverged_when_both_advanced() {
+        let repo = TempRepo::new();
+        let remote = add_bare_origin(&repo);
+        repo.commit_file("a.txt", 1, "base");
+        repo.git(&["push", "-q", "origin", "master"]);
+        repo.commit_file("a.txt", 2, "remote-advance");
+        repo.git(&["push", "-q", "origin", "master"]);
+        repo.git(&["reset", "--hard", "HEAD~1"]);
+        // 本地另起一个不同提交：与远端互相不可快进。
+        repo.commit_file("b.txt", 1, "local-advance");
+        let verdict =
+            tauri::async_runtime::block_on(check_push_freshness(&repo.dir(), "master"));
+        assert!(matches!(verdict, PushFreshness::Diverged(1, 1)), "{verdict:?}");
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// 远端还没有该分支（首次推送）→ 放行，不存在分叉问题。
+    #[test]
+    fn push_freshness_ok_when_remote_branch_missing() {
+        let repo = TempRepo::new();
+        let remote = add_bare_origin(&repo);
+        repo.commit_file("a.txt", 1, "base");
+        let verdict =
+            tauri::async_runtime::block_on(check_push_freshness(&repo.dir(), "master"));
+        assert!(matches!(verdict, PushFreshness::Ok));
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// 预检到落后时给出的中文回执必须包含可操作指引（两条链路的文案口径）。
+    #[test]
+    fn translate_push_failure_converts_non_fast_forward() {
+        let stderr = "To codeup.aliyun.com:org/repo.git\n \
+                      ! [rejected]        master -> master (non-fast-forward)\n \
+                      error: failed to push some refs";
+        let msg = translate_push_failure(stderr);
+        assert!(msg.contains("git pull"), "{msg}");
+        assert!(msg.contains("不会 force push"), "{msg}");
+        // 原始英文报文不应再透传给用户。
+        assert!(!msg.contains("[rejected]"), "{msg}");
+    }
+
+    /// 识别不了的推送失败保留原始 stderr——原文始终比「未知错误」有用。
+    #[test]
+    fn translate_push_failure_keeps_unknown_stderr() {
+        let msg = translate_push_failure("remote: permission denied");
+        assert!(msg.contains("permission denied"), "{msg}");
     }
 
     /// 保护规则的默认评审人：**顶层数组**（实测响应形态），目标分支规则命中后取
