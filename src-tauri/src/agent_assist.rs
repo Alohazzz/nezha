@@ -41,9 +41,12 @@ fn build_headless_agent_args(
                 "--skip-git-repo-check",
                 "-c",
                 "approval_policy=\"never\"",
+                // headless 提示词自包含（材料全部内联），禁加载 cwd 下的 project doc
+                // （AGENTS.md 等）——业务仓库的强指令（如「不确定即提问」）会污染判定。
             ]
             .map(OsString::from),
         );
+        args.extend(["-c", "project_doc_max_bytes=0"].map(OsString::from));
         if let Some(model) = model {
             args.push("--model".into());
             args.push(model.into());
@@ -71,6 +74,9 @@ fn build_headless_agent_args(
             ]
             .map(OsString::from),
         );
+        // 同上：headless 调用不加载项目 .claude/settings.json 里的 MCP servers
+        // （实测 HIS 挂着 oracle-db，门调用会无谓拉起 uvx + 数据库连接）。
+        args.push("--strict-mcp-config".into());
         if !allow_read_tools {
             args.extend(["--tools", ""].map(OsString::from));
         }
@@ -2269,6 +2275,8 @@ mod tests {
                 "text",
                 "--permission-mode",
                 "plan",
+                // 项目上下文隔离：headless 提示词自包含，不加载项目 MCP。
+                "--strict-mcp-config",
                 "--tools",
                 "",
                 "--no-session-persistence",
@@ -2287,9 +2295,31 @@ mod tests {
                 "--skip-git-repo-check",
                 "-c",
                 "approval_policy=\"never\"",
+                // 项目上下文隔离：禁加载 cwd 下的 project doc（AGENTS.md 等）。
+                "-c",
+                "project_doc_max_bytes=0",
                 "prompt text",
             ]
         );
+    }
+
+    /// 项目上下文隔离（HIS 实测误拒的缓解）：无论轻量模型配置如何，claude 必须
+    /// 带 `--strict-mcp-config`、codex 必须带 `-c project_doc_max_bytes=0`，
+    /// 防止业务仓库的 AGENTS.md 强指令 / MCP servers 进入判定上下文。
+    #[test]
+    fn headless_args_isolate_from_project_context() {
+        for model in [None, Some("fast-model")] {
+            let claude = build_headless_agent_args("claude", "p", model, None, true);
+            assert!(
+                claude.contains(&OsString::from("--strict-mcp-config")),
+                "claude 缺 --strict-mcp-config：{claude:?}"
+            );
+            let codex = build_headless_agent_args("codex", "p", model, None, true);
+            let pos = codex
+                .windows(2)
+                .position(|w| w == [OsString::from("-c"), OsString::from("project_doc_max_bytes=0")]);
+            assert!(pos.is_some(), "codex 缺 project_doc_max_bytes=0：{codex:?}");
+        }
     }
 
     #[test]
