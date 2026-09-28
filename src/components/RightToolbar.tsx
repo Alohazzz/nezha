@@ -13,6 +13,7 @@ export function RightToolbar({
   onOpenSettings,
   panelDocked,
   onTogglePanelDocked,
+  knowledgePending = 0,
 }: {
   activePanel: RightPanel;
   onToggle: (panel: Exclude<RightPanel, null>) => void;
@@ -22,18 +23,26 @@ export function RightToolbar({
   onOpenSettings: () => void;
   panelDocked: boolean;
   onTogglePanelDocked: () => void;
+  /** 知识库待确认卡片数：> 0 时在知识库图标上显示红点。 */
+  knowledgePending?: number;
 }) {
   const { t } = useI18n();
   const buttons: Array<{
     key: Exclude<RightPanel, null>;
     icon: ReactNode;
     title: string;
+    badge?: number;
   }> = [
     { key: "files", icon: <Folder size={17} />, title: t("toolbar.fileExplorer") },
     { key: "git-changes", icon: <GitBranch size={17} />, title: t("toolbar.gitChanges") },
     { key: "git-history", icon: <History size={17} />, title: t("toolbar.gitHistory") },
     { key: "build", icon: <Hammer size={17} />, title: t("toolbar.build") },
-    { key: "knowledge", icon: <BookOpen size={17} />, title: t("toolbar.knowledge") },
+    {
+      key: "knowledge",
+      icon: <BookOpen size={17} />,
+      title: t("toolbar.knowledge"),
+      badge: knowledgePending,
+    },
   ];
 
   const footerItems = [
@@ -62,6 +71,7 @@ export function RightToolbar({
           icon={btn.icon}
           title={btn.title}
           active={activePanel === btn.key}
+          badge={btn.badge}
           onClick={() => onToggle(btn.key)}
         />
       ))}

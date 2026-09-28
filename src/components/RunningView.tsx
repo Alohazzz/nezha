@@ -32,7 +32,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Send,
-  Layers,
   BookOpenText,
   Terminal as TerminalIcon,
 } from "lucide-react";
@@ -98,9 +97,6 @@ export function RunningView({
   onMergeWorktree,
   onDiscardWorktree,
   onOpenWriteback,
-  onOpenKnowledgeResult,
-  sedimenting,
-  knowledgeResult,
   onOpenPlanPreview,
   onOpenWorktreeTerminal,
   onReconnect,
@@ -129,12 +125,6 @@ export function RunningView({
   onMergeWorktree?: () => Promise<void>;
   onDiscardWorktree?: () => Promise<void>;
   onOpenWriteback?: () => void;
-  /** 打开只读的「本次沉淀结果」（自动沉淀完成后可用）。 */
-  onOpenKnowledgeResult?: () => void;
-  /** 自动沉淀是否进行中。 */
-  sedimenting?: boolean;
-  /** 是否已有沉淀结果可查看。 */
-  knowledgeResult?: boolean;
   /** 打开右侧「方案预览」面板（任务关联了 Plan 时出现顶栏「方案」按钮）。 */
   onOpenPlanPreview?: () => void;
   onOpenWorktreeTerminal?: () => void;
@@ -580,31 +570,6 @@ export function RunningView({
               <span>{t("yunxiao.writeback.button")}</span>
             </button>
           ))}
-        {!isActive &&
-          task.status === "done" &&
-          onOpenKnowledgeResult &&
-          (sedimenting ? (
-            // 自动沉淀进行中：只提示，不可点开（结果还没出来）。
-            <button
-              type="button"
-              style={s.yunxiaoWritebackBtnDisabled}
-              title={t("yunxiao.knowledge.running")}
-            >
-              <Layers size={12} strokeWidth={2.5} />
-              <span>{t("yunxiao.knowledge.running")}</span>
-            </button>
-          ) : knowledgeResult ? (
-            // 已有结果：只读入口（写入/拒绝条数与逐条理由）。
-            <button
-              type="button"
-              style={s.yunxiaoWritebackBtn}
-              title={t("yunxiao.knowledge.resultButton")}
-              onClick={onOpenKnowledgeResult}
-            >
-              <Layers size={12} strokeWidth={2.5} />
-              <span>{t("yunxiao.knowledge.resultButton")}</span>
-            </button>
-          ) : null)}
         {!isActive && (sessionPath || resumeSessionId || task.agent === "dsh") && (
           <SessionActionsMenu
             defaultForkName={defaultForkName}

@@ -409,19 +409,17 @@ fn setup_env(cmd: &mut CommandBuilder) {
 ///   脚本内部校验直接 exit 0，不会重复上报。
 /// 是否把知识沉淀产出要求注入任务提示词。
 ///
-/// 三个条件**都要**满足：
+/// 两个条件**都要**满足：
 /// - 项目绑定了图谱（未绑定 ⇒ 没有可沉淀目标，强求只会逼出无意义的 skipped）
-/// - 知识沉淀总开关开启（关闭 ⇒ 连产出都不该要求，与设置项文档语义一致）
 /// - **本任务要求产出**（`require_sediment`，由前端按任务类型判定）：只有云效议题的
 ///   方案执行 / 直接执行任务为真。普通任务与方案讨论任务不要求——它们要么没有可沉淀的
 ///   议题上下文，要么产出的是方案而非知识；一律要求只会把「漏产出」的告警和云效议题
 ///   灌到无关任务上（空提示词启动的「启动终端」也算普通任务）。
-fn should_inject_sediment_contract(
-    graph_id: &str,
-    sedimentation_enabled: bool,
-    sediment_required: bool,
-) -> bool {
-    !graph_id.trim().is_empty() && sedimentation_enabled && sediment_required
+///
+/// **不再看「知识沉淀」设置**：该设置已重定义为「审核通过后直接写入 / 走云效审批」的
+/// 发布方式选择器，不再决定是否产出——绑定图谱就一律产出并进入审核发布链路。
+fn should_inject_sediment_contract(graph_id: &str, sediment_required: bool) -> bool {
+    !graph_id.trim().is_empty() && sediment_required
 }
 
 /// 按 `inject` 决定是否把知识沉淀产出要求追加到提示词末尾。
@@ -1024,21 +1022,19 @@ graph_id = \"HIS\"
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 产出要求的注入条件：绑定图谱 **且** 总开关开启 **且** 本任务被要求产出
-    /// （任一不满足都不注入）。
+    /// 产出要求的注入条件：绑定图谱 **且** 本任务被要求产出（任一不满足都不注入）。
+    /// 「知识沉淀」设置已重定义为发布方式，不再参与注入判定。
     #[test]
-    fn sediment_contract_requires_graph_master_switch_and_task_scope() {
-        // 三条齐备 ⇒ 注入
-        assert!(should_inject_sediment_contract("HIS", true, true));
-        // 总开关关闭 ⇒ 不注入（关闭后连产出都不该要求）
-        assert!(!should_inject_sediment_contract("HIS", false, true));
+    fn sediment_contract_requires_graph_and_task_scope() {
+        // 两条齐备 ⇒ 注入
+        assert!(should_inject_sediment_contract("HIS", true));
         // 未绑定图谱 ⇒ 不注入
-        assert!(!should_inject_sediment_contract("", true, true));
-        assert!(!should_inject_sediment_contract("   ", true, true));
-        // 普通任务 / 方案讨论任务（未要求产出）⇒ 不注入，即使前两条都满足
-        assert!(!should_inject_sediment_contract("HIS", true, false));
+        assert!(!should_inject_sediment_contract("", true));
+        assert!(!should_inject_sediment_contract("   ", true));
+        // 普通任务 / 方案讨论任务（未要求产出）⇒ 不注入，即使已绑定图谱
+        assert!(!should_inject_sediment_contract("HIS", false));
         // 全不满足 ⇒ 不注入
-        assert!(!should_inject_sediment_contract("", false, false));
+        assert!(!should_inject_sediment_contract("", false));
     }
 
     /// 空提示词（点「启动终端」只开交互式 REPL）不得因为注入产出要求而被填成非空——
@@ -1392,16 +1388,13 @@ pub async fn run_task(
         )
     };
 
-    // 知识沉淀产出要求：仅对「绑定图谱的项目 × 总开关开启 × 本任务要求产出」注入
+    // 知识沉淀产出要求：仅对「绑定图谱的项目 × 本任务要求产出」注入
     // （未绑定图谱没有可沉淀目标；普通任务 / 方案讨论任务不该被要求，见 gate 注释）。
     // 图谱身份取自项目配置，已在上面读出。空提示词的守卫在 helper 内部。
+    // 「知识沉淀」设置不再参与——它已重定义为发布方式选择器（见 gate 注释）。
     let final_prompt = append_sediment_requirement(
         with_text_paths,
-        should_inject_sediment_contract(
-            &config.knowledge.graph_id,
-            crate::app_settings::load_settings_internal().knowledge.enabled,
-            sediment_required,
-        ),
+        should_inject_sediment_contract(&config.knowledge.graph_id, sediment_required),
     );
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);

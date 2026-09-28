@@ -73,9 +73,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.systemNotificationsHint":
       "Show OS-level notifications when the window is unfocused and the agent needs your confirmation or a task completes or fails. While the window is focused, only the in-app badge is shown.",
     "appSettings.knowledgeEnabled": "Knowledge sedimentation",
-    "appSettings.knowledgeEnabledToggle": "Auto-write to the knowledge graph when a task finishes",
+    "appSettings.knowledgeEnabledToggle": "Write to the knowledge graph on approval",
     "appSettings.knowledgeEnabledHint":
-      "When enabled, knowledge produced during a task is processed automatically once the task finishes: entries that pass the quality gate are written to the project's knowledge graph and pushed; the rest are recorded but not written. Turning it off skips sedimentation and stops requiring the task to produce entries.",
+      "Knowledge is reviewed and published from the right-side Knowledge panel. On: publishing commits and pushes to the graph directly. Off: publishing creates a Yunxiao review issue instead, for a human to update the graph.",
     "appSettings.experimentalBadge": "Experimental",
     "appSettings.batchGrill": "Batch Grill",
     "appSettings.batchGrillToggle": "Ask the whole question frontier at once",
@@ -351,6 +351,13 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "knowledgePanel.publish": "Commit & push ({count})",
     "knowledgePanel.noChanges": "No changes to publish.",
     "knowledgePanel.publishDone": "Committed & pushed.",
+    "knowledgePanel.discard": "Discard all",
+    "knowledgePanel.discardDone": "Discarded unpublished changes on {count} card(s).",
+    "knowledgePanel.discardHint": "Revert all unpublished card changes (auto-sedimented and manual).",
+    "knowledgePanel.needYunxiaoForApproval":
+      "Yunxiao token/organization not configured, cannot create a review issue. Configure Yunxiao in app settings, or enable direct write to the graph.",
+    "knowledgePanel.approvalSubject": "[Knowledge pending review] New entries in the {graph} graph",
+    "knowledgePanel.approvalCreated": "Review issue created ({count} card(s)).",
     "knowledgePanel.noGraphBound": "No knowledge graph bound. Configure it in project settings.",
     "knowledgePanel.selectCard": "Select a module card",
     "knowledgePanel.modified": "Modified",
@@ -1211,9 +1218,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.systemNotificationsHint":
       "窗口未聚焦时，Agent 需要确认或任务完成/失败时发送系统通知；窗口聚焦时只显示应用内角标。",
     "appSettings.knowledgeEnabled": "知识沉淀",
-    "appSettings.knowledgeEnabledToggle": "任务完成后自动写入知识图谱",
+    "appSettings.knowledgeEnabledToggle": "审核通过后直接写入知识图谱",
     "appSettings.knowledgeEnabledHint":
-      "开启后，任务完成时会自动处理会话内产出的知识条目：通过质量门的写入项目选定的知识图谱并推送；未通过的只记录结果、不写入。关闭则不沉淀，也不要求任务产出。",
+      "知识统一在右侧「知识库」面板审核发布。开启：确认发布即提交并推送图谱；关闭：确认发布改为创建云效审核议题，由人工审核后更新图谱。",
     "appSettings.experimentalBadge": "测试",
     "appSettings.batchGrill": "批量盘问",
     "appSettings.batchGrillToggle": "一轮抛出当前前沿的全部问题",
@@ -1475,6 +1482,13 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "knowledgePanel.publish": "提交并推送（{count}）",
     "knowledgePanel.noChanges": "没有需要发布的变更。",
     "knowledgePanel.publishDone": "已提交并推送。",
+    "knowledgePanel.discard": "全部丢弃",
+    "knowledgePanel.discardDone": "已丢弃 {count} 张卡片的未发布变更。",
+    "knowledgePanel.discardHint": "还原所有未发布的卡片改动（含自动沉淀与人工编辑）。",
+    "knowledgePanel.needYunxiaoForApproval":
+      "未配置云效令牌/组织，无法创建审核议题。请在应用设置中配置云效，或开启「直接写入知识图谱」。",
+    "knowledgePanel.approvalSubject": "【知识沉淀待审核】{graph} 图谱有新条目",
+    "knowledgePanel.approvalCreated": "已创建云效审核议题（{count} 张卡片）。",
     "knowledgePanel.noGraphBound": "当前项目未绑定知识库，请到项目设置中配置。",
     "knowledgePanel.selectCard": "请选择模块卡片",
     "knowledgePanel.modified": "已改",

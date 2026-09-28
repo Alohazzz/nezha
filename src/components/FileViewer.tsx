@@ -200,9 +200,36 @@ function FilePreviewPane({
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const showMarkdownPreview = isMarkdown && previewMode && content !== null;
   const showHtmlPreview = isHtml && previewMode && content !== null;
+  // 知识库卡片预览时高亮「未发布的新增条目」：拉取该卡片相对 HEAD 的新增行，
+  // 仅预览态生效；编辑态保持原始文本，不受任何装饰影响（可直接改）。
+  const [pendingAdditions, setPendingAdditions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!knowledge || !module || !knowledgeGraphId || !previewMode) {
+      setPendingAdditions([]);
+      return;
+    }
+    let cancelled = false;
+    invoke<string[]>("list_pending_knowledge_additions", {
+      graphId: knowledgeGraphId,
+      module,
+    })
+      .then((lines) => {
+        if (!cancelled) setPendingAdditions(lines);
+      })
+      .catch(() => {
+        // 高亮是锦上添花：拿不到新增内容（如卡片未修改 / git 不可用）就不高亮，不报错。
+        if (!cancelled) setPendingAdditions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [knowledge, module, knowledgeGraphId, previewMode, content]);
   const { html: markdownHtml, toc } = useMemo(
-    () => (isMarkdown && content !== null ? renderMarkdownWithToc(content) : { html: "", toc: [] }),
-    [isMarkdown, content],
+    () =>
+      isMarkdown && content !== null
+        ? renderMarkdownWithToc(content, { highlightTexts: pendingAdditions })
+        : { html: "", toc: [] },
+    [isMarkdown, content, pendingAdditions],
   );
 
   const codeSymbols = useMemo(

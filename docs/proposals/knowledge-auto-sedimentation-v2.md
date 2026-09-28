@@ -1,5 +1,11 @@
 # 设计规格：知识图谱自动沉淀（取代云效议题人工编辑）
 
+> ⚠️ **部分内容已被 [knowledge-sedimentation-convergence-v3.md](./knowledge-sedimentation-convergence-v3.md) 取代（2026-09-28，#100）**：
+> 本文档 §6.3 / §6.4 的「门通过即自动 commit + push」、§8.1 的「无任何手动入口」、§8.4 的「总开关」语义，
+> 均已被 v3 改为「门通过仅暂存工作区 → 右侧知识库面板审核发布」；§9.2 指标字段 `pushed_pending` 改为 `trigger`。
+> **§5（质量门分层与阈值）仍然有效**，是现行实现的事实源。实现以 v3 为准。
+
+
 > 状态：**设计规格（待评审）**——wayfinder 决策地图已走完（11 张 decision ticket 全部 resolved），可进入实现排期。
 > 日期：2026-09-16
 > 承接：`docs/proposals/yunxiao-knowledge-sedimentation.md`（v1：讨论完成 → 建云效审核议题 → 人工编辑图谱）。

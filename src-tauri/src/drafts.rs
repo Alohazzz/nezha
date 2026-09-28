@@ -14,6 +14,9 @@ const ALLOWED_DRAFT_FILES: &[&str] = &["discussion.md", "knowledge.json", "backf
 const MAX_DRAFT_READ_BYTES: u64 = 2 * 1024 * 1024;
 /// 补录议题消费标记（幂等去重）：记录已创建的「来源+内容签名」，防止同一补录草稿被重复建议题。
 const BACKFILL_CONSUMED_FILE: &str = "backfill-issue.consumed";
+/// 知识沉淀消费标记（幂等去重）：手工触发的沉淀消费掉 `knowledge.json` 后写入，
+/// 使任务收尾的自动路径不再重复处理，也不会把「已被手工消费」误报为漏产出。
+const KNOWLEDGE_CONSUMED_FILE: &str = "knowledge.consumed";
 
 /// task_id 会拼进草稿目录名：拒绝路径分隔符与 `..`，防目录穿越。
 fn validate_task_id(task_id: &str) -> Result<(), String> {
@@ -228,6 +231,86 @@ pub async fn clear_backfill_draft(project_path: String, task_id: String) -> Resu
     remove_draft_file(&project_path, &task_id, "backfill-issue.json")
 }
 
+/// 列出某草稿根下所有**未消费**的知识沉淀产物：返回 `(task_id, 文件原始内容)`。
+///
+/// 手工沉淀的侦测入口：会话中调用 `knowledge-sediment-now` 后落盘的 `knowledge.json`
+/// 由此被检出并由前端触发消费。已写消费标记（`knowledge.consumed`）的目录跳过，
+/// 避免重复处理；目录名非法 / 超限一律跳过，不抛错。
+pub(crate) fn list_knowledge_drafts(project_path: &str) -> Result<Vec<(String, String)>, String> {
+    let root = Path::new(project_path);
+    if !root.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project root: {}", e))?;
+    let drafts_dir = canonical_root.join(".nezha").join("drafts");
+    if !drafts_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in
+        fs::read_dir(&drafts_dir).map_err(|e| format!("Failed to read drafts dir: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read draft entry: {}", e))?;
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let task_id = entry.file_name().to_string_lossy().into_owned();
+        if validate_task_id(&task_id).is_err() {
+            continue;
+        }
+        let file = entry.path().join("knowledge.json");
+        if !file.is_file() {
+            continue;
+        }
+        // 已消费（手工沉淀已处理过）⇒ 跳过，避免重复触发。
+        if entry.path().join(KNOWLEDGE_CONSUMED_FILE).exists() {
+            continue;
+        }
+        let meta =
+            fs::metadata(&file).map_err(|e| format!("Failed to read draft metadata: {}", e))?;
+        if meta.len() > MAX_DRAFT_READ_BYTES {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&file).map_err(|e| format!("Failed to read draft: {}", e))?;
+        out.push((task_id, content));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// 知识沉淀消费标记路径：`<project>/.nezha/drafts/<task_id>/knowledge.consumed`。
+fn knowledge_consumed_path(project_path: &str, task_id: &str) -> Result<PathBuf, String> {
+    validate_task_id(task_id)?;
+    let root = Path::new(project_path);
+    if !root.is_absolute() {
+        return Err("Project path must be absolute".to_string());
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve project root: {}", e))?;
+    Ok(task_drafts_dir(&canonical_root, task_id).join(KNOWLEDGE_CONSUMED_FILE))
+}
+
+/// 是否已存在知识沉淀消费标记（任务收尾的自动路径据此跳过已手工消费的产物）。
+pub(crate) fn knowledge_consumed(project_path: &str, task_id: &str) -> bool {
+    knowledge_consumed_path(project_path, task_id)
+        .map(|path| path.exists())
+        .unwrap_or(false)
+}
+
+/// 写入知识沉淀消费标记（幂等；标记由 Nezha 管理，Agent 不写入）。
+pub(crate) fn write_knowledge_consumed(project_path: &str, task_id: &str) -> Result<(), String> {
+    let target = knowledge_consumed_path(project_path, task_id)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create draft dir: {}", e))?;
+    }
+    fs::write(&target, b"1").map_err(|e| format!("Failed to write consumed marker: {}", e))?;
+    Ok(())
+}
+
 /// 任务收尾时把 Agent 写在「有效工作目录」（可能是 worktree）下的草稿收拢到项目根。
 ///
 /// - 有效路径与项目根一致（无 worktree）时是 no-op；
@@ -423,6 +506,46 @@ mod tests {
         let proj = temp_project("consumed_bad");
         assert!(write_backfill_consumed(proj.to_str().unwrap(), "../t1", "s", "w").is_err());
         assert!(read_backfill_consumed(proj.to_str().unwrap(), "../t1").is_err());
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn list_knowledge_drafts_skips_consumed() {
+        let proj = temp_project("list_knowledge");
+        let t1 = task_drafts_dir(proj.to_str().unwrap(), "t1");
+        let t2 = task_drafts_dir(proj.to_str().unwrap(), "t2");
+        fs::create_dir_all(&t1).unwrap();
+        fs::create_dir_all(&t2).unwrap();
+        fs::write(t1.join("knowledge.json"), r#"{"version":1,"skipped":true}"#).unwrap();
+        fs::write(t2.join("knowledge.json"), r#"{"version":1,"candidates":[]}"#).unwrap();
+        // t2 已消费 ⇒ 应被跳过，只返回 t1。
+        write_knowledge_consumed(proj.to_str().unwrap(), "t2").unwrap();
+
+        let entries = list_knowledge_drafts(proj.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(names, vec!["t1"]);
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn knowledge_consumed_marker_roundtrip_and_isolation() {
+        let proj = temp_project("knowledge_consumed");
+        let dir = task_drafts_dir(proj.to_str().unwrap(), "t1");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(!knowledge_consumed(proj.to_str().unwrap(), "t1"));
+        write_knowledge_consumed(proj.to_str().unwrap(), "t1").unwrap();
+        assert!(knowledge_consumed(proj.to_str().unwrap(), "t1"));
+        // 其它任务目录不受影响。
+        assert!(!knowledge_consumed(proj.to_str().unwrap(), "t2"));
+        // 非法 task_id 不产生标记（路径穿越防护）。
+        assert!(write_knowledge_consumed(proj.to_str().unwrap(), "../t1").is_err());
+        let _ = fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn list_knowledge_drafts_missing_root_returns_empty() {
+        let proj = temp_project("list_knowledge_empty");
+        assert!(list_knowledge_drafts(proj.to_str().unwrap()).unwrap().is_empty());
         let _ = fs::remove_dir_all(&proj);
     }
 }
