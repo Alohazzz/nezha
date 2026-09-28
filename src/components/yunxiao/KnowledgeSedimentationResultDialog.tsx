@@ -4,10 +4,10 @@ import type { KnowledgeSedimentationEvent } from "../../types";
 import s from "../../styles";
 
 /**
- * 只读的「本次沉淀结果」：任务完成后自动沉淀的结果查看。
+ * 只读的「本次沉淀判定结果」：写入 / 拒绝条数与逐条理由。
  *
- * 自动沉淀已改为任务完成即处理（无需手动触发），因此这里**没有**操作能力——
- * 只展示写了哪些条目、拒了哪些以及逐条判定理由，供追溯与排查。
+ * 第二阶段起回写的审核发布在右侧知识库面板进行（提交并推送 / 全部丢弃），
+ * 本弹窗只负责**展示判定明细**（面板「最近一次判定结果」入口打开），无任何操作能力。
  */
 export function KnowledgeSedimentationResultDialog({
   result,
@@ -69,10 +69,6 @@ export function KnowledgeSedimentationResultDialog({
               ))}
             </div>
           )}
-
-          {result.status === "ok" && result.pushedPending ? (
-            <div style={s.knowledgeHint}>{t("yunxiao.knowledge.resultPushedPending")}</div>
-          ) : null}
         </div>
 
         <div style={s.knowledgeDialogFooter}>

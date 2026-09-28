@@ -459,13 +459,10 @@ export interface KnowledgeWritebackItem {
 export interface KnowledgeSedimentationEvent {
   taskId: string;
   status: "running" | "ok" | "failed";
-  /** status=ok：实际写入条数。 */
+  /** status=ok：本次暂存（写入工作区、待确认发布）的条数。 */
   written?: number;
-  /** status=ok：本次是否补推了此前失败留下的本地提交。 */
-  pushedPending?: boolean;
   /** status=ok：逐条判定结果（含未通过的理由）。 */
   items?: KnowledgeWritebackItem[];
-  commit?: string | null;
   /** status=failed：失败原因（如「未产出知识沉淀产物」）。 */
   error?: string;
 }

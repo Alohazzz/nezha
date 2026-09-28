@@ -95,8 +95,6 @@ function renderPage(props: {
           onGenerateWritebackSummary={vi.fn()}
           onWritebackYunxiao={vi.fn()}
           onRetryWritebackScoreField={vi.fn()}
-          knowledgeResults={{}}
-          sedimentingTasks={{}}
           plans={[]}
           onGeneratePlanTodos={vi.fn()}
           onRebindTaskPlan={vi.fn()}

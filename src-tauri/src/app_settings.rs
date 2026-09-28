@@ -1495,15 +1495,6 @@ pub async fn save_knowledge_enabled(enabled: bool) -> Result<AppSettings, String
     .map_err(|e| e.to_string())?
 }
 
-/// 已废弃的旧命令名（等价于 [`save_knowledge_enabled`]）。
-///
-/// 保留是为了让尚未升级的前端继续可用：总开关换了语义与键名，但**命令名不变**，
-/// 前端无需同时改动即可生效。新代码请用 `save_knowledge_enabled`。
-#[tauri::command]
-pub async fn save_knowledge_auto_writeback(enabled: bool) -> Result<AppSettings, String> {
-    save_knowledge_enabled(enabled).await
-}
-
 /// 测试技能开关：切换后，云效议题讨论链路（「直接开始（先澄清）」与「方案讨论」）
 /// 组装提示词时改用 `batch-grill-me` 批量盘问（见 agent_assist）。
 #[tauri::command]

@@ -920,41 +920,15 @@ function App() {
       }
     };
 
+    // 自动沉淀上报：第二阶段起回写统一经右侧知识库面板审核发布，因此前端**不再**
+    // 维护「沉淀中 / 沉淀结果」状态与结果弹窗（需求已并入面板红点与卡片预览）。
+    // 只剩失败出口：toast + 建云效议题（唯一人工入口；成功路径完全不碰云效）。
     const p3 = listen<KnowledgeSedimentationEvent>("knowledge-sedimentation", (e) => {
       const payload = e.payload;
-      setSedimentingTasks((prev) => {
-        if (!prev[payload.taskId]) return prev;
-        const next = { ...prev };
-        delete next[payload.taskId];
-        return next;
-      });
-      if (payload.status === "running") {
-        // 后端在前置条件都成立时才发 running，因此这里的状态是准确的（前端不猜）。
-        // running **不写入 knowledgeResults**：它没有 items，若被存下来会让已打开的
-        // 结果弹窗显示「写入 0 / 拒绝 0」这类假结果（只应有终态结果）。
-        setSedimentingTasks((prev) => ({ ...prev, [payload.taskId]: true }));
-        // 兜底超时：后端正常总会发终态事件，但进程崩溃 / emit 失败 / 等待 hub 写锁
-        // （最长 10 分钟）时按钮会永远停在「正在沉淀」，这里给一条自愈路径。
-        window.clearTimeout(sedimentingTimeoutsRef.current[payload.taskId]);
-        sedimentingTimeoutsRef.current[payload.taskId] = window.setTimeout(() => {
-          setSedimentingTasks((prev) => {
-            if (!prev[payload.taskId]) return prev;
-            const next = { ...prev };
-            delete next[payload.taskId];
-            return next;
-          });
-        }, SEDIMENTING_TIMEOUT_MS);
-        return;
-      }
-      // 终态：清掉兜底定时器。
-      window.clearTimeout(sedimentingTimeoutsRef.current[payload.taskId]);
-      delete sedimentingTimeoutsRef.current[payload.taskId];
-      setKnowledgeResults((prev) => ({ ...prev, [payload.taskId]: payload }));
-      if (payload.status === "failed") {
-        showToast(`知识沉淀未完成：${payload.error ?? ""}`, "warning");
-        const label = knowledgeTaskLabel(payload.taskId);
-        void raiseSedimentationIssue(payload, label);
-      }
+      if (payload.status !== "failed") return;
+      showToast(`知识沉淀未完成：${payload.error ?? ""}`, "warning");
+      const label = knowledgeTaskLabel(payload.taskId);
+      void raiseSedimentationIssue(payload, label);
     });
     return () => {
       p1.then((fn) => fn());
@@ -2985,20 +2959,6 @@ function App() {
     });
   }
 
-  /** 「沉淀中」状态的兜底时限（毫秒）。见事件处理器里的说明。 */
-  const SEDIMENTING_TIMEOUT_MS = 15 * 60 * 1000;
-
-  /**
-   * 知识沉淀结果（按任务）：自动沉淀完成后由 `knowledge-sedimentation` 事件填充。
-   * 同时用 `sedimentingTasks` 标记「进行中」，供按钮显示状态。
-   */
-  const [knowledgeResults, setKnowledgeResults] = useState<
-    Record<string, KnowledgeSedimentationEvent>
-  >({});
-  const [sedimentingTasks, setSedimentingTasks] = useState<Record<string, boolean>>({});
-  /** 每个任务的「沉淀中」兜底定时器（见事件处理器里的说明）。 */
-  const sedimentingTimeoutsRef = useRef<Record<string, number>>({});
-
   function buildBackfillTask(
     sourceTask: Task,
     draft: BackfillIssueRequest,
@@ -3149,6 +3109,7 @@ function App() {
       byEffectivePath.set(eff, arr);
     }
     for (const [effectivePath, activeTasks] of byEffectivePath) {
+      // 补录议题草稿：检出即建 Y + 待办。
       const entries = await invoke<BackfillDraftEntry[]>("list_backfill_drafts", {
         projectPath: effectivePath,
       }).catch(() => []);
@@ -3165,6 +3126,30 @@ function App() {
         backfillProcessingRef.current.add(key);
         processBackfillDraft(sourceTask, entry.request, entry.taskId, effectivePath)
           .catch(() => {})
+          .finally(() => backfillProcessingRef.current.delete(key));
+      }
+
+      // 手工知识沉淀产物：会话中调用 `knowledge-sediment-now` 后落盘的 knowledge.json，
+      // 检出即触发沉淀（与自动路径同一套门 + 暂存语义）；消费标记由后端在成功后写入。
+      const knowledgeEntries = await invoke<Array<{ taskId: string }>>("list_knowledge_drafts", {
+        projectPath: effectivePath,
+      }).catch(() => []);
+      for (const entry of knowledgeEntries) {
+        let sourceTask = activeTasks.find((t) => t.id === entry.taskId);
+        if (!sourceTask && activeTasks.length === 1) sourceTask = activeTasks[0];
+        if (!sourceTask) {
+          console.warn(`[knowledge] 无法匹配沉淀产物到活跃任务：${entry.taskId} @ ${effectivePath}`);
+          continue;
+        }
+        const key = `knowledge:${effectivePath}:${entry.taskId}`;
+        if (backfillProcessingRef.current.has(key)) continue;
+        backfillProcessingRef.current.add(key);
+        invoke("knowledge_manual_sediment", {
+          projectPath: effectivePath,
+          taskId: entry.taskId,
+          agent: sourceTask.agent,
+        })
+          .catch((e) => console.warn("[knowledge] 手工沉淀触发失败", e))
           .finally(() => backfillProcessingRef.current.delete(key));
       }
     }
@@ -3450,8 +3435,6 @@ function App() {
               onGenerateWritebackSummary={handleGenerateYunxiaoWritebackSummary}
               onWritebackYunxiao={handleWritebackYunxiao}
               onRetryWritebackScoreField={handleRetryWritebackScoreField}
-              knowledgeResults={knowledgeResults}
-              sedimentingTasks={sedimentingTasks}
               plans={plans}
               planDeps={planDeps}
               waitingBadges={waitingBadges}

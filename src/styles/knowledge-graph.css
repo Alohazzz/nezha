@@ -229,6 +229,36 @@
   line-height: 1.5;
 }
 
+/* 待确认（自动沉淀写入工作区、尚未发布）——与「人工编辑未提交」用不同色区分。 */
+.kpi-badge[data-kind="pending"] {
+  border-color: var(--warning-border, var(--accent-soft));
+  background: var(--warning-surface, var(--accent-subtle));
+  color: var(--warning, var(--accent));
+}
+
+/* 右侧工具条图标角标：有待确认变更时显示红点。 */
+.icon-btn-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg-sidebar, transparent);
+  border-radius: 50%;
+  background: var(--danger, #e5534b);
+  pointer-events: none;
+}
+
+/* 知识库卡片预览：未发布的新增条目高亮（浅底 + 左竖线，不干扰阅读）。
+   只作用于预览态（编辑态是原始文本），因此不阻碍「发现问题直接改」。 */
+.md-preview li.kg-new-entry {
+  margin-left: -8px;
+  padding: 1px 8px;
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  background: var(--accent-subtle);
+}
+
 .knowledge-card-editor {
   display: flex;
   min-height: 0;

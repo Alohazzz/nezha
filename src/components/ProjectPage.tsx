@@ -16,7 +16,6 @@ import type {
   TerminalScrollback,
   TaskDisplayWindow,
   FontFamily,
-  KnowledgeSedimentationEvent,
   YunxiaoWritebackDraft,
   YunxiaoWritebackResult,
 } from "../types";
@@ -51,7 +50,6 @@ import { buildWorktreeScopeOptions } from "./branch-batch/worktreeScope";
 import { TodoTaskView } from "./TodoTaskView";
 import { YunxiaoTodoDiscussionView } from "./yunxiao/YunxiaoTodoDiscussionView";
 import { YunxiaoWritebackDialog } from "./yunxiao/YunxiaoWritebackDialog";
-import { KnowledgeSedimentationResultDialog } from "./yunxiao/KnowledgeSedimentationResultDialog";
 import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
 import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
@@ -68,6 +66,7 @@ import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTermin
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useToast } from "./Toast";
 import { useProjectPanels } from "../hooks/useProjectPanels";
+import { useKnowledgePending } from "../hooks/useKnowledgePending";
 import { resolveProjectGitContext, useGitRoots } from "../hooks/useGitRoots";
 import { useI18n } from "../i18n";
 
@@ -107,8 +106,6 @@ export function ProjectPage({
   onGenerateWritebackSummary,
   onWritebackYunxiao,
   onRetryWritebackScoreField,
-  knowledgeResults,
-  sedimentingTasks,
   plans,
   onGeneratePlanTodos,
   onRebindTaskPlan,
@@ -219,9 +216,7 @@ export function ProjectPage({
   ) => Promise<YunxiaoWritebackResult>;
   onRetryWritebackScoreField: (taskId: string, value: number) => Promise<void>;
   /** 各任务的自动沉淀结果（任务完成时由事件填充）。 */
-  knowledgeResults: Record<string, KnowledgeSedimentationEvent>;
   /** 各任务是否正在自动沉淀。 */
-  sedimentingTasks: Record<string, boolean>;
 
   plans: Plan[];
   onGeneratePlanTodos: (input: {
@@ -507,9 +502,6 @@ export function ProjectPage({
                 onMergeWorktree={() => onMergeWorktree(task.id)}
                 onDiscardWorktree={() => onDiscardWorktree(task.id)}
                 onOpenWriteback={() => openWriteback(task.id)}
-                onOpenKnowledgeResult={() => setKnowledgeResultDialog(task.id)}
-                sedimenting={Boolean(sedimentingTasks[task.id])}
-                knowledgeResult={Boolean(knowledgeResults[task.id])}
                 onOpenPlanPreview={
                   task.planId
                     ? () => {
@@ -1044,8 +1036,9 @@ export function ProjectPage({
     }
   }, [writebackDialog, onRetryWritebackScoreField, showToast, t]);
 
-  // ── 知识沉淀：任务完成后自动处理（无手动触发）；此处只提供只读结果入口 ──
-  const [knowledgeResultDialog, setKnowledgeResultDialog] = useState<string | null>(null);
+  // ── 知识回写：所有写入经右侧知识库面板审核发布（提交并推送 / 全部丢弃）──
+  // 待确认卡片数：驱动右侧工具条「知识库」图标红点（面板关闭时也提示）。
+  const knowledgePending = useKnowledgePending(project.path);
 
   // ── 行级 Review 评论（纯前端内存态，决策 6：不持久化） ─────────────────
   const [reviewComments, setReviewComments] = useState<ReviewComment[]>([]);
@@ -1219,13 +1212,6 @@ export function ProjectPage({
     [sendDialog, projectTasks, onInput, onResumeTaskAndSend, onSubmitTask, subRepoPath, showToast, t],
   );
 
-  const knowledgeResultDialogNode =
-    knowledgeResultDialog && knowledgeResults[knowledgeResultDialog] ? (
-      <KnowledgeSedimentationResultDialog
-        result={knowledgeResults[knowledgeResultDialog]}
-        onClose={() => setKnowledgeResultDialog(null)}
-      />
-    ) : null;
 
   return (
     <div style={visible ? s.projectBodyVisible : s.projectBodyHidden}>
@@ -1477,6 +1463,7 @@ export function ProjectPage({
         onOpenSettings={() => setShowSettings(true)}
         panelDocked={rightPanelDocked}
         onTogglePanelDocked={handleTogglePanelDocked}
+        knowledgePending={knowledgePending}
       />
       </div>
 
@@ -1559,8 +1546,6 @@ export function ProjectPage({
             />
           );
         })()}
-
-      {knowledgeResultDialogNode}
     </div>
   );
 }

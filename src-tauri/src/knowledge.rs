@@ -59,16 +59,17 @@ pub struct KnowledgeWritebackItem {
     pub layer: String,
 }
 
-/// 一次提交的整体回写结果。
+/// 一次沉淀的判定与**暂存**结果。
+///
+/// 第二阶段起，门通过的条目只写入工作区（未提交），由右侧知识库面板审核后再发布；
+/// 因此本结构不再携带 commit / push 结果，只回答「判定通过几条、暂存了几条」。
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeWritebackResult {
     pub items: Vec<KnowledgeWritebackItem>,
     pub all_passed: bool,
+    /// 本次写入工作区（待确认）的条目数。
     pub written_count: usize,
-    pub commit: Option<String>,
-    /// 本次是否补推了此前失败留下的本地提交（重试语义的可见性，§8.4）。
-    pub pushed_pending: bool,
 }
 
 /// 项目可选的一个知识图谱目标。目录名是稳定 ID；展示名优先取 SKILL.md 后的首个 H1。
@@ -176,67 +177,8 @@ pub(crate) async fn lock_graph(graph_id: &str) -> GraphWriteGuard {
     GraphWriteGuard { _guard: guard }
 }
 
-/// 一次性取出「哪些待写模块卡片有未提交人工修改」。整批一次 `git status`，
-/// 避免按候选逐条调用产生 N 个子进程。命令失败时**保守地视为全部脏**（逐条降级为不写入），
-/// 而不是整批报错——否则已经付出的模型判定会被白费掉。
-async fn dirty_module_cards(
-    graph: &KnowledgeTarget,
-    modules: &[String],
-) -> Result<HashSet<String>, String> {
-    let mut pathspecs: Vec<String> = Vec::new();
-    for module in modules {
-        let path = module_card_path(graph, module)?;
-        let rel = path
-            .strip_prefix(&graph.graph_dir)
-            .map_err(|_| "模块卡片路径越界".to_string())?;
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        if !pathspecs.contains(&rel) {
-            pathspecs.push(rel);
-        }
-    }
-    if pathspecs.is_empty() {
-        return Ok(HashSet::new());
-    }
-    // `core.quotepath` 默认会对非 ASCII 路径做 C 转义（`"data/modules/æ.md"`），
-    // 那样解析出的模块名是垃圾、dirty 判定落空，卡片会被**静默覆盖**——正是本层要防的事。
-    let mut args: Vec<String> = vec![
-        "-c".into(),
-        "core.quotepath=false".into(),
-        "status".into(),
-        "--porcelain".into(),
-        "--".into(),
-    ];
-    args.extend(pathspecs);
-    let result = crate::git::run_git_with_timeout(
-        graph.graph_dir.clone(),
-        args,
-        std::time::Duration::from_secs(15),
-    )
-    .await?;
-    if !result.status.success() {
-        eprintln!(
-            "[knowledge] git status 失败，按全部未提交处理：{}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        );
-        return Ok(modules.iter().cloned().collect());
-    }
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    let mut dirty: HashSet<String> = HashSet::new();
-    for line in stdout.lines() {
-        // porcelain 行：`XY path`（path 可能含空格，取状态字段之后的整段）。
-        let Some(rest) = line.get(3..) else { continue };
-        let norm = rest.trim().trim_matches('"').replace('\\', "/");
-        if let Some(name) = norm.rsplit('/').next() {
-            if let Some(module) = name.strip_suffix(".md") {
-                dirty.insert(module.to_string());
-            }
-        }
-    }
-    Ok(dirty)
-}
-
 /// L3 语义判定单次调用的超时。内联上下文后实测 5–20 s，120 s 留足余量。
-/// 超时按**逐条降级**处理（不整批报错），见 [`knowledge_auto_writeback`]。
+/// 超时按**逐条降级**处理（不整批报错），见 [`knowledge_stage_writeback`]。
 const QUALITY_GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// 单次质量门提示词的字数上限。Windows `CreateProcess` 的命令行上限是 32767 字符，
@@ -322,12 +264,14 @@ pub(crate) fn list_knowledge_targets_internal() -> Result<Vec<KnowledgeTarget>, 
     Ok(targets)
 }
 
-/// 任务完成后自动处理知识沉淀（best-effort，superseded 由日志与事件体现）。
+/// 任务收尾自动处理知识沉淀（`trigger = "auto"`）。
 ///
-/// 决策（提案 §8.1）：任务完成即自动处理，无手动按钮。前置条件是三条**都已成立**：
-/// - 总开关开启（`settings.knowledge.enabled`，默认开）
+/// 前置条件两条**都已成立**：
 /// - 项目绑定了图谱（`graph_id` 非空；未绑定项目连产出契约都不注入）
 /// - 该任务的会话内产物存在（缺失 = 「漏了」，由 `run_auto_sedimentation` 报错）
+///
+/// **不再看 `settings.knowledge.enabled`**：该设置已重定义为「审核通过后直接写入 /
+/// 走云效审批」的发布方式选择器，不再决定是否产出与是否沉淀。
 ///
 /// 本函数**立即返回**，实际工作在后台任务里跑（一次沉淀含最多两次模型调用，
 /// 不能拖住 PTY 退出收尾路径）。结果通过 `knowledge-sedimentation` 事件上报。
@@ -337,35 +281,79 @@ pub fn spawn_auto_sedimentation(
     real_project_path: String,
     agent: String,
 ) {
-    if !crate::app_settings::load_settings_internal().knowledge.enabled {
-        return; // 总开关关闭：不跑沉淀，也不要求产出
+    spawn_sedimentation(app, task_id, real_project_path, agent, "auto");
+}
+
+/// 手工触发沉淀（会话中调用 `knowledge-sediment-now` 技能产出 `knowledge.json` 后由前端发起）。
+///
+/// 与自动路径**共用同一套门与暂存逻辑**，仅 `trigger` 不同（用于指标区分来源）。
+/// 本命令**等待沉淀跑完**（前端轮询已是异步、且有在途去重），成功后写消费标记并清理
+/// 产物，使随后的任务收尾自动路径不再重复处理、也不误报「漏产出」。
+#[tauri::command]
+pub async fn knowledge_manual_sediment(
+    app: tauri::AppHandle,
+    project_path: String,
+    task_id: String,
+    agent: String,
+) -> Result<(), String> {
+    let result = run_sedimentation_report(app, task_id.clone(), project_path.clone(), agent, "manual").await;
+    if result.is_ok() {
+        // 消费标记 + 清理产物：标记让收尾自动路径判定「已人工消费」而跳过；
+        // 删除产物避免下一次轮询重复触发。标记先写，避免删除后到收尾之间出现空窗。
+        let _ = crate::drafts::write_knowledge_consumed(&project_path, &task_id);
+        let _ = crate::drafts::remove_draft_file(&project_path, &task_id, "knowledge.json");
     }
+    result.map(|_| ())
+}
+
+/// 沉淀执行体：按 `trigger` 记录来源，跑门 + 暂存，经事件上报结果。
+/// 自动路径 fire-and-forget 地 spawn 它；手工路径直接 await。
+fn spawn_sedimentation(
+    app: tauri::AppHandle,
+    task_id: String,
+    real_project_path: String,
+    agent: String,
+    trigger: &'static str,
+) {
     tauri::async_runtime::spawn(async move {
-        // 前置条件（总开关 / 绑定图谱 / 产物存在）通过后才发 running，前端据此准确显示
-        // 「沉淀中」，不必也不应在前端猜（前端读不到项目是否绑定图谱）。
-        let resolved_graph_id = resolve_knowledge_target(real_project_path.clone())
-            .await
-            .ok()
-            .map(|target| {
-                let _ = app.emit(
-                    "knowledge-sedimentation",
-                    serde_json::json!({ "taskId": task_id, "status": "running", "graph": target.id }),
-                );
-                target.id
-            });
-        let result = run_auto_sedimentation(&task_id, &real_project_path, &agent).await;
-        // 指标记录（best-effort）：无论成败都记，使拒绝率 / 缺失率 / 补推可统计（§9.2）。
-        // 未绑定图谱的项目**不记**：它本就不该沉淀，记进去只会给分母灌水
-        // （skipped 会同时混入「未绑定 / 显式跳过 / 无候选」三种成因）。
-        let graph_for_metric = resolved_graph_id.unwrap_or_default();
-        let record_metrics = !graph_for_metric.is_empty();
-        match result {
-            Ok(outcome) => {
-                if record_metrics {
-                    let record = KnowledgeMetricRecord {
+        let _ = run_sedimentation_report(app, task_id, real_project_path, agent, trigger).await;
+    });
+}
+
+/// 跑一次沉淀并上报（指标 + `knowledge-sedimentation` 事件）。返回门执行结果。
+async fn run_sedimentation_report(
+    app: tauri::AppHandle,
+    task_id: String,
+    real_project_path: String,
+    agent: String,
+    trigger: &'static str,
+) -> Result<KnowledgeWritebackResult, String> {
+    // 前置条件（绑定图谱 / 产物存在）通过后才发 running，前端据此准确显示
+    // 「沉淀中」，不必也不应在前端猜（前端读不到项目是否绑定图谱）。
+    let resolved_graph_id = resolve_knowledge_target(real_project_path.clone())
+        .await
+        .ok()
+        .map(|target| {
+            let _ = app.emit(
+                "knowledge-sedimentation",
+                serde_json::json!({ "taskId": task_id, "status": "running", "graph": target.id }),
+            );
+            target.id
+        });
+    let result = run_auto_sedimentation(&task_id, &real_project_path, &agent).await;
+    // 指标记录（best-effort）：无论成败都记，使拒绝率 / 缺失率可统计（§9.2）。
+    // 未绑定图谱的项目**不记**：它本就不该沉淀，记进去只会给分母灌水
+    // （skipped 会同时混入「未绑定 / 显式跳过 / 无候选」三种成因）。
+    let graph_for_metric = resolved_graph_id.unwrap_or_default();
+    let record_metrics = !graph_for_metric.is_empty();
+    match &result {
+        Ok(outcome) => {
+            if record_metrics {
+                let record = KnowledgeMetricRecord {
                     at: chrono::Utc::now().timestamp_millis(),
                     task_id: task_id.clone(),
                     graph_id: graph_for_metric.clone(),
+                    trigger: trigger.to_string(),
                     status: if outcome.items.is_empty() {
                         "skipped".to_string()
                     } else {
@@ -373,55 +361,72 @@ pub fn spawn_auto_sedimentation(
                     },
                     written: outcome.written_count,
                     rejected_by_layer: rejected_by_layer(&outcome.items),
-                    pushed_pending: outcome.pushed_pending,
                     error: None,
-                    };
-                    let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
-                }
-                let _ = app.emit(
-                    "knowledge-sedimentation",
-                    serde_json::json!({
-                        "taskId": task_id,
-                        "status": "ok",
-                        "written": outcome.written_count,
-                        "pushedPending": outcome.pushed_pending,
-                        "items": outcome.items,
-                        "commit": outcome.commit,
-                    }),
-                );
+                };
+                let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
             }
-            Err(error) => {
-                if record_metrics {
-                    let record = KnowledgeMetricRecord {
-                        at: chrono::Utc::now().timestamp_millis(),
-                        task_id: task_id.clone(),
-                        graph_id: graph_for_metric.clone(),
-                        status: "failed".to_string(),
-                        written: 0,
-                        rejected_by_layer: HashMap::new(),
-                        pushed_pending: false,
-                        error: Some(error.clone()),
-                    };
-                    let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
-                }
-                eprintln!("[knowledge] 自动沉淀未完成：{error}");
-                let _ = app.emit(
-                    "knowledge-sedimentation",
-                    serde_json::json!({
-                        "taskId": task_id,
-                        "status": "failed",
-                        "error": error,
-                    }),
-                );
-            }
+            // 不再上报 commit：第二阶段已无自动提交，通过项只暂存在工作区，
+            // 由右侧知识库面板审核发布。pending 提示由面板（git 未提交状态）驱动。
+            let _ = app.emit(
+                "knowledge-sedimentation",
+                serde_json::json!({
+                    "taskId": task_id,
+                    "status": "ok",
+                    "written": outcome.written_count,
+                    "trigger": trigger,
+                    "items": outcome.items,
+                }),
+            );
         }
-    });
+        Err(error) => {
+            if record_metrics {
+                let record = KnowledgeMetricRecord {
+                    at: chrono::Utc::now().timestamp_millis(),
+                    task_id: task_id.clone(),
+                    graph_id: graph_for_metric.clone(),
+                    trigger: trigger.to_string(),
+                    status: "failed".to_string(),
+                    written: 0,
+                    rejected_by_layer: HashMap::new(),
+                    error: Some(error.clone()),
+                };
+                let _ = tokio::task::spawn_blocking(move || append_metric_record(&record)).await;
+            }
+            eprintln!("[knowledge] 知识沉淀未完成（{trigger}）：{error}");
+            let _ = app.emit(
+                "knowledge-sedimentation",
+                serde_json::json!({
+                    "taskId": task_id,
+                    "status": "failed",
+                    "trigger": trigger,
+                    "error": error,
+                }),
+            );
+        }
+    }
+    result
+}
+
+/// 手工沉淀的侦测入口：列出未消费的 `knowledge.json` 产物（只需 taskId，候选内容由后端读）。
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeDraftEntry {
+    pub task_id: String,
+}
+
+#[tauri::command]
+pub async fn list_knowledge_drafts(project_path: String) -> Result<Vec<KnowledgeDraftEntry>, String> {
+    let entries = crate::drafts::list_knowledge_drafts(&project_path)?;
+    Ok(entries
+        .into_iter()
+        .map(|(task_id, _)| KnowledgeDraftEntry { task_id })
+        .collect())
 }
 
 /// 一次沉淀运行的指标记录（提案 §9.2 的自动指标数据源）。
 ///
 /// 以 JSONL 追加到 `~/.nezha/knowledge-metrics.jsonl`：单文件、追加写、无需迁移，
-/// 且失败/成功都记录，使「拒绝率、产物缺失率、退避与补推」都能被统计。
+/// 且失败/成功都记录，使「拒绝率、产物缺失率、来源分布」都能被统计。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeMetricRecord {
@@ -429,15 +434,21 @@ pub struct KnowledgeMetricRecord {
     pub at: i64,
     pub task_id: String,
     pub graph_id: String,
+    /// 触发来源：`auto`（任务收尾自动沉淀） / `manual`（会话中手工调技能）。
+    /// 旧记录无此字段，反序列化时回落为 `auto`（历史记录都来自自动路径），保证向后兼容。
+    #[serde(default = "default_trigger")]
+    pub trigger: String,
     /// `ok` 已完成 / `failed` 未完成（含产物缺失）。
     pub status: String,
     pub written: usize,
     /// 各层拒绝条数（L0 / L1 / L2 / L3 / write）。
     pub rejected_by_layer: HashMap<String, usize>,
-    /// 本次是否补推了此前失败留下的本地提交。
-    pub pushed_pending: bool,
     /// 失败原因（status=failed 时）。
     pub error: Option<String>,
+}
+
+fn default_trigger() -> String {
+    "auto".to_string()
 }
 
 fn knowledge_metrics_path() -> Result<PathBuf, String> {
@@ -476,7 +487,8 @@ pub struct KnowledgeMetricsSummary {
     pub skipped_runs: usize,
     pub written_total: usize,
     pub rejected_by_layer: HashMap<String, usize>,
-    pub pushed_pending_runs: usize,
+    /// 按触发来源分组的运行数（`auto` / `manual`）。
+    pub runs_by_trigger: HashMap<String, usize>,
 }
 
 pub(crate) fn summarize_metrics(records: &[KnowledgeMetricRecord]) -> KnowledgeMetricsSummary {
@@ -490,9 +502,10 @@ pub(crate) fn summarize_metrics(records: &[KnowledgeMetricRecord]) -> KnowledgeM
             _ => {}
         }
         summary.written_total += record.written;
-        if record.pushed_pending {
-            summary.pushed_pending_runs += 1;
-        }
+        *summary
+            .runs_by_trigger
+            .entry(record.trigger.clone())
+            .or_insert(0) += 1;
         for (layer, count) in &record.rejected_by_layer {
             *summary.rejected_by_layer.entry(layer.clone()).or_insert(0) += count;
         }
@@ -543,6 +556,11 @@ async fn run_auto_sedimentation(
         Ok(target) => target,
         Err(_) => return Ok(empty_writeback_result()),
     };
+    // 已被手工沉淀消费过（`knowledge.consumed`）：跳过且**不报「漏产出」**——
+    // 产物已被处理并清理，收尾自动路径不该重复处理、更不该误报。
+    if crate::drafts::knowledge_consumed(real_project_path, task_id) {
+        return Ok(empty_writeback_result());
+    }
     // 复用同一套产出契约解析（含 skipped / 图谱兜底 / 缺失判定）。
     let draft = crate::drafts::read_draft_file(real_project_path, task_id, "knowledge.json")
         .map_err(|e| format!("读取知识沉淀产物失败: {e}"))?
@@ -579,7 +597,7 @@ async fn run_auto_sedimentation(
     } else {
         "claude".to_string()
     };
-    knowledge_auto_writeback(real_project_path.to_string(), candidates, agent).await
+    knowledge_stage_writeback(real_project_path.to_string(), candidates, agent).await
 }
 
 fn empty_writeback_result() -> KnowledgeWritebackResult {
@@ -587,8 +605,6 @@ fn empty_writeback_result() -> KnowledgeWritebackResult {
         items: Vec::new(),
         all_passed: true,
         written_count: 0,
-        commit: None,
-        pushed_pending: false,
     }
 }
 
@@ -977,6 +993,9 @@ pub async fn publish_knowledge_changes(
     let graph = graph_by_id_async(graph_id.clone()).await?;
     let _guard = lock_graph(&graph.id).await;
     let _hub_git_guard = crate::skills::lock_hub_git().await;
+    // 发布前先跟上远端（fetch + 落后则 --ff-only pull；分叉则拒绝）。
+    // 第二阶段起这是唯一图谱写路径，写前同步从自动回写迁移到这里。
+    sync_graph_before_publish(&graph).await?;
     let graph_dir = PathBuf::from(&graph.graph_dir);
     let mut absolute = Vec::new();
     for path_text in paths {
@@ -1042,6 +1061,126 @@ pub async fn publish_knowledge_changes(
     }
     Ok("已提交并推送".into())
 }
+
+/// 「全部丢弃」：还原工作区里知识库仓库的未提交改动，不触碰已提交历史。
+///
+/// 用于审核不通过时放弃本批沉淀（含人工编辑）：`checkout -- .` 恢复已跟踪文件，
+/// `clean -fd -- data/modules` 清掉新增的未跟踪卡片。**不 reset、不动 HEAD**，
+/// 因此不会误伤已提交内容；与 `publish_knowledge_changes` 共用同一套写锁。
+#[tauri::command]
+pub async fn discard_knowledge_changes(graph_id: String) -> Result<usize, String> {
+    let graph = graph_by_id_async(graph_id.clone()).await?;
+    let _guard = lock_graph(&graph.id).await;
+    let _hub_git_guard = crate::skills::lock_hub_git().await;
+
+    // 先统计将被丢弃的卡片数（丢掉后才统计不到），用于前端提示。
+    let discarded = list_modified_knowledge_cards(graph_id.clone())
+        .await?
+        .len();
+
+    let checkout = crate::git::run_git_with_timeout(
+        graph.graph_dir.clone(),
+        vec!["checkout".into(), "--".into(), ".".into()],
+        std::time::Duration::from_secs(30),
+    )
+    .await?;
+    if !checkout.status.success() {
+        return Err(format!(
+            "还原工作区失败: {}",
+            String::from_utf8_lossy(&checkout.stderr).trim()
+        ));
+    }
+    // 清掉本批新增、尚未跟踪的卡片（只限 data/modules，避免误删其它产物）。
+    let clean = crate::git::run_git_with_timeout(
+        graph.graph_dir.clone(),
+        vec![
+            "clean".into(),
+            "-fd".into(),
+            "--".into(),
+            "data/modules".into(),
+        ],
+        std::time::Duration::from_secs(30),
+    )
+    .await?;
+    if !clean.status.success() {
+        return Err(format!(
+            "清理未跟踪卡片失败: {}",
+            String::from_utf8_lossy(&clean.stderr).trim()
+        ));
+    }
+    Ok(discarded)
+}
+
+/// 待处理卡片数：图谱仓库中相对 HEAD 有未提交改动的模块卡片数量。
+///
+/// 供右侧工具条红点使用——数值即「有几张卡片等你确认发布」。
+#[tauri::command]
+pub async fn count_pending_knowledge_cards(graph_id: String) -> Result<usize, String> {
+    if graph_id.trim().is_empty() {
+        return Ok(0);
+    }
+    Ok(list_modified_knowledge_cards(graph_id).await?.len())
+}
+
+/// 模块卡片相对 HEAD 的**新增内容**（未提交），供预览态高亮「本批新增条目」。
+///
+/// 用 `git diff -U0`（不带上文，只给真正新增的块）解析出新增行，剥掉 diff 前缀与
+/// 空白后返回原文行。调用方按「包含」匹配卡片里的条目行——因此这里返回的是内容片段，
+/// 不做行号对齐（行号会随渲染映射错位，反而不可靠）。
+#[tauri::command]
+pub async fn list_pending_knowledge_additions(
+    graph_id: String,
+    module: String,
+) -> Result<Vec<String>, String> {
+    if !module_is_safe(&module) {
+        return Err(format!("模块名不合法：{module}"));
+    }
+    let graph = graph_by_id_async(graph_id).await?;
+    let rel = format!("data/modules/{module}.md");
+    let result = crate::git::run_git_with_timeout(
+        graph.graph_dir.clone(),
+        vec![
+            "diff".into(),
+            "-U0".into(),
+            "--".into(),
+            rel,
+        ],
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    if !result.status.success() {
+        return Err(format!(
+            "读取卡片新增内容失败: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let mut additions = Vec::new();
+    for line in stdout.lines() {
+        // 只取新增行（`+` 开头），排除 diff 头 `+++`。
+        let Some(text) = line.strip_prefix('+') else {
+            continue;
+        };
+        if text.starts_with("++") {
+            continue;
+        }
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // 剥掉列表前缀与入块前缀：预览高亮按「纯文本包含」匹配，保留符号会打不中。
+        let normalized = trimmed
+            .trim_start_matches("- ")
+            .trim_start_matches("* ")
+            .trim_start_matches("+ ")
+            .trim();
+        if !normalized.is_empty() {
+            additions.push(normalized.to_string());
+        }
+    }
+    Ok(additions)
+}
+
 
 /// section 标题归一化：去空白、`/` 归并为「与」，让候选的
 /// 「关键实体与数据表」能命中文档里的「关键实体 / 数据表」标题。
@@ -1253,14 +1392,12 @@ fn evidence_note(kind: &EvidenceKind) -> String {
     }
 }
 
-/// 写前把本地未推送的提交补推上去，并在落后远端时先做 `--ff-only` 拉取。
+/// 发布前同步远端：`fetch` 探测后，落后则 `--ff-only` 拉取，分叉则拒绝。
 ///
-/// 返回「是否发生了补推」。任何一步失败都**不阻断**本次沉淀：
-/// 本次写入仍会照常提交，推送失败由调用方按可重试错误处理（本地提交保留）。
-async fn push_pending_commits(target: &KnowledgeTarget) -> Result<bool, String> {
-    // 先 fetch：`@{u}` 是**本地**的远端跟踪引用，不 fetch 就无法知道远端已前进
-    // （实测：上游有别人的新提交时，本地不 fetch 看到的仍是 ahead=1 / behind=0）。
-    // fetch 很便宜（实测一次约 2 s），且这一步的失败不阻断——后续 pull/push 会照实报错。
+/// 第二阶段起，图谱写操作只有「面板确认发布」这一条路径（`publish_knowledge_changes`），
+/// 因此原先附在自动回写里的写前同步逻辑迁移到这里：发布前先让本地跟上远端，
+/// 降低非快进 push 的概率；若已分叉（既领先又落后）则明确拒绝，不硬写。
+async fn sync_graph_before_publish(target: &KnowledgeTarget) -> Result<(), String> {
     let fetched = crate::git::run_git_with_timeout(
         target.graph_dir.clone(),
         vec!["fetch".into(), "origin".into()],
@@ -1268,14 +1405,13 @@ async fn push_pending_commits(target: &KnowledgeTarget) -> Result<bool, String> 
     )
     .await?;
     if !fetched.status.success() {
+        // fetch 失败不阻断（可能离线）：交给后续 push 照实报错。
         eprintln!(
-            "[knowledge] 写前 fetch 失败（继续尝试提交推送）: {}",
+            "[knowledge] 发布前 fetch 失败（继续尝试发布）: {}",
             String::from_utf8_lossy(&fetched.stderr).trim()
         );
+        return Ok(());
     }
-
-    // 落后远端就先 ff-only 拉，降低非快进 push 的概率。
-    // 分叉（既领先又落后）时 pull 会失败——那是需要人工处理的状态，此时**不硬写**。
     let behind = crate::git::run_git_with_timeout(
         target.graph_dir.clone(),
         vec![
@@ -1286,58 +1422,26 @@ async fn push_pending_commits(target: &KnowledgeTarget) -> Result<bool, String> 
         std::time::Duration::from_secs(15),
     )
     .await?;
-    if behind.status.success() {
-        let count = String::from_utf8_lossy(&behind.stdout).trim().to_string();
-        if count != "0" {
-            let pull = crate::git::run_git_with_timeout(
-                target.graph_dir.clone(),
-                vec![
-                    "pull".into(),
-                    "--no-rebase".into(),
-                    "--ff-only".into(),
-                ],
-                std::time::Duration::from_secs(120),
-            )
-            .await?;
-            if !pull.status.success() {
-                return Err(format!(
-                    "图谱仓库落后远端且无法快进（可能有本地改动或已分叉），已停止写入以避免损坏仓库：{}",
-                    String::from_utf8_lossy(&pull.stderr).trim()
-                ));
-            }
-        }
+    if !behind.status.success() {
+        return Ok(()); // 没有 upstream 等：交给后续 push 报错
     }
-
-    // 补推本地未推送的提交（上一次 push 失败留下的）。
-    let ahead = crate::git::run_git_with_timeout(
+    if String::from_utf8_lossy(&behind.stdout).trim() == "0" {
+        return Ok(());
+    }
+    let pull = crate::git::run_git_with_timeout(
         target.graph_dir.clone(),
-        vec!["rev-list".into(), "--count".into(), "@{u}..HEAD".into()],
-        std::time::Duration::from_secs(15),
-    )
-    .await?;
-    if !ahead.status.success() {
-        return Ok(false); // 没有 upstream 等：交给后续 push 报错，不在这里拦截
-    }
-    let pending = String::from_utf8_lossy(&ahead.stdout).trim().to_string();
-    if pending == "0" {
-        return Ok(false);
-    }
-    let push = crate::git::run_git_with_timeout(
-        target.graph_dir.clone(),
-        vec!["push".into()],
+        vec!["pull".into(), "--no-rebase".into(), "--ff-only".into()],
         std::time::Duration::from_secs(120),
     )
     .await?;
-    if !push.status.success() {
+    if !pull.status.success() {
         return Err(format!(
-            "补推未推送的本地提交失败: {}",
-            String::from_utf8_lossy(&push.stderr).trim()
+            "图谱仓库落后远端且无法快进（可能有本地改动或已分叉），已停止发布以避免损坏仓库：{}",
+            String::from_utf8_lossy(&pull.stderr).trim()
         ));
     }
-    Ok(true)
-}
-
-/// 生成本次沉淀的溯源标记：`<图谱>@<UTC 时间戳>.<短随机段>`。
+    Ok(())
+}/// 生成本次沉淀的溯源标记：`<图谱>@<UTC 时间戳>.<短随机段>`。
 /// 与提交信息里的 `kg=<token>` 对应，二者可在 `git log -S` / `git log --grep` 中互相定位。
 ///
 /// 带上随机后缀：毫秒级时间戳在同一毫秒内调用会撞车（实测两次连续调用相同），
@@ -1363,6 +1467,10 @@ fn sediment_trace_token(graph_id: &str) -> String {
 
 /// 在 section 末尾追加一条结构化知识块（只增不改），返回新文件内容。
 ///
+/// 条目正文由 `entry_template` 渲染（模板唯一事实源在 SkillHub
+/// `references/sedimentation-template.md`，调用方一次性取好传入）——写入格式不再硬编码在此，
+/// 改格式只需改技能文件。
+///
 /// section 在 L0 已校验过，但校验与写入之间隔着 L1~L3（可能数分钟、两次模型调用）；
 /// 期间卡片可能被 hub 拉取或人工编辑改动，因此这里必须**重新定位并优雅失败**，
 /// 不能靠 `expect` 在 async 命令里崩溃。
@@ -1371,6 +1479,7 @@ fn append_entry(
     section: &str,
     candidate: &KnowledgeCandidate,
     trace: &str,
+    entry_template: &str,
 ) -> Result<String, String> {
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
@@ -1391,12 +1500,14 @@ fn append_entry(
     if end == 0 || !lines[end - 1].trim().is_empty() {
         block.push(String::new());
     }
-    block.push(format!("- {date} · {}", candidate.content.trim()));
-    block.push(format!("  - 依据：{}", candidate.evidence.trim()));
-    // 可追溯标记：不打扰阅读，且让「自动写入」的条目可被识别（回滚/审计依赖它）。
-    if !trace.is_empty() {
-        block.push(format!("  <!-- kg:{trace} -->"));
-    }
+    let rendered = crate::agent_assist::render_entry_template(
+        entry_template,
+        candidate.content.trim(),
+        candidate.evidence.trim(),
+        &date,
+        trace,
+    );
+    block.extend(rendered.lines().map(str::to_string));
     if end < lines.len() && lines[end].starts_with("## ") {
         block.push(String::new());
     }
@@ -1540,11 +1651,15 @@ async fn run_gate_once(
         .ok_or_else(|| "质量门未返回 <GATE> 结果".to_string())
 }
 
-/// 知识沉淀自动回写：L0 结构 → L1 依据核验 → L2 去重 → L3 语义（双跑）→ 写卡片 → git 提交推送。
+/// 知识沉淀质量门 + **暂存**：L0 结构 → L1 依据核验 → L2 去重 → L3 语义（双跑）→ 写工作区。
+///
+/// **不再自动 commit / push**：门通过的条目只落到 `data/modules/*.md` 工作区（未提交），
+/// 由右侧知识库面板审核后发布（第二阶段「审核发布」语义）。这样写入内容对用户可见、
+/// 可编辑、可丢弃，不再黑盒直写主干。
 ///
 /// 逐条返回结果；门执行失败（超时等）只把该批候选降级为未通过，不影响其他候选。
 #[tauri::command]
-pub async fn knowledge_auto_writeback(
+pub async fn knowledge_stage_writeback(
     project_path: String,
     suggestions: Vec<KnowledgeCandidate>,
     agent: String,
@@ -1686,35 +1801,23 @@ pub async fn knowledge_auto_writeback(
     }
 
     // 写入通过的条目（同模块多次写入按顺序累积）。
-    // 一次性取全部待写入模块的 git 状态，避免每写一条就跑一次 git status。
+    //
+    // 不再做「脏卡检测」：第二阶段起写入只落工作区、由用户审核发布，而**上一次沉淀的
+    // 暂存内容本身就是未提交改动**——保留该检测会把第二批候选全部误拒（同一卡片在任何
+    // 未发布状态下都写不进去）。写入本身是「读当前内容 → 在 section 末尾追加」，从不覆盖
+    // 人工改动，因此不存在此检测原先要防的静默覆盖；重复由 L2/L3 去重兜底（去重语料读的是
+    // 工作区内容，已包含暂存条目）。
     let writable: Vec<usize> = items
         .iter()
         .filter(|item| item.passed)
         .map(|item| item.index)
         .collect();
-    let dirty_modules = if writable.is_empty() {
-        HashSet::new()
-    } else {
-        let modules: Vec<String> = writable
-            .iter()
-            .map(|index| suggestions[*index].module.clone())
-            .collect();
-        dirty_module_cards(&target, &modules).await?
-    };
     // 本次沉淀的溯源标记：同一个 token 写进所有条目，便于按批追溯与回滚。
     let trace_token = sediment_trace_token(&target.id);
-    let mut changed_docs: Vec<PathBuf> = Vec::new();
+    // 写入模板一次性取好（技能库读盘一次），整批条目共用——避免逐条重复读盘。
+    let entry_template = crate::agent_assist::sedimentation_entry_template();
     for index in writable {
         let candidate = &suggestions[index];
-        if dirty_modules.contains(&candidate.module) {
-            if let Some(item) = items.iter_mut().find(|item| item.index == index) {
-                item.passed = false;
-                item.written = false;
-                item.layer = "write".to_string();
-                item.reason = "目标模块卡片存在未提交人工修改".to_string();
-            }
-            continue;
-        }
         // 换行会让内容伪造出 `## ` 标题，把后续条目挂到假 section 下（写入完整性）。
         if candidate.content.contains('\n') || candidate.evidence.contains('\n') {
             if let Some(item) = items.iter_mut().find(|item| item.index == index) {
@@ -1727,12 +1830,15 @@ pub async fn knowledge_auto_writeback(
         let doc = module_doc_path(&target, &candidate.module);
         let current = std::fs::read_to_string(&doc)
             .map_err(|e| format!("写入前读取 {} 失败: {e}", candidate.module))?;
-        let next = append_entry(&current, &candidate.section, candidate, &trace_token)
+        let next = append_entry(
+            &current,
+            &candidate.section,
+            candidate,
+            &trace_token,
+            &entry_template,
+        )
             .map_err(|e| format!("{}: {e}", candidate.module))?;
         std::fs::write(&doc, next).map_err(|e| format!("写入 {} 失败: {e}", candidate.module))?;
-        if !changed_docs.contains(&doc) {
-            changed_docs.push(doc);
-        }
         if let Some(item) = items.iter_mut().find(|item| item.index == index) {
             item.written = true;
             item.layer = "write".to_string();
@@ -1745,79 +1851,25 @@ pub async fn knowledge_auto_writeback(
         }
     }
 
-    // 4) git：先补推未推送的本地提交，再提交本次写入，最后推送。
-    //    「补推」是必须的：push 失败后重跑时，卡片里已有那些条目 ⇒ 会被去重层判为重复
-    //    ⇒ 本次没有新写入 ⇒ 若只依赖「有写入才提交」，那些本地提交会**永远推不上去**。
-    let pushed_before = push_pending_commits(&target).await?;
-
+    // 4) 不再自动提交：通过的条目已落到工作区，等待用户在右侧知识库面板确认发布
+    //    （或按设置走云效审批）。暂存语义下不存在「已有本地提交需要补推」的情况，
+    //    因此原先的 push_pending_commits 补推逻辑整体退役。
     let written_count = items.iter().filter(|i| i.written).count();
-    let mut commit: Option<String> = None;
-    if written_count > 0 {
-        let mut add_args: Vec<String> = vec!["add".into(), "--".into()];
-        for doc in &changed_docs {
-            let rel = doc
-                .strip_prefix(&target.graph_dir)
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            add_args.push(rel);
-        }
-        let add = crate::git::run_git_with_timeout(
-            target.graph_dir.clone(),
-            add_args,
-            std::time::Duration::from_secs(30),
-        )
-        .await?;
-        if !add.status.success() {
-            return Err(format!(
-                "git add 失败: {}",
-                String::from_utf8_lossy(&add.stderr).trim()
-            ));
-        }
-        let message = format!(
-            "docs(knowledge): auto sediment {written_count} entries via Nezha
-
-kg={trace_token}"
-        );
-        let commit_out = crate::git::run_git_with_timeout(
-            target.graph_dir.clone(),
-            vec!["commit".into(), "-m".into(), message.clone()],
-            std::time::Duration::from_secs(30),
-        )
-        .await?;
-        if !commit_out.status.success() {
-            return Err(format!(
-                "git commit 失败: {}",
-                String::from_utf8_lossy(&commit_out.stderr).trim()
-            ));
-        }
-        let push = crate::git::run_git_with_timeout(
-            target.graph_dir.clone(),
-            vec!["push".into()],
-            std::time::Duration::from_secs(120),
-        )
-        .await?;
-        if !push.status.success() {
-            return Err(format!(
-                "已提交但推送失败: {}（本地提交已保留，可手动 push 后关闭议题）",
-                String::from_utf8_lossy(&push.stderr).trim()
-            ));
-        }
-        commit = Some(message);
-    }
 
     let all_passed = items.iter().all(|i| i.passed);
     Ok(KnowledgeWritebackResult {
         items,
         all_passed,
         written_count,
-        commit,
-        pushed_pending: pushed_before,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试统一用内嵌回退模板：不依赖本机技能库是否装好，断言的是渲染逻辑本身。
+    const FALLBACK_TEMPLATE: &str = crate::agent_assist::SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK;
 
     fn sample_target() -> KnowledgeTarget {
         KnowledgeTarget {
@@ -1985,7 +2037,8 @@ commit_prompt = \"x\"
             suggested_title: String::new(),
             knowledge_graph_id: "ICUCIS".into(),
         };
-        let next = append_entry(&sample_doc(), "职责", &candidate, "").expect("追加成功");
+        let next = append_entry(&sample_doc(), "职责", &candidate, "", FALLBACK_TEMPLATE)
+            .expect("追加成功");
         assert!(next.contains("某职责"));
         assert!(!next.contains("<!-- kg:"), "无 token 不应写标记：{next}");
     }
@@ -2003,80 +2056,8 @@ commit_prompt = \"x\"
         assert_ne!(a, b, "同图谱两次调用应生成不同 token");
     }
 
-    /// 真实 git 仓库上的集成检查：`push_pending_commits` 的行为不变量。
-    ///
-    /// 需要 `NEZHA_KG_E2E_REPO` 指向一个图谱写操作仓库。按仓库实际状态断言两种之一：
-    /// - **仅领先**（本地有未推送提交）：必须补推成功，且推完后 `@{u}..HEAD` 为 0；
-    /// - **已分叉**（同时领先与落后）：必须**拒绝**，且**不得**留下 merge / rebase 半成品状态。
-    ///
-    /// 夹具建立方式：`git init --bare origin.git` → clone → 提交并 push → 再本地提交一次
-    /// 即得「仅领先」；在此基础上让另一个 clone 抢先 push 一次即得「已分叉」。
-    #[tokio::test]
-    #[ignore = "需要本机临时 git 仓库（NEZHA_KG_E2E_REPO）"]
-    async fn acceptance_push_pending_commits() {
-        let Ok(repo) = std::env::var("NEZHA_KG_E2E_REPO") else {
-            eprintln!("SKIP: 未设置 NEZHA_KG_E2E_REPO");
-            return;
-        };
-        let target = KnowledgeTarget {
-            id: "T".into(),
-            name: "T".into(),
-            adapter: "dotnet".into(),
-            graph_dir: repo.clone(),
-            skill_dir: repo.clone(),
-            data_dir: repo.clone(),
-            ready: true,
-            scan_available: false,
-        };
-        let count = |spec: &str| {
-            let repo = repo.clone();
-            let spec = spec.to_string();
-            async move {
-                let out = crate::git::run_git_with_timeout(
-                    repo,
-                    vec!["rev-list".into(), "--count".into(), spec],
-                    std::time::Duration::from_secs(15),
-                )
-                .await
-                .expect("读取提交计数");
-                String::from_utf8_lossy(&out.stdout).trim().to_string()
-            }
-        };
-
-        // 先 fetch 一次，让后面的 ahead/behind 判定基于最新远端状态。
-        let _ = crate::git::run_git_with_timeout(
-            repo.clone(),
-            vec!["fetch".into(), "origin".into()],
-            std::time::Duration::from_secs(120),
-        )
-        .await;
-        let ahead0 = count("@{u}..HEAD").await;
-        let behind0 = count("HEAD..@{u}").await;
-        println!("初始 ahead={ahead0} behind={behind0}");
-
-        let result = push_pending_commits(&target).await;
-
-        if behind0 == "0" {
-            // 仅领先：应补推成功。
-            assert!(result.is_ok(), "仅领先时应补推成功：{result:?}");
-            assert_eq!(count("@{u}..HEAD").await, "0", "补推后应无未推送提交");
-        } else {
-            // 已分叉：必须拒绝，且不留下 merge/rebase 状态。
-            assert!(result.is_err(), "分叉时应拒绝写入：{result:?}");
-            let msg = result.unwrap_err();
-            assert!(msg.contains("无法快进") || msg.contains("分叉"), "{msg}");
-            for marker in [".git/MERGE_HEAD", ".git/rebase-merge", ".git/rebase-apply"] {
-                assert!(
-                    !std::path::Path::new(&repo).join(marker).exists(),
-                    "拒绝后不应留下半成品状态：{marker}"
-                );
-            }
-            assert_eq!(count("@{u}..HEAD").await, ahead0, "本地提交应保留");
-        }
-    }
-
     /// 自动沉淀的候选抽取：从契约产物到写入候选的转换必须保持字段与图谱绑定。
-    /// （真正的写入由 `knowledge_auto_writeback` 负责，此处只验转换与前置判定。）
+    /// （真正的写入由 `knowledge_stage_writeback` 负责，此处只验转换与前置判定。）
     #[test]
     fn auto_sediment_skips_when_contract_says_skipped() {
         let raw = r#"{"version":1,"skipped":true,"skipReason":"仅样式调整"}"#;
@@ -2121,8 +2102,7 @@ commit_prompt = \"x\"
         let result = empty_writeback_result();
         assert!(result.all_passed);
         assert_eq!(result.written_count, 0);
-        assert!(result.commit.is_none());
-        assert!(!result.pushed_pending);
+        assert!(result.items.is_empty());
     }
 
     fn item(layer: &str, passed: bool) -> KnowledgeWritebackItem {
@@ -2158,30 +2138,30 @@ commit_prompt = \"x\"
                 at: 1,
                 task_id: "t1".into(),
                 graph_id: "HIS".into(),
+                trigger: "auto".into(),
                 status: "ok".into(),
                 written: 2,
                 rejected_by_layer: HashMap::from([("L2".to_string(), 1)]),
-                pushed_pending: true,
                 error: None,
             },
             KnowledgeMetricRecord {
                 at: 2,
                 task_id: "t2".into(),
                 graph_id: "HIS".into(),
+                trigger: "manual".into(),
                 status: "skipped".into(),
                 written: 0,
                 rejected_by_layer: HashMap::new(),
-                pushed_pending: false,
                 error: None,
             },
             KnowledgeMetricRecord {
                 at: 3,
                 task_id: "t3".into(),
                 graph_id: "HIS".into(),
+                trigger: "auto".into(),
                 status: "failed".into(),
                 written: 0,
                 rejected_by_layer: HashMap::new(),
-                pushed_pending: false,
                 error: Some("未产出知识沉淀产物".into()),
             },
         ];
@@ -2192,7 +2172,8 @@ commit_prompt = \"x\"
         assert_eq!(summary.failed_runs, 1);
         assert_eq!(summary.written_total, 2);
         assert_eq!(summary.rejected_by_layer.get("L2"), Some(&1));
-        assert_eq!(summary.pushed_pending_runs, 1);
+        assert_eq!(summary.runs_by_trigger.get("auto"), Some(&2));
+        assert_eq!(summary.runs_by_trigger.get("manual"), Some(&1));
     }
 
     #[test]
@@ -2201,10 +2182,10 @@ commit_prompt = \"x\"
             at: 42,
             task_id: "t".into(),
             graph_id: "HIS".into(),
+            trigger: "auto".into(),
             status: "ok".into(),
             written: 1,
             rejected_by_layer: HashMap::from([("L3".to_string(), 2)]),
-            pushed_pending: false,
             error: None,
         };
         let line = serde_json::to_string(&record).unwrap();
@@ -2213,6 +2194,16 @@ commit_prompt = \"x\"
         let back: KnowledgeMetricRecord = serde_json::from_str(&line).unwrap();
         assert_eq!(back.task_id, "t");
         assert_eq!(back.rejected_by_layer.get("L3"), Some(&2));
+        assert_eq!(back.trigger, "auto");
+    }
+
+    /// 旧记录没有 `trigger` 字段（历史记录都来自自动路径），必须回落为 `auto`，
+    /// 否则读取既有 JSONL 会整体反序列化失败、指标清零。
+    #[test]
+    fn legacy_metric_record_without_trigger_defaults_to_auto() {
+        let legacy = r#"{"at":1,"taskId":"t1","graphId":"HIS","status":"ok","written":1,"rejectedByLayer":{},"error":null}"#;
+        let record: KnowledgeMetricRecord = serde_json::from_str(legacy).expect("旧记录应可读");
+        assert_eq!(record.trigger, "auto");
     }
 
     #[test]
@@ -2295,23 +2286,30 @@ commit_prompt = \"x\"
             suggested_title: String::new(),
             knowledge_graph_id: "HIS".into(),
         };
-        let next = append_entry(&sample_doc(), &candidate.section, &candidate, "ICUCIS@20260917T000000.000Z")
-            .expect("追加成功");
+        let next = append_entry(
+            &sample_doc(),
+            &candidate.section,
+            &candidate,
+            "ICUCIS@20260917T000000.000Z",
+            FALLBACK_TEMPLATE,
+        )
+        .expect("追加成功");
         let in_section = next
             .split("## 业务规则 / 已知坑")
             .nth(1)
             .and_then(|rest| rest.split("## 验证记录").next())
             .unwrap_or_default();
         assert!(in_section.contains("缓存键必须带租户前缀"));
-        assert!(in_section.contains("依据：Hsp.BaseData.Cache.Bll/CacheService.cs:42"));
+        assert!(in_section.contains("来源：Hsp.BaseData.Cache.Bll/CacheService.cs:42"));
         // 可追溯标记：自动写入的条目可被识别，回滚/审计依赖它。
         assert!(
             in_section.contains("<!-- kg:ICUCIS@20260917T000000.000Z -->"),
             "应带溯源标记：{in_section}"
         );
-        // 条目格式：`- <日期> · <内容>`，不再写入恒定的「已确认」（只有 confirmed 能过门）。
+        // 条目格式由模板渲染（SkillHub `sedimentation-template.md`，此处取内嵌回退）：
+        // 来源内联对齐 `module-card-guide.md` 的人工条目风格，不再写恒定的「已确认」。
         assert!(!in_section.contains("已确认"), "{in_section}");
-        assert!(in_section.contains("· 缓存键必须带租户前缀") || in_section.contains("缓存键必须带租户前缀"));
+        assert!(in_section.contains("缓存键必须带租户前缀（来源："), "{in_section}");
         // 只增不改：原有内容仍在。
         assert!(next.contains("（待补充）"));
     }
@@ -2328,7 +2326,8 @@ commit_prompt = \"x\"
             suggested_title: String::new(),
             knowledge_graph_id: "HIS".into(),
         };
-        let err = append_entry(&sample_doc(), "不存在的 section", &candidate, "").unwrap_err();
+        let err = append_entry(&sample_doc(), "不存在的 section", &candidate, "", FALLBACK_TEMPLATE)
+            .unwrap_err();
         assert!(err.contains("已在判定期间变更"), "{err}");
     }
 

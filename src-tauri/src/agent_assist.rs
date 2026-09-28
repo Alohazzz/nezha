@@ -490,8 +490,89 @@ pub async fn generate_task_name(
 
 /// 技能里承载沉淀契约的参考文件（相对技能目录）。
 pub(crate) const SEDIMENTATION_CONTRACT_REFERENCE: &str = "references/sedimentation.md";
+/// 技能里承载「条目写入模板」的参考文件（相对技能目录）。
+///
+/// 该文件**正文即模板本体**（不套代码围栏、不写散文），让写入格式有唯一事实源、
+/// 随 hub 热更新；散文说明住在 `sedimentation.md` 与 `module-card-guide.md`。
+pub(crate) const SEDIMENTATION_TEMPLATE_REFERENCE: &str = "references/sedimentation-template.md";
 /// 承载契约的技能名。
 pub(crate) const SEDIMENTATION_CONTRACT_SKILL: &str = "knowledge-graph";
+
+/// 条目写入模板的内嵌回退（技能库未配置 / 模板读不到 / 模板不合法时使用）。
+///
+/// 必须与 SkillHub 的模板等价，否则离线环境下写出的格式会与在线不一致。
+/// 对齐 `module-card-guide.md` 的「来源内联」写法（人工条目既有风格），
+/// 并保留 `kg:` 标记行以便区分自动/人工条目（回滚与审计依赖它）。
+pub(crate) const SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK: &str =
+    "- {content}（来源：{evidence}，{date}）\n  <!-- kg:{trace} -->";
+
+/// 渲染一条知识条目的写入文本（按模板替换占位符）。
+///
+/// `trace` 为空时，含 `{trace}` 的整行会被丢弃——保持「无标记」的既有行为，
+/// 而不是写出 `<!-- kg: -->` 这样的空标记。
+pub(crate) fn render_entry_template(
+    template: &str,
+    content: &str,
+    evidence: &str,
+    date: &str,
+    trace: &str,
+) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in template.lines() {
+        if trace.is_empty() && line.contains("{trace}") {
+            continue;
+        }
+        out.push(
+            line.replace("{date}", date)
+                .replace("{content}", content)
+                .replace("{evidence}", evidence)
+                .replace("{trace}", trace),
+        );
+    }
+    out.join("\n")
+}
+
+/// 校验技能模板可用；不合格时由调用方回退内嵌默认值（返回 `Err` 而非 panic，
+/// 沉淀流程不因模板问题中断）。
+///
+/// 三条硬约束：
+/// - 四个占位符齐备（缺任一则渲染会漏字段）；
+/// - 任何行不得以 `## ` 开头（否则条目会伪造出 section 标题，破坏卡片结构）；
+/// - 渲染后行数 ≤ 5（防模板失控膨胀卡片）。
+pub(crate) fn validate_entry_template(template: &str) -> Result<(), String> {
+    for placeholder in ["{date}", "{content}", "{evidence}", "{trace}"] {
+        if !template.contains(placeholder) {
+            return Err(format!("模板缺少占位符 {placeholder}"));
+        }
+    }
+    if template.lines().any(|line| line.starts_with("## ")) {
+        return Err("模板行不得以 `## ` 开头（会伪造 section 标题）".to_string());
+    }
+    let line_count = template.lines().count();
+    if line_count > 5 {
+        return Err(format!("模板行数 {line_count} 超出上限 5"));
+    }
+    Ok(())
+}
+
+/// 取条目写入模板：优先技能库热更新版本，读不到 / 不合法时回退内嵌默认。
+///
+/// 与 [`sedimentation_contract_block`] 同一开关思路——格式的单一事实源在 SkillHub，
+/// 但 Nezha 必须能在 hub 缺失时独立工作。
+pub(crate) fn sedimentation_entry_template() -> String {
+    if let Some(path) = crate::skills::read_skill_reference_path(
+        SEDIMENTATION_CONTRACT_SKILL,
+        SEDIMENTATION_TEMPLATE_REFERENCE,
+    ) {
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() && validate_entry_template(trimmed).is_ok() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK.to_string()
+}
 /// 承载契约文件路径的环境变量名（由 `knowledge::knowledge_env_for_project` 注入）。
 pub(crate) const SEDIMENTATION_CONTRACT_ENV: &str = "NEZHA_KNOWLEDGE_SEDIMENTATION_CONTRACT";
 
@@ -2079,6 +2160,64 @@ mod tests {
         assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("$NEZHA_TASK_ID"));
         assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("skipped"));
         assert!(SESSION_SEDIMENTATION_CONTRACT_FALLBACK.contains("skipReason"));
+    }
+
+    /// 内嵌回退模板必须自带全部占位符且自身合法——它是 hub 缺失时的唯一格式来源。
+    #[test]
+    fn fallback_entry_template_is_valid_and_has_all_placeholders() {
+        validate_entry_template(SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK).expect("回退模板应合法");
+        for placeholder in ["{date}", "{content}", "{evidence}", "{trace}"] {
+            assert!(
+                SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK.contains(placeholder),
+                "回退模板缺少 {placeholder}"
+            );
+        }
+    }
+
+    /// 渲染：占位符替换到位，且 `trace` 为空时丢弃整条标记行（不写空标记）。
+    #[test]
+    fn render_entry_template_substitutes_and_drops_empty_trace_line() {
+        let rendered = render_entry_template(
+            SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK,
+            "缓存键必须带租户前缀",
+            "CacheService.cs:42",
+            "2026-09-28",
+            "HIS@20260928T000000.000Z.abcd1234",
+        );
+        assert!(rendered.contains("缓存键必须带租户前缀"));
+        assert!(rendered.contains("来源：CacheService.cs:42，2026-09-28"));
+        assert!(rendered.contains("<!-- kg:HIS@20260928T000000.000Z.abcd1234 -->"));
+        // 占位符不得残留。
+        assert!(!rendered.contains('{'), "占位符未替换：{rendered}");
+
+        let untraced = render_entry_template(
+            SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK,
+            "某规则",
+            "X.cs",
+            "2026-09-28",
+            "",
+        );
+        assert!(!untraced.contains("<!-- kg:"), "空 trace 不应产生标记行：{untraced}");
+        assert!(!untraced.contains('{'), "占位符未替换：{untraced}");
+    }
+
+    /// 模板校验：缺占位符 / 含 `## ` 抬头 / 行数超限都必须被拒，避免坏模板破坏卡片结构。
+    #[test]
+    fn validate_entry_template_rejects_malformed_templates() {
+        assert!(validate_entry_template("- {content}（来源：{evidence}，{date}）").is_err());
+        assert!(validate_entry_template(
+            "- {content}\n## 伪造标题\n{evidence}{date}{trace}"
+        )
+        .is_err());
+        let too_many = ["{content}{evidence}{date}{trace}"]
+            .iter()
+            .chain(std::iter::repeat(&"x").take(6))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(validate_entry_template(&too_many).is_err());
+        // 合法模板应通过。
+        assert!(validate_entry_template(SEDIMENTATION_ENTRY_TEMPLATE_FALLBACK).is_ok());
     }
 
 
