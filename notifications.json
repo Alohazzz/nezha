@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.27.1",
+      "level": "info",
+      "title": "Nezha v0.27.1 released",
+      "body": "1. 手工沉淀全部被拒可重试（#101/#103）：此前只要质量门跑完（哪怕全部候选被拒）就写消费标记并删除 knowledge.json，被拒候选不可恢复。现在全部被拒时保留草稿、写 knowledge.rejected.json（逐条 module/section/layer/reason），用户改写草稿后（mtime 晚于拒绝标记）前端轮询自动重试；有写入/跳过仍维持「消费标记 + 清理产物」终局语义。拒绝原因随指标落盘（rejectedItems，向后兼容旧 JSONL）。\n2. L3 质量门 headless 调用与项目上下文隔离（#102）：业务仓库的 AGENTS.md 强指令、项目级 MCP servers 不再进入门判定上下文（codex 传 project_doc_max_bytes=0，claude 传 --strict-mcp-config）；交互式任务与 writer 路径不受影响。\n3. 发起合并请求前预检源分支新鲜度：本地落后/分叉于远端时不再产生推送副作用，直接给出可操作的中文回执（先 pull --ff-only 同步再发起）；push 仍被拒时把 non-fast-forward 翻译成中文指引。codeup_create_mr 与批量链路共用。",
+      "body_zh": "1. 手工沉淀全部被拒可重试（#101/#103）：此前只要质量门跑完（哪怕全部候选被拒）就写消费标记并删除 knowledge.json，被拒候选不可恢复。现在全部被拒时保留草稿、写 knowledge.rejected.json（逐条 module/section/layer/reason），用户改写草稿后（mtime 晚于拒绝标记）前端轮询自动重试；有写入/跳过仍维持「消费标记 + 清理产物」终局语义。拒绝原因随指标落盘（rejectedItems，向后兼容旧 JSONL）。\n2. L3 质量门 headless 调用与项目上下文隔离（#102）：业务仓库的 AGENTS.md 强指令、项目级 MCP servers 不再进入门判定上下文（codex 传 project_doc_max_bytes=0，claude 传 --strict-mcp-config）；交互式任务与 writer 路径不受影响。\n3. 发起合并请求前预检源分支新鲜度：本地落后/分叉于远端时不再产生推送副作用，直接给出可操作的中文回执（先 pull --ff-only 同步再发起）；push 仍被拒时把 non-fast-forward 翻译成中文指引。codeup_create_mr 与批量链路共用。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.27.1",
+      "created_at": "2026-09-28",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.27.0",
       "level": "info",
       "title": "Nezha v0.27.0 released",
