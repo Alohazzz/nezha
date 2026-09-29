@@ -395,6 +395,28 @@ const deliveryPlan = {
   // 禁用按钮的悬停提示载体：disabled 的 button 不派发 hover，title 只能挂在包裹层上。
   dpBtnWrap: { display: "inline-flex" as const },
   dpSpacer: { flex: 1 },
+  // 关联方案列：chip + 定位按钮成组，组间距大于组内间距。
+  dpSchemeChipGroup: {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    marginRight: 8,
+  },
+  dpSchemeLocateBtn: {
+    display: "inline-flex" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    width: 18,
+    height: 18,
+    padding: 0,
+    marginLeft: 2,
+    borderRadius: 4,
+    border: "1px solid transparent",
+    background: "transparent",
+    color: "var(--text-hint)",
+    cursor: "pointer",
+    opacity: 0.6,
+    transition: "color 0.12s, opacity 0.12s, background 0.12s",
+  },
 } satisfies Record<string, React.CSSProperties>;
 
 /** chip 色调 → 样式键（mockup .chip.ok/.warn/.err/.ac）。 */
