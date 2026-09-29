@@ -1,6 +1,18 @@
 {
   "notifications": [
     {
+      "id": "v0.28.0",
+      "level": "info",
+      "title": "Nezha v0.28.0 released",
+      "body": "1. 关联方案列去重：孤儿 draft（讨论任务被删/对话框泄漏的残留）不再展示、不再参与议题状态派生；多议题方案 chip 显示完整名称（如「QHDK-30487 等 3 项联合方案」）。\n2. 方案 chip 可点开预览：复用方案看板预览组件，弹窗内查看 plan.md 正文与讨论图片，支持删除方案。\n3. 方案 → 任务窗口一键定位：方案下有执行任务时 chip 旁出现定位按钮，点击直达该项目工作区并选中最新一条执行任务的终端窗口。",
+      "body_zh": "1. 关联方案列去重：孤儿 draft（讨论任务被删/对话框泄漏的残留）不再展示、不再参与议题状态派生；多议题方案 chip 显示完整名称（如「QHDK-30487 等 3 项联合方案」）。\n2. 方案 chip 可点开预览：复用方案看板预览组件，弹窗内查看 plan.md 正文与讨论图片，支持删除方案。\n3. 方案 → 任务窗口一键定位：方案下有执行任务时 chip 旁出现定位按钮，点击直达该项目工作区并选中最新一条执行任务的终端窗口。",
+      "url": "https://github.com/Alohazzz/nezha/releases/tag/v0.28.0",
+      "created_at": "2026-09-29",
+      "expires_at": null,
+      "min_app_version": null,
+      "max_app_version": null
+    },
+    {
       "id": "v0.27.1",
       "level": "info",
       "title": "Nezha v0.27.1 released",
