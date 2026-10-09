@@ -2479,6 +2479,8 @@ pub const PLAN_DEV_STATUS_NAME: &str = "待开发";
 pub const PLAN_PENDING_STATUS_NAME: &str = "待处理";
 /// 「计划完成时间」自定义字段的约定名（与 `YUNXIAO_PLAN_END_FIELD_NAME` 同一约定，Rust 侧独立成常量）。
 pub const PLAN_END_FIELD_NAME: &str = "计划完成时间";
+/// 「计划开始时间」自定义字段的约定名：工作流切「待开发」时云效侧校验必填。
+pub const PLAN_START_FIELD_NAME: &str = "计划开始时间";
 
 /// 毫秒时间戳 → 云效自定义日期字段值（`yyyy-MM-dd 00:00:00`，本地时区零点）。
 fn plan_end_field_value(plan_end_ms: i64) -> String {
@@ -2490,20 +2492,28 @@ fn plan_end_field_value(plan_end_ms: i64) -> String {
         .unwrap_or_default()
 }
 
+/// 「计划开始时间」默认取加入当天（本地时区零点，与日期字段格式约定一致）。
+fn plan_start_default_value() -> String {
+    chrono::Local::now().format("%Y-%m-%d 00:00:00").to_string()
+}
+
 /// 查工作项类型的字段配置并按名称解析字段 ID（带缓存；与价值评分同套路）。
-async fn fetch_plan_end_field_id(
+/// 缓存 key 含字段名——「计划开始/完成时间」两个日期字段共用此函数。
+async fn fetch_plan_date_field_id(
     client: &reqwest::Client,
     token: &str,
     organization_id: &str,
     project_id: &str,
     workitem_type_id: &str,
+    field_name: &str,
 ) -> Result<String, String> {
-    static CACHE: LazyLock<Mutex<HashMap<(String, String, String), String>>> =
+    static CACHE: LazyLock<Mutex<HashMap<(String, String, String, String), String>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
     let key = (
         organization_id.to_string(),
         project_id.to_string(),
         workitem_type_id.to_string(),
+        field_name.to_string(),
     );
     if let Some(cached) = CACHE.lock().get(&key) {
         return Ok(cached.clone());
@@ -2514,14 +2524,53 @@ async fn fetch_plan_end_field_id(
     let bytes = get_yunxiao_json(client, token, url).await?;
     let configs: Vec<YunxiaoFieldConfig> =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析云效字段配置失败: {e}"))?;
-    let field_id = find_field_config_by_name(&configs, PLAN_END_FIELD_NAME)
+    let field_id = find_field_config_by_name(&configs, field_name)
         .map(str::to_string)
-        .ok_or_else(|| format!("议题类型未配置「{PLAN_END_FIELD_NAME}」字段"))?;
+        .ok_or_else(|| format!("议题类型未配置「{field_name}」字段"))?;
     CACHE.lock().insert(key, field_id.clone());
     Ok(field_id)
 }
 
-/// 单条议题的「添加到计划」回写：计划完成时间 + 负责人（当前令牌用户）+ 状态（待开发）。
+/// 「计划完成时间」字段 ID 解析的便捷封装。
+async fn fetch_plan_end_field_id(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+    workitem_type_id: &str,
+) -> Result<String, String> {
+    fetch_plan_date_field_id(
+        client,
+        token,
+        organization_id,
+        project_id,
+        workitem_type_id,
+        PLAN_END_FIELD_NAME,
+    )
+    .await
+}
+
+/// 「计划开始时间」字段 ID 解析的便捷封装。
+async fn fetch_plan_start_field_id(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+    workitem_type_id: &str,
+) -> Result<String, String> {
+    fetch_plan_date_field_id(
+        client,
+        token,
+        organization_id,
+        project_id,
+        workitem_type_id,
+        PLAN_START_FIELD_NAME,
+    )
+    .await
+}
+
+/// 单条议题的「添加到计划」回写：计划开始/完成时间 + 负责人（当前令牌用户）+ 状态（待开发）。
+/// 开始时间默认取加入当天（云效工作流切「待开发」时校验必填，不写会 400）。
 /// 顺序执行，任一步失败即返回 Err（调用方阻断本次添加）。
 pub async fn writeback_issue_add_to_plan(
     client: &reqwest::Client,
@@ -2545,6 +2594,19 @@ pub async fn writeback_issue_add_to_plan(
     )
     .await
     .map_err(|e| format!("回写计划完成时间失败: {e}"))?;
+    let start_field_id =
+        fetch_plan_start_field_id(client, token, organization_id, &project_id, &workitem_type_id)
+            .await?;
+    update_workitem_field_json(
+        client,
+        token,
+        organization_id,
+        workitem_id,
+        &start_field_id,
+        serde_json::Value::String(plan_start_default_value()),
+    )
+    .await
+    .map_err(|e| format!("回写计划开始时间失败: {e}"))?;
     let user_id = fetch_current_user_id(client, token).await?;
     update_workitem_field_json(
         client,
@@ -2572,7 +2634,7 @@ pub async fn writeback_issue_add_to_plan(
     Ok(())
 }
 
-/// 单条议题的「移出计划」回写：状态回退（待处理）+ 清空计划完成时间；负责人不动。
+/// 单条议题的「移出计划」回写：状态回退（待处理）+ 清空计划开始/完成时间；负责人不动。
 /// 顺序执行，任一步失败即返回 Err（调用方阻断移除、本地成员不动）。
 pub async fn writeback_issue_remove_from_plan(
     client: &reqwest::Client,
@@ -2596,6 +2658,21 @@ pub async fn writeback_issue_remove_from_plan(
     )
     .await
     .map_err(|e| format!("清空计划完成时间失败: {e}"))?;
+    if let Ok(start_field_id) =
+        fetch_plan_start_field_id(client, token, organization_id, &project_id, &workitem_type_id)
+            .await
+    {
+        update_workitem_field_json(
+            client,
+            token,
+            organization_id,
+            workitem_id,
+            &start_field_id,
+            serde_json::Value::String(String::new()),
+        )
+        .await
+        .map_err(|e| format!("清空计划开始时间失败: {e}"))?;
+    }
     let status_id = find_status_id_by_name(
         client,
         token,
@@ -2693,6 +2770,12 @@ mod tests {
         let utc = chrono::DateTime::parse_from_rfc3339("2026-10-14T16:00:00Z").unwrap();
         let ms = utc.with_timezone(&chrono::Local).timestamp_millis();
         assert_eq!(plan_end_field_value(ms), "2026-10-15 00:00:00");
+    }
+
+    #[test]
+    fn plan_start_default_value_is_today_midnight() {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert_eq!(plan_start_default_value(), format!("{today} 00:00:00"));
     }
 
     #[test]

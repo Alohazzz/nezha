@@ -99,8 +99,8 @@ export function AddToPlanDialog({
         </div>
         <div style={s.bbCheckHint}>
           将加入 {issues.length} 个议题：{issues.map((i) => i.serialNumber).join("、")}
-          。顺序＝当前勾选顺序。加入时会把计划完成时间、负责人（当前用户）写入云效，
-          议题状态置为「待开发」；已是「待开发」的议题会被拒绝。
+          。顺序＝当前勾选顺序。加入时会把计划完成时间、计划开始时间（默认当天）、
+          负责人（当前用户）写入云效，议题状态置为「待开发」；已是「待开发」的议题会被拒绝。
         </div>
         {error && <div style={s.bbError}>{error}</div>}
         <div style={s.bbDialogActions}>

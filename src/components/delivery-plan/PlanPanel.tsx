@@ -304,7 +304,7 @@ export function PlanPanel({
   async function handleRemoveIssue(workitemId: string) {
     if (!selected || !project) return;
     try {
-      // 移出前要回写云效（状态回退待处理 + 清计划完成时间），先确保云效连接可用。
+      // 移出前要回写云效（状态回退待处理 + 清计划开始/完成时间），先确保云效连接可用。
       const settings = await ensureYunxiaoSettings();
       if (!settings.token || !settings.organizationId) {
         setNotice("未连接云效，无法同步「移出计划」的状态回退；请先在设置中配置令牌");
