@@ -115,7 +115,7 @@
           <div class="nz-step"><span class="nz-step-no">03</span><span class="nz-step-name">并行执行</span><span class="nz-step-desc">按依赖拓扑串行放行</span></div>
           <div class="nz-step"><span class="nz-step-no">04</span><span class="nz-step-name">合并审核</span><span class="nz-step-desc">Agent 先读一遍代码</span></div>
           <div class="nz-step"><span class="nz-step-no">05</span><span class="nz-step-name">回写云效</span><span class="nz-step-desc">开发向 / 测试向双评论</span></div>
-          <div class="nz-step"><span class="nz-step-no">06</span><span class="nz-step-name">知识沉淀</span><span class="nz-step-desc">结论回到模块卡片</span></div>
+          <div class="nz-step"><span class="nz-step-no">06</span><span class="nz-step-name">知识沉淀</span><span class="nz-step-desc">结论过门后回填卡片</span></div>
           <div class="nz-step nz-step-reentry">
             <span class="nz-step-no accent">↺</span>
             <span class="nz-step-name accent">补录议题</span>
@@ -400,32 +400,32 @@
         <div class="sub-card">
           <i data-lucide="log-in" class="lucide"></i>
           <span class="nb-corner">01</span>
-          <h4 class="ttl">入口</h4>
-          <p class="desc">任务 <span class="mono">done</span> 且云效绑定时，详情头部出现「沉淀知识」按钮。</p>
+          <h4 class="ttl">产出入口</h4>
+          <p class="desc">云效议题执行任务收尾自动产出；会话中可调用 <span class="mono">knowledge-sediment-now</span> 手工触发，共用同一份沉淀契约。</p>
         </div>
         <div class="sub-card">
           <i data-lucide="file-search" class="lucide"></i>
           <span class="nb-corner">02</span>
-          <h4 class="ttl">生成候选</h4>
-          <p class="desc">读取 <span class="mono">knowledge-sedimentation</span> 技能，按「卡片六段骨架」判优先级；门槛 = 有依据（代码 / 文档 / 用户确认）。</p>
+          <h4 class="ttl">四层质量门</h4>
+          <p class="desc">L0 结构 → L1 依据 → L2 去重 → L3 语义，宁缺毋滥；全拒保留草稿、逐条给理由，改写后可重试。</p>
         </div>
         <div class="sub-card">
           <i data-lucide="list-checks" class="lucide"></i>
           <span class="nb-corner">03</span>
-          <h4 class="ttl">预览与编辑</h4>
-          <p class="desc">逐条可改内容、依据、标题、置信度，可勾选要创建的候选；无有效候选时可重新生成。</p>
+          <h4 class="ttl">暂存与预览</h4>
+          <p class="desc">过门条目只写工作区，不自动提交；面板以红点、「已改」徽标和预览高亮提醒，可继续编辑。</p>
         </div>
         <div class="sub-card">
           <i data-lucide="ticket-check" class="lucide"></i>
           <span class="nb-corner">04</span>
-          <h4 class="ttl">创建审核议题</h4>
-          <p class="desc">逐条创建到「知识库图谱」项目，标题 <span class="mono">【知识沉淀】&lt;模块id&gt;-&lt;知识点摘要&gt;</span>，创建前按标题关键词去重。</p>
+          <h4 class="ttl">审核发布</h4>
+          <p class="desc">在右侧「知识库」面板确认：提交并推送，或全部丢弃；发布前先同步远端。</p>
         </div>
         <div class="sub-card">
           <i data-lucide="shield-check" class="lucide"></i>
           <span class="nb-corner">05</span>
-          <h4 class="ttl">自动回写（默认关）</h4>
-          <p class="desc">开启后过质量门 → <span class="nz-em">只增不改</span>地追加进模块卡片、推送技能库、议题置「已完成」；不覆盖未提交的手工改动。</p>
+          <h4 class="ttl">发布方式</h4>
+          <p class="desc">「知识沉淀」开关只选落库方式：开 = 直接提交推送；关 = 创建云效审核议题，人工审核后更新图谱。</p>
         </div>
         <div class="sub-card">
           <i data-lucide="git-branch" class="lucide"></i>
@@ -469,8 +469,8 @@
             <span class="nz-layer-key"></span>
             <div>
               <div class="t-cat">外圈 · 维护侧</div>
-              <h4 class="nz-force-ttl">技能仓库与审核议题</h4>
-              <p class="t-body-sm">卡片随技能仓库统一 git 管理；新增知识先落成云效审核议题，有审核人把关才入库。</p>
+              <h4 class="nz-force-ttl">技能仓库与审核发布</h4>
+              <p class="t-body-sm">卡片随技能仓库统一 git 管理；暂存内容在面板确认后提交推送，或按设置创建云效审核议题。</p>
             </div>
           </div>
         </div>
@@ -618,8 +618,8 @@
           <div style="display:grid;grid-template-columns:auto minmax(0,1fr);gap:2vw;align-items:start;padding:2.4vh 0;border-top:1px solid var(--border-subtle);border-bottom:2px solid var(--accent)">
             <div style="font-family:var(--sans);font-weight:200;font-size:min(4.2vw,7.4vh);line-height:.9;color:var(--accent)">03</div>
             <div>
-              <h3 class="nz-take-ttl accent">一句轻量规划</h3>
-              <p class="t-body-sm">知识沉淀从「默认关闭」切到逐步铺开——有依据、有人审才入库，节奏可控。</p>
+              <h3 class="nz-take-ttl accent">知识沉淀有闸门</h3>
+              <p class="t-body-sm">从「门过即写」切到「暂存 → 审核发布」——有依据、先过门、再过眼。</p>
             </div>
           </div>
         </div>
