@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Search, Sparkles, X } from "lucide-react";
+import { Plus, Search, Sparkles, X } from "lucide-react";
 import type { DeliveryPlan,
   AgentType,
   PermissionMode,
@@ -19,6 +19,7 @@ import {
 } from "../app-settings/types";
 import {
   collectOccupiedYunxiaoWorkitemIds,
+  getYunxiaoProduct,
   isYunxiaoWorkitemImported,
 } from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
@@ -39,6 +40,8 @@ import s from "../../styles";
 
 const PAGE_SIZE = 100;
 const YUNXIAO_LAST_PROJECT_KEY = "nezha:yunxiaoLastProjectId";
+/** 产品过滤候选的按项目缓存（议题 product 字段去重积累，跨会话复用）。 */
+const YUNXIAO_PRODUCTS_PREFIX = "nezha:yunxiaoProducts:";
 /** 多选软上限：讨论会话上下文与图片量的现实约束，超出仅提醒不阻断已选项。 */
 const PLAN_SELECT_SOFT_LIMIT = 10;
 
@@ -215,6 +218,68 @@ export function YunxiaoView({
     setPage(0);
     loadIssues(1, false);
   }, [configured, connectMode, settingsLoaded, filtersReady, category, conditions, loadIssues]);
+
+  // ── 产品过滤候选：「所属产品」是自定义字段（实测探明：搜索响应无顶层 product 键），
+  // 从议题 customFieldValues 按字段 ID 提取去重，localStorage 按项目持久化跨会话复用。 ──
+  const [productOptions, setProductOptions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!settings.projectId) return;
+    try {
+      const raw = localStorage.getItem(`${YUNXIAO_PRODUCTS_PREFIX}${settings.projectId}`);
+      const saved = raw ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(saved)) {
+        setProductOptions(saved.filter((x): x is string => typeof x === "string" && x.length > 0));
+        return;
+      }
+    } catch {
+      // 缓存损坏时从头积累
+    }
+    setProductOptions([]);
+  }, [settings.projectId]);
+
+  // 每次议题列表更新后，从 customFieldValues 里的产品名扩充候选并写回缓存。
+  useEffect(() => {
+    if (issues.length === 0 || !settings.projectId || !filters.productFieldId) return;
+    setProductOptions((prev) => {
+      const seen = new Set(prev);
+      let added = false;
+      for (const issue of issues) {
+        const product = getYunxiaoProduct(issue, filters.productFieldId ?? undefined)?.trim();
+        if (product && !seen.has(product)) {
+          seen.add(product);
+          added = true;
+        }
+      }
+      if (!added) return prev;
+      const next = [...seen];
+      try {
+        localStorage.setItem(
+          `${YUNXIAO_PRODUCTS_PREFIX}${settings.projectId}`,
+          JSON.stringify(next),
+        );
+      } catch {
+        // 缓存写失败不阻断过滤
+      }
+      return next;
+    });
+  }, [issues, settings.projectId, filters.productFieldId]);
+
+  // 产品过滤：本地执行（服务端 conditions 对自定义字段按文本过滤实测不可用：
+  // CONTAINS 恒 0 条 / IN 与 = 不过滤全量）。过滤只作用于当前已加载页。
+  const selectedProductSet = useMemo(
+    () => new Set(filters.selectedProducts),
+    [filters.selectedProducts],
+  );
+  const visibleIssues = useMemo(
+    () =>
+      selectedProductSet.size === 0
+        ? issues
+        : issues.filter((issue) => {
+            const product = getYunxiaoProduct(issue, filters.productFieldId ?? undefined);
+            return product !== undefined && selectedProductSet.has(product);
+          }),
+    [issues, selectedProductSet, filters.productFieldId],
+  );
 
   // 议题占用集合：任务直接绑定 + 仍被存活任务引用的方案（孤儿方案不占用，
   // 见 collectOccupiedYunxiaoWorkitemIds 注释）。
@@ -444,7 +509,8 @@ export function YunxiaoView({
         />
       ) : (
         <>
-          <div style={s.yunxiaoToolbar}>
+          {/* 工具栏第一行：项目选择 + 分类 Tab + 创建计划（右侧推齐）。 */}
+          <div style={s.yunxiaoToolbarPrimary}>
             <YunxiaoProjectSelect
               settings={settings}
               cloudProjects={cloudProjects}
@@ -466,6 +532,19 @@ export function YunxiaoView({
                 </button>
               ))}
             </div>
+            <div style={s.yunxiaoToolbarSpacer} />
+            <button
+              type="button"
+              style={s.yunxiaoCreatePlanBtn}
+              disabled={!targetProject}
+              onClick={() => setShowCreatePlan(true)}
+            >
+              <Plus size={13} strokeWidth={2.2} />
+              创建计划
+            </button>
+          </div>
+          {/* 工具栏第二行：过滤栏 + 搜索框 + 计数。 */}
+          <div style={s.yunxiaoToolbarSecondary}>
             <YunxiaoFilterBar
               assignedToMe={filters.assignedToMe}
               onToggleAssignedToMe={() => filters.setAssignedToMe((v) => !v)}
@@ -485,6 +564,19 @@ export function YunxiaoView({
               versionsLoading={filters.versionsLoading}
               versionError={filters.versionError}
               onRetryVersions={filters.retryVersions}
+              productOptions={productOptions}
+              selectedProducts={filters.selectedProducts}
+              onProductsChange={filters.setSelectedProducts}
+              productsDegraded={!filters.productFieldId}
+              planEndPreset={filters.planEndPreset}
+              onPlanEndPresetChange={filters.setPlanEndPreset}
+              planEndCustomFrom={filters.planEndCustomFrom}
+              planEndCustomTo={filters.planEndCustomTo}
+              onPlanEndCustomChange={(from, to) => {
+                filters.setPlanEndCustomFrom(from);
+                filters.setPlanEndCustomTo(to);
+              }}
+              planEndEnabled={!!filters.planEndFieldId}
             />
             <div style={s.yunxiaoSearchBox}>
               <Search size={13} strokeWidth={2} color="var(--text-muted)" />
@@ -495,24 +587,20 @@ export function YunxiaoView({
                 placeholder={t("yunxiao.searchPlaceholder")}
               />
             </div>
-            <div style={s.yunxiaoCount}>{t("yunxiao.count", { count: total })}</div>
+            <div style={s.yunxiaoCount}>
+              {t("yunxiao.count", {
+                count: selectedProductSet.size > 0 ? visibleIssues.length : total,
+              })}
+            </div>
           </div>
-          <button
-            type="button"
-            style={s.yunxiaoSelectGhostBtn}
-            disabled={!targetProject}
-            onClick={() => setShowCreatePlan(true)}
-          >
-            创建计划
-          </button>
           <YunxiaoImportBar
             targetProjectId={targetProjectId}
             onTargetProjectChange={setTargetProjectId}
             options={targetOptions}
           />
           <YunxiaoIssueList
-            issues={issues}
-            total={total}
+            issues={visibleIssues}
+            total={selectedProductSet.size > 0 ? visibleIssues.length : total}
             loading={loading}
             loadingMore={loadingMore}
             importedIds={importedIds}
@@ -530,6 +618,8 @@ export function YunxiaoView({
               )
             }
             yunxiaoProjectId={settings.projectId}
+            planEndFieldId={filters.planEndFieldId}
+            productFieldId={filters.productFieldId}
             onLoadMore={() => loadIssues(page + 1, true)}
           />
           {selectionMode && (

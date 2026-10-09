@@ -2,9 +2,25 @@ import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Cloud, ExternalLink, Loader2, Zap } from "lucide-react";
 import type { YunxiaoWorkitem } from "../../types";
-import { buildYunxiaoIssueLink, getYunxiaoPriority } from "../../utils/yunxiao";
+import {
+  buildYunxiaoIssueLink,
+  getYunxiaoPlanEndDate,
+  getYunxiaoPriority,
+  getYunxiaoProduct,
+  getYunxiaoStatusTone,
+  isYunxiaoIssueOverdue,
+  type YunxiaoStatusTone,
+} from "../../utils/yunxiao";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
+
+/** 状态色调 → chip 样式（云效四色系，色值走 themes.css 主题变量）。 */
+const STATUS_CHIP_STYLE: Record<YunxiaoStatusTone, React.CSSProperties> = {
+  blue: s.yunxiaoStatusChipBlue,
+  green: s.yunxiaoStatusChipGreen,
+  orange: s.yunxiaoStatusChipOrange,
+  grey: s.yunxiaoStatusChipGrey,
+};
 
 function formatDate(ts: number | undefined): string {
   if (!ts) return "";
@@ -30,6 +46,8 @@ export function YunxiaoIssueList({
   planNamesByWorkitem,
   onLoadMore,
   yunxiaoProjectId,
+  planEndFieldId,
+  productFieldId,
 }: {
   issues: YunxiaoWorkitem[];
   total: number;
@@ -53,6 +71,10 @@ export function YunxiaoIssueList({
   onLoadMore: () => void;
   /** 云效云项目 ID（构建源议题链接；空则不显示链接按钮）。 */
   yunxiaoProjectId: string;
+  /** 「计划完成时间」自定义字段 ID（提取卡片时间徽标；缺省不展示）。 */
+  planEndFieldId?: string | null;
+  /** 「所属产品」自定义字段 ID（提取卡片产品徽标；缺省不展示）。 */
+  productFieldId?: string | null;
 }) {
   const { t } = useI18n();
   const [hoverIssueId, setHoverIssueId] = useState<string | null>(null);
@@ -75,9 +97,15 @@ export function YunxiaoIssueList({
           const hover = hoverIssueId === issue.id;
           const checked = selectedIds.has(issue.id);
           const priority = getYunxiaoPriority(issue);
-          const meta: string[] = [
-            issue.status?.displayName ?? issue.status?.name ?? t("yunxiao.statusUnknown"),
-          ];
+          // 状态独立成彩色 chip（云效四色系），不再混入灰色 meta 数组。
+          const statusLabel =
+            issue.status?.displayName ?? issue.status?.name ?? t("yunxiao.statusUnknown");
+          const statusTone = getYunxiaoStatusTone(issue);
+          const planEnd = getYunxiaoPlanEndDate(issue, planEndFieldId ?? undefined);
+          const overdue = isYunxiaoIssueOverdue(issue, planEnd);
+          const product = getYunxiaoProduct(issue, productFieldId ?? undefined);
+          const meta: string[] = [];
+          if (product) meta.push(product);
           if (priority) meta.push(priority);
           if (issue.assignedTo) meta.push(issue.assignedTo.name);
           const date = formatDate(issue.gmtCreate);
@@ -108,6 +136,14 @@ export function YunxiaoIssueList({
               <div style={s.yunxiaoIssueBody}>
                 <div style={s.yunxiaoIssueSubject}>{issue.subject}</div>
                 <div style={s.yunxiaoIssueMeta}>
+                  <span style={STATUS_CHIP_STYLE[statusTone]}>{statusLabel}</span>
+                  {planEnd !== undefined && (
+                    <span style={overdue ? s.yunxiaoPlanEndOverdue : s.yunxiaoPlanEndBadge}>
+                      {t("yunxiao.planEnd.prefix")}
+                      {formatDate(planEnd)}
+                      {overdue ? t("yunxiao.planEnd.overdueSuffix") : ""}
+                    </span>
+                  )}
                   {meta.map((m) => (
                     <span key={m} style={s.yunxiaoMetaBadge}>
                       {m}

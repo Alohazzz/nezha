@@ -584,6 +584,7 @@ pub fn run() {
             yunxiao::yunxiao_get_current_user,
             yunxiao::yunxiao_list_workitem_statuses,
             yunxiao::yunxiao_list_versions,
+            yunxiao::yunxiao_find_custom_field_id,
             yunxiao::yunxiao_search_projects,
             yunxiao::yunxiao_search_workitems,
             yunxiao::yunxiao_get_workitem,

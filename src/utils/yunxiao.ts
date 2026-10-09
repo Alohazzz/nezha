@@ -216,6 +216,12 @@ export interface YunxiaoConditionsInput {
   selectedStatusIds?: string[];
   /** 选中的版本 ID 列表（空数组不生成条件）。 */
   selectedVersionIds?: string[];
+  /** 选中的产品名列表（本地过滤用，不进 conditions——实测服务端不支持按文本过滤自定义字段）。 */
+  selectedProducts?: string[];
+  /** 计划完成时间范围（毫秒时间戳；自定义字段条件需字段 ID）。 */
+  planEndDateRange?: { from?: number; to?: number };
+  /** 「计划完成时间」自定义字段 ID（时间范围条件依赖它，缺省不生成条件）。 */
+  planEndFieldId?: string;
 }
 
 /** 议题编号 token（如 QHDK-30074 / ABC-12：字母前缀-数字）。 */
@@ -300,6 +306,38 @@ export function buildYunxiaoConditions(input: YunxiaoConditionsInput): string | 
     });
   }
 
+  // 产品过滤不做服务端 conditions：实测差分（2026-10）云效 SearchWorkitems 对
+  // 自定义字段按显示文本过滤整体不可用——CONTAINS 返回恒 0，IN/= 不过滤返回全量，
+  // 对照组（来源字段）同样 0 条。产品改为前端本地过滤（YunxiaoView），此处跳过。
+
+  // 计划完成时间范围（自定义字段）：fieldIdentifier 用字段 ID，BETWEEN 闭区间；
+  // 只填起或止时退化为 GTE / LTE。字段 ID 未知时不生成条件。
+  const range = input.planEndDateRange;
+  const fieldId = input.planEndFieldId?.trim();
+  if (range && fieldId) {
+    const from = typeof range.from === "number" ? Math.floor(range.from) : undefined;
+    const to = typeof range.to === "number" ? Math.floor(range.to) : undefined;
+    if (from !== undefined && to !== undefined) {
+      conditions.push({
+        className: "date",
+        fieldIdentifier: fieldId,
+        format: "input",
+        operator: "BETWEEN",
+        toValue: null,
+        value: [String(from), String(to)],
+      });
+    } else if (from !== undefined || to !== undefined) {
+      conditions.push({
+        className: "date",
+        fieldIdentifier: fieldId,
+        format: "input",
+        operator: from !== undefined ? "GTE" : "LTE",
+        toValue: null,
+        value: [String(from ?? to)],
+      });
+    }
+  }
+
   if (conditions.length === 0) return undefined;
   return JSON.stringify({ conditionGroups: [conditions] });
 }
@@ -308,6 +346,128 @@ export function buildYunxiaoConditions(input: YunxiaoConditionsInput): string | 
 export function getYunxiaoPriority(issue: YunxiaoWorkitem): string | undefined {
   const field = issue.customFieldValues.find((f) => f.fieldId === "priority");
   return field?.values[0]?.displayValue;
+}
+
+/** 「计划完成时间」自定义字段的项目级约定名称（yunxiao_find_custom_field_id 按它查 ID）。 */
+export const YUNXIAO_PLAN_END_FIELD_NAME = "计划完成时间";
+
+/** 「所属产品」自定义字段的项目级约定名称（同上）。 */
+export const YUNXIAO_PRODUCT_FIELD_NAME = "所属产品";
+
+/**
+ * 从议题自定义字段里提取「所属产品」显示名（顶层 product 键实测不存在，
+ * 产品值在 customFieldValues，fieldId 按项目字段配置探测）。
+ */
+export function getYunxiaoProduct(
+  issue: YunxiaoWorkitem,
+  productFieldId?: string,
+): string | undefined {
+  if (issue.product) return issue.product;
+  const field = productFieldId
+    ? issue.customFieldValues.find((f) => f.fieldId === productFieldId)
+    : undefined;
+  return field?.values[0]?.displayValue || undefined;
+}
+
+/** 计划完成时间快捷范围：本周（周一起始自然周）/ 本月（自然月）。 */
+export function getYunxiaoPresetRange(
+  preset: "week" | "month",
+  now: Date = new Date(),
+): { from: number; to: number } {
+  if (preset === "week") {
+    const from = new Date(now);
+    // 周一起始：周日(getDay=0)回退到上周一（-6 天），其余减 getDay()-1 天
+    from.setDate(from.getDate() - ((from.getDay() + 6) % 7));
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(from);
+    to.setDate(to.getDate() + 7);
+    return { from: from.getTime(), to: to.getTime() - 1 };
+  }
+  const from = new Date(now.getFullYear(), now.getMonth(), 1);
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { from: from.getTime(), to: to.getTime() - 1 };
+}
+
+/** 解析云效自定义字段的日期文本（yyyy/mm/dd、yyyy.mm.dd、yyyy-mm-dd）为本地时区当天 00:00。
+ *  不用 Date.parse：纯日期 ISO 串按 UTC 解析，UTC+8 下得到当天 08:00，逾期判断会漂移 8 小时。 */
+function parseLocalDateString(raw: string): number | undefined {
+  const m = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (!m) return undefined;
+  const ms = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/**
+ * 从议题自定义字段里提取「计划完成时间」（毫秒时间戳）。
+ * 云效自定义字段值形态不统一：displayValue 可能是 "2026/10/15" 或时间戳字符串，
+ * 能解析成日期/数字才返回。Workitem.planEndDate（后端直出的标准字段）优先。
+ */
+export function getYunxiaoPlanEndDate(
+  issue: YunxiaoWorkitem,
+  planEndFieldId?: string,
+): number | undefined {
+  if (typeof issue.planEndDate === "number") return issue.planEndDate;
+  const field = planEndFieldId
+    ? issue.customFieldValues.find((f) => f.fieldId === planEndFieldId)
+    : undefined;
+  const raw = field?.values[0]?.displayValue;
+  if (!raw) return undefined;
+  if (/^\d{10,13}$/.test(raw)) {
+    const n = Number(raw);
+    // 10 位按秒补齐到毫秒
+    return raw.length === 10 ? n * 1000 : n;
+  }
+  return parseLocalDateString(raw.trim());
+}
+
+/**
+ * 议题状态名 → 云效官网四色系色调。
+ * 云效 API 不返回状态颜色，只能按状态名硬映射（对照云效 Projex 默认工作流配色）；
+ * 未匹配/自定义工作流状态一律回落灰色。
+ */
+export type YunxiaoStatusTone = "blue" | "green" | "orange" | "grey";
+
+const STATUS_TONE_BY_NAME: Record<string, YunxiaoStatusTone> = {
+  待处理: "blue",
+  待确认: "blue",
+  已确认: "blue",
+  待开发: "green",
+  开发中: "green",
+  开发完成: "green",
+  待测试: "green",
+  测试中: "green",
+  测试完成: "green",
+  测试打回: "orange",
+  发布中: "orange",
+  验收完成: "orange",
+  触发重置: "orange",
+  发布完成: "orange",
+  已完成: "grey",
+  已创建: "grey",
+  已拒绝: "grey",
+  已取消: "grey",
+  已关闭: "grey",
+};
+
+/** 终态状态名集合：逾期标红只看非终态（已完成的老议题不红）。 */
+const TERMINAL_STATUS_NAMES = new Set(["已完成", "已拒绝", "已取消", "已关闭"]);
+
+export function getYunxiaoStatusTone(issue: YunxiaoWorkitem): YunxiaoStatusTone {
+  const name = issue.status?.displayName ?? issue.status?.name ?? "";
+  return STATUS_TONE_BY_NAME[name] ?? "grey";
+}
+
+/**
+ * 议题是否已逾期：计划完成时间早于今天 00:00 且状态非终态。
+ * 终态（已完成/已拒绝/已取消/已关闭）即使日期早于今天也保持灰色。
+ */
+export function isYunxiaoIssueOverdue(issue: YunxiaoWorkitem, planEnd?: number): boolean {
+  if (!planEnd) return false;
+  const name = issue.status?.displayName ?? issue.status?.name ?? "";
+  if (TERMINAL_STATUS_NAMES.has(name)) return false;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  return planEnd < todayStart.getTime();
 }
 
 /** 计算当前被占用的议题 id 集合：

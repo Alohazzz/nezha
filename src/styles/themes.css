@@ -138,6 +138,18 @@
 
   --font-ui: "SF Pro Display", "IBM Plex Sans", "PingFang SC", "Noto Sans SC", sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, ui-monospace, monospace;
+
+  /* 云效议题状态徽标四色系（对照云效 Projex 官网配色）：半透明底 + 同色相深文字。 */
+  --yunxiao-status-blue-fg: #1664d9;
+  --yunxiao-status-blue-bg: rgba(22, 119, 255, 0.12);
+  --yunxiao-status-green-fg: #0f8a3d;
+  --yunxiao-status-green-bg: rgba(27, 168, 87, 0.14);
+  --yunxiao-status-orange-fg: #c26a00;
+  --yunxiao-status-orange-bg: rgba(255, 136, 0, 0.14);
+  --yunxiao-status-grey-fg: #57606a;
+  --yunxiao-status-grey-bg: rgba(87, 96, 106, 0.12);
+  --yunxiao-overdue-fg: #c7352f;
+  --yunxiao-overdue-bg: rgba(248, 81, 73, 0.14);
 }
 
 /* Design tokens: eye-care theme (warm sepia, low-contrast) */
@@ -190,6 +202,18 @@ html.eyecare {
   --code-line-divider: rgba(101, 84, 51, 0.12);
   --code-line-hover-bg: rgba(101, 84, 51, 0.06);
   --image-checker-bg: rgba(101, 84, 51, 0.08);
+
+  /* 云效议题状态徽标：护眼主题降饱和的暖调四色。 */
+  --yunxiao-status-blue-fg: #3a5f96;
+  --yunxiao-status-blue-bg: rgba(88, 130, 189, 0.16);
+  --yunxiao-status-green-fg: #4a7042;
+  --yunxiao-status-green-bg: rgba(122, 156, 96, 0.18);
+  --yunxiao-status-orange-fg: #96601e;
+  --yunxiao-status-orange-bg: rgba(186, 132, 60, 0.18);
+  --yunxiao-status-grey-fg: #6b6353;
+  --yunxiao-status-grey-bg: rgba(122, 108, 79, 0.16);
+  --yunxiao-overdue-fg: #a8443c;
+  --yunxiao-overdue-bg: rgba(178, 84, 72, 0.16);
 }
 
 /* Design tokens: dark theme */
@@ -294,6 +318,18 @@ html.dark {
   --shadow-toast: 0 4px 16px rgba(0, 0, 0, 0.55), 0 1px 4px rgba(0, 0, 0, 0.35);
   --shadow-media: 0 16px 40px rgba(0, 0, 0, 0.6);
   --agent-badge-filter: brightness(0) invert(1) opacity(0.7);
+
+  /* 云效议题状态徽标：暗色主题同色相提亮。 */
+  --yunxiao-status-blue-fg: #79b0ff;
+  --yunxiao-status-blue-bg: rgba(88, 145, 255, 0.18);
+  --yunxiao-status-green-fg: #57c585;
+  --yunxiao-status-green-bg: rgba(46, 184, 114, 0.18);
+  --yunxiao-status-orange-fg: #ffab52;
+  --yunxiao-status-orange-bg: rgba(255, 154, 60, 0.18);
+  --yunxiao-status-grey-fg: #9aa3b2;
+  --yunxiao-status-grey-bg: rgba(148, 158, 170, 0.18);
+  --yunxiao-overdue-fg: #ff7b72;
+  --yunxiao-overdue-bg: rgba(248, 81, 73, 0.2);
 }
 
 /* Design tokens: midnight dark theme (neutral near-black).

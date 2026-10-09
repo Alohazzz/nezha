@@ -551,6 +551,10 @@ export interface YunxiaoWorkitem {
   imageCount?: number;
   categoryId?: string;
   logicalStatus?: string;
+  /** 所属产品（列表响应可能缺省） */
+  product?: string;
+  /** 计划完成时间（毫秒时间戳；自定义字段，从 customFieldValues 提取） */
+  planEndDate?: number;
   workitemType?: { id: string; name: string };
 }
 

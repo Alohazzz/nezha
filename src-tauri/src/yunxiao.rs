@@ -212,6 +212,12 @@ pub struct YunxiaoWorkitem {
         skip_serializing_if = "Option::is_none"
     )]
     pub logical_status: Option<String>,
+    /// 所属产品（列表响应可能缺省；conditions 过滤用字符串、展示用名称）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// 计划完成时间（毫秒时间戳；自定义字段，值经前端从 customFieldValues 提取）。
+    #[serde(rename = "planEndDate", default, skip_serializing_if = "Option::is_none")]
+    pub plan_end_date: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -822,6 +828,73 @@ pub async fn yunxiao_list_versions(
     );
     let bytes = get_yunxiao_json(&client, token, url).await?;
     serde_json::from_slice(&bytes).map_err(|e| format!("解析云效版本列表失败: {e}"))
+}
+
+/// 自定义字段 ID 按名称查找的内存缓存（org, project, 字段名 → fieldId）。
+static CUSTOM_FIELD_ID_BY_NAME_CACHE: LazyLock<Mutex<HashMap<(String, String, String), String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 按名称在项目的工作项类型字段配置里查自定义字段 ID（供 conditions 过滤使用）。
+/// 同名字段在多个类型上都配置时取第一个命中；找不到返回 None（前端据此隐藏过滤器）。
+#[tauri::command]
+pub async fn yunxiao_find_custom_field_id(
+    token: String,
+    organization_id: String,
+    project_id: String,
+    categories: Vec<String>,
+    field_name: String,
+) -> Result<Option<String>, String> {
+    let token = token.trim();
+    let organization_id = organization_id.trim();
+    let project_id = project_id.trim();
+    let field_name = field_name.trim();
+    if token.is_empty() || organization_id.is_empty() || project_id.is_empty() || field_name.is_empty()
+    {
+        return Err("缺少云效令牌、组织 ID、项目 ID 或字段名".to_string());
+    }
+    let cache_key = (
+        organization_id.to_string(),
+        project_id.to_string(),
+        field_name.to_string(),
+    );
+    if let Some(cached) = CUSTOM_FIELD_ID_BY_NAME_CACHE.lock().get(&cache_key) {
+        return Ok(Some(cached.clone()));
+    }
+    let client = build_client()?;
+    for category in categories
+        .iter()
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+    {
+        let types_url = format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes?category={category}"
+        );
+        let types: Vec<YunxiaoWorkitemType> = {
+            let bytes = get_yunxiao_json(&client, token, types_url).await?;
+            serde_json::from_slice(&bytes).map_err(|e| format!("解析云效工作项类型失败: {e}"))?
+        };
+        for workitem_type in &types {
+            if workitem_type.id.is_empty() {
+                continue;
+            }
+            let fields_url = format!(
+                "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes/{}/fields",
+                workitem_type.id
+            );
+            let bytes = get_yunxiao_json(&client, token, fields_url).await?;
+            let configs: Vec<YunxiaoFieldConfig> = serde_json::from_slice(&bytes)
+                .map_err(|e| format!("解析云效字段配置失败: {e}"))?;
+            if let Some(field) = configs.iter().find(|c| c.name == field_name && !c.id.is_empty())
+            {
+                let id = field.id.clone();
+                CUSTOM_FIELD_ID_BY_NAME_CACHE
+                    .lock()
+                    .insert(cache_key, id.clone());
+                return Ok(Some(id));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// 按工作项 ID 获取议题详情（GetWorkitem）。

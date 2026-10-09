@@ -3,6 +3,10 @@ import type { Plan, Task } from "../types";
 import {
   buildYunxiaoConditions,
   ensureIssueTagInMessage,
+  getYunxiaoPlanEndDate,
+  getYunxiaoProduct,
+  getYunxiaoStatusTone,
+  isYunxiaoIssueOverdue,
   isYunxiaoWorkitemImported,
   issueTag,
   messageHasIssueTag,
@@ -265,6 +269,55 @@ describe("buildYunxiaoConditions", () => {
       },
     ]);
   });
+
+  // 回归锁：产品过滤不进 conditions——实测（差分）服务端对自定义字段按文本过滤
+  // 不可用（CONTAINS 恒 0 条，IN/= 不过滤全量），产品在 YunxiaoView 本地过滤。
+  it("产品选择不生成任何 conditions（回归：服务端不支持按文本过滤自定义字段）", () => {
+    expect(
+      buildYunxiaoConditions({
+        selectedProducts: ["财务管理系统", "实验室信息管理系统（LIS）"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("计划完成时间范围用字段 ID 拼 BETWEEN 闭区间条件", () => {
+    const conditions = JSON.parse(
+      buildYunxiaoConditions({
+        planEndDateRange: { from: 1759248000000, to: 1761849599999 },
+        planEndFieldId: "abc123",
+      })!,
+    );
+    expect(conditions.conditionGroups[0]).toEqual([
+      {
+        className: "date",
+        fieldIdentifier: "abc123",
+        format: "input",
+        operator: "BETWEEN",
+        toValue: null,
+        value: ["1759248000000", "1761849599999"],
+      },
+    ]);
+  });
+
+  it("时间范围只填一侧时退化为 GTE/LTE；无字段 ID 不生成条件", () => {
+    const gte = JSON.parse(
+      buildYunxiaoConditions({
+        planEndDateRange: { from: 1759248000000 },
+        planEndFieldId: "abc123",
+      })!,
+    );
+    expect(gte.conditionGroups[0][0].operator).toBe("GTE");
+    const lte = JSON.parse(
+      buildYunxiaoConditions({
+        planEndDateRange: { to: 1761849599999 },
+        planEndFieldId: "abc123",
+      })!,
+    );
+    expect(lte.conditionGroups[0][0].operator).toBe("LTE");
+    expect(
+      buildYunxiaoConditions({ planEndDateRange: { from: 1759248000000 } }),
+    ).toBeUndefined();
+  });
 });
 
 describe("requiresSedimentation", () => {
@@ -376,5 +429,139 @@ describe("splitValueScoreSection", () => {
     const result = splitValueScoreSection(text);
     expect(result.comment).toBe("开头总结");
     expect(result.scoreValue).toBe(3.5);
+  });
+});
+
+describe("getYunxiaoProduct", () => {
+  const PRODUCT_FIELD_ID = "81571b37063687b4aefd3f16";
+
+  const issueWithCustomFields = (values: Array<{ fieldId: string; displayValue: string }>) => ({
+    id: "w-1",
+    serialNumber: "QHDK-1",
+    subject: "s",
+    customFieldValues: values.map((v) => ({
+      fieldId: v.fieldId,
+      fieldName: "",
+      values: [{ identifier: v.displayValue, displayValue: v.displayValue }],
+    })),
+  });
+
+  it("回归：产品从 customFieldValues 按字段 ID 提取（搜索响应无顶层 product 键）", () => {
+    const issue = issueWithCustomFields([
+      { fieldId: "12870b90729a20c378a99c94", displayValue: "客户反馈" },
+      { fieldId: PRODUCT_FIELD_ID, displayValue: "财务管理系统" },
+    ]);
+    expect(getYunxiaoProduct(issue as never, PRODUCT_FIELD_ID)).toBe("财务管理系统");
+  });
+
+  it("字段 ID 不匹配时返回 undefined（不误取其他自定义字段）", () => {
+    const issue = issueWithCustomFields([
+      { fieldId: "12870b90729a20c378a99c94", displayValue: "客户反馈" },
+    ]);
+    expect(getYunxiaoProduct(issue as never, PRODUCT_FIELD_ID)).toBeUndefined();
+  });
+
+  it("displayValue 为空串视为无产品", () => {
+    const issue = issueWithCustomFields([{ fieldId: PRODUCT_FIELD_ID, displayValue: "" }]);
+    expect(getYunxiaoProduct(issue as never, PRODUCT_FIELD_ID)).toBeUndefined();
+  });
+});
+
+describe("getYunxiaoPlanEndDate", () => {
+  const PLAN_FIELD_ID = "plan-field-1";
+
+  it("顶层 planEndDate 优先于自定义字段", () => {
+    const issue = {
+      id: "w-1",
+      serialNumber: "QHDK-1",
+      subject: "s",
+      planEndDate: 1760486400000,
+      customFieldValues: [
+        {
+          fieldId: PLAN_FIELD_ID,
+          fieldName: "计划完成时间",
+          values: [{ identifier: "2099/01/01", displayValue: "2099/01/01" }],
+        },
+      ],
+    };
+    expect(getYunxiaoPlanEndDate(issue as never, PLAN_FIELD_ID)).toBe(1760486400000);
+  });
+
+  it("从自定义字段 displayValue 解析日期字符串（yyyy/mm/dd）", () => {
+    const issue = {
+      id: "w-1",
+      serialNumber: "QHDK-1",
+      subject: "s",
+      customFieldValues: [
+        {
+          fieldId: PLAN_FIELD_ID,
+          fieldName: "计划完成时间",
+          values: [{ identifier: "2026/10/15", displayValue: "2026/10/15" }],
+        },
+      ],
+    };
+    expect(getYunxiaoPlanEndDate(issue as never, PLAN_FIELD_ID)).toBe(
+      new Date(2026, 9, 15).getTime(),
+    );
+  });
+
+  it("10 位秒级时间戳自动补齐到毫秒", () => {
+    const issue = {
+      id: "w-1",
+      serialNumber: "QHDK-1",
+      subject: "s",
+      customFieldValues: [
+        {
+          fieldId: PLAN_FIELD_ID,
+          fieldName: "计划完成时间",
+          values: [{ identifier: "1760486400", displayValue: "1760486400" }],
+        },
+      ],
+    };
+    expect(getYunxiaoPlanEndDate(issue as never, PLAN_FIELD_ID)).toBe(1760486400000);
+  });
+
+  it("无法解析的文本返回 undefined", () => {
+    const issue = {
+      id: "w-1",
+      serialNumber: "QHDK-1",
+      subject: "s",
+      customFieldValues: [
+        {
+          fieldId: PLAN_FIELD_ID,
+          fieldName: "计划完成时间",
+          values: [{ identifier: "待定", displayValue: "待定" }],
+        },
+      ],
+    };
+    expect(getYunxiaoPlanEndDate(issue as never, PLAN_FIELD_ID)).toBeUndefined();
+  });
+});
+
+describe("getYunxiaoStatusTone / isYunxiaoIssueOverdue", () => {
+  const mkIssue = (status?: string) => ({
+    id: "w-1",
+    serialNumber: "QHDK-1",
+    subject: "s",
+    customFieldValues: [],
+    ...(status ? { status: { name: status } } : {}),
+  });
+
+  it("四色系映射：蓝=待处理、绿=开发中、橙=测试打回、未知回落灰", () => {
+    expect(getYunxiaoStatusTone(mkIssue("待处理") as never)).toBe("blue");
+    expect(getYunxiaoStatusTone(mkIssue("开发中") as never)).toBe("green");
+    expect(getYunxiaoStatusTone(mkIssue("测试打回") as never)).toBe("orange");
+    expect(getYunxiaoStatusTone(mkIssue("自定义工作流状态") as never)).toBe("grey");
+  });
+
+  it("非终态且早于今天 00:00 判逾期；终态不判；未来不判", () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(12, 0, 0, 0);
+    expect(isYunxiaoIssueOverdue(mkIssue("开发中") as never, yesterday.getTime())).toBe(true);
+    expect(isYunxiaoIssueOverdue(mkIssue("已完成") as never, yesterday.getTime())).toBe(false);
+    const tomorrow = yesterday.getTime() + 2 * 86400000;
+    expect(isYunxiaoIssueOverdue(mkIssue("开发中") as never, tomorrow)).toBe(false);
+    expect(isYunxiaoIssueOverdue(mkIssue("开发中") as never, undefined)).toBe(false);
   });
 });
