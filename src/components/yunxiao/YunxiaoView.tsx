@@ -684,6 +684,7 @@ export function YunxiaoView({
           issues={addToPlanIssues}
           projectId={targetProject.id}
           deliveryPlans={deliveryPlans}
+          settings={settings}
           onAdded={(plan) => {
             onDeliveryPlansChange([
               ...deliveryPlans.filter((p) => p.id !== plan.id),

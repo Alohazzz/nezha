@@ -141,6 +141,9 @@ pub async fn create_delivery_plan(
     version: Option<String>,
     // 是否另建 worktree；缺省 false = 在主工作区直接切分支。
     use_worktree: Option<bool>,
+    // 计划完成时间（毫秒时间戳）：必填——「添加到计划」要拿它回写云效议题的
+    // 「计划完成时间」自定义字段；创建后不可改，保证与已回写议题的日期永远一致。
+    plan_end_date: Option<i64>,
 ) -> Result<DeliveryPlan, String> {
     if id.trim().is_empty() {
         return Err("DeliveryPlan id is required".to_string());
@@ -155,6 +158,10 @@ pub async fn create_delivery_plan(
     // 目标分支允许留空（暂不指定合并目标）；空目标批不能提交 MR / 合并回，见各入口校验。
     if base_branch.trim().is_empty() {
         return Err("baseBranch is required".to_string());
+    }
+    let plan_end_date = plan_end_date.filter(|ms| *ms > 0);
+    if plan_end_date.is_none() {
+        return Err("计划完成时间必填：它是添加议题时回写云效的取值来源".to_string());
     }
     let target_branch = target_branch.trim().to_string();
     let use_worktree = use_worktree.unwrap_or(false);
@@ -318,6 +325,7 @@ pub async fn create_delivery_plan(
             worktree_repo: owner_repo,
             use_worktree,
             mr_source_sha: None,
+            plan_end_date,
         };
         let mut batches = load_project_batches_sync(project_id.clone())?;
         batches.push(batch.clone());
@@ -922,14 +930,71 @@ pub async fn get_delivery_plan_worktree_base(
     .map_err(|e| format!("Worktree base task panicked: {e}"))?
 }
 
+/// 「已是待开发」整批拒绝的报错文案（抽出纯函数留测试接缝，与校验循环同口径）。
+fn reject_pending_issues_error(serial_numbers: &[&str]) -> String {
+    format!(
+        "议题 {} 已是「{}」状态，不能重复加入计划",
+        serial_numbers.join("、"),
+        crate::yunxiao::PLAN_DEV_STATUS_NAME
+    )
+}
+
 /// 「添加到计划」：把云效议题加入计划成员（有序追加，重复跳过）。
 /// 单计划归属（S1）：同一议题已在**其它**计划时整体拒绝，不部分写入。
+///
+/// 云效同步（issue #105）：添加前逐条实时校验「已是待开发则整批拒绝」；校验通过后
+/// 先对每条议题顺序回写云效（计划完成时间 + 负责人 + 状态待开发），全部成功才把
+/// 成员写入本地 batches.json——任一失败本地不动，重试语义干净。
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn add_delivery_plan_issues(
     project_id: String,
     plan_id: String,
     issues: Vec<PlanIssue>,
+    token: String,
+    organization_id: String,
+    plan_end_date: i64,
 ) -> Result<DeliveryPlan, String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() {
+        return Err("缺少云效令牌或组织 ID，请先在设置中配置云效连接".to_string());
+    }
+    if plan_end_date <= 0 {
+        return Err("计划缺少有效的计划完成时间，无法回写云效".to_string());
+    }
+    // 校验阶段（云效实时状态，不用列表缓存）：全部检查完再一次性报错，不遇错即停。
+    let client = crate::yunxiao::build_client()?;
+    let mut pending: Vec<&str> = Vec::new();
+    for issue in &issues {
+        let status_name = crate::yunxiao::fetch_workitem_status_name(
+            &client,
+            &token,
+            &organization_id,
+            &issue.workitem_id,
+        )
+        .await
+        .map_err(|e| format!("议题 {} 状态获取失败：{e}", issue.serial_number))?;
+        if status_name == crate::yunxiao::PLAN_DEV_STATUS_NAME {
+            pending.push(&issue.serial_number);
+        }
+    }
+    if !pending.is_empty() {
+        return Err(reject_pending_issues_error(&pending));
+    }
+    // 回写阶段：逐条顺序执行；失败信息带议题编号与具体字段，方便在云效侧核对。
+    for issue in &issues {
+        crate::yunxiao::writeback_issue_add_to_plan(
+            &client,
+            &token,
+            &organization_id,
+            &issue.workitem_id,
+            plan_end_date,
+        )
+        .await
+        .map_err(|e| format!("议题 {} 添加回写失败：{e}", issue.serial_number))?;
+    }
+    // 落盘阶段：云效全部成功后才动本地。
     tokio::task::spawn_blocking(move || {
         let mut plans = load_project_batches_sync(project_id.clone())?;
         let taken = |wid: &str| {
@@ -962,12 +1027,32 @@ pub async fn add_delivery_plan_issues(
 }
 
 /// 「移出计划」：按 workitemId 移除成员（不存在时幂等返回）。
+///
+/// 云效同步（issue #105）：移出前先回写云效（清空计划完成时间 + 状态回退「待处理」，
+/// 负责人保持不动）；全部成功才移除本地成员——失败时本地不动，用户可重试。
+/// 删除整个计划**不**触发回写（那通常是已交付场景，回退状态反而是错的）。
 #[tauri::command]
 pub async fn remove_delivery_plan_issue(
     project_id: String,
     plan_id: String,
     workitem_id: String,
+    token: String,
+    organization_id: String,
 ) -> Result<DeliveryPlan, String> {
+    let token = token.trim().to_string();
+    let organization_id = organization_id.trim().to_string();
+    if token.is_empty() || organization_id.is_empty() {
+        return Err("缺少云效令牌或组织 ID，请先在设置中配置云效连接".to_string());
+    }
+    let client = crate::yunxiao::build_client()?;
+    crate::yunxiao::writeback_issue_remove_from_plan(
+        &client,
+        &token,
+        &organization_id,
+        &workitem_id,
+    )
+    .await
+    .map_err(|e| format!("移出回写云效失败（本地计划未变更，可重试）：{e}"))?;
     tokio::task::spawn_blocking(move || {
         let mut plans = load_project_batches_sync(project_id.clone())?;
         let plan = plans
@@ -1092,6 +1177,15 @@ mod tests {
         assert!(merge_allows_kind("patch"));
         assert!(merge_allows_kind("project"));
         assert!(!merge_allows_kind("hotfix"));
+    }
+
+    #[test]
+    fn pending_issues_error_lists_every_serial_at_once() {
+        // 整批拒绝：一次报出全部不合格编号，而不是遇到第一个就停。
+        let err = reject_pending_issues_error(&["QHDK-1", "QHDK-2"]);
+        assert!(err.contains("QHDK-1"));
+        assert!(err.contains("QHDK-2"));
+        assert!(err.contains("待开发"));
     }
 
     #[test]

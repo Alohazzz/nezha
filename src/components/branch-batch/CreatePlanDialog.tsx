@@ -50,6 +50,8 @@ export function CreatePlanDialog({
   const [baseBranch, setBaseBranch] = useState("develop");
   // 合并回目标分支允许留空：空表示暂不指定合并目标（源分支名不带目标段，不能提交 MR / 合并回）。
   const [targetBranch, setTargetBranch] = useState("");
+  // 计划完成时间（yyyy-MM-dd）：必填——添加议题时要拿它回写云效；创建后不可改。
+  const [planEndDate, setPlanEndDate] = useState("");
   const [version, setVersion] = useState("");
   const [versionPickerOpen, setVersionPickerOpen] = useState(false);
   const [useWorktree, setUseWorktree] = useState(false);
@@ -234,6 +236,7 @@ export function CreatePlanDialog({
       !name.trim() ||
       !baseBranch.trim() ||
       !sourceBranch.trim() ||
+      !planEndDate ||
       (useWorktree && !worktreeDir.trim()) ||
       busy
     )
@@ -249,6 +252,8 @@ export function CreatePlanDialog({
     setBusy(true);
     setError("");
     try {
+      // yyyy-MM-dd → 本地零点毫秒时间戳（与云效自定义日期字段的「日」粒度一致）。
+      const planEndMs = new Date(`${planEndDate}T00:00:00`).getTime();
       const batch = await invoke<DeliveryPlan>("create_delivery_plan", {
         projectPath,
         repoPath: selectedRepo,
@@ -264,6 +269,7 @@ export function CreatePlanDialog({
         worktreeDir: useWorktree ? worktreeDir.trim() : null,
         version: version.trim() || null,
         useWorktree,
+        planEndDate: Number.isFinite(planEndMs) ? planEndMs : null,
       });
       onCreated(batch);
       onClose();
@@ -444,6 +450,17 @@ export function CreatePlanDialog({
             value={targetBranch}
             onChange={(e) => setTargetBranch(e.target.value)}
             placeholder="develop；留空则暂不指定合并目标"
+          />
+        </div>
+
+        <div style={s.bbField}>
+          <span style={s.bbFieldLabel}>计划完成时间（必填，创建后不可改）</span>
+          <input
+            type="date"
+            style={s.bbInput}
+            value={planEndDate}
+            onChange={(e) => setPlanEndDate(e.target.value)}
+            required
           />
         </div>
 

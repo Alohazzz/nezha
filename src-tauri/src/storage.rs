@@ -307,6 +307,14 @@ pub struct DeliveryPlan {
         skip_serializing_if = "Option::is_none"
     )]
     pub mr_source_sha: Option<String>,
+    /// 计划完成时间（毫秒时间戳，本地字段）：创建必填、创建后不可改；
+    /// 添加议题时回写云效议题「计划完成时间」自定义字段。
+    #[serde(
+        rename = "planEndDate",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub plan_end_date: Option<i64>,
 }
 
 /// 旧批次记录（字段缺失）一律按「有 worktree」读回——改动前创建的批次都带 worktree。
@@ -607,6 +615,7 @@ mod tests {
             worktree_repo: None,
             use_worktree: false,
             mr_source_sha: None,
+            plan_end_date: Some(1_760_000_000_000),
         };
         let json = serde_json::to_string(&plan).unwrap();
         // taskIds / issueSerialNumbers 不再序列化。
@@ -619,6 +628,7 @@ mod tests {
         assert_eq!(back.issues.len(), 1);
         assert_eq!(back.issues[0].serial_number, "QHDK-29312");
         assert_eq!(back.status, "active");
+        assert_eq!(back.plan_end_date, Some(1_760_000_000_000));
         // false 必须能被序列化并读回，否则「不建 worktree」的计划会被读成旧语义。
         assert!(!back.use_worktree);
     }

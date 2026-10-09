@@ -241,9 +241,17 @@ pub struct YunxiaoFieldConfig {
 
 /// 按名称「价值评分」查找字段 ID（名称是 issue-value-scoring 技能与云效字段配置的约定）。
 fn find_value_score_field_id(configs: &[YunxiaoFieldConfig]) -> Option<&str> {
+    find_field_config_by_name(configs, "价值评分")
+}
+
+/// 按名称在字段配置里找自定义字段（名称精确匹配、ID 非空才算命中）。
+fn find_field_config_by_name<'a>(
+    configs: &'a [YunxiaoFieldConfig],
+    field_name: &str,
+) -> Option<&'a str> {
     configs
         .iter()
-        .find(|c| c.name == "价值评分")
+        .find(|c| c.name == field_name)
         .map(|c| c.id.as_str())
         .filter(|id| !id.is_empty())
 }
@@ -1983,6 +1991,29 @@ async fn update_workitem_field_str(
     Ok(())
 }
 
+/// PUT 更新工作项字段（值形态不限定：字符串字段、自定义日期、负责人 ID 等各自序列化）。
+async fn update_workitem_field_json(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+    field_id: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let resp = client
+        .put(format!(
+            "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+        ))
+        .header("x-yunxiao-token", token)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ field_id: value }))
+        .send()
+        .await
+        .map_err(|e| format!("请求云效更新字段失败: {e}"))?;
+    let _ = read_json_body(resp).await?;
+    Ok(())
+}
+
 /// 查询指定工作项类型工作流里名为「已完成」的状态 ID；找不到时报错。
 async fn find_done_status_id(
     client: &reqwest::Client,
@@ -1991,17 +2022,55 @@ async fn find_done_status_id(
     project_id: &str,
     workitem_type_id: &str,
 ) -> Result<String, String> {
+    find_status_id_by_name(
+        client,
+        token,
+        organization_id,
+        project_id,
+        workitem_type_id,
+        "已完成",
+    )
+    .await
+}
+
+/// 工作流「状态名 → 状态 ID」的进程内缓存：同一次批量添加/移出会对每条议题各查一次，
+/// 而同一议题类型的工作流在整个项目内是同一份。
+static WORKFLOW_STATUS_ID_CACHE: LazyLock<Mutex<HashMap<(String, String, String, String), String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 按名称在工作项类型工作流里解析状态 ID（带缓存）；找不到时报错（调用方阻断本次操作）。
+async fn find_status_id_by_name(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+    workitem_type_id: &str,
+    status_name: &str,
+) -> Result<String, String> {
+    let cache_key = (
+        organization_id.to_string(),
+        project_id.to_string(),
+        workitem_type_id.to_string(),
+        status_name.to_string(),
+    );
+    if let Some(cached) = WORKFLOW_STATUS_ID_CACHE.lock().get(&cache_key) {
+        return Ok(cached.clone());
+    }
     let url = format!(
         "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes/{workitem_type_id}/workflows"
     );
     let bytes = get_yunxiao_json(client, token, url).await?;
     let statuses = parse_workflow_statuses(&bytes)?;
-    statuses
+    let found = statuses
         .iter()
-        .find(|s| s.name == "已完成" || s.display_name.as_deref() == Some("已完成"))
+        .find(|s| s.name == status_name || s.display_name.as_deref() == Some(status_name))
         .map(|s| s.id.clone())
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| "工作流中未找到「已完成」状态".to_string())
+        .ok_or_else(|| format!("工作流中未找到「{status_name}」状态"))?;
+    WORKFLOW_STATUS_ID_CACHE
+        .lock()
+        .insert(cache_key, found.clone());
+    Ok(found)
 }
 
 /// 把工作项状态置为「已完成」（知识沉淀自动回写闭环用）。
@@ -2403,6 +2472,184 @@ pub async fn write_backfill_consumed(
     crate::drafts::write_backfill_consumed(&project_path, &task_id, &signature, &workitem_id)
 }
 
+// ── 计划成员回写（添加 / 移出计划时同步云效议题）─────────────────────────────
+
+/// 云效工作流状态约定名：议题加入计划即进入开发排期（待开发），移出则回退（待处理）。
+pub const PLAN_DEV_STATUS_NAME: &str = "待开发";
+pub const PLAN_PENDING_STATUS_NAME: &str = "待处理";
+/// 「计划完成时间」自定义字段的约定名（与 `YUNXIAO_PLAN_END_FIELD_NAME` 同一约定，Rust 侧独立成常量）。
+pub const PLAN_END_FIELD_NAME: &str = "计划完成时间";
+
+/// 毫秒时间戳 → 云效自定义日期字段值（`yyyy-MM-dd 00:00:00`，本地时区零点）。
+fn plan_end_field_value(plan_end_ms: i64) -> String {
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_millis_opt(plan_end_ms)
+        .earliest()
+        .map(|t| t.format("%Y-%m-%d 00:00:00").to_string())
+        .unwrap_or_default()
+}
+
+/// 查工作项类型的字段配置并按名称解析字段 ID（带缓存；与价值评分同套路）。
+async fn fetch_plan_end_field_id(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    project_id: &str,
+    workitem_type_id: &str,
+) -> Result<String, String> {
+    static CACHE: LazyLock<Mutex<HashMap<(String, String, String), String>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let key = (
+        organization_id.to_string(),
+        project_id.to_string(),
+        workitem_type_id.to_string(),
+    );
+    if let Some(cached) = CACHE.lock().get(&key) {
+        return Ok(cached.clone());
+    }
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/projects/{project_id}/workitemTypes/{workitem_type_id}/fields"
+    );
+    let bytes = get_yunxiao_json(client, token, url).await?;
+    let configs: Vec<YunxiaoFieldConfig> =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效字段配置失败: {e}"))?;
+    let field_id = find_field_config_by_name(&configs, PLAN_END_FIELD_NAME)
+        .map(str::to_string)
+        .ok_or_else(|| format!("议题类型未配置「{PLAN_END_FIELD_NAME}」字段"))?;
+    CACHE.lock().insert(key, field_id.clone());
+    Ok(field_id)
+}
+
+/// 单条议题的「添加到计划」回写：计划完成时间 + 负责人（当前令牌用户）+ 状态（待开发）。
+/// 顺序执行，任一步失败即返回 Err（调用方阻断本次添加）。
+pub async fn writeback_issue_add_to_plan(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+    plan_end_ms: i64,
+) -> Result<(), String> {
+    let (project_id, workitem_type_id) =
+        fetch_workitem_placements(client, token, organization_id, workitem_id).await?;
+    let field_id =
+        fetch_plan_end_field_id(client, token, organization_id, &project_id, &workitem_type_id)
+            .await?;
+    update_workitem_field_json(
+        client,
+        token,
+        organization_id,
+        workitem_id,
+        &field_id,
+        serde_json::Value::String(plan_end_field_value(plan_end_ms)),
+    )
+    .await
+    .map_err(|e| format!("回写计划完成时间失败: {e}"))?;
+    let user_id = fetch_current_user_id(client, token).await?;
+    update_workitem_field_json(
+        client,
+        token,
+        organization_id,
+        workitem_id,
+        "assignedTo",
+        serde_json::Value::String(user_id),
+    )
+    .await
+    .map_err(|e| format!("回写负责人失败: {e}"))?;
+    let status_id = find_status_id_by_name(
+        client,
+        token,
+        organization_id,
+        &project_id,
+        &workitem_type_id,
+        PLAN_DEV_STATUS_NAME,
+    )
+    .await
+    .map_err(|e| format!("解析「{PLAN_DEV_STATUS_NAME}」状态失败: {e}"))?;
+    update_workitem_field_str(client, token, organization_id, workitem_id, "status", &status_id)
+        .await
+        .map_err(|e| format!("回写状态失败: {e}"))?;
+    Ok(())
+}
+
+/// 单条议题的「移出计划」回写：状态回退（待处理）+ 清空计划完成时间；负责人不动。
+/// 顺序执行，任一步失败即返回 Err（调用方阻断移除、本地成员不动）。
+pub async fn writeback_issue_remove_from_plan(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+) -> Result<(), String> {
+    let (project_id, workitem_type_id) =
+        fetch_workitem_placements(client, token, organization_id, workitem_id).await?;
+    let field_id =
+        fetch_plan_end_field_id(client, token, organization_id, &project_id, &workitem_type_id)
+            .await?;
+    // 清空：云效自定义字段接受空串为清除（与官网「清空」按钮同效）。
+    update_workitem_field_json(
+        client,
+        token,
+        organization_id,
+        workitem_id,
+        &field_id,
+        serde_json::Value::String(String::new()),
+    )
+    .await
+    .map_err(|e| format!("清空计划完成时间失败: {e}"))?;
+    let status_id = find_status_id_by_name(
+        client,
+        token,
+        organization_id,
+        &project_id,
+        &workitem_type_id,
+        PLAN_PENDING_STATUS_NAME,
+    )
+    .await
+    .map_err(|e| format!("解析「{PLAN_PENDING_STATUS_NAME}」状态失败: {e}"))?;
+    update_workitem_field_str(client, token, organization_id, workitem_id, "status", &status_id)
+        .await
+        .map_err(|e| format!("回写状态失败: {e}"))?;
+    Ok(())
+}
+
+/// 拉取议题当前状态名（添加前校验「已是待开发」用；实时查详情，不用列表缓存）。
+pub async fn fetch_workitem_status_name(
+    client: &reqwest::Client,
+    token: &str,
+    organization_id: &str,
+    workitem_id: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "{API_BASE}/oapi/v1/projex/organizations/{organization_id}/workitems/{workitem_id}"
+    );
+    let bytes = get_yunxiao_json(client, token, url).await?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("解析云效工作项详情失败: {e}"))?;
+    if value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
+        if let Some(result) = value.get_mut("result") {
+            value = result.take();
+        }
+    }
+    let name = value
+        .get("status")
+        .map(|s| {
+            s.get("displayName")
+                .or_else(|| s.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        })
+        .unwrap_or("");
+    if name.is_empty() {
+        return Err("议题详情缺少状态信息".to_string());
+    }
+    Ok(name.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2439,6 +2686,14 @@ mod tests {
       "categoryId": "Req",
       "parentId": "EMPTY_VALUE"
     }"#;
+
+    #[test]
+    fn plan_end_field_value_formats_local_midnight() {
+        // 本地时区 2026-10-15 00:00:00 的毫秒时间戳（CST = UTC+8 → UTC 2026-10-14T16:00:00Z）。
+        let utc = chrono::DateTime::parse_from_rfc3339("2026-10-14T16:00:00Z").unwrap();
+        let ms = utc.with_timezone(&chrono::Local).timestamp_millis();
+        assert_eq!(plan_end_field_value(ms), "2026-10-15 00:00:00");
+    }
 
     #[test]
     fn parses_workitem_with_optional_fields_and_unknown_fields() {

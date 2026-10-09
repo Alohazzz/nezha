@@ -39,6 +39,13 @@ const OVERDUE_MS = 14 * 24 * 60 * 60 * 1000;
 /** 合并讨论的软上限：与云效议题列表同口径（讨论上下文与图片量的现实约束）。 */
 const MERGE_SELECT_SOFT_LIMIT = 10;
 
+/** 毫秒时间戳 → 本地日期（yyyy/MM/dd），计划详情头的完成时间 chip 用。 */
+function formatPlanEndDate(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+}
+
 /** 「提交 MR」被禁用的原因（null = 可提交）。
  *
  *  同一套判据给按钮 `disabled` 与悬停提示共用：此前禁用是静默的，用户点了没反应也无法
@@ -297,10 +304,18 @@ export function PlanPanel({
   async function handleRemoveIssue(workitemId: string) {
     if (!selected || !project) return;
     try {
+      // 移出前要回写云效（状态回退待处理 + 清计划完成时间），先确保云效连接可用。
+      const settings = await ensureYunxiaoSettings();
+      if (!settings.token || !settings.organizationId) {
+        setNotice("未连接云效，无法同步「移出计划」的状态回退；请先在设置中配置令牌");
+        return;
+      }
       const plan = await invoke<DeliveryPlan>("remove_delivery_plan_issue", {
         projectId: project.id,
         planId: selected.id,
         workitemId,
+        token: settings.token,
+        organizationId: settings.organizationId,
       });
       onDeliveryPlansChange(deliveryPlans.map((p) => (p.id === plan.id ? plan : p)));
       setSelectedIssuesById((prev) => {
@@ -412,6 +427,14 @@ export function PlanPanel({
                 </span>
                 <span style={s.dpChip}>{selected.kind}</span>
                 {!selected.useWorktree && <span style={s.dpChip}>主检出</span>}
+                {selected.planEndDate && (
+                  <span
+                    style={s.dpChip}
+                    title="计划完成时间：添加议题时回写云效议题「计划完成时间」字段（创建后不可改）"
+                  >
+                    完成时间 {formatPlanEndDate(selected.planEndDate)}
+                  </span>
+                )}
                 {selected.worktreeMissing && <span style={s.dpChipWarn}>WorkTree 缺失</span>}
                 {selected.runRootMissing && <span style={s.dpChipWarn}>运行程序缺失</span>}
                 {selected.status !== "merged" &&

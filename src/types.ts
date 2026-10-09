@@ -160,6 +160,8 @@ export interface DeliveryPlan {
   worktreeMissing?: boolean;
   /** 提交 MR 时源分支 HEAD SHA。 */
   mrSourceSha?: string;
+  /** 计划完成时间（毫秒时间戳，本地字段）：创建必填、创建后不可改；添加议题时回写云效。 */
+  planEndDate?: number;
 }
 
 /** 新建 PR 前的源分支冲突预检结果。 */
