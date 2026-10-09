@@ -600,7 +600,7 @@ export function YunxiaoView({
           />
           <YunxiaoIssueList
             issues={visibleIssues}
-            total={selectedProductSet.size > 0 ? visibleIssues.length : total}
+            hasMore={issues.length < total}
             loading={loading}
             loadingMore={loadingMore}
             importedIds={importedIds}

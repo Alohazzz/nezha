@@ -33,7 +33,7 @@ function formatDate(ts: number | undefined): string {
 
 export function YunxiaoIssueList({
   issues,
-  total,
+  hasMore,
   loading,
   loadingMore,
   importedIds,
@@ -50,7 +50,8 @@ export function YunxiaoIssueList({
   productFieldId,
 }: {
   issues: YunxiaoWorkitem[];
-  total: number;
+  /** 是否还有未加载页（服务端 total − 已加载）。产品过滤只偷换计数 total，不改变此判断。 */
+  hasMore: boolean;
   loading: boolean;
   loadingMore: boolean;
   importedIds: ReadonlySet<string>;
@@ -208,7 +209,7 @@ export function YunxiaoIssueList({
           );
         })
       )}
-      {!loading && issues.length > 0 && issues.length < total && (
+      {!loading && issues.length > 0 && hasMore && (
         <button
           type="button"
           style={s.yunxiaoLoadMore}

@@ -32,7 +32,7 @@ function renderList(overrides: { selectionMode?: boolean } = {}) {
     <I18nProvider>
       <YunxiaoIssueList
         issues={[issue(1), issue(2)]}
-        total={2}
+        hasMore={false}
         loading={false}
         loadingMore={false}
         importedIds={new Set()}
