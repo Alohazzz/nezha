@@ -18,6 +18,7 @@ interface ProjectConfig {
     default: string;
     default_permission_mode: string;
     prompt_prefix: string;
+    prevent_auto_commit?: boolean;
   };
   git: {
     commit_prompt: string;
@@ -55,6 +56,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   const [agentDefault, setAgentDefault] = useState("claude");
   const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode>("ask");
   const [promptPrefix, setPromptPrefix] = useState("");
+  const [preventAutoCommit, setPreventAutoCommit] = useState(false);
   const [commitPrompt, setCommitPrompt] = useState("");
   const [commitMessageTimeoutSecs, setCommitMessageTimeoutSecs] = useState(
     String(DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS),
@@ -102,6 +104,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
         setDefaultPermissionMode(mode);
       }
       setPromptPrefix(c.agent.prompt_prefix ?? "");
+      setPreventAutoCommit(c.agent.prevent_auto_commit ?? false);
       setCommitPrompt(c.git.commit_prompt);
       const timeoutSecs = c.git.commit_message_timeout_secs ?? DEFAULT_COMMIT_MESSAGE_TIMEOUT_SECS;
       setCommitMessageTimeoutSecs(
@@ -177,6 +180,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
             default: agentDefault,
             default_permission_mode: defaultPermissionMode,
             prompt_prefix: promptPrefix,
+            prevent_auto_commit: preventAutoCommit,
           },
           git: {
             commit_prompt: commitPrompt,
@@ -257,6 +261,23 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
                   spellCheck={false}
                   placeholder={t("settings.promptPrefixPlaceholder")}
                 />
+              </div>
+              <div style={s.modalField}>
+                <label style={s.modalLabel}>
+                  <span
+                    style={s.settingsMultiSelectOption}
+                    onClick={() => setPreventAutoCommit(!preventAutoCommit)}
+                  >
+                    <input
+                      type="checkbox"
+                      style={s.settingsMultiSelectCheckbox}
+                      checked={preventAutoCommit}
+                      onChange={(e) => setPreventAutoCommit(e.target.checked)}
+                    />
+                    <span style={s.settingsMultiSelectLabel}>{t("settings.preventAutoCommit")}</span>
+                  </span>
+                  <span style={s.modalLabelHint}>{t("settings.preventAutoCommitHint")}</span>
+                </label>
               </div>
             </div>
 

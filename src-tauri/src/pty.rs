@@ -26,6 +26,10 @@ const PTY_EMIT_CHANNEL_CAPACITY: usize = 32;
 /// 是终端始终未挂载（异常路径）时不无限推迟任务启动。
 const TERMINAL_READY_WAIT_MAX: Duration = Duration::from_secs(3);
 
+/// `[agent] prevent_auto_commit` 开启时注入的禁令（中英双语覆盖 agent 系统语言差异）。
+/// 只拦 `git commit`；暂存 / 只读 git / worktree 分支操作明确放行，避免误伤正常流程。
+const PREVENT_AUTO_COMMIT_PROMPT: &str = "禁止执行 `git commit`——用户将在验证修改后自行提交。允许使用 `git add` 暂存、`git status`/`git diff` 等只读操作，以及 worktree 流程所需的分支操作。\nDo NOT run `git commit` — the user will review the changes and commit manually. `git add`, read-only git commands, and worktree branch operations are allowed.";
+
 /// 统一的 PTY system 入口:Windows 上先等待侧载 ConPTY 预加载完成再创建
 /// (portable-pty 的 CONPTY 是 lazy_static,首次 openpty 前必须完成预加载,
 /// 见 platform/windows.rs;其余平台该屏障为 no-op)。openpty 一律经此获取,
@@ -1364,6 +1368,15 @@ pub async fn run_task(
         prompt.clone()
     } else {
         format!("{}\n{}", config.agent.prompt_prefix, prompt)
+    };
+    // 「禁止 agent 自动提交」：项目开启 prevent_auto_commit 后追加内置禁令。
+    // 纯提示词软约束（Codex 无 hook 硬拦截对等能力）；允许 git add / 只读 git /
+    // worktree 分支操作，只拦 commit。与 prompt_prefix 一样仅在 run_task 注入，
+    // resume_task 不重复。
+    let base_prompt = if config.agent.prevent_auto_commit {
+        format!("{}\n{}", PREVENT_AUTO_COMMIT_PROMPT, base_prompt)
+    } else {
+        base_prompt
     };
 
     // 将图片路径追加到提示词，供 Claude Code 通过文件工具读取

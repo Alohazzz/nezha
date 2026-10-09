@@ -17,6 +17,9 @@ default = "codex"
 default_permission_mode = "ask"
 # Text automatically prepended (followed by a newline) to every task prompt
 prompt_prefix = ""
+# Instruct agents not to run "git commit" on their own; the user reviews and
+# commits manually after verification (prompt-level constraint, not enforced)
+prevent_auto_commit = false
 
 [git]
 # Prompt used when generating commit messages via the AI agent
@@ -42,6 +45,9 @@ pub struct AgentConfig {
     pub default_permission_mode: String,
     #[serde(default)]
     pub prompt_prefix: String,
+    /// 开启后向每个新任务的提示词注入「禁止自行 git commit」禁令（纯提示词软约束）。
+    #[serde(default)]
+    pub prevent_auto_commit: bool,
 }
 
 fn default_permission_mode() -> String {
@@ -125,6 +131,7 @@ impl Default for ProjectConfig {
                 default: "codex".to_string(),
                 default_permission_mode: "ask".to_string(),
                 prompt_prefix: String::new(),
+                prevent_auto_commit: false,
             },
             git: GitConfig {
                 commit_prompt: "You are a git commit message generator. Based on the provided git diff, write a concise and descriptive commit message. Follow these rules:\n1. Use the imperative mood (e.g., \"Add feature\" not \"Added feature\")\n2. First line: type(scope): short summary (50 chars or less)\n   Types: feat, fix, docs, style, refactor, test, chore\n3. If needed, add a blank line then a brief body explaining what and why\n4. Output ONLY the commit message text, no explanations or markdown formatting".to_string(),
