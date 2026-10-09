@@ -704,7 +704,7 @@ pub async fn yunxiao_search_projects(
     })
 }
 
-/// 搜索项目下的工作项（议题），category 为空时默认查需求+任务+缺陷。
+/// 搜索项目下的工作项（议题），category 为空时默认查需求+缺陷（任务不在议题范围）。
 #[tauri::command]
 pub async fn yunxiao_search_workitems(
     token: String,
@@ -724,7 +724,7 @@ pub async fn yunxiao_search_workitems(
     let category = category
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
-        .unwrap_or_else(|| "Req,Task,Bug".to_string());
+        .unwrap_or_else(|| "Req,Bug".to_string());
     let conditions = conditions
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())

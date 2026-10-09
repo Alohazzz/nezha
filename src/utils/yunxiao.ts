@@ -470,6 +470,16 @@ export function isYunxiaoIssueOverdue(issue: YunxiaoWorkitem, planEnd?: number):
   return planEnd < todayStart.getTime();
 }
 
+/** 议题行类型徽标：需求蓝 / 缺陷红（与状态 chip 同套四色系，色值走主题变量）；未知类型不显示。 */
+export type YunxiaoTypeBadge = { tone: "blue" | "red"; labelKey: string };
+
+export function getYunxiaoTypeBadge(categoryId: string | undefined): YunxiaoTypeBadge | null {
+  const category = (categoryId ?? "").trim().toLowerCase();
+  if (category === "req") return { tone: "blue", labelKey: "yunxiao.categoryReq" };
+  if (category === "bug") return { tone: "red", labelKey: "yunxiao.categoryBug" };
+  return null;
+}
+
 /** 计算当前被占用的议题 id 集合：
  *  - 任务直接绑定（补录待办 / 执行待办 / 直接执行任务）；
  *  - 方案占用——但以「仍存在 task.planId 指向该方案」为准（讨论任务 / 生成的待办存活期间）。

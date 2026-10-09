@@ -448,6 +448,15 @@ export const yunxiao = {
     fontWeight: 700,
     whiteSpace: "nowrap" as const,
   },
+  yunxiaoStatusChipRed: {
+    padding: "1px 8px",
+    borderRadius: 999,
+    background: "var(--yunxiao-status-red-bg)",
+    color: "var(--yunxiao-status-red-fg)",
+    fontSize: 10.5,
+    fontWeight: 700,
+    whiteSpace: "nowrap" as const,
+  },
   // 计划完成时间徽标：默认灰色；逾期（非终态且早于今天）标红。
   yunxiaoPlanEndBadge: {
     padding: "1px 7px",

@@ -148,6 +148,8 @@
   --yunxiao-status-orange-bg: rgba(255, 136, 0, 0.14);
   --yunxiao-status-grey-fg: #57606a;
   --yunxiao-status-grey-bg: rgba(87, 96, 106, 0.12);
+  --yunxiao-status-red-fg: #c7352f;
+  --yunxiao-status-red-bg: rgba(248, 81, 73, 0.14);
   --yunxiao-overdue-fg: #c7352f;
   --yunxiao-overdue-bg: rgba(248, 81, 73, 0.14);
 }
@@ -212,6 +214,8 @@ html.eyecare {
   --yunxiao-status-orange-bg: rgba(186, 132, 60, 0.18);
   --yunxiao-status-grey-fg: #6b6353;
   --yunxiao-status-grey-bg: rgba(122, 108, 79, 0.16);
+  --yunxiao-status-red-fg: #a8443c;
+  --yunxiao-status-red-bg: rgba(178, 84, 72, 0.16);
   --yunxiao-overdue-fg: #a8443c;
   --yunxiao-overdue-bg: rgba(178, 84, 72, 0.16);
 }
@@ -328,6 +332,8 @@ html.dark {
   --yunxiao-status-orange-bg: rgba(255, 154, 60, 0.18);
   --yunxiao-status-grey-fg: #9aa3b2;
   --yunxiao-status-grey-bg: rgba(148, 158, 170, 0.18);
+  --yunxiao-status-red-fg: #ff7b72;
+  --yunxiao-status-red-bg: rgba(248, 81, 73, 0.2);
   --yunxiao-overdue-fg: #ff7b72;
   --yunxiao-overdue-bg: rgba(248, 81, 73, 0.2);
 }

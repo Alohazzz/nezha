@@ -45,12 +45,11 @@ const YUNXIAO_PRODUCTS_PREFIX = "nezha:yunxiaoProducts:";
 /** 多选软上限：讨论会话上下文与图片量的现实约束，超出仅提醒不阻断已选项。 */
 const PLAN_SELECT_SOFT_LIMIT = 10;
 
-type CategoryKey = "all" | "Req" | "Task" | "Bug";
+type CategoryKey = "all" | "Req" | "Bug";
 
 const CATEGORIES: Array<{ key: CategoryKey; labelKey: string }> = [
   { key: "all", labelKey: "yunxiao.categoryAll" },
   { key: "Req", labelKey: "yunxiao.categoryReq" },
-  { key: "Task", labelKey: "yunxiao.categoryTask" },
   { key: "Bug", labelKey: "yunxiao.categoryBug" },
 ];
 
@@ -154,7 +153,7 @@ export function YunxiaoView({
 
   // 过滤状态（搜索/我负责的/状态多选/当前用户/持久化）下沉到 hook。
   const statusCategories = useMemo(
-    () => (category === "all" ? ["Req", "Task", "Bug"] : [category]),
+    () => (category === "all" ? ["Req", "Bug"] : [category]),
     [category],
   );
   const filters = useYunxiaoFilters(

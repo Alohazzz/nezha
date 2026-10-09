@@ -8,6 +8,7 @@ import {
   getYunxiaoPriority,
   getYunxiaoProduct,
   getYunxiaoStatusTone,
+  getYunxiaoTypeBadge,
   isYunxiaoIssueOverdue,
   type YunxiaoStatusTone,
 } from "../../utils/yunxiao";
@@ -20,6 +21,12 @@ const STATUS_CHIP_STYLE: Record<YunxiaoStatusTone, React.CSSProperties> = {
   green: s.yunxiaoStatusChipGreen,
   orange: s.yunxiaoStatusChipOrange,
   grey: s.yunxiaoStatusChipGrey,
+};
+
+/** 类型徽标色调 → chip 样式（需求蓝 / 缺陷红）。 */
+const TYPE_CHIP_STYLE: Record<"blue" | "red", React.CSSProperties> = {
+  blue: s.yunxiaoStatusChipBlue,
+  red: s.yunxiaoStatusChipRed,
 };
 
 function formatDate(ts: number | undefined): string {
@@ -102,6 +109,7 @@ export function YunxiaoIssueList({
           const statusLabel =
             issue.status?.displayName ?? issue.status?.name ?? t("yunxiao.statusUnknown");
           const statusTone = getYunxiaoStatusTone(issue);
+          const typeBadge = getYunxiaoTypeBadge(issue.categoryId);
           const planEnd = getYunxiaoPlanEndDate(issue, planEndFieldId ?? undefined);
           const overdue = isYunxiaoIssueOverdue(issue, planEnd);
           const product = getYunxiaoProduct(issue, productFieldId ?? undefined);
@@ -137,6 +145,9 @@ export function YunxiaoIssueList({
               <div style={s.yunxiaoIssueBody}>
                 <div style={s.yunxiaoIssueSubject}>{issue.subject}</div>
                 <div style={s.yunxiaoIssueMeta}>
+                  {typeBadge && (
+                    <span style={TYPE_CHIP_STYLE[typeBadge.tone]}>{t(typeBadge.labelKey)}</span>
+                  )}
                   <span style={STATUS_CHIP_STYLE[statusTone]}>{statusLabel}</span>
                   {planEnd !== undefined && (
                     <span style={overdue ? s.yunxiaoPlanEndOverdue : s.yunxiaoPlanEndBadge}>
