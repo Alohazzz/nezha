@@ -36,9 +36,10 @@ pub struct BuildConfig {
     pub skip_clean: bool,
     #[serde(default)]
     pub default_branch: String,
-    /// 构建面板「可选子仓库」白名单：主仓库恒显示；子模块的名称或路径命中任一关键字
-    /// （忽略大小写）才列出。留空表示列出全部子模块。可在项目设置页编辑。
-    #[serde(default = "default_visible_subrepos")]
+    /// 构建面板「可选子仓库」白名单：主仓库恒显示；其余仓库（.gitmodules 子模块
+    /// 与第一层嵌套仓库）的名称或路径命中任一关键字（忽略大小写）才列出。
+    /// 留空表示不限制，列出全部发现的仓库。可在项目设置页编辑。
+    #[serde(default)]
     pub visible_subrepos: Vec<String>,
     #[serde(default = "default_max_parallel")]
     pub max_parallel: u32,
@@ -57,13 +58,6 @@ fn default_configuration() -> String {
 fn default_platform() -> String {
     "AnyCPU".to_string()
 }
-fn default_visible_subrepos() -> Vec<String> {
-    vec![
-        "DrugInOut".to_string(),
-        "Term".to_string(),
-        "Hsp.Win".to_string(),
-    ]
-}
 fn default_max_parallel() -> u32 {
     2
 }
@@ -81,7 +75,7 @@ impl Default for BuildConfig {
             skip_restore: false,
             skip_clean: false,
             default_branch: String::new(),
-            visible_subrepos: default_visible_subrepos(),
+            visible_subrepos: Vec::new(),
             max_parallel: default_max_parallel(),
             auto_fix_on_failure: false,
         }
@@ -369,13 +363,14 @@ pub struct BuildSubrepo {
     pub path: String,
 }
 
-/// 轻量列出项目的子仓库（只读 `.gitmodules`，**不跑任何 git 命令**）。
+/// 轻量列出项目的子仓库（`.gitmodules` 条目 + 第一层嵌套仓库，**不跑任何 git 命令**）。
 ///
 /// 用途：只需要「有哪些子仓库可勾选」的场景（如设置页的「可选子仓库」下拉）。
 /// 完整 `discover_build_repos` 即使已并发化，仍要为每个仓库跑数条 git 命令
 /// （每条都是一次约 80ms 的进程启动），只为填一个下拉框不值当——这里约 5ms。
-/// 命名口径与 `discover_repos_blocking` 一致（均取自 `parse_gitmodules`），
-/// 因此列表里的名字可以直接作为构建面板白名单的匹配值。
+/// 命名口径与 `discover_repos_blocking` 一致：子模块取 `parse_gitmodules` 名，
+/// 嵌套仓库取目录名；撞车时子模块优先。因此列表里的名字可以直接作为构建面板
+/// 白名单的匹配值。
 #[tauri::command]
 pub async fn list_build_subrepos(project_path: String) -> Result<Vec<BuildSubrepo>, String> {
     validate_project_path(&project_path)?;
@@ -384,21 +379,49 @@ pub async fn list_build_subrepos(project_path: String) -> Result<Vec<BuildSubrep
         .map_err(|e| format!("list_build_subrepos panicked: {e}"))?
 }
 
-/// `list_build_subrepos` 的同步实现（无 git 调用，只解析 `.gitmodules`）。
+/// `list_build_subrepos` 的同步实现（无 git 调用，只做文件系统判断）。
 fn list_subrepos_blocking(project_path: &str) -> Result<Vec<BuildSubrepo>, String> {
     let root = read_project_path(project_path)?;
+    let mut out: Vec<BuildSubrepo> = Vec::new();
     let gitmodules = root.join(".gitmodules");
-    if !gitmodules.exists() {
-        return Ok(Vec::new());
+    if gitmodules.exists() {
+        let content = std::fs::read_to_string(&gitmodules).unwrap_or_default();
+        for (name, rel, _) in parse_gitmodules(&content) {
+            out.push(BuildSubrepo {
+                name,
+                path: root.join(&rel).to_string_lossy().into_owned(),
+            });
+        }
     }
-    let content = std::fs::read_to_string(&gitmodules).unwrap_or_default();
-    Ok(parse_gitmodules(&content)
-        .into_iter()
-        .map(|(name, rel, _)| BuildSubrepo {
-            name,
-            path: root.join(&rel).to_string_lossy().into_owned(),
-        })
-        .collect())
+    // 第一层嵌套仓库：与 discover_repos_blocking 同一套扫描口径（含子模块优先去重），
+    // 否则设置页勾不到构建面板里实际列出的嵌套仓库。
+    let claimed: HashSet<PathBuf> = out
+        .iter()
+        .map(|s| PathBuf::from(&s.path))
+        .chain(std::iter::once(root.clone()))
+        .collect();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || claimed.contains(&path) {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') || name == "node_modules" || name == ".nezha" {
+                continue;
+            }
+            if !path.join(".git").exists() {
+                continue;
+            }
+            out.push(BuildSubrepo {
+                name: name.to_string(),
+                path: path.to_string_lossy().into_owned(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// 单仓库的 git 元信息（`discover_repos_blocking` 内部用，便于并发收集）。
@@ -425,7 +448,7 @@ fn repo_git_info(dir: &str, remote: Option<String>) -> RepoGitInfo {
     }
 }
 
-/// 自动推导仓库清单：主仓库 + `.gitmodules` 子模块。
+/// 自动推导仓库清单：主仓库 + `.gitmodules` 子模块 + 第一层嵌套 git 仓库。
 /// 在阻塞线程执行（涉及 git / 文件 IO）。
 #[tauri::command]
 pub async fn discover_build_repos(project_path: String) -> Result<Vec<BuildRepo>, String> {
@@ -475,6 +498,40 @@ pub(crate) fn discover_repos_blocking(project_path: &str) -> Result<Vec<BuildRep
                 url,
                 is_submodule: true,
                 missing: !full.exists(),
+            });
+        }
+    }
+
+    // 第一层嵌套仓库（前后端同项目目录的常见布局）：目录名撞车的子模块优先，
+    // 嵌套仓库只补缺口。跳过隐藏目录 / node_modules / .nezha；`.git` 是文件也算
+    // （git worktree / submodule 的链接形态）。
+    let claimed: HashSet<PathBuf> = pending
+        .iter()
+        .map(|p| PathBuf::from(&p.path))
+        .chain(std::iter::once(root.clone()))
+        .collect();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || claimed.contains(&path) {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') || name == "node_modules" || name == ".nezha" {
+                continue;
+            }
+            let is_repo = path.join(".git").exists();
+            if !is_repo {
+                continue;
+            }
+            pending.push(Pending {
+                name: name.to_string(),
+                path: path.to_string_lossy().into_owned(),
+                url: String::new(),
+                is_submodule: false,
+                missing: false,
             });
         }
     }
@@ -1838,18 +1895,17 @@ mod tests {
         assert!(!is_submodule_path("Nto.His/DrugInOut", &subs));
     }
 
-    // 构建面板的「可选子仓库」白名单：缺省必须含 Hsp.Win；显式空数组表示不限制
-    // （前端据此展示全部子模块），因此不能把「缺失」与「空」混为一谈。
+    // 「可选子仓库」白名单缺省 = 不限制（列出全部发现的仓库）：旧版硬编码默认
+    // 白名单（DrugInOut/Term/Hsp.Win）已删除，「缺失」与「空」语义一致，均为不过滤。
     #[test]
-    fn visible_subrepos_default_includes_hsp_win_and_empty_means_unrestricted() {
-        assert!(default_visible_subrepos().iter().any(|s| s == "Hsp.Win"));
-        assert_eq!(BuildConfig::default().visible_subrepos, default_visible_subrepos());
+    fn visible_subrepos_default_is_unrestricted() {
+        assert!(BuildConfig::default().visible_subrepos.is_empty());
 
-        // 配置里缺该字段（老配置文件）→ 落到默认白名单
+        // 配置里缺该字段（老配置文件）→ 不限制
         let legacy: BuildConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(legacy.visible_subrepos, default_visible_subrepos());
+        assert!(legacy.visible_subrepos.is_empty());
 
-        // 显式空数组 → 保持为空（前端不过滤）
+        // 显式空数组 → 同样不限制
         let unrestricted: BuildConfig =
             serde_json::from_str("{\"visible_subrepos\":[]}").unwrap();
         assert!(unrestricted.visible_subrepos.is_empty());
@@ -1881,6 +1937,61 @@ mod tests {
     fn list_subrepos_is_empty_without_gitmodules() {
         let repo = TempRepo::new();
         assert!(list_subrepos_blocking(repo.dir()).unwrap().is_empty());
+    }
+
+    // 轻量列举必须覆盖第一层嵌套 git 仓库（前后端同项目目录的布局），
+    // 且与 discover_repos_blocking 同一套去重口径：子模块优先、跳过 node_modules。
+    #[test]
+    fn list_subrepos_includes_first_level_nested_repos() {
+        let repo = TempRepo::new();
+        let web = repo.path.join("web");
+        let server = repo.path.join("server");
+        let plain = repo.path.join("plain-dir");
+        let modules = repo.path.join("node_modules/pkg");
+        for dir in [&web, &server, &plain, &modules] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        for dir in [&web, &server, &modules] {
+            let o = Command::new("git").arg("init").arg(dir).output().unwrap();
+            assert!(o.status.success());
+        }
+
+        let subs = list_subrepos_blocking(repo.dir()).unwrap();
+        let mut names: Vec<&str> = subs.iter().map(|s| s.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["server", "web"]);
+        // plain-dir 不是 git 仓库、node_modules 被跳过，都不该出现。
+    }
+
+    // 完整发现：主仓库 + .gitmodules 子模块 + 第一层嵌套仓库。未初始化子模块
+    // （目录不存在）保持 missing 标记，第一层扫描不得把它当嵌套仓库补进来。
+    #[test]
+    fn discover_repos_includes_first_level_nested_repos_with_submodule_priority() {
+        let repo = TempRepo::new();
+        // 嵌套仓库（独立 git 仓库，非子模块）
+        let web = repo.path.join("web");
+        std::fs::create_dir_all(&web).unwrap();
+        let o = Command::new("git").arg("init").arg(&web).output().unwrap();
+        assert!(o.status.success());
+        // 子模块只做声明：目录不存在 → missing=true，且不会被第一层扫描重复收录。
+        std::fs::write(
+            repo.path.join(".gitmodules"),
+            "[submodule \"ghost-sub\"]\n\tpath = ghost-sub\n\turl = git@example.com:x.git\n",
+        )
+        .unwrap();
+
+        let repos = discover_repos_blocking(repo.dir()).unwrap();
+        let mut names: Vec<&str> = repos.iter().map(|r| r.name.as_str()).collect();
+        names.sort();
+        let mut expected: Vec<String> = vec!["ghost-sub".into(), "web".into(), repo.name()];
+        expected.sort();
+        assert_eq!(names, expected);
+        let ghost = repos.iter().find(|r| r.name == "ghost-sub").unwrap();
+        assert!(ghost.is_submodule);
+        assert!(ghost.missing);
+        let web_repo = repos.iter().find(|r| r.name == "web").unwrap();
+        assert!(!web_repo.is_submodule);
+        assert!(!web_repo.missing);
     }
 
     /// 临时 bare 远端仓库（Drop 时删除）。

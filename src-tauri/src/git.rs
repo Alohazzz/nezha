@@ -402,13 +402,14 @@ fn subrepo_whitelist(project_path: &str) -> Vec<String> {
 /// - 按「可选子仓库」白名单过滤（名称或路径的子串、忽略大小写；白名单为空表示全列）；
 /// - 未初始化 / 目录缺失的子模块不返回——拿它当 cwd 跑 git 会向上解析到主仓库，
 ///   面板会假装成主仓库的内容，比不列出来更糟。
-fn submodule_git_roots(root_path: &str, project_canonical: &Path) -> Vec<GitRoot> {
+fn submodule_git_roots(root_path: &str, project_canonical: &Path) -> (Vec<GitRoot>, Vec<PathBuf>) {
     let gitmodules = Path::new(root_path).join(".gitmodules");
     let Ok(content) = std::fs::read_to_string(&gitmodules) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let whitelist = subrepo_whitelist(root_path);
     let mut found: Vec<GitRoot> = Vec::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
     for (name, rel, _url) in crate::build::parse_gitmodules(&content) {
         let full = Path::new(root_path).join(&rel);
         if !dir_is_git_repo(&full) {
@@ -430,9 +431,64 @@ fn submodule_git_roots(root_path: &str, project_canonical: &Path) -> Vec<GitRoot
                 continue;
             }
         }
+        paths.push(PathBuf::from(path));
         found.push(GitRoot {
             path: path.to_string(),
             name,
+            is_root: false,
+        });
+    }
+    (found, paths)
+}
+
+/// 第一层子目录里的嵌套 git 仓库（前后端同项目目录、各自独立仓库的布局）。
+///
+/// - 与 `submodule_git_roots` 同一套白名单过滤与防逃逸规则；
+/// - `claimed`：已被主仓库 / 子模块占用的路径（子模块优先，撞车目录不重复列出）；
+/// - 跳过隐藏目录、`node_modules`、`.nezha`；`.git` 是文件也算（worktree 链接形态）。
+fn nested_git_roots(
+    root_path: &str,
+    project_canonical: &Path,
+    claimed: &[PathBuf],
+    whitelist: &[String],
+) -> Vec<GitRoot> {
+    let Ok(entries) = std::fs::read_dir(root_path) else {
+        return Vec::new();
+    };
+    let mut found: Vec<GitRoot> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || claimed.contains(&path) {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || name == "node_modules" || name == ".nezha" {
+            continue;
+        }
+        if !dir_is_git_repo(&path) {
+            continue;
+        }
+        let Ok(canonical) = path.canonicalize() else {
+            continue;
+        };
+        // Do not surface a first-level symlink that points to a repository outside the workspace.
+        if !canonical.starts_with(project_canonical) {
+            continue;
+        }
+        let Some(path_str) = path.to_str() else {
+            continue;
+        };
+        if !whitelist.is_empty() {
+            let haystack = format!("{}\n{}", name.to_lowercase(), path_str.to_lowercase());
+            if !whitelist.iter().any(|key| haystack.contains(key)) {
+                continue;
+            }
+        }
+        found.push(GitRoot {
+            path: path_str.to_string(),
+            name: name.to_string(),
             is_root: false,
         });
     }
@@ -440,7 +496,8 @@ fn submodule_git_roots(root_path: &str, project_canonical: &Path) -> Vec<GitRoot
 }
 
 /// 发现给定 project_path 下所有 git 工作目录。
-/// - 如果 project_path 自身是 git → 主仓库在前，其后是 `.gitmodules` 子模块（按白名单过滤）
+/// - 如果 project_path 自身是 git → 主仓库在前，其后是 `.gitmodules` 子模块和
+///   第一层嵌套仓库（均按白名单过滤，子模块优先去重）
 /// - 否则扫描第一层子目录中含 `.git` 的，按名字排序后返回
 /// - 都不是 → 返回空 vec（前端识别为非 git 项目）
 fn discover_git_roots_blocking(project_path: &str) -> Result<Vec<GitRoot>, String> {
@@ -456,7 +513,17 @@ fn discover_git_roots_blocking(project_path: &str) -> Result<Vec<GitRoot>, Strin
             name: ".".to_string(),
             is_root: true,
         }];
-        found.extend(submodule_git_roots(project_path, &project_canonical));
+        let (submodules, submodule_paths) = submodule_git_roots(project_path, &project_canonical);
+        found.extend(submodules);
+        let mut claimed = submodule_paths;
+        claimed.push(root.to_path_buf());
+        let whitelist = subrepo_whitelist(project_path);
+        found.extend(nested_git_roots(
+            project_path,
+            &project_canonical,
+            &claimed,
+            &whitelist,
+        ));
         return Ok(found);
     }
 
@@ -3068,9 +3135,12 @@ mod tests {
 
         let roots = discover_git_roots_blocking(&project_path).unwrap();
 
-        // 默认白名单（DrugInOut / Term / Hsp.Win）放行两个命中项；Other 被过滤。
+        // 白名单缺省 = 不限制：三个已初始化子模块全列出；Term 未初始化不出现。
         let names: Vec<&str> = roots.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec![".", "Hsp.Win", "Nto.His/Nto.His.DrugInOut"]);
+        assert_eq!(
+            names,
+            vec![".", "Hsp.Win", "Nto.His/Nto.His.DrugInOut", "Other"]
+        );
         assert!(roots[0].is_root);
         assert_eq!(roots[1].path, root.join("Hsp.Win").to_str().unwrap());
         assert!(!roots[1].is_root);
@@ -3098,6 +3168,39 @@ mod tests {
 
         let names: Vec<&str> = roots.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, vec![".", "Other"]);
+    }
+
+    // 根仓库是 git 时，第一层嵌套 git 仓库（非 .gitmodules 声明）也要被发现：
+    // 前后端同项目目录、各自独立仓库的布局。子模块优先：已初始化子模块 web
+    // 只出现一次（嵌套扫描跳过被占用的路径），不会重复列出。
+    #[test]
+    fn discovers_first_level_nested_repos_after_root_with_submodule_priority() {
+        let repo = TempRepo::new();
+        let project_path = repo.path_string();
+        let root = Path::new(&project_path);
+        // web：.gitmodules 子模块（已初始化，.git 为链接文件形态）
+        fs::create_dir_all(root.join("web")).unwrap();
+        fs::write(root.join("web/.git"), "gitdir: /tmp/elsewhere\n").unwrap();
+        fs::write(
+            root.join(".gitmodules"),
+            "[submodule \"web\"]\n\tpath = web\n\turl = git@example.com:web.git\n",
+        )
+        .unwrap();
+        // server：纯嵌套仓库（独立 git init，不在 .gitmodules 里）
+        let server = root.join("server");
+        fs::create_dir_all(&server).unwrap();
+        let out = Command::new("git").arg("init").arg(&server).output().unwrap();
+        assert!(out.status.success());
+        // 非 git 目录与 node_modules 内的仓库不收
+        fs::create_dir_all(root.join("plain-directory")).unwrap();
+        fs::create_dir_all(root.join("node_modules/pkg/.git")).unwrap();
+
+        let roots = discover_git_roots_blocking(&project_path).unwrap();
+
+        let names: Vec<&str> = roots.iter().map(|r| r.name.as_str()).collect();
+        // 子模块在前、嵌套仓库在后；web 只出现一次。
+        assert_eq!(names, vec![".", "web", "server"]);
+        assert!(roots[0].is_root);
     }
 
     #[test]

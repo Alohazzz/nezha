@@ -1,33 +1,40 @@
 /** 构建面板「可选子仓库」白名单的共享定义。
  *
- * 默认值与后端 `src-tauri/src/build.rs::default_visible_subrepos` 保持一致：只列出
- * DrugInOut / Term / Hsp.Win 三个子模块，其余子模块不在构建面板里出现。用户可在
- * 项目设置页覆盖该列表；列表为空表示不做限制，展示全部子模块。
+ * 默认行为是**不限制**：未配置（空列表 / 字段缺失）时列出全部发现的仓库
+ * （主仓库恒显示）。需要收缩的用户在项目设置页勾选；与后端
+ * `src-tauri/src/build.rs` 的 `visible_subrepos` 缺省语义保持一致。
  */
-export const DEFAULT_VISIBLE_SUBREPOS = ["DrugInOut", "Term", "Hsp.Win"];
 
-/** 仓库是否需要按白名单过滤的最小结构（主仓库 / 子模块）。 */
+/** 仓库是否需要按白名单过滤的最小结构（主仓库 / 子模块 / 嵌套仓库）。 */
 interface FilterableRepo {
   name: string;
   path: string;
   is_submodule: boolean;
 }
 
-/** 按白名单过滤仓库：主仓库恒显示；子模块的名称或路径命中任一关键字（忽略大小写）才展示。
- * `patterns` 缺省用内置默认值；显式传空数组表示不限制，展示全部子模块。 */
+/** 按白名单过滤仓库：主仓库（路径等于 rootPath）恒显示；其余仓库（子模块 /
+ * 嵌套仓库）的名称或路径命中任一关键字（忽略大小写）才展示。`patterns` 缺省
+ * 或为空数组均表示不限制，展示全部仓库。 */
 export function filterVisibleRepos<T extends FilterableRepo>(
   list: T[],
   patterns?: string[],
+  rootPath?: string,
 ): T[] {
-  const keys = (patterns ?? DEFAULT_VISIBLE_SUBREPOS)
+  const keys = (patterns ?? [])
     .map((p) => p.trim().toLowerCase())
     .filter(Boolean);
   if (keys.length === 0) return list;
-  return list.filter(
-    (r) =>
-      !r.is_submodule ||
-      keys.some((k) => r.name.toLowerCase().includes(k) || r.path.toLowerCase().includes(k)),
-  );
+  const root = rootPath?.replace(/\\/g, "/").toLowerCase();
+  return list.filter((r) => {
+    if (root !== undefined && r.path.replace(/\\/g, "/").toLowerCase() === root) {
+      return true;
+    }
+    // 兜底：discover 保证主仓库在列表首位；rootPath 未传时不误杀它。
+    if (root === undefined && r === list[0]) return true;
+    return keys.some(
+      (k) => r.name.toLowerCase().includes(k) || r.path.toLowerCase().includes(k),
+    );
+  });
 }
 
 /** 把配置里保存的关键字对齐到实际发现的仓库名（多选下拉的值必须是真实存在的选项）。

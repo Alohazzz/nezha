@@ -8,10 +8,7 @@ import s from "../styles";
 import { KnowledgeGraphPanel } from "./settings/KnowledgeGraphPanel";
 import { Select } from "./settings/Select";
 import { MultiSelect } from "./settings/MultiSelect";
-import {
-  DEFAULT_VISIBLE_SUBREPOS,
-  resolveVisibleSubrepos,
-} from "./build/visibleSubrepos";
+import { resolveVisibleSubrepos } from "./build/visibleSubrepos";
 
 interface ProjectConfig {
   agent: {
@@ -31,7 +28,7 @@ interface ProjectConfig {
     graphId?: string;
   };
   build?: {
-    /** 构建面板「可选子仓库」白名单；空数组 = 列出全部子模块。 */
+    /** 构建面板「可选子仓库」白名单；空数组 = 不限制，列出全部发现的仓库。 */
     visible_subrepos?: string[];
     [key: string]: unknown;
   };
@@ -63,7 +60,7 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
   );
   const [worktreeBasePath, setWorktreeBasePath] = useState("");
   // 构建面板「可选子仓库」：存的是子仓库名（后端按名称/路径做 includes 匹配）。
-  // 空数组 = 不限制，列出全部子模块。
+  // 空数组 = 不限制，列出全部发现的仓库（主仓库恒显示）。
   const [visibleSubrepos, setVisibleSubrepos] = useState<string[]>([]);
   // 选项来自项目实际发现的子模块，而不是让用户手敲关键字。
   const [subrepoOptions, setSubrepoOptions] = useState<
@@ -116,14 +113,9 @@ function ProjectSettings({ projectPath, onClose }: { projectPath: string; onClos
         ),
       );
       setWorktreeBasePath(c.worktree?.base_path ?? "");
-      setVisibleSubrepos(
-        resolveVisibleSubrepos(
-          // 与 BuildPanel 的兜底保持一致：拿不到配置时用内置默认白名单，
-          // 而不是「不限制」——两处对同一份配置必须给出同一种解读。
-          c.build?.visible_subrepos ?? DEFAULT_VISIBLE_SUBREPOS,
-          discovered,
-        ),
-      );
+      // 白名单缺省 = 不限制（列出全部发现的仓库）。拿不到配置时同样按「不限制」
+      // 解读——两处（这里与 BuildPanel）对同一份配置必须给出同一种解读。
+      setVisibleSubrepos(resolveVisibleSubrepos(c.build?.visible_subrepos ?? [], discovered));
     })();
 
     return () => {

@@ -57,6 +57,8 @@ function panelCommandDefaults(): Record<string, () => unknown> {
       skip_clean: false,
       default_branch: "",
       max_parallel: 2,
+      // 显式配置白名单：无配置 = 不限制（新默认），此处要测的是「白名单过滤生效」。
+      visible_subrepos: ["Nto.His"],
     }),
     read_build_state: () => ({ last_built: {} }),
     read_project_config: () => ({ agent: { default: "claude", default_permission_mode: "ask" } }),

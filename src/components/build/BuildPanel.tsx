@@ -303,7 +303,7 @@ export function BuildPanel({
     }
     try {
       const repoList = await invoke<BuildRepo[]>("discover_build_repos", { projectPath });
-      const visible = filterVisibleRepos(repoList, cfg?.visible_subrepos);
+      const visible = filterVisibleRepos(repoList, cfg?.visible_subrepos, projectPath);
       setRepos(visible);
       setSelected((prev) => {
         const next = new Set<string>();
