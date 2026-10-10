@@ -1747,19 +1747,22 @@ pub struct YunxiaoWritebackResult {
     pub dev_comment_id: String,
     /// 测试向评论 ID（测试内容为空时未发布，为 None）。
     pub test_comment_id: Option<String>,
-    /// 解析出的评分指数（四舍五入），无评分小节时为 None。
+    /// 评分评论 ID（评分内容为空时未发布，为 None）。
+    pub score_comment_id: Option<String>,
+    /// 解析出的评分指数（四舍五入），无评分内容时为 None。
     pub score_value: Option<i32>,
     /// 「价值评分」字段是否写入成功。
     pub field_written: bool,
-    /// 非阻断警告（评分缺失 / 字段未找到 / 字段写入失败）。
+    /// 非阻断警告（评分缺失 / 字段未找到 / 字段写入失败 / 评分评论发布失败）。
     pub warning: Option<String>,
 }
 
-/// 提交总结回写：发布两条评论（开发向 + 测试向），再把「价值评分」写入议题字段。
-/// - 开发向评论保留「价值评分」推导小节（面向开发解释评分由来）；
-/// - 评分数值同时从开发向评论解析并写入议题「价值评分」字段；
-/// - 测试向评论为空时跳过发布（test_comment_id=None）。
-/// 字段写入失败不阻断（返回 warning，前端提供「补写字段」入口）。
+/// 提交总结回写：发布三条评论（开发向 + 测试向 + 评分），再把「价值评分」写入议题字段。
+/// - 评分数值从评分评论解析（独立输入，编辑 dev/test 预览不影响字段链路）；
+/// - 测试向 / 评分评论为空时跳过发布（对应 *_comment_id=None）；评分评论为空时
+///   回落从开发向评论解析（兼容只传两条的旧调用与旧草稿）；
+/// - 字段写入失败不阻断（返回 warning，前端提供「补写字段」入口）；
+/// - 评分评论发布失败不阻断（dev/test 已发出，警告上报，字段写入继续）。
 #[tauri::command]
 pub async fn yunxiao_writeback_with_score(
     token: String,
@@ -1767,6 +1770,7 @@ pub async fn yunxiao_writeback_with_score(
     workitem_id: String,
     dev_content: String,
     test_content: String,
+    score_content: Option<String>,
 ) -> Result<YunxiaoWritebackResult, String> {
     let token = token.trim().to_string();
     let organization_id = organization_id.trim().to_string();
@@ -1776,6 +1780,7 @@ pub async fn yunxiao_writeback_with_score(
     }
     let dev_content = dev_content.trim();
     let test_content = test_content.trim();
+    let score_content = score_content.as_deref().map(str::trim).unwrap_or("");
     if dev_content.is_empty() {
         return Err("开发向评论不能为空".to_string());
     }
@@ -1785,16 +1790,22 @@ pub async fn yunxiao_writeback_with_score(
     if test_content.chars().count() > MAX_COMMENT_CHARS {
         return Err(format!("测试向评论超过 {MAX_COMMENT_CHARS} 字上限"));
     }
-    // 从开发向评论解析「价值评分」数值（评分小节保留在开发向评论正文里，随评论发布）。
-    let score_value = crate::value_score::extract_value_score_section(dev_content)
+    if !score_content.is_empty() && score_content.chars().count() > MAX_COMMENT_CHARS {
+        return Err(format!("评分评论超过 {MAX_COMMENT_CHARS} 字上限"));
+    }
+    // 评分数值优先从评分评论解析；评分评论缺省时回落开发向评论（旧格式草稿仍把
+    // 评分小节写在正文里）。评分数值与评分评论发布互不依赖，解析失败只影响字段。
+    let score_value = crate::value_score::extract_value_score_section(score_content)
+        .or_else(|| crate::value_score::extract_value_score_section(dev_content))
         .and_then(crate::value_score::parse_value_score_index)
         .map(|v| v.round() as i32);
     // 发送前把 Markdown 转成云效富文本 JSON（评分解析已在原始 Markdown 上完成，转换不破坏评分链路）。
     let dev_rich = markdown_to_yunxiao_rich_text(dev_content);
     let test_rich = markdown_to_yunxiao_rich_text(test_content);
+    let score_rich = markdown_to_yunxiao_rich_text(score_content);
 
     let client = build_client()?;
-    // 1) 先发布开发向评论（含评分推导小节）。
+    // 1) 先发布开发向评论。
     let dev_comment_id =
         post_workitem_comment(&client, &token, &organization_id, &workitem_id, &dev_rich).await?;
     // 2) 测试向评论非空时再发布（test_content 非空则 test_rich 必非空）。
@@ -1812,35 +1823,64 @@ pub async fn yunxiao_writeback_with_score(
             .await?,
         )
     };
-
-    // 3) 评分写入议题字段（失败不阻断，返回 warning）
-    let Some(score_value) = score_value else {
-        return Ok(YunxiaoWritebackResult {
-            dev_comment_id,
-            test_comment_id,
-            score_value: None,
-            field_written: false,
-            warning: Some("未检测到价值评分小节，未写入议题字段".to_string()),
-        });
-    };
-    match write_value_score_field(&client, &token, &organization_id, &workitem_id, score_value)
+    // 3) 评分评论最后发布（弱化评论区噪音）；失败不阻断（dev/test 已发出）。
+    let mut score_warning: Option<String> = None;
+    let score_comment_id = if score_content.is_empty() {
+        None
+    } else {
+        match post_workitem_comment(
+            &client,
+            &token,
+            &organization_id,
+            &workitem_id,
+            &score_rich,
+        )
         .await
-    {
-        Ok(()) => Ok(YunxiaoWritebackResult {
-            dev_comment_id,
-            test_comment_id,
-            score_value: Some(score_value),
-            field_written: true,
-            warning: None,
-        }),
-        Err(warning) => Ok(YunxiaoWritebackResult {
-            dev_comment_id,
-            test_comment_id,
-            score_value: Some(score_value),
-            field_written: false,
-            warning: Some(warning),
-        }),
-    }
+        {
+            Ok(id) => Some(id),
+            Err(e) => {
+                score_warning = Some(format!("评分评论发布失败（评论已部分发布）: {e}"));
+                None
+            }
+        }
+    };
+
+    // 4) 评分写入议题字段（失败不阻断，返回 warning）
+    let warning = match score_value {
+        None => Some(
+            score_warning.unwrap_or_else(|| "未检测到价值评分内容，未写入议题字段".to_string()),
+        ),
+        Some(score_value) => {
+            match write_value_score_field(
+                &client,
+                &token,
+                &organization_id,
+                &workitem_id,
+                score_value,
+            )
+            .await
+            {
+                Ok(()) => score_warning,
+                Err(e) => Some(match score_warning {
+                    Some(w) => format!("{w}；字段写入失败: {e}"),
+                    None => e,
+                }),
+            }
+        }
+    };
+    let field_written = score_value.is_some()
+        && warning
+            .as_deref()
+            .map(|w| !w.contains("字段写入失败") && !w.contains("未写入议题字段"))
+            .unwrap_or(false);
+    Ok(YunxiaoWritebackResult {
+        dev_comment_id,
+        test_comment_id,
+        score_comment_id,
+        score_value,
+        field_written,
+        warning,
+    })
 }
 
 /// 补写「价值评分」字段（评论已发布但字段写入失败时的重试入口，不重复发评论）。
@@ -2479,20 +2519,8 @@ pub async fn write_backfill_consumed(
 /// 流转边，回退到待处理会被云效 400 拒绝（当前状态:待开发不能流转到目标状态:待处理）。
 pub const PLAN_DEV_STATUS_NAME: &str = "待开发";
 pub const PLAN_CONFIRMED_STATUS_NAME: &str = "已确认";
-/// 「计划完成时间」自定义字段的约定名（与 `YUNXIAO_PLAN_END_FIELD_NAME` 同一约定，Rust 侧独立成常量）。
-pub const PLAN_END_FIELD_NAME: &str = "计划完成时间";
 /// 「计划开始时间」自定义字段的约定名：工作流切「待开发」时云效侧校验必填。
 pub const PLAN_START_FIELD_NAME: &str = "计划开始时间";
-
-/// 毫秒时间戳 → 云效自定义日期字段值（`yyyy-MM-dd 00:00:00`，本地时区零点）。
-fn plan_end_field_value(plan_end_ms: i64) -> String {
-    use chrono::{Local, TimeZone};
-    Local
-        .timestamp_millis_opt(plan_end_ms)
-        .earliest()
-        .map(|t| t.format("%Y-%m-%d 00:00:00").to_string())
-        .unwrap_or_default()
-}
 
 /// 「计划开始时间」默认取加入当天（本地时区零点，与日期字段格式约定一致）。
 fn plan_start_default_value() -> String {
@@ -2533,25 +2561,6 @@ async fn fetch_plan_date_field_id(
     Ok(field_id)
 }
 
-/// 「计划完成时间」字段 ID 解析的便捷封装。
-async fn fetch_plan_end_field_id(
-    client: &reqwest::Client,
-    token: &str,
-    organization_id: &str,
-    project_id: &str,
-    workitem_type_id: &str,
-) -> Result<String, String> {
-    fetch_plan_date_field_id(
-        client,
-        token,
-        organization_id,
-        project_id,
-        workitem_type_id,
-        PLAN_END_FIELD_NAME,
-    )
-    .await
-}
-
 /// 「计划开始时间」字段 ID 解析的便捷封装。
 async fn fetch_plan_start_field_id(
     client: &reqwest::Client,
@@ -2571,31 +2580,18 @@ async fn fetch_plan_start_field_id(
     .await
 }
 
-/// 单条议题的「添加到计划」回写：计划开始/完成时间 + 负责人（当前令牌用户）+ 状态（待开发）。
+/// 单条议题的「添加到计划」回写：计划开始时间 + 负责人（当前令牌用户）+ 状态（待开发）。
 /// 开始时间默认取加入当天（云效工作流切「待开发」时校验必填，不写会 400）。
+/// 计划完成时间**不回写**——议题上该字段若已由用户在云效侧维护，保持不动。
 /// 顺序执行，任一步失败即返回 Err（调用方阻断本次添加）。
 pub async fn writeback_issue_add_to_plan(
     client: &reqwest::Client,
     token: &str,
     organization_id: &str,
     workitem_id: &str,
-    plan_end_ms: i64,
 ) -> Result<(), String> {
     let (project_id, workitem_type_id) =
         fetch_workitem_placements(client, token, organization_id, workitem_id).await?;
-    let field_id =
-        fetch_plan_end_field_id(client, token, organization_id, &project_id, &workitem_type_id)
-            .await?;
-    update_workitem_field_json(
-        client,
-        token,
-        organization_id,
-        workitem_id,
-        &field_id,
-        serde_json::Value::String(plan_end_field_value(plan_end_ms)),
-    )
-    .await
-    .map_err(|e| format!("回写计划完成时间失败: {e}"))?;
     let start_field_id =
         fetch_plan_start_field_id(client, token, organization_id, &project_id, &workitem_type_id)
             .await?;
@@ -2636,8 +2632,9 @@ pub async fn writeback_issue_add_to_plan(
     Ok(())
 }
 
-/// 单条议题的「移出计划」回写：状态回退（已确认）+ 清空计划开始/完成时间；负责人不动。
-/// 顺序执行，任一步失败即返回 Err（调用方阻断移除、本地成员不动）。
+/// 单条议题的「移出计划」回写：状态回退（已确认）+ 清空计划开始时间；负责人与
+/// 计划完成时间不动——添加时已不写完成时间，议题上该字段归用户在云效侧维护，
+/// 进不写、出也不删。顺序执行，任一步失败即返回 Err（调用方阻断移除、本地成员不动）。
 pub async fn writeback_issue_remove_from_plan(
     client: &reqwest::Client,
     token: &str,
@@ -2646,20 +2643,6 @@ pub async fn writeback_issue_remove_from_plan(
 ) -> Result<(), String> {
     let (project_id, workitem_type_id) =
         fetch_workitem_placements(client, token, organization_id, workitem_id).await?;
-    let field_id =
-        fetch_plan_end_field_id(client, token, organization_id, &project_id, &workitem_type_id)
-            .await?;
-    // 清空：云效自定义字段接受空串为清除（与官网「清空」按钮同效）。
-    update_workitem_field_json(
-        client,
-        token,
-        organization_id,
-        workitem_id,
-        &field_id,
-        serde_json::Value::String(String::new()),
-    )
-    .await
-    .map_err(|e| format!("清空计划完成时间失败: {e}"))?;
     if let Ok(start_field_id) =
         fetch_plan_start_field_id(client, token, organization_id, &project_id, &workitem_type_id)
             .await
@@ -2765,14 +2748,6 @@ mod tests {
       "categoryId": "Req",
       "parentId": "EMPTY_VALUE"
     }"#;
-
-    #[test]
-    fn plan_end_field_value_formats_local_midnight() {
-        // 本地时区 2026-10-15 00:00:00 的毫秒时间戳（CST = UTC+8 → UTC 2026-10-14T16:00:00Z）。
-        let utc = chrono::DateTime::parse_from_rfc3339("2026-10-14T16:00:00Z").unwrap();
-        let ms = utc.with_timezone(&chrono::Local).timestamp_millis();
-        assert_eq!(plan_end_field_value(ms), "2026-10-15 00:00:00");
-    }
 
     #[test]
     fn plan_start_default_value_is_today_midnight() {

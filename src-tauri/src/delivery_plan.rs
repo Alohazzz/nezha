@@ -943,25 +943,21 @@ fn reject_pending_issues_error(serial_numbers: &[&str]) -> String {
 /// 单计划归属（S1）：同一议题已在**其它**计划时整体拒绝，不部分写入。
 ///
 /// 云效同步（issue #105）：添加前逐条实时校验「已是待开发则整批拒绝」；校验通过后
-/// 先对每条议题顺序回写云效（计划完成时间 + 负责人 + 状态待开发），全部成功才把
-/// 成员写入本地 batches.json——任一失败本地不动，重试语义干净。
+/// 先对每条议题顺序回写云效（计划开始时间 + 负责人 + 状态待开发；计划完成时间
+/// 不回写、归用户在云效侧维护），全部成功才把成员写入本地 batches.json——任一
+/// 失败本地不动，重试语义干净。
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn add_delivery_plan_issues(
     project_id: String,
     plan_id: String,
     issues: Vec<PlanIssue>,
     token: String,
     organization_id: String,
-    plan_end_date: i64,
 ) -> Result<DeliveryPlan, String> {
     let token = token.trim().to_string();
     let organization_id = organization_id.trim().to_string();
     if token.is_empty() || organization_id.is_empty() {
         return Err("缺少云效令牌或组织 ID，请先在设置中配置云效连接".to_string());
-    }
-    if plan_end_date <= 0 {
-        return Err("计划缺少有效的计划完成时间，无法回写云效".to_string());
     }
     // 校验阶段（云效实时状态，不用列表缓存）：全部检查完再一次性报错，不遇错即停。
     let client = crate::yunxiao::build_client()?;
@@ -989,7 +985,6 @@ pub async fn add_delivery_plan_issues(
             &token,
             &organization_id,
             &issue.workitem_id,
-            plan_end_date,
         )
         .await
         .map_err(|e| format!("议题 {} 添加回写失败：{e}", issue.serial_number))?;

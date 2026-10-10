@@ -54,7 +54,7 @@ describe("AddToPlanDialog 云效回写（issue #105）", () => {
     invokeMock.mockResolvedValue(plan);
   });
 
-  it("提交时把云效连接与所选计划的完成时间一并交给后端", async () => {
+  it("提交时把云效连接与成员列表一并交给后端（不再回写完成时间）", async () => {
     const user = userEvent.setup();
     renderDialog();
 
@@ -66,9 +66,10 @@ describe("AddToPlanDialog 云效回写（issue #105）", () => {
       expect.objectContaining({
         token: "pt-test",
         organizationId: "org-1",
-        planEndDate: plan.planEndDate,
       }),
     );
+    const args = invokeMock.mock.calls[0][1] as Record<string, unknown>;
+    expect("planEndDate" in args).toBe(false);
   });
 
   it("未连接云效时不发起请求，直接提示配置令牌", async () => {
@@ -80,14 +81,17 @@ describe("AddToPlanDialog 云效回写（issue #105）", () => {
     expect(await screen.findByText(/未连接云效/)).toBeTruthy();
   });
 
-  it("计划缺少完成时间（旧数据）时阻断并提示重建", async () => {
+  it("计划缺少完成时间（旧数据）时不再阻断，可正常添加", async () => {
     const user = userEvent.setup();
     renderDialog({ plan: { ...plan, planEndDate: undefined } });
 
     await user.click(screen.getByRole("button", { name: "加入" }));
 
-    expect(invokeMock).not.toHaveBeenCalled();
-    expect(await screen.findByText(/缺少计划完成时间/)).toBeTruthy();
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    expect(invokeMock).toHaveBeenCalledWith(
+      "add_delivery_plan_issues",
+      expect.objectContaining({ planId: plan.id }),
+    );
   });
 
   it("后端回写失败（如已是待开发）时在弹窗内展示完整错误", async () => {

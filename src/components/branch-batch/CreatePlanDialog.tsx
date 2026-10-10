@@ -50,8 +50,9 @@ export function CreatePlanDialog({
   const [baseBranch, setBaseBranch] = useState("develop");
   // 合并回目标分支允许留空：空表示暂不指定合并目标（源分支名不带目标段，不能提交 MR / 合并回）。
   const [targetBranch, setTargetBranch] = useState("");
-  // 计划完成时间（yyyy-MM-dd）：必填——添加议题时要拿它回写云效；创建后不可改。
+  // 计划完成时间（yyyy-MM-dd）：必填——创建后不可改；缺失时提交会被拦截并就近标红提示。
   const [planEndDate, setPlanEndDate] = useState("");
+  const [planEndDateError, setPlanEndDateError] = useState(false);
   const [version, setVersion] = useState("");
   const [versionPickerOpen, setVersionPickerOpen] = useState(false);
   const [useWorktree, setUseWorktree] = useState(false);
@@ -236,11 +237,16 @@ export function CreatePlanDialog({
       !name.trim() ||
       !baseBranch.trim() ||
       !sourceBranch.trim() ||
-      !planEndDate ||
       (useWorktree && !worktreeDir.trim()) ||
       busy
     )
       return;
+    if (!planEndDate) {
+      // 必填拦截要显式可见：字段标红 + 错误条，不能静默 return。
+      setPlanEndDateError(true);
+      setError("请选择计划完成时间后再创建。");
+      return;
+    }
     if (localConflict) {
       setError("请先处理本地同名分支后再创建。");
       return;
@@ -454,12 +460,18 @@ export function CreatePlanDialog({
         </div>
 
         <div style={s.bbField}>
-          <span style={s.bbFieldLabel}>计划完成时间（必填，创建后不可改）</span>
+          <span style={planEndDateError ? s.bbFieldLabelError : s.bbFieldLabel}>
+            计划完成时间（必填，创建后不可改）
+            {planEndDateError ? "——请选择计划完成时间" : ""}
+          </span>
           <input
             type="date"
-            style={s.bbInput}
+            style={planEndDateError ? s.bbInputError : s.bbInput}
             value={planEndDate}
-            onChange={(e) => setPlanEndDate(e.target.value)}
+            onChange={(e) => {
+              setPlanEndDate(e.target.value);
+              if (e.target.value) setPlanEndDateError(false);
+            }}
             required
           />
         </div>

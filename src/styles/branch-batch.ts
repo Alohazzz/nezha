@@ -292,11 +292,28 @@ const branchBatch = {
     fontWeight: 400,
     color: "var(--text-muted)",
   },
+  /// 字段校验失败态：label 标红（配合 bbInputError / bbFieldLabelError 使用）。
+  bbFieldLabelError: {
+    fontSize: 12,
+    fontWeight: 400,
+    color: "var(--danger-fg)",
+  },
   bbInput: {
     height: 32,
     padding: "0 10px",
     borderRadius: 6,
     border: "1px solid var(--border-dim)",
+    background: "var(--bg-hover)",
+    color: "var(--text-primary)",
+    fontSize: 13,
+    outline: "none",
+  },
+  /// 输入框校验失败态：红边框 + 聚焦时保持红色描边。
+  bbInputError: {
+    height: 32,
+    padding: "0 10px",
+    borderRadius: 6,
+    border: "1px solid var(--danger-fg)",
     background: "var(--bg-hover)",
     color: "var(--text-primary)",
     fontSize: 13,
