@@ -2906,6 +2906,7 @@ function App() {
     taskId: string,
     devContent: string,
     testContent: string,
+    scoreContent?: string,
   ): Promise<YunxiaoWritebackResult> {
     const task = tasks.find((candidate) => candidate.id === taskId);
     if (!task || !task.yunxiaoWorkitemId) throw new Error("Not a Yunxiao task");
@@ -2922,6 +2923,7 @@ function App() {
       workitemId: task.yunxiaoWorkitemId,
       devContent,
       testContent,
+      scoreContent: scoreContent ?? null,
     });
     const now = Date.now();
     setTasks((prev) => {

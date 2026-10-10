@@ -1846,10 +1846,12 @@ pub async fn yunxiao_writeback_with_score(
     };
 
     // 4) 评分写入议题字段（失败不阻断，返回 warning）
-    let warning = match score_value {
-        None => Some(
-            score_warning.unwrap_or_else(|| "未检测到价值评分内容，未写入议题字段".to_string()),
-        ),
+    let mut warnings: Vec<String> = score_warning.into_iter().collect();
+    let field_written = match score_value {
+        None => {
+            warnings.push("未检测到价值评分内容，未写入议题字段".to_string());
+            false
+        }
         Some(score_value) => {
             match write_value_score_field(
                 &client,
@@ -1860,19 +1862,19 @@ pub async fn yunxiao_writeback_with_score(
             )
             .await
             {
-                Ok(()) => score_warning,
-                Err(e) => Some(match score_warning {
-                    Some(w) => format!("{w}；字段写入失败: {e}"),
-                    None => e,
-                }),
+                Ok(()) => true,
+                Err(e) => {
+                    warnings.push(format!("字段写入失败: {e}"));
+                    false
+                }
             }
         }
     };
-    let field_written = score_value.is_some()
-        && warning
-            .as_deref()
-            .map(|w| !w.contains("字段写入失败") && !w.contains("未写入议题字段"))
-            .unwrap_or(false);
+    let warning = if warnings.is_empty() {
+        None
+    } else {
+        Some(warnings.join("；"))
+    };
     Ok(YunxiaoWritebackResult {
         dev_comment_id,
         test_comment_id,

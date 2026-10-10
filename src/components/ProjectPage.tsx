@@ -213,6 +213,7 @@ export function ProjectPage({
     taskId: string,
     devContent: string,
     testContent: string,
+    scoreContent?: string,
   ) => Promise<YunxiaoWritebackResult>;
   onRetryWritebackScoreField: (taskId: string, value: number) => Promise<void>;
   /** 各任务的自动沉淀结果（任务完成时由事件填充）。 */
@@ -904,6 +905,9 @@ export function ProjectPage({
     taskId: string;
     devPreview: string;
     testPreview: string;
+    /** 评分评论预览（空串 = 草稿无独立评分，不发布第三条评论） */
+    scorePreview: string;
+    scoreExpanded: boolean;
     generating: boolean;
     posting: boolean;
     error: string | null;
@@ -929,6 +933,8 @@ export function ProjectPage({
               taskId,
               devPreview: "",
               testPreview: "",
+              scorePreview: "",
+              scoreExpanded: true,
               generating: true,
               posting: false,
               error: null,
@@ -942,7 +948,13 @@ export function ProjectPage({
         const draft = await onGenerateWritebackSummary(taskId, force);
         setWritebackDialog((prev) =>
           prev && prev.taskId === taskId
-            ? { ...prev, devPreview: draft.devComment, testPreview: draft.testComment, generating: false }
+            ? {
+                ...prev,
+                devPreview: draft.devComment,
+                testPreview: draft.testComment,
+                scorePreview: draft.scoreComment ?? "",
+                generating: false,
+              }
             : prev,
         );
       } catch (err) {
@@ -981,6 +993,7 @@ export function ProjectPage({
         writebackDialog.taskId,
         devContent,
         testContent,
+        writebackDialog.scorePreview.trim() || undefined,
       );
       const serial = projectTasks.find((c) => c.id === writebackDialog.taskId)
         ?.yunxiaoSerialNumber;
@@ -1522,6 +1535,8 @@ export function ProjectPage({
               title={writebackTask?.name ?? writebackTask?.prompt.slice(0, 80) ?? ""}
               devPreview={writebackDialog.devPreview}
               testPreview={writebackDialog.testPreview}
+              scorePreview={writebackDialog.scorePreview}
+              scoreExpanded={writebackDialog.scoreExpanded}
               generating={writebackDialog.generating}
               posting={writebackDialog.posting}
               error={writebackDialog.error}
@@ -1537,6 +1552,16 @@ export function ProjectPage({
               onTestChange={(value) =>
                 setWritebackDialog((prev) =>
                   prev ? { ...prev, testPreview: value } : prev,
+                )
+              }
+              onScoreChange={(value) =>
+                setWritebackDialog((prev) =>
+                  prev ? { ...prev, scorePreview: value } : prev,
+                )
+              }
+              onScoreToggle={() =>
+                setWritebackDialog((prev) =>
+                  prev ? { ...prev, scoreExpanded: !prev.scoreExpanded } : prev,
                 )
               }
               onRetryField={() => void retryWritebackScoreField()}

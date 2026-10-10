@@ -1318,12 +1318,15 @@ fn extract_tagged_block(stdout: &str, open: &str, close: &str) -> Option<String>
     None
 }
 
-/// 云效回写草稿：开发向与测试向两条评论。
+/// 云效回写草稿：开发向 / 测试向 / 评分三条评论。
+/// score_comment 为空表示草稿没有独立评分内容（旧格式草稿评分仍在 dev_comment 正文里）。
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct YunxiaoWritebackDraft {
     pub dev_comment: String,
     pub test_comment: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub score_comment: String,
 }
 
 /// discussion.md 中「影响范围与测试」小节标题前缀。
@@ -1386,18 +1389,46 @@ fn bolden_test_comment_fields(text: &str) -> String {
 /// - 开发向 = 从开头到 `## 影响范围与测试` 之前（含 `## 修改方案汇总` 与 `## 价值评分`）；
 /// - 测试向 = 从 `## 影响范围与测试` 到文档末尾。
 /// 找不到测试小节时：整篇归开发向，测试向为空串（由前端补填/走 headless 再生成）。
-fn split_discussion_into_comments(text: &str) -> (String, String) {
+/// 把 discussion.md 拆成（开发向，测试向，评分）三条评论。
+/// - 测试向 = 从 `## 影响范围与测试` 到下一个 `## ` 标题或文末；
+/// - 评分 = 从 `## 价值评分` 到下一个 `## ` 标题或文末（位置不限——agent 可能把评分
+///   写在测试向之后（QHDK-30560），三分离后顺序自由，各自按标题切片互不干扰）；
+/// - 开发向 = 其余内容；评分小节从 dev/test 两侧剥除，不再随任何一条正文评论重复发布。
+fn split_discussion_into_comments(text: &str) -> (String, String, String) {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return (String::new(), String::new());
+        return (String::new(), String::new(), String::new());
     }
-    if let Some(pos) = trimmed.find(TEST_SECTION_HEADER) {
-        let dev = trimmed[..pos].trim();
-        let test = trimmed[pos..].trim();
-        (dev.to_string(), test.to_string())
-    } else {
-        (trimmed.to_string(), String::new())
-    }
+    let (before_test, test_half, after_test) = match trimmed.find(TEST_SECTION_HEADER) {
+        Some(pos) => {
+            let rest = &trimmed[pos..];
+            let section = match rest.find("\n## ") {
+                Some(next) => &rest[..next],
+                None => rest,
+            };
+            // 评分小节常被 agent 排在测试向之后：它属于 rest 里 section 之后的剩余部分，
+            // 不属于 before_test，单独作为评分搜索域。
+            let after = match rest.find("\n## ") {
+                Some(next) => rest[next + 1..].trim(),
+                None => "",
+            };
+            (trimmed[..pos].trim(), section.trim(), after)
+        }
+        None => (trimmed, "", ""),
+    };
+    // 评分优先级：测试向之后的剩余段（QHDK-30560 排列）> 测试向段内 > 开发向段内。
+    let score_section = crate::value_score::extract_value_score_section(after_test)
+        .or_else(|| crate::value_score::extract_value_score_section(test_half))
+        .or_else(|| crate::value_score::extract_value_score_section(before_test))
+        .unwrap_or_default()
+        .to_string();
+    let dev = crate::value_score::strip_value_score_section(before_test);
+    let test = crate::value_score::strip_value_score_section(test_half);
+    (
+        dev.trim().to_string(),
+        test.trim().to_string(),
+        score_section.trim().to_string(),
+    )
 }
 
 /// AI 生成失败时的纯事实模板回退（用户仍可在预览中编辑后发布）。
@@ -1446,6 +1477,7 @@ fn build_fallback_draft(
     YunxiaoWritebackDraft {
         dev_comment: dev.join("\n"),
         test_comment: test,
+        score_comment: String::new(),
     }
 }
 
@@ -1467,34 +1499,35 @@ fn split_plan_section(text: &str) -> (String, String) {
     }
 }
 
-/// 方案任务回写合并：开发向 = 方案节（修改方案汇总）+ 任务 drafts 的价值评分；
-/// 测试向 = 任务 drafts 的影响范围（执行修订版）优先，回落方案节的测试小节。
+/// 方案任务回写合并：开发向 = 方案节（修改方案汇总）；测试向 = 任务 drafts 的影响范围
+/// （执行修订版）优先，回落方案节的测试小节；评分 = 任务 drafts 的评分小节，独立成评
+/// （位置不限，QHDK-30560 排列也能取到；无评分时留空，回写命令回落从 dev 评论解析）。
 fn merge_plan_writeback_draft(
     plan_section: &str,
     task_drafts: Option<&str>,
 ) -> YunxiaoWritebackDraft {
     let (plan_dev, plan_test) = split_plan_section(plan_section);
-    // 评分小节从整份草稿提取，不限定 dev 半区：agent 可能把「## 价值评分」写在
-    // 「## 影响范围与测试」之后（QHDK-30560），按标题切分后评分会落进 test 半区，
-    // 只查 dev 半区会取不到 → 开发向评论无评分 → 回写时字段不写。
-    let score_section = task_drafts
-        .and_then(|drafts| crate::value_score::extract_value_score_section(drafts))
-        .map(str::to_string);
-    let drafts_test = task_drafts
-        .map(|drafts| split_discussion_into_comments(drafts).1)
+    let (_drafts_dev, drafts_test, score_comment) = task_drafts
+        .map(split_discussion_into_comments)
         .unwrap_or_default();
-    let dev_comment =
-        crate::value_score::reappend_value_score_section(&plan_dev, score_section.as_deref());
-    // test 半区若带着评分小节（顺序颠倒的草稿），剥掉避免与开发向评论重复发布。
-    let drafts_test = crate::value_score::strip_value_score_section(&drafts_test);
     let test_comment = if drafts_test.trim().is_empty() {
         plan_test
     } else {
         drafts_test
     };
+    // 方案节若内联了评分小节（旧方案文档格式），剥出为独立评分评论，避免重复发布。
+    let score_comment = if score_comment.is_empty() {
+        crate::value_score::extract_value_score_section(&plan_dev).map(str::to_string)
+    } else {
+        Some(score_comment)
+    }
+    .unwrap_or_default();
     YunxiaoWritebackDraft {
-        dev_comment,
+        dev_comment: crate::value_score::strip_value_score_section(&plan_dev)
+            .trim()
+            .to_string(),
         test_comment: bolden_test_comment_fields(&test_comment),
+        score_comment,
     }
 }
 
@@ -1560,7 +1593,8 @@ pub async fn generate_yunxiao_writeback_summary(
                 .map_err(|e| format!("读取讨论草稿失败: {e}"))?
                 .filter(|s| !s.trim().is_empty())
         {
-            let (dev_comment, test_comment) = split_discussion_into_comments(&draft);
+            let (dev_comment, test_comment, score_comment) =
+                split_discussion_into_comments(&draft);
             // 草稿里的「修改文件」是执行 agent 会话中凭记忆归纳的，可能漏报（fix #106）。
             // 先 bolden 归一字段名（未加粗的「修改文件：」apply 不识别），再确定性覆盖字段值。
             let test_comment = bolden_test_comment_fields(&test_comment);
@@ -1576,12 +1610,13 @@ pub async fn generate_yunxiao_writeback_summary(
             return Ok(YunxiaoWritebackDraft {
                 dev_comment,
                 test_comment: apply_deterministic_modified_files(&test_comment, &names),
+                score_comment,
             });
         }
     }
 
     // 重新生成（force=true）会跳过草稿走 headless 润色，这里先把草稿里的
-    // 「价值评分」小节保留下来，生成后拼到开发向评论末尾（评分推导随开发向评论发布）。
+    // 「价值评分」小节保留下来（位置不限），生成后作为独立的评分评论返回。
     let preserved_score_section =
         crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
             .ok()
@@ -1643,15 +1678,17 @@ pub async fn generate_yunxiao_writeback_summary(
         .unwrap_or(fallback.dev_comment);
     let test = extract_tagged_block(&raw, "<TEST_SUMMARY>", "</TEST_SUMMARY>")
         .unwrap_or(fallback.test_comment);
-    let dev_comment =
-        crate::value_score::reappend_value_score_section(&dev, preserved_score_section.as_deref());
+    // headless 产出不含评分小节（prompt 不要求），评分一律来自草稿保留值，独立成评发布；
+    // 无保留值时 score_comment 留空（回写命令回落从 dev 评论解析，兼容旧草稿）。
+    let dev_comment = crate::value_score::strip_value_score_section(&dev);
     // 先 bolden 归一字段名，再确定性覆盖「修改文件」字段值（fix #106）；
     // fallback 路径的「（无）」占位也会被真实统计替换。
     let test_comment =
         apply_deterministic_modified_files(&bolden_test_comment_fields(&test), &project_names);
     Ok(YunxiaoWritebackDraft {
-        dev_comment,
+        dev_comment: dev_comment.trim().to_string(),
         test_comment,
+        score_comment: preserved_score_section.unwrap_or_default(),
     })
 }
 
@@ -1982,29 +2019,45 @@ mod tests {
     }
 
     #[test]
-    fn split_discussion_splits_dev_and_test_sections() {
+    fn split_discussion_splits_dev_test_and_score() {
         let text = "## 修改方案汇总（开发向）\n\nWhat…\n\n## 价值评分\n\n- 核心指数：**50** = (4 × 5 × 5) ÷ 2\n\n## 影响范围与测试（测试向）\n\n- 影响范围：模块A\n- 测试步骤：1. …";
-        let (dev, test) = split_discussion_into_comments(text);
+        let (dev, test, score) = split_discussion_into_comments(text);
         assert!(dev.contains("修改方案汇总"));
-        assert!(dev.contains("## 价值评分"));
-        assert!(dev.contains("核心指数"));
+        assert!(!dev.contains("价值评分"), "评分必须独立成评，不留在 dev：{dev}");
         assert!(!dev.contains("影响范围与测试"));
         assert!(test.contains("影响范围与测试"));
         assert!(test.contains("模块A"));
+        assert!(score.starts_with("## 价值评分"));
+        assert!(score.contains("核心指数"));
+    }
+
+    #[test]
+    fn split_discussion_finds_score_after_test_section() {
+        // QHDK-30560 排列：评分写在测试向之后。三分离下两条正文评论各自切片，
+        // 评分从 test 半区抽出，位置无关。
+        let text = "## 修改方案汇总\n\n内容\n\n## 影响范围与测试（测试向）\n\n**修改分支** fix/x\n\n## 价值评分\n\n- 优先指数：**31.5**";
+        let (dev, test, score) = split_discussion_into_comments(text);
+        assert!(dev.contains("修改方案汇总"));
+        assert!(test.contains("影响范围与测试"));
+        assert!(test.contains("修改分支"));
+        assert!(!test.contains("价值评分"), "评分不留在 test：{test}");
+        assert!(score.starts_with("## 价值评分"));
+        assert!(score.contains("31.5"));
     }
 
     #[test]
     fn split_discussion_without_test_section_keeps_all_in_dev() {
         let text = "## 修改方案汇总\n\n内容";
-        let (dev, test) = split_discussion_into_comments(text);
+        let (dev, test, score) = split_discussion_into_comments(text);
         assert_eq!(dev, "## 修改方案汇总\n\n内容");
         assert!(test.is_empty());
+        assert!(score.is_empty());
     }
 
     #[test]
-    fn merge_plan_writeback_finds_score_after_test_section() {
+    fn merge_plan_writeback_extracts_score_as_standalone_comment() {
         // 回归（QHDK-30560）：草稿里「## 价值评分」被 agent 写在「## 影响范围与测试」之后时，
-        // 评分小节落在 test 半区。合并时必须仍能取到评分拼进开发向评论，
+        // 评分必须独立成评返回（score_comment），不再依赖拼进开发向评论——
         // 否则 yunxiao_writeback_with_score 解析不到评分，字段不写（评论有评分、字段无值）。
         let task_drafts = "\
             ## 影响范围与测试（测试向）\n\
@@ -2020,11 +2073,47 @@ mod tests {
         let plan_section = "## 修改方案汇总\n\n方案内容。\n\n### 影响范围与测试\n\n- 影响范围：模块A";
         let draft = merge_plan_writeback_draft(plan_section, Some(task_drafts));
         assert!(
-            draft.dev_comment.contains("## 价值评分"),
-            "开发向评论必须含评分小节，实际：{}",
+            !draft.dev_comment.contains("价值评分"),
+            "评分不再拼进开发向评论：{}",
             draft.dev_comment
         );
-        assert!(draft.dev_comment.contains("31.5"));
+        assert!(draft.dev_comment.contains("方案内容"));
+        assert!(
+            draft.score_comment.contains("## 价值评分"),
+            "评分必须独立成评：{}",
+            draft.score_comment
+        );
+        assert!(draft.score_comment.contains("31.5"));
+        assert!(draft.test_comment.contains("修改分支"));
+        assert!(!draft.test_comment.contains("价值评分"));
+    }
+
+    #[test]
+    fn merge_plan_writeback_prefers_draft_score_over_plan_inline() {
+        // drafts 评分（执行后实际值）优先于方案节内联评分（讨论期预评），且 plan 内联
+        // 评分被剥出时不得重复出现在 dev 评论里。
+        let task_drafts = "\
+            ## 价值评分\n\
+            \n\
+            - 核心指数：**50**\n\
+            \n\
+            ## 影响范围与测试（测试向）\n\
+            \n\
+            **修改分支** fix/x\n";
+        let plan_section = "## 修改方案汇总\n\n方案。\n\n## 价值评分\n\n- 核心指数：**40**";
+        let draft = merge_plan_writeback_draft(plan_section, Some(task_drafts));
+        assert!(draft.score_comment.contains("50"), "drafts 评分优先：{}", draft.score_comment);
+        assert!(!draft.score_comment.contains("40"));
+        assert!(!draft.dev_comment.contains("价值评分"));
+    }
+
+    #[test]
+    fn merge_plan_writeback_extracts_inline_plan_score_when_no_drafts() {
+        // 旧方案文档把评分内联在方案节里、无任务草稿时：剥出为独立评分评论。
+        let plan_section = "## 修改方案汇总\n\n方案。\n\n## 价值评分\n\n- 核心指数：**40**";
+        let draft = merge_plan_writeback_draft(plan_section, None);
+        assert!(draft.score_comment.contains("40"));
+        assert!(!draft.dev_comment.contains("价值评分"));
     }
 
     #[test]

@@ -1,13 +1,18 @@
-import { Sparkles, Send, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Sparkles, Send, X } from "lucide-react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
-/** 回写云效预览弹窗：AI 生成「开发向 + 测试向」两条评论 → 分别可编辑 → 一次性发布。 */
+/**
+ * 回写云效预览弹窗：AI 生成「开发向 + 测试向 + 评分」三条评论 → 分别可编辑 → 一次性发布。
+ * 评分框独立成评（编辑 dev/test 不影响字段解析链路）；为空串时不发布第三条评论。
+ */
 export function YunxiaoWritebackDialog({
   serialNumber,
   title,
   devPreview,
   testPreview,
+  scorePreview,
+  scoreExpanded,
   generating,
   posting,
   error,
@@ -17,6 +22,8 @@ export function YunxiaoWritebackDialog({
   posted,
   onDevChange,
   onTestChange,
+  onScoreChange,
+  onScoreToggle,
   onRegenerate,
   onPost,
   onRetryField,
@@ -26,6 +33,8 @@ export function YunxiaoWritebackDialog({
   title: string;
   devPreview: string;
   testPreview: string;
+  scorePreview: string;
+  scoreExpanded: boolean;
   generating: boolean;
   posting: boolean;
   error: string | null;
@@ -35,6 +44,8 @@ export function YunxiaoWritebackDialog({
   posted: boolean;
   onDevChange: (value: string) => void;
   onTestChange: (value: string) => void;
+  onScoreChange: (value: string) => void;
+  onScoreToggle: () => void;
   onRegenerate: () => void;
   onPost: () => void;
   onRetryField: () => void;
@@ -86,6 +97,37 @@ export function YunxiaoWritebackDialog({
           disabled={generating}
           onChange={(event) => onTestChange(event.target.value)}
         />
+
+        <button
+          type="button"
+          data-testid="writeback-score-toggle"
+          style={s.yunxiaoWritebackScoreToggle}
+          onClick={onScoreToggle}
+          disabled={generating}
+          title={t("yunxiao.writeback.scoreToggleTitle")}
+        >
+          {scoreExpanded ? (
+            <ChevronDown size={12} strokeWidth={2.5} />
+          ) : (
+            <ChevronRight size={12} strokeWidth={2.5} />
+          )}
+          {t("yunxiao.writeback.scoreLabel")}
+          {scorePreview.trim() ? "" : ` — ${t("yunxiao.writeback.scoreEmptyHint")}`}
+        </button>
+        {scoreExpanded ? (
+          <textarea
+            style={s.yunxiaoWritebackScoreTextarea}
+            value={scorePreview}
+            spellCheck={false}
+            placeholder={
+              generating
+                ? t("yunxiao.writeback.generatingScore")
+                : t("yunxiao.writeback.scorePlaceholder")
+            }
+            disabled={generating}
+            onChange={(event) => onScoreChange(event.target.value)}
+          />
+        ) : null}
 
         {warning && (
           <div style={s.yunxiaoWritebackError}>
