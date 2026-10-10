@@ -1145,6 +1145,128 @@ fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, Stri
     (branch, truncate(commits), truncate(diff_stat))
 }
 
+/// 回写「修改文件」字段的确定性统计上限（超出说明仓库异常，做提示性截断）。
+const MAX_MODIFIED_FILE_LABELS: usize = 50;
+
+/// 确定性收集本次改动涉及的工程名（三源并集，fix #106）：
+/// 1. 已提交变更 `git diff --name-only {base}...HEAD`；
+/// 2. 已暂存 + 未暂存变更 `git diff --name-only HEAD`；
+/// 3. 未跟踪文件 `git status --porcelain`（`??` 行）。
+///
+/// 现状是「修改文件」由 LLM 凭会话记忆/diff stat 归纳，五处系统性漏报
+/// （草稿过期、未提交变更不在 diff 事实里、plan.md 预判、base 缺失、8000 字符截断）。
+/// 本函数给回写时刻一个不依赖 LLM 的事实基线；git 全部不可用时返回空集（字段保持原样）。
+fn collect_writeback_project_names(cwd: &str, base_branch: Option<&str>) -> Vec<String> {
+    let run = |args: &[&str]| -> Option<String> {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args).current_dir(cwd);
+        crate::subprocess::configure_background_command(&mut cmd);
+        let out = cmd.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(String::from_utf8_lossy(&out.stdout).to_string())
+    };
+
+    // 已提交：base 缺失时回落最近 20 条提交涉及的文件（口径与 commits 事实一致），
+    // 避免非 worktree 任务 baseBranch 为 undefined 时已提交变更整体缺失。
+    let committed = base_branch
+        .and_then(|b| run(&["diff", "--name-only", &format!("{b}...HEAD")]))
+        .or_else(|| run(&["diff", "--name-only", "@{20}..HEAD"]))
+        .unwrap_or_default();
+    // 已暂存 + 未暂存（对工作区与 HEAD 比较；重命名输出 "to\tpath"，取新路径）。
+    let unstaged = run(&["diff", "--name-only", "HEAD"]).unwrap_or_default();
+    // 未跟踪：porcelain 里 `?? path`；其余状态行已由上面两路覆盖。
+    let untracked = run(&["status", "--porcelain"])
+        .map(|out| {
+            out.lines()
+                .filter(|line| line.starts_with("??"))
+                .filter_map(|line| line.get(3..))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    let mut paths: Vec<String> = Vec::new();
+    for chunk in [committed, unstaged, untracked] {
+        for line in chunk.lines() {
+            let path = line.split('\t').next_back().unwrap_or(line).trim();
+            if !path.is_empty() {
+                paths.push(path.to_string());
+            }
+        }
+    }
+    derive_project_names(&paths)
+}
+
+/// 把改动文件路径归并成工程名：默认取一级目录（`src/a/b.ts` → `src`），
+/// 根目录散文件保留文件名。同名去重后按字母序稳定输出，超上限截断加提示。
+fn derive_project_names(paths: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for path in paths {
+        let name = match path.split(['/', '\\']).next() {
+            Some(first) if first.is_empty() => path.to_string(),
+            // 一级目录即整个路径（根目录散文件）→ 保留文件名本身。
+            Some(first) if first == path => path.to_string(),
+            Some(first) => first.to_string(),
+            None => continue,
+        };
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    if names.len() > MAX_MODIFIED_FILE_LABELS {
+        names.truncate(MAX_MODIFIED_FILE_LABELS);
+        names.push(format!("…等 {} 项（已截断）", names.len()));
+    }
+    names
+}
+
+/// 把确定性工程名清单写进测试向评论的 `**修改文件**` 字段（幂等）：
+/// 命中该字段行则替换其值为「A、B、C」；无该字段的评论（草稿缺失字段）不动。
+/// 确定性统计为空集时保持原文——宁缺毋错，不用空值覆盖 LLM 可能正确的归纳。
+fn apply_deterministic_modified_files(test_comment: &str, project_names: &[String]) -> String {
+    if project_names.is_empty() || test_comment.trim().is_empty() {
+        return test_comment.to_string();
+    }
+    let joined = project_names.join("、");
+    let mut replaced = false;
+    let lines: Vec<String> = test_comment
+        .lines()
+        .map(|raw| {
+            let trimmed = raw.trim_start();
+            let stripped = trimmed
+                .strip_prefix("- ")
+                .or_else(|| trimmed.strip_prefix("* "))
+                .or_else(|| trimmed.strip_prefix("+ "))
+                .map(str::trim_start)
+                .unwrap_or_else(|| trimmed.trim_start_matches('#').trim_start());
+            let body = stripped.strip_prefix("**修改文件**").map(|after| {
+                after
+                    .strip_prefix("**")
+                    .unwrap_or(after)
+                    .trim_start_matches(['：', ':'])
+            });
+            match body {
+                Some(_) => {
+                    replaced = true;
+                    // 保留原行的非字段前缀（列表符 `- ` 等），只替换字段内容本身。
+                    let prefix_len = raw.find(stripped).unwrap_or(0);
+                    format!("{}**修改文件**：{}", &raw[..prefix_len], joined)
+                }
+                None => raw.to_string(),
+            }
+        })
+        .collect();
+    if replaced {
+        lines.join("\n")
+    } else {
+        test_comment.to_string()
+    }
+}
+
 fn build_writeback_prompt(
     serial_number: &str,
     task_name: &str,
@@ -1412,7 +1534,20 @@ pub async fn generate_yunxiao_writeback_summary(
         let task_drafts = crate::drafts::read_draft_file(&project_path, &task_id, "discussion.md")
             .map_err(|e| format!("读取讨论草稿失败: {e}"))?
             .filter(|s| !s.trim().is_empty());
-        return Ok(merge_plan_writeback_draft(plan_section, task_drafts.as_deref()));
+        let mut draft = merge_plan_writeback_draft(plan_section, task_drafts.as_deref());
+        // 「修改文件」用确定性统计覆盖（fix #106）：plan.md 预判 / 草稿归纳都可能漏报。
+        let repo_for_names =
+            repo_path.as_deref().filter(|r| !r.trim().is_empty()).unwrap_or(&project_path);
+        let names = tokio::task::spawn_blocking({
+            let cwd = repo_for_names.to_string();
+            let base = base_branch.clone();
+            move || collect_writeback_project_names(&cwd, base.as_deref())
+        })
+        .await
+        .map_err(|e| format!("收集修改文件线程错误: {e}"))?;
+        draft.test_comment =
+            apply_deterministic_modified_files(&draft.test_comment, &names);
+        return Ok(draft);
     }
 
     // 草稿优先（force=true 表示用户点了「重新生成」，跳过草稿走 headless）。
@@ -1423,9 +1558,21 @@ pub async fn generate_yunxiao_writeback_summary(
                 .filter(|s| !s.trim().is_empty())
         {
             let (dev_comment, test_comment) = split_discussion_into_comments(&draft);
+            // 草稿里的「修改文件」是执行 agent 会话中凭记忆归纳的，可能漏报（fix #106）。
+            // 先 bolden 归一字段名（未加粗的「修改文件：」apply 不识别），再确定性覆盖字段值。
+            let test_comment = bolden_test_comment_fields(&test_comment);
+            let repo_for_names =
+                repo_path.as_deref().filter(|r| !r.trim().is_empty()).unwrap_or(&project_path);
+            let names = tokio::task::spawn_blocking({
+                let cwd = repo_for_names.to_string();
+                let base = base_branch.clone();
+                move || collect_writeback_project_names(&cwd, base.as_deref())
+            })
+            .await
+            .map_err(|e| format!("收集修改文件线程错误: {e}"))?;
             return Ok(YunxiaoWritebackDraft {
                 dev_comment,
-                test_comment: bolden_test_comment_fields(&test_comment),
+                test_comment: apply_deterministic_modified_files(&test_comment, &names),
             });
         }
     }
@@ -1456,8 +1603,11 @@ pub async fn generate_yunxiao_writeback_summary(
         .filter(|b| !b.is_empty());
     let cwd_for_facts = cwd.clone();
     let base_for_facts = base_branch.clone();
-    let (branch, commits, diff_stat) = tokio::task::spawn_blocking(move || {
-        gather_writeback_facts(&cwd_for_facts, base_for_facts.as_deref())
+    let (branch, commits, diff_stat, project_names) = tokio::task::spawn_blocking(move || {
+        let names = collect_writeback_project_names(&cwd_for_facts, base_for_facts.as_deref());
+        let (branch, commits, diff_stat) =
+            gather_writeback_facts(&cwd_for_facts, base_for_facts.as_deref());
+        (branch, commits, diff_stat, names)
     })
     .await
     .map_err(|e| format!("收集 git 事实线程错误: {e}"))?;
@@ -1492,9 +1642,13 @@ pub async fn generate_yunxiao_writeback_summary(
         .unwrap_or(fallback.test_comment);
     let dev_comment =
         crate::value_score::reappend_value_score_section(&dev, preserved_score_section.as_deref());
+    // 先 bolden 归一字段名，再确定性覆盖「修改文件」字段值（fix #106）；
+    // fallback 路径的「（无）」占位也会被真实统计替换。
+    let test_comment =
+        apply_deterministic_modified_files(&bolden_test_comment_fields(&test), &project_names);
     Ok(YunxiaoWritebackDraft {
         dev_comment,
-        test_comment: bolden_test_comment_fields(&test),
+        test_comment,
     })
 }
 
@@ -2340,5 +2494,117 @@ mod tests {
                 .unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].message, "m");
+    }
+
+    #[test]
+    fn derive_project_names_groups_by_first_segment() {
+        let names = derive_project_names(&[
+            "src/a/b.ts".to_string(),
+            "src/deep/c.rs".to_string(),
+            "Nto.His.Foo/Bar.cs".to_string(),
+            "README.md".to_string(),
+        ]);
+        assert_eq!(names, vec!["Nto.His.Foo", "README.md", "src"]);
+    }
+
+    #[test]
+    fn derive_project_names_dedupes_and_stays_sorted() {
+        let names = derive_project_names(&[
+            "b/x".to_string(),
+            "a/y".to_string(),
+            "b/z".to_string(),
+            "a/w".to_string(),
+        ]);
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn derive_project_names_truncates_at_cap() {
+        let paths: Vec<String> = (0..(MAX_MODIFIED_FILE_LABELS + 10))
+            .map(|i| format!("dir{i}/file"))
+            .collect();
+        let names = derive_project_names(&paths);
+        assert_eq!(names.len(), MAX_MODIFIED_FILE_LABELS + 1);
+        assert!(names.last().unwrap().contains("已截断"));
+    }
+
+    #[test]
+    fn deterministic_modified_files_replaces_field_value() {
+        let comment = "## 影响范围与测试指引\n\n**修改分支**：feat-x\n**修改文件**：Nto.Old（草稿归纳）\n**测试步骤**：回归登录";
+        let out = apply_deterministic_modified_files(comment, &["src".to_string(), "docs".to_string()]);
+        assert!(out.contains("**修改分支**：feat-x"));
+        assert!(out.contains("**修改文件**：src、docs"));
+        assert!(out.contains("**测试步骤**：回归登录"));
+        assert!(!out.contains("Nto.Old"));
+    }
+
+    #[test]
+    fn deterministic_modified_files_preserves_list_prefix() {
+        // 已加粗的列表行：替换字段值并保留行首列表符。
+        let listed = "- **修改文件**：Nto.X\n- **测试步骤**：1";
+        assert!(apply_deterministic_modified_files(listed, &["a".to_string()])
+            .starts_with("- **修改文件**：a"));
+        // 未加粗行不在本函数契约内——由 bolden_test_comment_fields 先行归一（调用链上
+        // headless 路径 apply 在 bolden 之前，草稿路径同样），这里只验证不误伤。
+        let plain = "修改文件：Nto.X";
+        assert_eq!(
+            apply_deterministic_modified_files(plain, &["a".to_string()]),
+            plain
+        );
+    }
+
+    #[test]
+    fn deterministic_modified_files_idempotent_and_keeps_text_when_empty() {
+        let once = apply_deterministic_modified_files(
+            "**修改文件**：a、b",
+            &["a".to_string(), "b".to_string()],
+        );
+        let twice = apply_deterministic_modified_files(&once, &["a".to_string(), "b".to_string()]);
+        assert_eq!(once, twice);
+        // 空集（git 不可用）不覆盖，宁缺毋错。
+        assert_eq!(
+            apply_deterministic_modified_files("**修改文件**：Nto.X", &[]),
+            "**修改文件**：Nto.X"
+        );
+        // 无该字段的评论不动。
+        assert_eq!(
+            apply_deterministic_modified_files("## 其他内容", &["a".to_string()]),
+            "## 其他内容"
+        );
+    }
+
+    #[test]
+    fn collect_writeback_project_names_includes_uncommitted_and_untracked() {
+        let dir = std::env::temp_dir().join(format!("nezha-wb-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.args(args).current_dir(&dir);
+            cmd.env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t");
+            cmd.env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t");
+            assert!(cmd.status().unwrap().success(), "git {:?} failed", args);
+        };
+        git(&["init", "-q", "-b", "base"]);
+        std::fs::write(dir.join("Committed.cs"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        git(&["checkout", "-q", "-b", "feat"]);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src").join("Committed2.cs"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "feat: c2"]);
+        // 已暂存未提交
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::write(dir.join("lib").join("Staged.cs"), "c").unwrap();
+        git(&["add", "."]);
+        // 未跟踪
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::write(dir.join("docs").join("Untracked.md"), "d").unwrap();
+
+        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"));
+        let _ = std::fs::remove_dir_all(&dir);
+        // 已提交（src）+ 已暂存未提交（lib）+ 未跟踪（docs）三类都在。
+        assert_eq!(names, vec!["docs", "lib", "src"]);
     }
 }
