@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>议题管理全流程闭环 · 说明文档</title>
+<style>
+  :root {
+    --blue-800: #1e3a8a;
+    --blue-700: #1d4ed8;
+    --blue-600: #2563eb;
+    --blue-500: #3b82f6;
+    --blue-200: #bfdbfe;
+    --blue-100: #dbeafe;
+    --blue-50:  #eff6ff;
+    --ink:   #0f172a;
+    --ink-2: #334155;
+    --ink-3: #64748b;
+    --line:  #e2e8f0;
+    --bg:    #f5f8ff;
+    --card:  #ffffff;
+    --green-700: #047857;
+    --green-100: #d1fae5;
+    --amber-700: #b45309;
+    --amber-100: #fef3c7;
+    --violet-700: #6d28d9;
+    --violet-100: #ede9fe;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 64px; }
+
+  /* ---------- Header ---------- */
+  header {
+    background: linear-gradient(135deg, var(--blue-800) 0%, var(--blue-600) 55%, var(--blue-500) 100%);
+    color: #fff;
+    padding: 44px 20px 88px;
+    text-align: center;
+  }
+  header .badge {
+    display: inline-block;
+    background: rgba(255,255,255,.16);
+    border: 1px solid rgba(255,255,255,.35);
+    border-radius: 999px;
+    padding: 3px 14px;
+    font-size: 12.5px;
+    letter-spacing: .5px;
+    margin-bottom: 14px;
+  }
+  header h1 { font-size: 30px; font-weight: 700; letter-spacing: 1px; }
+  header p.sub {
+    margin-top: 10px; font-size: 14.5px; color: rgba(255,255,255,.85);
+    max-width: 720px; margin-left: auto; margin-right: auto;
+  }
+  .hero-lift { margin-top: -56px; }
+
+  /* ---------- Cards / sections ---------- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(30, 58, 138, .06), 0 8px 24px rgba(30, 58, 138, .05);
+    padding: 26px 28px;
+    margin-bottom: 22px;
+  }
+  section h2 {
+    font-size: 19px; color: var(--blue-800);
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 6px;
+  }
+  section h2 .idx {
+    width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+    background: var(--blue-600); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600;
+  }
+  section > p.lead { color: var(--ink-3); font-size: 13.5px; margin-bottom: 20px; }
+
+  /* ---------- Pipeline (流程总览) ---------- */
+  .pipeline { display: flex; align-items: stretch; gap: 0; }
+  .phase {
+    flex: 1 1 0;
+    border: 1.5px solid var(--blue-200);
+    border-radius: 12px;
+    background: linear-gradient(180deg, #fbfdff 0%, var(--blue-50) 100%);
+    padding: 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    min-width: 0;
+  }
+  .phase .ph-head { text-align: center; margin-bottom: 4px; }
+  .phase .ph-name { font-size: 14.5px; font-weight: 700; color: var(--blue-800); }
+  .phase .ph-sub  { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .step {
+    display: flex; align-items: flex-start; gap: 9px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 9px 11px;
+  }
+  .step .no {
+    flex: 0 0 auto;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--blue-600); color: #fff;
+    font-size: 12px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 2px;
+  }
+  .step .t  { font-size: 13.5px; font-weight: 600; color: var(--ink); line-height: 1.45; }
+  .step .who {
+    font-size: 11px; color: var(--blue-700); background: var(--blue-100);
+    border-radius: 999px; padding: 0 8px; margin-left: 6px; white-space: nowrap;
+  }
+  .phase-arrow {
+    flex: 0 0 auto; align-self: center;
+    color: var(--blue-500); font-size: 22px; font-weight: 700;
+    padding: 0 8px; user-select: none;
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; font-size: 12.5px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  /* ---------- Anchor strip (贯穿字段) ---------- */
+  .anchor-strip {
+    background: linear-gradient(90deg, var(--blue-700), var(--blue-500));
+    border-radius: 14px;
+    color: #fff;
+    padding: 20px 26px;
+    margin-bottom: 22px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  .anchor-strip .k {
+    font-size: 12px; letter-spacing: 2px; opacity: .85;
+    border: 1px solid rgba(255,255,255,.4); border-radius: 999px; padding: 2px 12px;
+    white-space: nowrap;
+  }
+  .anchor-strip .chain { font-size: 15.5px; font-weight: 600; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .anchor-strip .node {
+    background: rgba(255,255,255,.14);
+    border: 1px solid rgba(255,255,255,.35);
+    border-radius: 8px; padding: 3px 12px; font-size: 13.5px;
+  }
+  .anchor-strip .arrow { opacity: .8; font-weight: 700; }
+  .anchor-strip p.hint { flex-basis: 100%; font-size: 12.5px; opacity: .85; margin-top: 2px; }
+
+  /* ---------- Steps detail (六步详解) ---------- */
+  .steps-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .step-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px 18px;
+    box-shadow: 0 1px 2px rgba(30,58,138,.05);
+    display: flex; flex-direction: column;
+  }
+  .step-card .head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .step-card .no {
+    width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto;
+    background: linear-gradient(135deg, var(--blue-700), var(--blue-500));
+    color: #fff; font-size: 16px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .step-card h3 { font-size: 16px; color: var(--ink); }
+  .tag {
+    font-size: 11px; border-radius: 999px; padding: 1px 10px; white-space: nowrap; font-weight: 600;
+  }
+  .tag.manual  { background: var(--amber-100); color: var(--amber-700); }
+  .tag.auto   { background: var(--green-100); color: var(--green-700); }
+  .tag.plan   { background: var(--violet-100); color: var(--violet-700); }
+  .step-card .where {
+    font-size: 12.5px; color: var(--blue-700); background: var(--blue-50);
+    border: 1px solid var(--blue-100); border-radius: 8px;
+    padding: 5px 10px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;
+  }
+  .step-card .where b { font-weight: 600; }
+  .step-card p.why { font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
+  .step-card p.why b { color: var(--blue-800); }
+  .step-card ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .step-card li {
+    font-size: 12.8px; color: var(--ink-2); padding-left: 20px; position: relative;
+  }
+  .step-card li::before {
+    content: ""; position: absolute; left: 6px; top: 9px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--blue-500);
+  }
+  .kv {
+    margin-top: auto; padding-top: 12px;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .kv .pill {
+    font-size: 11.5px; background: #f8fafc; border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 10px; color: var(--ink-3);
+  }
+  .kv .pill b { color: var(--blue-700); font-weight: 600; }
+
+  /* ---------- Status chain (状态流转) ---------- */
+  .status-chain { display: flex; align-items: flex-start; justify-content: center; flex-wrap: wrap; gap: 4px; padding: 8px 0 2px; }
+  .st {
+    text-align: center;
+    background: #fff; border: 1.5px solid var(--blue-200);
+    color: var(--blue-800); font-size: 13.5px; font-weight: 600;
+    border-radius: 999px; padding: 7px 18px;
+    min-width: 84px;
+  }
+  .st.done { background: var(--blue-600); border-color: var(--blue-600); color: #fff; }
+  .tr {
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    padding: 4px 10px; min-width: 96px; max-width: 150px;
+  }
+  .tr .a { color: var(--blue-500); font-size: 16px; font-weight: 700; line-height: 1; }
+  .tr .c { font-size: 10.5px; color: var(--ink-3); text-align: center; line-height: 1.4; }
+  .tr .c b.hot { color: var(--green-700); }
+  .tr .c b.hand { color: var(--amber-700); }
+
+  /* ---------- Writeback table ---------- */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.2px; min-width: 640px; }
+  thead th {
+    background: var(--blue-50); color: var(--blue-800);
+    text-align: left; font-weight: 600; font-size: 12.5px; letter-spacing: .3px;
+    padding: 10px 14px; border-bottom: 2px solid var(--blue-200);
+    white-space: nowrap;
+  }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--line); color: var(--ink-2); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: #fafcff; }
+  td .dir { white-space: nowrap; font-weight: 600; }
+  td .dir.to-yunxiao { color: var(--blue-700); }
+  td .dir.in-yunxiao { color: var(--ink-3); }
+  td code {
+    background: var(--blue-50); border: 1px solid var(--blue-100);
+    border-radius: 5px; padding: 0 6px; font-size: 12px; color: var(--blue-800);
+  }
+  .badge-sm { font-size: 11px; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
+  .badge-sm.auto  { background: var(--green-100); color: var(--green-700); }
+  .badge-sm.manual { background: var(--amber-100); color: var(--amber-700); }
+
+  /* ---------- FAQ ---------- */
+  details {
+    border: 1px solid var(--line); border-radius: 10px;
+    background: #fff; margin-bottom: 10px; overflow: hidden;
+  }
+  summary {
+    cursor: pointer; list-style: none;
+    padding: 13px 18px; font-size: 14px; font-weight: 600; color: var(--ink);
+    display: flex; align-items: center; gap: 10px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: "+"; flex: 0 0 auto;
+    width: 20px; height: 20px; border-radius: 6px;
+    background: var(--blue-50); color: var(--blue-700);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+  }
+  details[open] summary::before { content: "−"; }
+  details .ans { padding: 0 18px 14px 48px; font-size: 13.2px; color: var(--ink-2); }
+
+  footer { text-align: center; color: var(--ink-3); font-size: 12px; padding: 26px 0 8px; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 860px) {
+    .steps-grid { grid-template-columns: 1fr; }
+    .pipeline { flex-direction: column; }
+    .phase-arrow { transform: rotate(90deg); padding: 2px 0; align-self: center; }
+    header h1 { font-size: 24px; }
+    .card { padding: 20px 18px; }
+    .status-chain { flex-direction: column; align-items: stretch; }
+    .st { align-self: center; }
+    .tr { flex-direction: row; justify-content: center; max-width: none; }
+    .tr .c { text-align: left; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="badge">Nezha × 云效 · Codeup</div>
+  <h1>议题管理全流程闭环</h1>
+  <p class="sub">从需求确认到合并完结的 6 个环节：云效确认排期 → Nezha 圈池建计划 → 自动回写排期 → 分支合并 → 议题完结，一次看懂。</p>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ 1. 流程总览 ============ -->
+  <section class="card hero-lift">
+    <h2><span class="idx">1</span>流程总览：六步走完一个闭环</h2>
+    <p class="lead">前 4 步在云效与 Nezha 之间双向回写数据，后 2 步在 Codeup 与云效侧收口。</p>
+
+    <div class="pipeline">
+      <div class="phase">
+        <div class="ph-head">
+          <div class="ph-name">云效 · 人工确认</div>
+          <div class="ph-sub">需求方在云效 Web 操作</div>
+        </div>
+        <div class="step"><span class="no">1</span><span class="t">状态改「已确认」<br>标记计划完成时间<span class="who">需求确认人</span></span></div>
+      </div>
+
+      <div class="phase-arrow">➜</div>
+
+      <div class="phase">
+        <div class="ph-head">
+          <div class="ph-name">Nezha · 排期与开发</div>
+          <div class="ph-sub">排期人在 Nezha 桌面端操作</div>
+        </div>
+        <div class="step"><span class="no">2</span><span class="t">按计划完成时间圈定议题池<span class="who">排期人</span></span></div>
+        <div class="step"><span class="no">3</span><span class="t">创建计划：关联分支 + 完成时间<span class="who">排期人</span></span></div>
+        <div class="step"><span class="no">4</span><span class="t">议题加入计划 → 自动回写云效<span class="who">排期人</span></span></div>
+      </div>
+
+      <div class="phase-arrow">➜</div>
+
+      <div class="phase">
+        <div class="ph-head">
+          <div class="ph-name">Codeup / 云效 · 收口</div>
+          <div class="ph-sub">合并交付与议题完结</div>
+        </div>
+        <div class="step"><span class="no">5</span><span class="t">发起分支合并（MR）<span class="who">开发 / 评审人</span></span></div>
+        <div class="step"><span class="no">6</span><span class="t">议题手工标记完成<span class="who">开发 / 确认人</span></span></div>
+      </div>
+    </div>
+
+    <div class="legend">
+      <span><span class="dot" style="background:var(--amber-100);border:1px solid var(--amber-700);"></span>手工操作步骤：① ⑥（⑥ 自动化在规划中）</span>
+      <span><span class="dot" style="background:var(--green-100);border:1px solid var(--green-700);"></span>自动回写步骤：④（加入计划即同步云效）</span>
+    </div>
+  </section>
+
+  <!-- ============ 贯穿字段 ============ -->
+  <div class="anchor-strip">
+    <span class="k">贯穿字段</span>
+    <div class="chain">
+      <span class="node">① 云效标记</span><span class="arrow">➜</span>
+      <span class="node">② 圈定议题池</span><span class="arrow">➜</span>
+      <span class="node">③ 计划承载</span><span class="arrow">➜</span>
+      <span class="node">④ 回写对齐</span>
+    </div>
+    <p class="hint">「计划完成时间」是整条闭环的数据主键：它是云效的自定义字段，Nezha 按字段名自动探测。项目未配置该字段时过滤器会隐藏，需先在云效项目设置中补配。</p>
+  </div>
+
+  <!-- ============ 2. 六步详解 ============ -->
+  <section class="card">
+    <h2><span class="idx">2</span>六步详解</h2>
+    <p class="lead">每一步在哪里做、做什么、为什么，以及容易踩的坑。</p>
+
+    <div class="steps-grid">
+
+      <div class="step-card">
+        <div class="head"><span class="no">1</span><h3>云效确认议题</h3><span class="tag manual">手工</span></div>
+        <div class="where">📍 <b>云效 Web</b>（Nezha 不代做需求确认）</div>
+        <p class="why"><b>做什么：</b>评审通过后，把议题状态从「待确认」改为「已确认」，并在<b>「计划完成时间」自定义字段</b>上标记承诺完成日期。</p>
+        <p class="why"><b>为什么：</b>这是后续一切自动化的锚点——没有该字段的议题进不了排期范围。</p>
+        <ul>
+          <li>「计划完成时间」是自定义字段，需项目预先配置</li>
+          <li>此处标记的是议题期望完成时间，入计划时会被计划值覆盖对齐</li>
+        </ul>
+      </div>
+
+      <div class="step-card">
+        <div class="head"><span class="no">2</span><h3>圈定议题池</h3><span class="tag manual">手工</span></div>
+        <div class="where">📍 <b>Nezha → 云效视图</b> → 筛选栏「计划完成时间」</div>
+        <p class="why"><b>做什么：</b>用时间过滤器圈出候选议题——支持<b>本周 / 本月</b>快捷预设，或<b>自定义起止日期</b>（闭区间）。</p>
+        <p class="why"><b>为什么：</b>一个时间窗就能圈出本期要交付的全部需求，作为步骤 ④ 的勾选来源。</p>
+        <ul>
+          <li>卡片时间徽标已逾期（非终态且早于今天）会标红</li>
+          <li>已被其它活跃计划占用的议题，后续加入时会被拒绝</li>
+        </ul>
+      </div>
+
+      <div class="step-card">
+        <div class="head"><span class="no">3</span><h3>创建计划</h3><span class="tag manual">手工</span><span class="tag plan">计划</span></div>
+        <div class="where">📍 <b>Nezha → 计划看板</b> →「创建计划」</div>
+        <p class="why"><b>做什么：</b>填写<b>关联分支</b>（可预览生成、冲突预检）与<b>计划完成时间</b>（yyyy-MM-dd），可选独立 worktree。</p>
+        <p class="why"><b>为什么：</b>计划是交付的执行载体——一个计划对应一条分支、一个完成时间承诺。</p>
+        <ul>
+          <li>计划完成时间创建后<b>不可改</b>（添加议题时要拿它回写云效）</li>
+          <li>旧版本创建、缺该字段的计划无法添加议题，需重建</li>
+        </ul>
+      </div>
+
+      <div class="step-card">
+        <div class="head"><span class="no">4</span><h3>议题加入计划</h3><span class="tag auto">自动回写</span></div>
+        <div class="where">📍 <b>Nezha → 计划详情</b> →「添加议题」</div>
+        <p class="why"><b>做什么：</b>勾选议题池中的议题加入计划，后端<b>逐条原子回写</b>，任一失败整批阻断：</p>
+        <ul>
+          <li>状态 → <b>「待开发」</b>（进入开发排期）</li>
+          <li>计划开始时间 → <b>当前时间</b>（加入当天，云效切状态必填）</li>
+          <li>计划完成时间 → 计划的完成时间（对齐覆盖）</li>
+          <li>负责人 → 当前令牌用户</li>
+        </ul>
+        <div class="kv">
+          <span class="pill">已是「待开发」→ 拒绝重复加入</span>
+          <span class="pill">移出议题 → 状态回退「已确认」并清空起止时间</span>
+        </div>
+      </div>
+
+      <div class="step-card">
+        <div class="head"><span class="no">5</span><h3>发起分支合并</h3><span class="tag auto">Agent 执行</span></div>
+        <div class="where">📍 <b>Nezha → 合并中心（Merge Hub）</b></div>
+        <p class="why"><b>做什么：</b>计划内议题开发就绪后，在合并中心先<b>拉取代码 / 代码审查</b>（审查报告可回写 MR 评论），再点<b>「分支合并」</b>交给 Agent 执行。</p>
+        <p class="why"><b>为什么：</b>计划分支承载全部变更，合并即交付完成；MR 是评审与回滚的边界。</p>
+        <ul>
+          <li>存在阻止级审查 fail 时会弹二次确认</li>
+          <li>合并成功后计划状态流转：<b>active → review → merged</b></li>
+        </ul>
+      </div>
+
+      <div class="step-card">
+        <div class="head"><span class="no">6</span><h3>议题标记完成</h3><span class="tag manual">手工 · 自动化规划中</span></div>
+        <div class="where">📍 <b>云效 Web</b>（当前为手工操作）</div>
+        <p class="why"><b>做什么：</b>合并成功后，把本计划对应议题逐条置为<b>「已完成」</b>，议题生命周期收口。</p>
+        <p class="why"><b>后续考虑：</b>计划 MR 达到 merged 状态时，Nezha 批量自动将成员议题标记完成（同类回写能力已在知识沉淀闭环验证）。实现前请保持手工标记。</p>
+        <div class="kv">
+          <span class="pill">合并成功 ≠ 需求完成，可能还有验收 / 回归收尾</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ 3. 状态流转 ============ -->
+  <section class="card">
+    <h2><span class="idx">3</span>议题状态怎么流转</h2>
+    <p class="lead">一条议题从提出到完结，状态共 4 跳：人工确认 1 跳，Nezha 自动 1 跳，人工收口 1 跳。</p>
+    <div class="status-chain">
+      <span class="st">待确认</span>
+      <span class="tr"><span class="a">➜</span><span class="c"><b class="hand">人工</b> · 评审通过（步骤①）</span></span>
+      <span class="st">已确认</span>
+      <span class="tr"><span class="a">➜</span><span class="c"><b class="hot">自动</b> · 加入计划（步骤④）<br>＋回写起止时间、负责人</span></span>
+      <span class="st">待开发</span>
+      <span class="tr"><span class="a">➜</span><span class="c"><b class="hand">人工</b> · 合并成功后（步骤⑥）</span></span>
+      <span class="st done">已完成</span>
+    </div>
+    <p class="lead" style="margin-top:14px;">※ 从计划移出议题时自动反向回退：「待开发 → 已确认」，并清空计划起止时间。</p>
+  </section>
+
+  <!-- ============ 4. 数据回写全景 ============ -->
+  <section class="card">
+    <h2><span class="idx">4</span>数据回写全景</h2>
+    <p class="lead">哪些动作动了云效议题的数据、往哪个方向写，一张表看清。</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>时刻</th><th>触发动作</th><th>云效议题侧变化</th><th>方向</th><th>方式</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>①</td><td>需求确认</td>
+            <td>状态 待确认 → 已确认；「计划完成时间」字段标记</td>
+            <td><span class="dir in-yunxiao">云效内</span></td>
+            <td><span class="badge-sm manual">手工</span></td>
+          </tr>
+          <tr>
+            <td>④</td><td>议题加入计划</td>
+            <td>状态 → <b>待开发</b>；计划开始时间＝当天；计划完成时间＝计划值；负责人＝当前用户</td>
+            <td><span class="dir to-yunxiao">Nezha ➜ 云效</span></td>
+            <td><span class="badge-sm auto">自动</span></td>
+          </tr>
+          <tr>
+            <td>④′</td><td>议题移出计划</td>
+            <td>状态回退 <b>已确认</b>；清空计划开始 / 完成时间</td>
+            <td><span class="dir to-yunxiao">Nezha ➜ 云效</span></td>
+            <td><span class="badge-sm auto">自动</span></td>
+          </tr>
+          <tr>
+            <td>⑤</td><td>MR 状态变化</td>
+            <td>审查报告可选回写云效 MR 评论</td>
+            <td><span class="dir to-yunxiao">Nezha ➜ Codeup</span></td>
+            <td><span class="badge-sm auto">自动</span></td>
+          </tr>
+          <tr>
+            <td>⑥</td><td>标记完成</td>
+            <td>状态 → <b>已完成</b></td>
+            <td><span class="dir in-yunxiao">云效内</span></td>
+            <td><span class="badge-sm manual">手工</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 5. 常见问题 ============ -->
+  <section class="card">
+    <h2><span class="idx">5</span>常见问题</h2>
+    <p class="lead">排期时最容易遇到的四件事。</p>
+
+    <details>
+      <summary>过滤器里看不到「计划完成时间」？</summary>
+      <div class="ans">项目未配置该名称的自定义字段，Nezha 探测不到字段 ID 时会自动隐藏过滤器。先到云效项目设置添加名为「计划完成时间」的自定义字段。</div>
+    </details>
+    <details>
+      <summary>添加议题时报「已是待开发状态，不能重复加入计划」？</summary>
+      <div class="ans">该议题此前已加入过计划。若要换计划，先从原计划移出（状态回退已确认）再添加。</div>
+    </details>
+    <details>
+      <summary>添加议题时报「所选计划缺少计划完成时间（旧计划请重建）」？</summary>
+      <div class="ans">该计划创建于旧版本、未携带计划完成时间字段。因回写云效必须依赖该值，请重建计划。</div>
+    </details>
+    <details>
+      <summary>合并成功了，云效议题还是「待开发」？</summary>
+      <div class="ans">正常现象——议题完结目前是步骤 ⑥ 的手工动作，「合并成功自动标记完成」在规划中。请先到云效手工置为「已完成」。</div>
+    </details>
+  </section>
+
+  <footer>Nezha · 议题管理全流程闭环 · 2026-10-09</footer>
+</div>
+
+</body>
+</html>
