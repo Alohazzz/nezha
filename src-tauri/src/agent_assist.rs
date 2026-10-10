@@ -1474,16 +1474,19 @@ fn merge_plan_writeback_draft(
     task_drafts: Option<&str>,
 ) -> YunxiaoWritebackDraft {
     let (plan_dev, plan_test) = split_plan_section(plan_section);
-    let (drafts_test, score_section) = task_drafts
-        .map(|drafts| {
-            let (drafts_dev, drafts_test) = split_discussion_into_comments(drafts);
-            let score = crate::value_score::extract_value_score_section(&drafts_dev)
-                .map(str::to_string);
-            (drafts_test, score)
-        })
-        .unwrap_or((String::new(), None));
+    // 评分小节从整份草稿提取，不限定 dev 半区：agent 可能把「## 价值评分」写在
+    // 「## 影响范围与测试」之后（QHDK-30560），按标题切分后评分会落进 test 半区，
+    // 只查 dev 半区会取不到 → 开发向评论无评分 → 回写时字段不写。
+    let score_section = task_drafts
+        .and_then(|drafts| crate::value_score::extract_value_score_section(drafts))
+        .map(str::to_string);
+    let drafts_test = task_drafts
+        .map(|drafts| split_discussion_into_comments(drafts).1)
+        .unwrap_or_default();
     let dev_comment =
         crate::value_score::reappend_value_score_section(&plan_dev, score_section.as_deref());
+    // test 半区若带着评分小节（顺序颠倒的草稿），剥掉避免与开发向评论重复发布。
+    let drafts_test = crate::value_score::strip_value_score_section(&drafts_test);
     let test_comment = if drafts_test.trim().is_empty() {
         plan_test
     } else {
@@ -1996,6 +1999,32 @@ mod tests {
         let (dev, test) = split_discussion_into_comments(text);
         assert_eq!(dev, "## 修改方案汇总\n\n内容");
         assert!(test.is_empty());
+    }
+
+    #[test]
+    fn merge_plan_writeback_finds_score_after_test_section() {
+        // 回归（QHDK-30560）：草稿里「## 价值评分」被 agent 写在「## 影响范围与测试」之后时，
+        // 评分小节落在 test 半区。合并时必须仍能取到评分拼进开发向评论，
+        // 否则 yunxiao_writeback_with_score 解析不到评分，字段不写（评论有评分、字段无值）。
+        let task_drafts = "\
+            ## 影响范围与测试（测试向）\n\
+            \n\
+            **修改分支** fix/x\n\
+            **修改文件** A、B\n\
+            **测试步骤** 1. …\n\
+            \n\
+            ## 价值评分（issue-value-scoring · 2026-09-28）\n\
+            \n\
+            - 议题类别：Bug\n\
+            - 优先指数：**31.5** = 严重 3 × 频率 5 × 范围 3 × 折减 0.7\n";
+        let plan_section = "## 修改方案汇总\n\n方案内容。\n\n### 影响范围与测试\n\n- 影响范围：模块A";
+        let draft = merge_plan_writeback_draft(plan_section, Some(task_drafts));
+        assert!(
+            draft.dev_comment.contains("## 价值评分"),
+            "开发向评论必须含评分小节，实际：{}",
+            draft.dev_comment
+        );
+        assert!(draft.dev_comment.contains("31.5"));
     }
 
     #[test]

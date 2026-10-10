@@ -82,6 +82,37 @@ pub fn reappend_value_score_section(summary: &str, preserved: Option<&str>) -> S
     format!("{summary}\n\n{preserved}")
 }
 
+/// 从文本中剥掉评分小节（含其标题行到下一个 `## ` 标题或文末），其余内容原样保留。
+/// 用于评分小节被 agent 写进测试向半区时，避免它随测试向评论重复发布。
+pub fn strip_value_score_section(text: &str) -> String {
+    let mut line_start = 0usize;
+    let mut start_byte = None;
+    for line in text.lines() {
+        if line.starts_with(SCORE_SECTION_HEADER) {
+            start_byte = Some(line_start);
+            break;
+        }
+        line_start += line.len() + 1;
+    }
+    let Some(start) = start_byte else {
+        return text.to_string();
+    };
+    let rest = &text[start..];
+    let end = match rest.find("\n## ") {
+        // 下一个小节标题从 rest 内的 `\n` 之后开始，保留它（含前导空行规整交给 trim）。
+        Some(next) => start + next + 1,
+        None => text.len(),
+    };
+    let mut out = String::with_capacity(text.len());
+    out.push_str(text[..start].trim_end());
+    let tail = text[end..].trim_start();
+    if !out.is_empty() && !tail.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(tail);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +208,31 @@ mod tests {
     fn reappend_returns_summary_unchanged_without_preserved() {
         let summary = "正文";
         assert_eq!(reappend_value_score_section(summary, None), summary);
+    }
+
+    #[test]
+    fn strips_section_running_to_eof() {
+        let text = "## 影响范围与测试\n\n- 修改分支：fix/x\n\n## 价值评分\n\n- 优先指数：**31.5**";
+        let out = strip_value_score_section(text);
+        assert!(out.contains("影响范围与测试"));
+        assert!(out.contains("修改分支"));
+        assert!(!out.contains("价值评分"));
+        assert!(!out.contains("31.5"));
+    }
+
+    #[test]
+    fn strips_section_stopping_at_next_heading() {
+        let text = "## 价值评分\n\n- 核心指数：**50**\n\n## 后续步骤\n\n继续。";
+        let out = strip_value_score_section(text);
+        assert!(!out.contains("价值评分"));
+        assert!(!out.contains("核心指数"));
+        assert!(out.contains("后续步骤"));
+    }
+
+    #[test]
+    fn strip_returns_text_unchanged_without_section() {
+        let text = "## 影响范围与测试\n\n- 测试步骤：1. …";
+        assert_eq!(strip_value_score_section(text), text);
+        assert_eq!(strip_value_score_section(""), "");
     }
 }
