@@ -2474,9 +2474,11 @@ pub async fn write_backfill_consumed(
 
 // ── 计划成员回写（添加 / 移出计划时同步云效议题）─────────────────────────────
 
-/// 云效工作流状态约定名：议题加入计划即进入开发排期（待开发），移出则回退（待处理）。
+/// 云效工作流状态约定名：议题加入计划即进入开发排期（待开发），移出则回退（已确认）。
+/// 回退目标取「已确认」而非初始态「待处理」：多数租户工作流不开放「待开发 → 待处理」
+/// 流转边，回退到待处理会被云效 400 拒绝（当前状态:待开发不能流转到目标状态:待处理）。
 pub const PLAN_DEV_STATUS_NAME: &str = "待开发";
-pub const PLAN_PENDING_STATUS_NAME: &str = "待处理";
+pub const PLAN_CONFIRMED_STATUS_NAME: &str = "已确认";
 /// 「计划完成时间」自定义字段的约定名（与 `YUNXIAO_PLAN_END_FIELD_NAME` 同一约定，Rust 侧独立成常量）。
 pub const PLAN_END_FIELD_NAME: &str = "计划完成时间";
 /// 「计划开始时间」自定义字段的约定名：工作流切「待开发」时云效侧校验必填。
@@ -2634,7 +2636,7 @@ pub async fn writeback_issue_add_to_plan(
     Ok(())
 }
 
-/// 单条议题的「移出计划」回写：状态回退（待处理）+ 清空计划开始/完成时间；负责人不动。
+/// 单条议题的「移出计划」回写：状态回退（已确认）+ 清空计划开始/完成时间；负责人不动。
 /// 顺序执行，任一步失败即返回 Err（调用方阻断移除、本地成员不动）。
 pub async fn writeback_issue_remove_from_plan(
     client: &reqwest::Client,
@@ -2679,10 +2681,10 @@ pub async fn writeback_issue_remove_from_plan(
         organization_id,
         &project_id,
         &workitem_type_id,
-        PLAN_PENDING_STATUS_NAME,
+        PLAN_CONFIRMED_STATUS_NAME,
     )
     .await
-    .map_err(|e| format!("解析「{PLAN_PENDING_STATUS_NAME}」状态失败: {e}"))?;
+    .map_err(|e| format!("解析「{PLAN_CONFIRMED_STATUS_NAME}」状态失败: {e}"))?;
     update_workitem_field_str(client, token, organization_id, workitem_id, "status", &status_id)
         .await
         .map_err(|e| format!("回写状态失败: {e}"))?;
