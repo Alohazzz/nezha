@@ -39,8 +39,11 @@ fn build_headless_agent_args(
                 "read-only",
                 "--ephemeral",
                 "--skip-git-repo-check",
+                // Windows 上 codex 可能是 npm 的 .cmd 垫片，参数含双引号会被
+                // Rust 的 BatBadBut 防护拒绝 spawn（batch file arguments are
+                // invalid），且 Command::args 不经 shell，TOML 解析裸值即可。
                 "-c",
-                "approval_policy=\"never\"",
+                "approval_policy=never",
                 // headless 提示词自包含（材料全部内联），禁加载 cwd 下的 project doc
                 // （AGENTS.md 等）——业务仓库的强指令（如「不确定即提问」）会污染判定。
             ]
@@ -53,13 +56,10 @@ fn build_headless_agent_args(
         }
         if let Some(effort) = reasoning_effort {
             args.push("-c".into());
-            args.push(
-                format!(
-                    "model_reasoning_effort={}",
-                    toml::Value::String(effort.to_string())
-                )
-                .into(),
-            );
+            // 同 approval_policy：不经过 shell，TOML 字符串裸值即可，
+            // 带引号（toml::Value::String 序列化）会触发 .cmd 垫片的
+            // BatBadBut 拒绝，实测裸值 low/medium/high 均被正常接受。
+            args.push(format!("model_reasoning_effort={}", effort).into());
         }
         args.push(prompt.into());
     } else {
@@ -110,8 +110,11 @@ fn build_headless_writer_agent_args(
                 "-a",
                 "on-request",
                 "--ephemeral",
+                // Windows 上 codex 可能是 npm 的 .cmd 垫片，参数含双引号会被
+                // Rust 的 BatBadBut 防护拒绝 spawn（batch file arguments are
+                // invalid），且 Command::args 不经 shell，TOML 解析裸值即可。
                 "-c",
-                "approval_policy=\"never\"",
+                "approval_policy=never",
             ]
             .map(OsString::from),
         );
@@ -121,13 +124,9 @@ fn build_headless_writer_agent_args(
         }
         if let Some(effort) = reasoning_effort {
             args.push("-c".into());
-            args.push(
-                format!(
-                    "model_reasoning_effort={}",
-                    toml::Value::String(effort.to_string())
-                )
-                .into(),
-            );
+            // 同 build_headless_agent_args：TOML 字符串裸值，避免 .cmd 垫片
+            // 机器上参数带引号被 BatBadBut 防护拒绝 spawn。
+            args.push(format!("model_reasoning_effort={}", effort).into());
         }
         args.push(prompt.into());
     } else {
@@ -2525,9 +2524,11 @@ mod tests {
         );
         let args: Vec<&str> = args.iter().map(|a| a.to_str().unwrap()).collect();
         assert!(args.windows(2).any(|w| w == ["--model", "fast-model"]));
+        // TOML 字符串裸值：参数带双引号会在 npm .cmd 垫片机器上被
+        // BatBadBut 防护拒绝 spawn（batch file arguments are invalid）。
         assert!(args
             .windows(2)
-            .any(|w| w == ["-c", "model_reasoning_effort=\"high\""]));
+            .any(|w| w == ["-c", "model_reasoning_effort=high"]));
         // 轻量模型旗标必须位于 positional prompt 之前
         let model_pos = args.iter().position(|a| *a == "fast-model").unwrap();
         let prompt_pos = args.iter().position(|a| *a == "prompt text").unwrap();
@@ -2566,7 +2567,7 @@ mod tests {
                 "--ephemeral",
                 "--skip-git-repo-check",
                 "-c",
-                "approval_policy=\"never\"",
+                "approval_policy=never",
                 // 项目上下文隔离：禁加载 cwd 下的 project doc（AGENTS.md 等）。
                 "-c",
                 "project_doc_max_bytes=0",
