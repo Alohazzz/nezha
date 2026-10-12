@@ -1090,7 +1090,7 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
      - 不要套用其他模板结构，不要在方案之外额外扩写，事实里没有的内容不要补。
    - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，首行固定为标题 `## 影响范围与测试指引`，其后为三个固定字段；**字段名必须加粗**（与开发向评论的小标题一致），不要用列表符号：
      - `**修改分支**`：直接使用下方给定的「修改分支」，不要改动、不要编造；
-     - `**修改文件**`：受影响的项目/工程名（从变更统计的文件路径归纳，如 Nto.His.Register.UI），多个用顿号分隔；
+     - `**修改文件**`：受影响的项目/工程名（.NET 仓库归并到含 .csproj 的工程目录这一级，如 Nto.His.Order.Bll；无工程的目录取一级目录名），多个用顿号分隔（该字段由系统按 git 变更确定性填充，你只需给出可执行的测试步骤）；
      - `**测试步骤**`：给出可执行的测试步骤与回归点。
 3. 每条评论语言与议题标题一致（中文议题输出中文），各 200-500 字，控制在 12 行以内。
 4. 某条若缺少事实支撑，就写「（无）」占位，不要编造。
@@ -1147,10 +1147,13 @@ fn gather_writeback_facts(cwd: &str, base_branch: Option<&str>) -> (String, Stri
 /// 回写「修改文件」字段的确定性统计上限（超出说明仓库异常，做提示性截断）。
 const MAX_MODIFIED_FILE_LABELS: usize = 50;
 
-/// 确定性收集本次改动涉及的工程名（三源并集，fix #106）：
+/// 确定性收集本次改动涉及的项目名（三源并集，fix #106）：
 /// 1. 已提交变更 `git diff --name-only {base}...HEAD`；
 /// 2. 已暂存 + 未暂存变更 `git diff --name-only HEAD`；
 /// 3. 未跟踪文件 `git status --porcelain`（`??` 行）。
+///
+/// 路径归并口径：.NET 仓库归并到含 `.csproj` 的工程目录这一级（obj 产物归属所在
+/// 工程），非工程文件回退一级目录（`derive_project_names_in_repo`）。
 ///
 /// 现状是「修改文件」由 LLM 凭会话记忆/diff stat 归纳，五处系统性漏报
 /// （草稿过期、未提交变更不在 diff 事实里、plan.md 预判、base 缺失、8000 字符截断）。
@@ -1158,7 +1161,9 @@ const MAX_MODIFIED_FILE_LABELS: usize = 50;
 fn collect_writeback_project_names(cwd: &str, base_branch: Option<&str>) -> Vec<String> {
     let run = |args: &[&str]| -> Option<String> {
         let mut cmd = std::process::Command::new("git");
-        cmd.args(args).current_dir(cwd);
+        // core.quotePath=false：中文等非 ASCII 路径不被转成带引号的八进制转义
+        // （如 "Hsp.Win/obj/Debug/\346…dll"），否则归并出的名字会带上前导引号。
+        cmd.arg("-c").arg("core.quotePath=false").args(args).current_dir(cwd);
         crate::subprocess::configure_background_command(&mut cmd);
         let out = cmd.output().ok()?;
         if !out.status.success() {
@@ -1196,19 +1201,18 @@ fn collect_writeback_project_names(cwd: &str, base_branch: Option<&str>) -> Vec<
             }
         }
     }
-    derive_project_names(&paths)
+    derive_project_names_in_repo(&paths, Some(Path::new(cwd)))
 }
 
-/// 把改动文件路径归并成工程名：默认取一级目录（`src/a/b.ts` → `src`），
-/// 根目录散文件保留文件名。同名去重后按字母序稳定输出，超上限截断加提示。
-fn derive_project_names(paths: &[String]) -> Vec<String> {
+/// 把改动文件路径归并成项目名：仓库内优先归并到含 `.csproj` 的工程目录
+/// （`Nto.His.Order.Bll/obj/Debug/x.dll` → `Nto.His.Order.Bll`，obj 产物归属所在
+/// 工程），找不到工程的文件回退一级目录（`src/a/b.ts` → `src`），根目录散文件保留
+/// 文件名。同名去重后按字母序稳定输出，超上限截断加提示。
+fn derive_project_names_in_repo(paths: &[String], repo: Option<&Path>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     for path in paths {
-        let name = match path.split(['/', '\\']).next() {
-            Some(first) if first.is_empty() => path.to_string(),
-            // 一级目录即整个路径（根目录散文件）→ 保留文件名本身。
-            Some(first) if first == path => path.to_string(),
-            Some(first) => first.to_string(),
+        let name = match derive_one_project_name(path, repo) {
+            Some(name) => name,
             None => continue,
         };
         if !names.contains(&name) {
@@ -1217,10 +1221,48 @@ fn derive_project_names(paths: &[String]) -> Vec<String> {
     }
     names.sort();
     if names.len() > MAX_MODIFIED_FILE_LABELS {
+        let total = names.len();
         names.truncate(MAX_MODIFIED_FILE_LABELS);
-        names.push(format!("…等 {} 项（已截断）", names.len()));
+        names.push(format!("…等 {total} 项（已截断）"));
     }
     names
+}
+
+/// 单条路径 → 项目名：从深到浅找最近含 `.csproj` 的祖先目录（相对 repo 的段数
+/// 递减），命中即返回该目录名；无 repo、路径越出 repo、或一路都没有工程文件时
+/// 回退一级目录/根目录文件名。
+fn derive_one_project_name(path: &str, repo: Option<&Path>) -> Option<String> {
+    let segments: Vec<&str> = path.split(['/', '\\']).collect();
+    if let Some(root) = repo {
+        // 文件路径最后一段是文件名；从最深目录段（含路径自身为目录的情形由
+        // git 输出保证不会出现——name-only 输出的是文件）向上探测。
+        let depth = segments.len().saturating_sub(1).max(1);
+        for take in (1..=depth).rev() {
+            let mut abs = root.to_path_buf();
+            for seg in segments.iter().take(take) {
+                abs.push(seg);
+            }
+            if let Ok(entries) = std::fs::read_dir(&abs) {
+                if entries
+                    .filter_map(Result::ok)
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".csproj"))
+                {
+                    return segments
+                        .get(take - 1)
+                        .map(|s| s.to_string())
+                        .filter(|s| !s.is_empty());
+                }
+            }
+        }
+    }
+    let name = match segments.first() {
+        Some(first) if first.is_empty() => path.to_string(),
+        // 一级目录即整个路径（根目录散文件）→ 保留文件名本身。
+        Some(_) if segments.len() == 1 => path.to_string(),
+        Some(first) => first.to_string(),
+        None => return None,
+    };
+    Some(name)
 }
 
 /// 把确定性工程名清单写进测试向评论的 `**修改文件**` 字段（幂等）：
@@ -2617,23 +2659,30 @@ mod tests {
 
     #[test]
     fn derive_project_names_groups_by_first_segment() {
-        let names = derive_project_names(&[
-            "src/a/b.ts".to_string(),
-            "src/deep/c.rs".to_string(),
-            "Nto.His.Foo/Bar.cs".to_string(),
-            "README.md".to_string(),
-        ]);
+        // 无仓库上下文（探测不可用）时按一级目录归并。
+        let names = derive_project_names_in_repo(
+            &[
+                "src/a/b.ts".to_string(),
+                "src/deep/c.rs".to_string(),
+                "Nto.His.Foo/Bar.cs".to_string(),
+                "README.md".to_string(),
+            ],
+            None,
+        );
         assert_eq!(names, vec!["Nto.His.Foo", "README.md", "src"]);
     }
 
     #[test]
     fn derive_project_names_dedupes_and_stays_sorted() {
-        let names = derive_project_names(&[
-            "b/x".to_string(),
-            "a/y".to_string(),
-            "b/z".to_string(),
-            "a/w".to_string(),
-        ]);
+        let names = derive_project_names_in_repo(
+            &[
+                "b/x".to_string(),
+                "a/y".to_string(),
+                "b/z".to_string(),
+                "a/w".to_string(),
+            ],
+            None,
+        );
         assert_eq!(names, vec!["a", "b"]);
     }
 
@@ -2642,7 +2691,7 @@ mod tests {
         let paths: Vec<String> = (0..(MAX_MODIFIED_FILE_LABELS + 10))
             .map(|i| format!("dir{i}/file"))
             .collect();
-        let names = derive_project_names(&paths);
+        let names = derive_project_names_in_repo(&paths, None);
         assert_eq!(names.len(), MAX_MODIFIED_FILE_LABELS + 1);
         assert!(names.last().unwrap().contains("已截断"));
     }
@@ -2693,6 +2742,51 @@ mod tests {
     }
 
     #[test]
+    fn collect_writeback_project_names_collapses_to_csproj_directory() {
+        // 走生产函数（含 git 三源 + quotePath 关闭），中文路径不产生带引号的转义。
+        let dir = std::env::temp_dir().join(format!("nezha-wb-e2e-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-c").arg("core.quotePath=false").args(args).current_dir(&dir);
+            cmd.env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t");
+            cmd.env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t");
+            assert!(cmd.status().unwrap().success(), "git {:?} failed", args);
+        };
+        git(&["init", "-q", "-b", "base"]);
+        // base 上只有与任务无关的文件。
+        std::fs::write(dir.join("Base.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        git(&["checkout", "-q", "-b", "feat"]);
+        // 工程一：根下 Hsp.Win，含 obj/Debug 中文 dll 产物。
+        let win = dir.join("Hsp.Win");
+        std::fs::create_dir_all(win.join("obj").join("Debug")).unwrap();
+        std::fs::write(win.join("Hsp.Win.csproj"), "<Project />").unwrap();
+        std::fs::write(win.join("obj").join("Debug").join("住院自费.dll"), "bin").unwrap();
+        // 工程二：子目录 src/Nto.His.Order.Bll。
+        let bll = dir.join("src").join("Nto.His.Order.Bll");
+        std::fs::create_dir_all(&bll).unwrap();
+        std::fs::write(bll.join("Nto.His.Order.Bll.csproj"), "<Project />").unwrap();
+        std::fs::write(bll.join("OrderService.cs"), "b").unwrap();
+        // 非工程文件：根目录散文件 + 无 csproj 目录。
+        std::fs::write(dir.join("Directory.Build.targets"), "c").unwrap();
+        std::fs::create_dir_all(dir.join("HspSQL").join("t")).unwrap();
+        std::fs::write(dir.join("HspSQL").join("t").join("_SIFLAG.sql"), "d").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "feat: all kinds"]);
+
+        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            names,
+            vec!["Directory.Build.targets", "Hsp.Win", "HspSQL", "Nto.His.Order.Bll"],
+            "工程目录归并（含 obj 产物、子目录工程）+ 非工程回退一级目录/文件名"
+        );
+    }
+
+    #[test]
     fn collect_writeback_project_names_includes_uncommitted_and_untracked() {
         let dir = std::env::temp_dir().join(format!("nezha-wb-probe-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2725,5 +2819,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         // 已提交（src）+ 已暂存未提交（lib）+ 未跟踪（docs）三类都在。
         assert_eq!(names, vec!["docs", "lib", "src"]);
+    }
+
+    #[test]
+    fn derive_project_names_without_repo_keeps_first_segment() {
+        // 无仓库上下文（探测不可用）时保持旧口径，行为不回退。
+        let names = derive_project_names_in_repo(
+            &[
+                "Hsp.Win/obj/Debug/x.dll".to_string(),
+                "README.md".to_string(),
+            ],
+            None,
+        );
+        assert_eq!(names, vec!["Hsp.Win", "README.md"]);
     }
 }
