@@ -12,6 +12,7 @@
 @import "./styles/plan-board.css";
 @import "./styles/html-preview.css";
 @import "./styles/row-actions.css";
+@import "./styles/task-list.css";
 
 /* ── Reset ─────────────────────────────────────────────────────── */
 *,

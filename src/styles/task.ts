@@ -390,13 +390,12 @@ export const task = {
     fontWeight: 700,
     color: "var(--text-hint)",
     letterSpacing: 0.7,
-    padding: "10px 14px 3px",
     textTransform: "uppercase" as const,
   },
   groupRow: {
     display: "flex",
     alignItems: "center" as const,
-    padding: "0 10px 0 0",
+    padding: "0 10px",
   },
   groupAdd: {
     width: 18,

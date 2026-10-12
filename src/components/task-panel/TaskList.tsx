@@ -1,7 +1,8 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
-import { Plus } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import { ChevronDown, Plus } from "lucide-react";
 import type { DeliveryPlan, Task, TaskDisplayWindow } from "../../types";
 import type { PlanWaitingBadge } from "../../utils/planQueue";
+import { load, save } from "../../utils";
 import { TaskListItem } from "./TaskListItem";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -11,8 +12,18 @@ const TASK_ROW_HEIGHT = 47;
 const OVERSCAN_ROWS = 8;
 
 type VirtualRow =
-  | { type: "group"; key: string; label: string; height: number }
+  | { type: "group"; key: string; label: string; count: number; collapsed: boolean; height: number }
   | { type: "task"; key: string; task: Task; showRunTodo: boolean; height: number };
+
+function collapsedGroupsKey(projectId: string) {
+  return `nezha.collapsedGroups.${projectId}`;
+}
+
+/** 组 key 里有 worktree 路径 / 计划 id，组消失后残留 key 在每次保存时惰性清掉。 */
+function loadCollapsedGroups(projectId: string, knownKeys: Set<string>): Set<string> {
+  const stored = load<string[]>(collapsedGroupsKey(projectId), []);
+  return new Set(stored.filter((key) => knownKeys.has(key)));
+}
 
 function findRowIndex(offsets: number[], value: number) {
   if (offsets.length <= 1) return 0;
@@ -33,6 +44,7 @@ function findRowIndex(offsets: number[], value: number) {
 }
 
 export function TaskList({
+  projectId,
   tasks,
   taskDisplayWindow,
   query,
@@ -46,6 +58,7 @@ export function TaskList({
   waitingBadges,
   onCreateTaskInGroup,
 }: {
+  projectId: string;
   tasks: Task[];
   taskDisplayWindow: TaskDisplayWindow;
   query: string;
@@ -114,6 +127,71 @@ export function TaskList({
     });
   }, [filtered]);
 
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  // 现存组 key 集合：用于 localStorage 加载时的惰性清理，见 rows 构建处。
+  const existingGroupKeys = useMemo(() => {
+    const MAIN = "__main__";
+    const planById = new Map<string, DeliveryPlan>();
+    for (const b of batches) planById.set(b.id, b);
+    const keys = new Set<string>([MAIN, "attention"]);
+    for (const task of sorted) {
+      if (!!task.worktreePath && !task.worktreeDiscarded) {
+        keys.add(`wt:${task.worktreePath}`);
+      } else if (task.deliveryPlanId && planById.has(task.deliveryPlanId)) {
+        keys.add(`batch:${task.deliveryPlanId}`);
+      }
+    }
+    return keys;
+  }, [sorted, batches]);
+
+  // 折叠状态按项目持久化；项目切换时重新加载。
+  useEffect(() => {
+    setCollapsedGroups(loadCollapsedGroups(projectId, existingGroupKeys));
+  }, [projectId, existingGroupKeys]);
+
+  const toggleGroup = useCallback(
+    (key: string) => {
+      setCollapsedGroups((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        // 保存前清理已消失的组 key，避免残留死数据无限累积。
+        const persisted = [...next].filter((k) => existingGroupKeys.has(k));
+        save(collapsedGroupsKey(projectId), persisted);
+        return next;
+      });
+    },
+    [projectId, existingGroupKeys],
+  );
+
+  // 选中导航例外：selectedId 落进折叠组时展开该组一次（reveal）。
+  useEffect(() => {
+    if (!selectedId) return;
+    const task = tasks.find((t) => t.id === selectedId);
+    if (!task) return;
+    const planById = new Map<string, DeliveryPlan>();
+    for (const b of batches) planById.set(b.id, b);
+    const needsAttention =
+      task.status === "input_required" ||
+      task.status === "awaiting_review" ||
+      task.status === "detached" ||
+      task.status === "interrupted";
+    const key = needsAttention
+      ? "attention"
+      : !!task.worktreePath && !task.worktreeDiscarded
+        ? `wt:${task.worktreePath}`
+        : task.deliveryPlanId && planById.has(task.deliveryPlanId)
+          ? `batch:${task.deliveryPlanId}`
+          : "__main__";
+    setCollapsedGroups((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, [selectedId, tasks, batches]);
+
   const rows = useMemo<VirtualRow[]>(() => {
     const MAIN = "__main__";
     const attention: Task[] = [];
@@ -157,10 +235,15 @@ export function TaskList({
       g.tasks.push(task);
     }
 
+    // 搜索语义是"找出所有匹配项"，query 非空时忽略折叠强制展开。
+    const searching = !!query.trim();
+
     const nextRows: VirtualRow[] = [];
     const appendGroup = (key: string, label: string, groupTasks: Task[]) => {
       if (groupTasks.length === 0) return;
-      nextRows.push({ type: "group", key, label, height: GROUP_ROW_HEIGHT });
+      const collapsed = !searching && collapsedGroups.has(key);
+      nextRows.push({ type: "group", key, label, count: groupTasks.length, collapsed, height: GROUP_ROW_HEIGHT });
+      if (collapsed) return;
       groupTasks.forEach((task) => {
         nextRows.push({
           type: "task",
@@ -181,7 +264,7 @@ export function TaskList({
       .forEach(([key, g]) => appendGroup(key, g.label, g.tasks));
 
     return nextRows;
-  }, [sorted, t, taskDisplayWindow, batches]);
+  }, [sorted, t, taskDisplayWindow, batches, query, collapsedGroups]);
 
   const offsets = useMemo(() => {
     const nextOffsets = [0];
@@ -220,14 +303,37 @@ export function TaskList({
               }}
             >
               {row.type === "group" ? (
-                <div style={s.groupRow}>
-                  <span style={s.groupLabel}>{row.label}</span>
+                <div
+                  className="tasklist-group-row"
+                  data-collapsed={row.collapsed}
+                  style={s.groupRow}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={!row.collapsed}
+                  onClick={() => toggleGroup(row.key)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggleGroup(row.key);
+                    }
+                  }}
+                >
+                  <span className="tasklist-group-chevron">
+                    <ChevronDown size={12} />
+                  </span>
+                  <span style={s.groupLabel} className="tasklist-group-label">
+                    {row.label}
+                  </span>
+                  <span className="tasklist-group-count">{row.count}</span>
                   <button
                     type="button"
                     style={s.groupAdd}
-                    aria-label="新建任务"
-                    title="新建任务"
-                    onClick={() => onCreateTaskInGroup(row.key)}
+                    aria-label={t("task.newTask")}
+                    title={t("task.newTask")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreateTaskInGroup(row.key);
+                    }}
                   >
                     <Plus size={12} />
                   </button>

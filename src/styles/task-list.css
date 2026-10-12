@@ -1,0 +1,51 @@
+/* 任务列表分组折叠（TaskList.tsx 组头交互） */
+
+.tasklist-group-row {
+  height: 100%;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 5px;
+}
+
+.tasklist-group-row:hover {
+  background: var(--bg-hover);
+}
+
+.tasklist-group-chevron {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-right: 0;
+  color: var(--text-hint);
+  transition: transform 0.15s ease;
+}
+
+.tasklist-group-row[data-collapsed="true"] .tasklist-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.tasklist-group-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 计数徽标常驻右缘（ZCode 文件夹行风格），不与截断的标签争宽。 */
+.tasklist-group-count {
+  flex: none;
+  margin-left: 6px;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 7px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  color: var(--text-hint);
+  background: var(--bg-hover);
+}

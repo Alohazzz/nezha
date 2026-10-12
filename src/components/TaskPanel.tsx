@@ -239,6 +239,7 @@ export function TaskPanel({
 
       {/* Task list */}
       <TaskList
+        projectId={project.id}
         tasks={tasks}
         taskDisplayWindow={taskDisplayWindow}
         query={query}
