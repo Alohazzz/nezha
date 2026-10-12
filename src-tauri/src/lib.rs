@@ -434,6 +434,7 @@ pub fn run() {
             fs_watcher::unwatch_dir,
             fs::open_in_system_file_manager,
             fs::read_file_content,
+            fs::read_file_mtimes,
             fs::read_image_preview,
             fs::write_file_content,
             fs::create_file,

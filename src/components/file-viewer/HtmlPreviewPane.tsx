@@ -184,7 +184,10 @@ export function HtmlPreviewPane({
         <iframe
           className="html-preview-frame"
           title={t("file.htmlPreview", { name: fileName })}
-          sandbox="allow-scripts"
+          // allow-modals：am 技能页面的「复制回复」按钮在 clipboard API 被禁时
+          // 会 fallback 到 execCommand/prompt，sandbox 缺该标志时该路径被拦死，
+          // 用户无法从预览页复制 # Re: 回复
+          sandbox="allow-scripts allow-modals"
           srcDoc={needsAssets ? (loaded?.srcDoc ?? html) : html}
         />
       ) : (

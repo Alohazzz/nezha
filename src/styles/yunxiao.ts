@@ -1570,8 +1570,8 @@ export const yunxiao = {
     padding: "6px 0 0",
   },
   planPreviewDialog: {
-    width: "min(760px, 92vw)",
-    height: "min(680px, 84vh)",
+    width: "min(1080px, 92vw)",
+    height: "min(880px, 90vh)",
     display: "flex",
     flexDirection: "column",
     background: "var(--bg-panel)",
@@ -1593,6 +1593,17 @@ export const yunxiao = {
     borderTop: "1px solid var(--border-dim)",
     display: "flex",
     flexDirection: "column",
+  },
+  // HtmlPreviewPane 的 .html-preview-pane 是 absolute inset:0，需要一层
+  // relative 定位上下文撑在正文区里。planPreviewBody 是 overflowY:auto 的
+  // 滚动容器，wrap 必须用显式 height 参与布局（flex:1 在滚动容器里会被
+  // 内容高度顶开，iframe 随之外溢），滚动在 HTML 分支下交给 iframe 内部。
+  planPreviewHtmlWrap: {
+    position: "relative",
+    height: "100%",
+    minHeight: 0,
+    overflow: "hidden",
+    flexShrink: 0,
   },
   planPanelMarkdown: {
     padding: "12px 14px",

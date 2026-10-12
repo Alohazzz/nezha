@@ -15,6 +15,7 @@ import { getLastYunxiaoAgent, getLastYunxiaoPermission } from "../../../utils/yu
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
 import { UnattendedToggle } from "./UnattendedToggle";
+import { HtmlPreviewPane } from "../../file-viewer/HtmlPreviewPane";
 import { useI18n } from "../../../i18n";
 import s from "../../../styles";
 
@@ -63,6 +64,13 @@ export function PlanPreviewPanel({
   const [markdown, setMarkdown] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /**
+   * 方案预览 HTML（讨论 agent 按 `answer-me-with-html` 技能随 plan.md 同批渲染）。
+   * 展示条件是「存在且不比 plan.md 旧」；缺失（历史方案 / 渲染失败被跳过）或过期
+   * （agent 改了 md 未重渲）一律回落 Markdown 平铺——预览内容必须与将被切片执行
+   * 的契约文本一致，不能押注 agent 的自觉。
+   */
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [images, setImages] = useState<PlanImage[]>([]);
   const [showGenerate, setShowGenerate] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -121,13 +129,40 @@ export function PlanPreviewPanel({
     setLoading(true);
     setLoadError(null);
     try {
+      const mdPath = planMdPath(projectPath, plan.id);
+      const htmlPath = `${planDirPath(projectPath, plan.id)}/preview.html`;
+      // 正文必须成功；preview.html / mtime 属增强路径，失败按「无预览页」回落。
       const content = await invoke<string>("read_file_content", {
-        path: planMdPath(projectPath, plan.id),
+        path: mdPath,
         projectPath,
       });
       setMarkdown(content);
+      try {
+        const [html, mtimes] = await Promise.all([
+          invoke<string>("read_file_content", { path: htmlPath, projectPath }),
+          invoke<Record<string, number>>("read_file_mtimes", {
+            paths: [mdPath, htmlPath],
+            projectPath,
+          }),
+        ]);
+        const htmlTrim = html.trim();
+        const htmlMs = mtimes[htmlPath];
+        const mdMs = mtimes[mdPath];
+        // 两份 mtime 都拿到才可比对；只拿到一边（竞态：中途被覆盖）按不可信处理。
+        setPreviewHtml(
+          htmlTrim.length > 0 &&
+            typeof htmlMs === "number" &&
+            typeof mdMs === "number" &&
+            htmlMs >= mdMs
+            ? html
+            : null,
+        );
+      } catch {
+        setPreviewHtml(null);
+      }
     } catch (e) {
       setMarkdown("");
+      setPreviewHtml(null);
       setLoadError(String(e));
     } finally {
       setLoading(false);
@@ -275,6 +310,17 @@ export function PlanPreviewPanel({
               {plan.status === "draft"
                 ? t("plan.preview.discussionRunning")
                 : t("plan.preview.mdMissing")}
+            </div>
+          ) : previewHtml ? (
+            // 沙箱 iframe（allow-scripts、null origin）由 HtmlPreviewPane 提供；
+            // 相对 position:absolute 的 pane 需要 body 区有定位上下文。
+            <div style={s.planPreviewHtmlWrap}>
+              <HtmlPreviewPane
+                html={previewHtml}
+                fileName="preview.html"
+                filePath={`${planDirPath(projectPath, plan.id)}/preview.html`}
+                projectPath={projectPath}
+              />
             </div>
           ) : (
             <>

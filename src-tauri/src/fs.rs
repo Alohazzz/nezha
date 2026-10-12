@@ -552,6 +552,39 @@ pub async fn read_file_content(path: String, project_path: String) -> Result<Str
     Ok(buf)
 }
 
+/// 批量读取文件 mtime（毫秒）。返回值只含**存在且可 stat** 的文件；缺失的键
+/// 直接不出现在结果里——调用方以「键是否存在」判定文件存在性（如方案目录下
+/// preview.html 是否已生成）。路径校验与 read_file_content 同级（项目内 + 目录遍历拒绝）。
+#[tauri::command]
+pub async fn read_file_mtimes(
+    paths: Vec<String>,
+    project_path: String,
+) -> Result<std::collections::HashMap<String, u64>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = std::collections::HashMap::new();
+        for path in &paths {
+            let validated = match validate_path_within(path, &project_path, true) {
+                Ok(p) => p,
+                // 单个路径非法不拖垮整批：跳过即可，调用方按「不存在」处理。
+                Err(_) => continue,
+            };
+            if let Ok(meta) = std::fs::metadata(&validated) {
+                if let Ok(mtime) = meta.modified() {
+                    let ms = mtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        // 早于 1970 的畸形时间戳按 0 处理，仍表达「存在」。
+                        .unwrap_or(0);
+                    result.insert(path.clone(), ms);
+                }
+            }
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn read_image_preview(
     path: String,
