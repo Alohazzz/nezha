@@ -543,11 +543,12 @@ export function messageHasIssueTag(message: string, serialNumber: string): boole
   return message.toLowerCase().includes(tag.toLowerCase());
 }
 
-/** 提交信息缺 tag 时追加（后端 git_commit 也会兜底，这里给 UI 预览用）。 */
+/** 提交信息缺 tag 时追加 tag + closed（后端 git_commit 也会兜底，这里给 UI 预览用）；云效按 closed 自动标记开发完成。 */
 export function ensureIssueTagInMessage(message: string, serialNumber: string): string {
   const tag = issueTag(serialNumber);
   if (!tag || messageHasIssueTag(message, serialNumber)) return message;
-  return `${message.trimEnd()}\n\n${tag}`;
+  const suffix = message.toLowerCase().includes("closed") ? tag : `${tag} closed`;
+  return `${message.trimEnd()}\n\n${suffix}`;
 }
 
 /** splitValueScoreSection 的返回：评论正文 + 只读评分小节 + 解析出的指数。 */

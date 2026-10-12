@@ -369,9 +369,15 @@ describe("messageHasIssueTag / ensureIssueTagInMessage", () => {
     );
   });
 
-  it("缺 tag 时追加到消息末尾", () => {
+  it("缺 tag 时追加到消息末尾，并携带 closed 标记", () => {
     expect(ensureIssueTagInMessage("fix: 修复查询报错", "QHDK-29312")).toBe(
-      "fix: 修复查询报错\n\n#QHDK-29312",
+      "fix: 修复查询报错\n\n#QHDK-29312 closed",
+    );
+  });
+
+  it("消息已含 closed（大小写不敏感）时只补 tag 不重复追加 closed", () => {
+    expect(ensureIssueTagInMessage("fix: 修复查询报错 CLOSED", "QHDK-29312")).toBe(
+      "fix: 修复查询报错 CLOSED\n\n#QHDK-29312",
     );
   });
 

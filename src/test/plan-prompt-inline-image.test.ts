@@ -159,4 +159,11 @@ describe("buildDirectExecutionPrompt — 直接开始（列表行 / 待办）", 
     expectCleanPrompts(prompt);
     expect(prompt).toContain(BODY);
   });
+
+  it("直接开始：协作约束要求提交信息携带议题 tag 与 closed 关键字", () => {
+    const prompt = build(issueWithInlineImage());
+    expect(prompt).toContain("协作约束");
+    expect(prompt).toContain(`#${issueWithInlineImage().serialNumber}`);
+    expect(prompt).toContain("closed");
+  });
 });

@@ -1039,7 +1039,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "yunxiao.images.none": "No images in this issue",
     "yunxiao.images.cleanupHint":
       "Issue images may have been cleaned up with the task. Restart the discussion or attach images manually if needed.",
-    "yunxiao.commit.issueTagHint": "Commit will be linked to {tag}",
+    "yunxiao.commit.issueTagHint": "Commit will be linked to {tag} and closed automatically",
     "plan.selectLimit":
       "Select at most {limit} issues per discussion (context and image budget)",
     "plan.selectedCount": "{count} selected",
@@ -2166,7 +2166,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "yunxiao.images.none": "议题中无图片",
     "yunxiao.images.cleanupHint":
       "议题图片可能已随任务清理，如需图片请重新发起讨论或手动补充。",
-    "yunxiao.commit.issueTagHint": "提交将自动关联 {tag}",
+    "yunxiao.commit.issueTagHint": "提交将自动关联 {tag} 并携带 closed 标记开发完成",
     "plan.selectLimit": "单次讨论最多选 {limit} 个议题（讨论上下文与图片量的现实约束）",
     "plan.selectedCount": "已选 {count} 项",
     "plan.launchAction": "发起讨论",

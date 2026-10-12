@@ -1366,8 +1366,14 @@ pub async fn git_commit(
         .map(str::trim)
         .filter(|t| !t.is_empty())
     {
+        // 云效自动化按 tag 关联议题、按 closed 关键字标记开发完成，两者一起兜底追加。
+        let suffix = if message.to_lowercase().contains("closed") {
+            tag.to_string()
+        } else {
+            format!("{tag} closed")
+        };
         if !message.contains(tag) {
-            message = format!("{}\n\n{}", message.trim_end(), tag);
+            message = format!("{}\n\n{}", message.trim_end(), suffix);
         }
     }
     run_git_check(&cwd, &["commit", "-m", &message])
@@ -2729,7 +2735,12 @@ pub async fn commit_conflict_resolution(
             .map(str::trim)
             .filter(|t| !t.is_empty())
         {
-            msg = format!("{msg} {tag}");
+            // 与 git_commit 兜底一致：云效按 closed 关键字自动标记开发完成。
+            if !msg.to_lowercase().contains("closed") {
+                msg = format!("{msg} {tag} closed");
+            } else if !msg.contains(tag) {
+                msg = format!("{msg} {tag}");
+            }
         }
         let commit = run_git(&worktree_path, &["commit", "-m", &msg])?;
         if !commit.status.success() {

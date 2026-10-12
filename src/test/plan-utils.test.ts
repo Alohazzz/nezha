@@ -85,6 +85,21 @@ describe("buildPlanExecutionPrompt 与空 overview 的配合", () => {
     expect(prompt).not.toContain("方案统筹");
     expect(prompt).toContain("## 本议题方案（已定稿）");
   });
+
+  it("协作约束要求提交信息携带议题 tag 与 closed 关键字", () => {
+    const prompt = buildPlanExecutionPrompt({
+      issue: { serialNumber: "QHDK-30132", subject: "分段结算医保开始时间" },
+      link: "",
+      planOverview: "",
+      issueSection: "## QHDK-30132 分段结算\n### 修改方案汇总（开发向）\n内容",
+      planMdAbsolutePath: "H:/p/.nezha/plans/1/plan.md",
+      imagePaths: [],
+      instructions: "",
+    });
+    expect(prompt).toContain("协作约束");
+    expect(prompt).toContain("#QHDK-30132");
+    expect(prompt).toContain("closed");
+  });
 });
 
 /** 方案树测试数据：root ← mid ← leaf，另有独立方案 solo。 */
