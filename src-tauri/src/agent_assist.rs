@@ -1155,10 +1155,18 @@ const MAX_MODIFIED_FILE_LABELS: usize = 50;
 /// 路径归并口径：.NET 仓库归并到含 `.csproj` 的工程目录这一级（obj 产物归属所在
 /// 工程），非工程文件回退一级目录（`derive_project_names_in_repo`）。
 ///
+/// 三源全部带 `--ignore-submodules=all`：父仓库会把「子模块检出 commit 与索引记录
+/// 不一致」报成一个普通路径（如 `Hsp.Win`、`Nto.His/Nto.His.Term`），这类指针漂移
+/// 与本议题无关，混进来会归并出一串假工程名（fix #109）。
+///
 /// 现状是「修改文件」由 LLM 凭会话记忆/diff stat 归纳，五处系统性漏报
 /// （草稿过期、未提交变更不在 diff 事实里、plan.md 预判、base 缺失、8000 字符截断）。
 /// 本函数给回写时刻一个不依赖 LLM 的事实基线；git 全部不可用时返回空集（字段保持原样）。
-fn collect_writeback_project_names(cwd: &str, base_branch: Option<&str>) -> Vec<String> {
+fn collect_writeback_project_names(
+    cwd: &str,
+    base_branch: Option<&str>,
+    serial_number: Option<&str>,
+) -> Vec<String> {
     let run = |args: &[&str]| -> Option<String> {
         let mut cmd = std::process::Command::new("git");
         // core.quotePath=false：中文等非 ASCII 路径不被转成带引号的八进制转义
@@ -1172,16 +1180,55 @@ fn collect_writeback_project_names(cwd: &str, base_branch: Option<&str>) -> Vec<
         Some(String::from_utf8_lossy(&out.stdout).to_string())
     };
 
-    // 已提交：base 缺失时回落最近 20 条提交涉及的文件（口径与 commits 事实一致），
-    // 避免非 worktree 任务 baseBranch 为 undefined 时已提交变更整体缺失。
+    // 已提交，三级回落（fix #109）：
+    // 1. 有 baseBranch 时 base...HEAD 最准；
+    // 2. base 缺失（非 worktree 任务的常见形态）时按议题编号检索提交——本议题的
+    //    改动必然带编号 tag，比「最近 N 条」精确得多，不受分支新旧影响；
+    // 3. 编号检索不可用（无编号 / 提交未带 tag）才回落到最近 20 条提交，与 commits
+    //    事实口径一致。原实现直接跑 `@{20}..HEAD`（当前分支 reflog），新分支只有
+    //    1-2 条 reflog 必然 fatal，会让已提交变更整体判空。
     let committed = base_branch
-        .and_then(|b| run(&["diff", "--name-only", &format!("{b}...HEAD")]))
-        .or_else(|| run(&["diff", "--name-only", "@{20}..HEAD"]))
+        .and_then(|b| {
+            run(&[
+                "diff",
+                "--name-only",
+                "--ignore-submodules=all",
+                &format!("{b}...HEAD"),
+            ])
+        })
+        .or_else(|| {
+            serial_number
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|serial| {
+                    run(&[
+                        "log",
+                        "--name-only",
+                        "--pretty=format:",
+                        "--max-count=50",
+                        "--ignore-submodules=all",
+                        "--fixed-strings",
+                        "--regexp-ignore-case",
+                        &format!("--grep={serial}"),
+                    ])
+                })
+                .filter(|out| !out.trim().is_empty())
+        })
+        .or_else(|| {
+            run(&[
+                "log",
+                "--name-only",
+                "--pretty=format:",
+                "--max-count=20",
+                "--ignore-submodules=all",
+            ])
+        })
         .unwrap_or_default();
     // 已暂存 + 未暂存（对工作区与 HEAD 比较；重命名输出 "to\tpath"，取新路径）。
-    let unstaged = run(&["diff", "--name-only", "HEAD"]).unwrap_or_default();
+    let unstaged =
+        run(&["diff", "--name-only", "--ignore-submodules=all", "HEAD"]).unwrap_or_default();
     // 未跟踪：porcelain 里 `?? path`；其余状态行已由上面两路覆盖。
-    let untracked = run(&["status", "--porcelain"])
+    let untracked = run(&["status", "--porcelain", "--ignore-submodules=all"])
         .map(|out| {
             out.lines()
                 .filter(|line| line.starts_with("??"))
@@ -1618,7 +1665,8 @@ pub async fn generate_yunxiao_writeback_summary(
         let names = tokio::task::spawn_blocking({
             let cwd = repo_for_names.to_string();
             let base = base_branch.clone();
-            move || collect_writeback_project_names(&cwd, base.as_deref())
+            let serial = serial_number.clone();
+            move || collect_writeback_project_names(&cwd, base.as_deref(), Some(&serial))
         })
         .await
         .map_err(|e| format!("收集修改文件线程错误: {e}"))?;
@@ -1644,7 +1692,8 @@ pub async fn generate_yunxiao_writeback_summary(
             let names = tokio::task::spawn_blocking({
                 let cwd = repo_for_names.to_string();
                 let base = base_branch.clone();
-                move || collect_writeback_project_names(&cwd, base.as_deref())
+                let serial = serial_number.clone();
+                move || collect_writeback_project_names(&cwd, base.as_deref(), Some(&serial))
             })
             .await
             .map_err(|e| format!("收集修改文件线程错误: {e}"))?;
@@ -1682,8 +1731,13 @@ pub async fn generate_yunxiao_writeback_summary(
         .filter(|b| !b.is_empty());
     let cwd_for_facts = cwd.clone();
     let base_for_facts = base_branch.clone();
+    let serial_for_names = serial_number.clone();
     let (branch, commits, diff_stat, project_names) = tokio::task::spawn_blocking(move || {
-        let names = collect_writeback_project_names(&cwd_for_facts, base_for_facts.as_deref());
+        let names = collect_writeback_project_names(
+            &cwd_for_facts,
+            base_for_facts.as_deref(),
+            Some(&serial_for_names),
+        );
         let (branch, commits, diff_stat) =
             gather_writeback_facts(&cwd_for_facts, base_for_facts.as_deref());
         (branch, commits, diff_stat, names)
@@ -2777,7 +2831,7 @@ mod tests {
         git(&["add", "."]);
         git(&["commit", "-q", "-m", "feat: all kinds"]);
 
-        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"));
+        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"), None);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(
             names,
@@ -2815,10 +2869,98 @@ mod tests {
         std::fs::create_dir_all(dir.join("docs")).unwrap();
         std::fs::write(dir.join("docs").join("Untracked.md"), "d").unwrap();
 
-        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"));
+        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"), None);
         let _ = std::fs::remove_dir_all(&dir);
         // 已提交（src）+ 已暂存未提交（lib）+ 未跟踪（docs）三类都在。
         assert_eq!(names, vec!["docs", "lib", "src"]);
+    }
+
+    /// fix #109 场景一：无 baseBranch + 新分支（reflog 只有 1 条）+ 子模块指针漂移。
+    /// 修复前：回落 `@{20}..HEAD` 直接 fatal → 已提交变更整体丢失，只剩子模块噪音
+    /// （Hsp.Win / Nto.His），实测与现场截图逐字一致。
+    #[test]
+    fn collect_writeback_project_names_falls_back_to_serial_number() {
+        let dir = std::env::temp_dir().join(format!("nezha-wb-serial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run_in = |sub: &Path, args: &[&str]| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-c").arg("core.quotePath=false").args(args).current_dir(sub);
+            cmd.env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t");
+            cmd.env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t");
+            assert!(cmd.status().unwrap().success(), "git {:?} failed", args);
+        };
+        let git = |args: &[&str]| run_in(&dir, args);
+        git(&["init", "-q", "-b", "base"]);
+        std::fs::write(dir.join("Base.txt"), "a").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "init"]);
+        // 本议题的真实改动。
+        git(&["checkout", "-q", "-b", "feat", "base"]);
+        let ui = dir.join("Nto.His").join("Nto.His.Order").join("Nto.His.Order.UI");
+        std::fs::create_dir_all(&ui).unwrap();
+        std::fs::write(ui.join("Nto.His.Order.UI.csproj"), "<Project />").unwrap();
+        std::fs::write(ui.join("Calc.cs"), "b").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "fix: 瓶签组数 #QHDK-29184 closed"]);
+        // 子模块（嵌套仓库 → gitlink），并让内部 commit 与父仓库索引不一致。
+        let sub = dir.join("Hsp.Win");
+        std::fs::create_dir_all(&sub).unwrap();
+        run_in(&sub, &["init", "-q", "-b", "master"]);
+        std::fs::write(sub.join("f.txt"), "x").unwrap();
+        run_in(&sub, &["add", "."]);
+        run_in(&sub, &["commit", "-q", "-m", "s1"]);
+        git(&["add", "Hsp.Win"]);
+        git(&["commit", "-q", "-m", "chore: add submodule"]);
+        std::fs::write(sub.join("f.txt"), "y").unwrap();
+        run_in(&sub, &["add", "."]);
+        run_in(&sub, &["commit", "-q", "-m", "s2"]);
+
+        // base_branch=None 走议题编号检索；子模块指针漂移不得进入结果。
+        let names = collect_writeback_project_names(dir.to_str().unwrap(), None, Some("QHDK-29184"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            names,
+            vec!["Nto.His.Order.UI"],
+            "编号检索应给出真实工程，子模块噪音（Hsp.Win）被 --ignore-submodules=all 剔除"
+        );
+    }
+
+    /// fix #109 场景二：基线上只有子模块指针漂移、没有任何真实改动时，
+    /// 三源并集必须为空——否则会用噪音名覆盖草稿里 agent 写对的归纳值。
+    #[test]
+    fn collect_writeback_project_names_ignores_submodule_pointer_drift() {
+        let dir = std::env::temp_dir().join(format!("nezha-wb-drift-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run_in = |sub: &Path, args: &[&str]| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-c").arg("core.quotePath=false").args(args).current_dir(sub);
+            cmd.env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t");
+            cmd.env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t");
+            assert!(cmd.status().unwrap().success(), "git {:?} failed", args);
+        };
+        let git = |args: &[&str]| run_in(&dir, args);
+        git(&["init", "-q", "-b", "base"]);
+        let sub = dir.join("Hsp.Win");
+        std::fs::create_dir_all(&sub).unwrap();
+        run_in(&sub, &["init", "-q", "-b", "master"]);
+        std::fs::write(sub.join("f.txt"), "x").unwrap();
+        run_in(&sub, &["add", "."]);
+        run_in(&sub, &["commit", "-q", "-m", "s1"]);
+        git(&["add", "Hsp.Win"]);
+        git(&["commit", "-q", "-m", "chore: add submodule"]);
+        // 子模块内前进一步，父仓库索引不动 → 父仓库视角出现 ` M Hsp.Win`。
+        std::fs::write(sub.join("f.txt"), "y").unwrap();
+        run_in(&sub, &["add", "."]);
+        run_in(&sub, &["commit", "-q", "-m", "s2"]);
+
+        let names = collect_writeback_project_names(dir.to_str().unwrap(), Some("base"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            names.is_empty(),
+            "纯子模块指针漂移必须判空（宁缺毋错，保留草稿原文），实际：{names:?}"
+        );
     }
 
     #[test]
