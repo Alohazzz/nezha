@@ -22,7 +22,8 @@ import {
   type PlanLaunchItemStatus,
 } from "./PlanLaunchItemList";
 import { PlanLaunchParentField } from "./PlanLaunchParentField";
-import type { YunxiaoSettings } from "../../app-settings/types";
+import type { QuestionMode, YunxiaoSettings } from "../../app-settings/types";
+import { questionModeOf } from "../../app-settings/types";
 import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
@@ -90,8 +91,9 @@ export function PlanLaunchDialog({
   const itemsRef = useRef(items);
   const [retryNonce, setRetryNonce] = useState(0);
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
-  // 应用级「批量盘问（测试技能）」开关：开启时讨论环节改走 batch-grill-me，仅影响文案提示。
-  const [batchGrill, setBatchGrill] = useState(false);
+  // 应用级「提问方式」开关（逐条 / 批量盘问 / UI 盘问，后两者互斥）：仅影响文案提示，
+  // 真正的节律由后端下发的「提问技能」参数决定。
+  const [questionMode, setQuestionMode] = useState<QuestionMode>("grilling");
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(targetProjectId) ?? "codex",
   );
@@ -129,10 +131,12 @@ export function PlanLaunchDialog({
 
   // Agent 启用状态 + 已禁用 Agent 回退。
   useEffect(() => {
-    invoke<AgentEnabledState & { batch_grill_enabled?: boolean }>("load_app_settings")
+    invoke<AgentEnabledState & { batch_grill_enabled?: boolean; grill_with_ui_enabled?: boolean }>(
+      "load_app_settings",
+    )
       .then((appSettings) => {
         setAgentSettings(appSettings);
-        setBatchGrill(appSettings.batch_grill_enabled ?? false);
+        setQuestionMode(questionModeOf(appSettings));
         setAgent((prev) => (isAgentEnabled(appSettings, prev) ? prev : firstEnabledAgent(appSettings)));
       })
       .catch(() => undefined);
@@ -372,8 +376,12 @@ export function PlanLaunchDialog({
           )}
         </div>
 
-        {batchGrill && (
-          <div style={s.planLaunchParentHint}>{t("plan.launch.batchGrillHint")}</div>
+        {questionMode !== "grilling" && (
+          <div style={s.planLaunchParentHint}>
+            {questionMode === "ui"
+              ? t("plan.launch.grillWithUiHint")
+              : t("plan.launch.batchGrillHint")}
+          </div>
         )}
 
         <div style={s.bbDialogActions}>

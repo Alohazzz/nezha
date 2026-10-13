@@ -572,11 +572,13 @@
         <tbody>
           <tr><td><strong>知识沉淀</strong></td><td>见 2.3 节：只决定审核通过后的落库方式——开启直接提交推送图谱，关闭改建议题走云效审批</td></tr>
           <tr><td><strong>批量盘问</strong>（带「测试」徽标，实验性）</td><td>需求澄清 / 方案讨论从「一次一问」改为「一轮抛出当前前沿的全部问题（各附推荐答案）」，压往返次数。只改提示词风格；需先安装 <code>batch-grill-me</code> 技能；Bug 议题仍走一次一问的根因取证。</td></tr>
+          <tr><td><strong>UI 盘问</strong>（带「测试」徽标，实验性）</td><td>同一链路改用 <code>grill-with-ui</code> 技能：问题以卡片形式开在<strong>本地浏览器页面</strong>上（界面已中文化，<strong>起页后自动打开浏览器</strong>），可任意顺序作答、逐题讨论，还能点「展开利弊」出优缺点对照表、「可视化」出原型或架构图；Agent 在你作答期间保持等待，结束后产出设计文档。<strong>与「批量盘问」互斥</strong>（开启一个会自动关掉另一个）；需先安装该技能，且本机有 Node 20+。</td></tr>
         </tbody>
       </table>
+      <p>两个「提问方式」开关（批量盘问 / UI 盘问）改的都是<strong>提问的呈现与节律</strong>，不改变方案文档结构、<code>deps.json</code> 契约、性能影响分析强制分支，也不介入 Bug 议题的 <code>diagnosing-bugs</code> 根因取证。二者互斥，同一时刻至多一个生效。</p>
       <figure class="shot-md">
-        <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="批量盘问开关" />
-        <figcaption>应用设置 → 技能库 →「批量盘问（测试）」开关</figcaption>
+        <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="提问方式开关" />
+        <figcaption>应用设置 → 技能库 →「批量盘问 / UI 盘问（测试）」开关</figcaption>
       </figure>
     </section>
 
@@ -944,7 +946,8 @@
           <tr><td>方案待办能不能并行跑</td><td>默认串行：受 <code>[plan] max_concurrent</code>（默认 1）约束，按 <code>deps.json</code> 拓扑顺序逐个放行；手动点 ▶ 同受此限。</td></tr>
           <tr><td>取消方案是不是就删了</td><td>不是，取消是留存态；移出视野用「归档」（可反归档），真删要显式删除并二次确认。</td></tr>
           <tr><td>怎么把新议题挂到已有方案下</td><td>「发起讨论」对话框里选「关联方案（作为子方案追加）」→ 挑一个已定稿主方案。</td></tr>
-          <tr><td>「批量盘问」开了没反应</td><td>需先在技能库安装 <code>batch-grill-me</code> 技能；该开关只改提示词风格，Bug 议题仍一次一问。</td></tr>
+          <tr><td>「批量盘问」开了没反应</td><td>需先在技能库安装 <code>batch-grill-me</code> 技能；该开关只改提问方式，Bug 议题仍一次一问。</td></tr>
+          <tr><td>「UI 盘问」开了没反应</td><td>需先在技能库安装 <code>grill-with-ui</code> 技能，并要求本机有 Node 20+；它与「批量盘问」互斥，检查另一个开关是否把本次切换顶掉了。</td></tr>
           <tr><td>发起讨论后 Agent 读不到议题图片</td><td>图片在发起时下载；若任务重跑/恢复，图片可能已随任务清理，可重新发起或用附件补图。</td></tr>
           <tr><td>提交信息不含 <code>#编号</code></td><td><code>git_commit</code> 会自动追加；<code>merge_task_worktree</code> 会校验并阻断缺失提交。</td></tr>
           <tr><td>「回写云效」后没有出现在议题</td><td>确认云效工作项「评论」权限；如价值评分字段写入失败，用「补写字段」。</td></tr>

@@ -81,6 +81,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.batchGrillToggle": "Ask the whole question frontier at once",
     "appSettings.batchGrillHint":
       "Experimental skill. When enabled, Yunxiao issue discussions (\"start directly with clarification\" and \"plan discussion\") use the batch-grill-me skill: every question on the current design-tree frontier is asked in one round with a recommended answer, instead of one question at a time. The skill must be installed from the skill library first.",
+    "appSettings.grillWithUi": "UI Grill",
+    "appSettings.grillWithUiToggle": "Ask on a local browser page",
+    "appSettings.grillWithUiHint":
+      "Experimental skill, mutually exclusive with Batch Grill (enabling one turns the other off). When enabled, the same flows use the grill-with-ui skill: every question becomes a card with lettered options, answerable in any order, with a per-question discussion thread, an optional pros-and-cons table (Explore deeper), and a prototype or diagram (Visualize). The agent serves a local page and waits for your Send; it writes the design doc when you finish. Requires the skill installed and Node 20+.",
     "appSettings.missingFlowSkill":
       "The {skill} skill is not installed for {agents}; Yunxiao tasks will not be able to read its contract. Install it from the Skill Library.",
     "appSettings.terminalScrollback": "Terminal Scrollback",
@@ -988,9 +992,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Background, references, an existing plan, etc. Appended to the task prompt as the execution baseline.",
     "yunxiao.direct.clarifyLabel": "Clarify requirements first (grilling), then implement",
     "yunxiao.direct.clarifyLabelBatch": "Clarify requirements first (batch-grill-me), then implement",
+    "yunxiao.direct.clarifyLabelUi": "Clarify requirements first (grill-with-ui), then implement",
     "yunxiao.direct.flowDirect": "Workflow: implement directly",
     "yunxiao.direct.flowClarify": "Workflow: clarify (grilling) → implement",
     "yunxiao.direct.flowClarifyBatch": "Workflow: clarify (batch-grill-me) → implement",
+    "yunxiao.direct.flowClarifyUi": "Workflow: clarify (grill-with-ui) → implement",
     "yunxiao.direct.flowBug": "Bug: diagnose root cause (diagnosing-bugs), then implement",
     "yunxiao.writeback.button": "Write back to Yunxiao",
     "yunxiao.writeback.done": "Written back",
@@ -1049,6 +1055,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.launch.fetching": "Fetching issue details and images…",
     "plan.launch.batchGrillHint":
       "Batch-grill (experimental skill) is on: clarifying questions are asked in rounds, each round covering the whole current frontier.",
+    "plan.launch.grillWithUiHint":
+      "UI grill (experimental skill) is on: clarifying questions open on a local browser page — answer cards in any order, one thread per question, then Send. The agent's terminal keeps waiting while you answer.",
     "plan.launch.itemImages": "{count} image(s) ready",
     "plan.launch.imagePartial": "{failed} image(s) failed, {downloaded} ready",
     "plan.launch.remove": "Exclude",
@@ -1244,6 +1252,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.batchGrillToggle": "一轮抛出当前前沿的全部问题",
     "appSettings.batchGrillHint":
       "测试技能。开启后，云效议题讨论（「直接开始（先澄清）」与「方案讨论」）改用 batch-grill-me 技能：把设计树当前前沿能确定的问题一轮全部抛出（每题附推荐答案），而不是一次只问一个；技能需先在技能库中安装。",
+    "appSettings.grillWithUi": "UI 盘问",
+    "appSettings.grillWithUiToggle": "在本地浏览器页面上盘问",
+    "appSettings.grillWithUiHint":
+      "测试技能，与「批量盘问」互斥（开启一个会自动关掉另一个）。开启后，同样的链路改用 grill-with-ui 技能：每题变成一张带选项的卡片，可任意顺序作答，每题独立讨论线程，可点「Explore deeper」出优缺点对照表、点「Visualize」出原型或架构图；agent 起一个本地页面并等你点 Send，盘问结束产出设计文档。需安装该技能并具备 Node 20+。",
     "appSettings.missingFlowSkill":
       "{agents} 尚未安装 {skill} 技能，云效任务将读不到该技能契约。请在技能库中安装。",
     "appSettings.terminalScrollback": "终端滚动缓冲",
@@ -2119,9 +2131,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "背景描述、参考资料、已有修改方案等；会作为执行基线拼进任务提示词。",
     "yunxiao.direct.clarifyLabel": "先做需求澄清（grilling），再执行",
     "yunxiao.direct.clarifyLabelBatch": "先做批量盘问澄清（batch-grill-me），再执行",
+    "yunxiao.direct.clarifyLabelUi": "先做 UI 盘问澄清（grill-with-ui），再执行",
     "yunxiao.direct.flowDirect": "当前工作流：直接执行（implement）",
     "yunxiao.direct.flowClarify": "当前工作流：先澄清（grilling）→ 再执行（implement）",
     "yunxiao.direct.flowClarifyBatch": "当前工作流：先批量盘问（batch-grill-me）→ 再执行（implement）",
+    "yunxiao.direct.flowClarifyUi": "当前工作流：先 UI 盘问（grill-with-ui）→ 再执行（implement）",
     "yunxiao.direct.flowBug": "Bug 缺陷：先根因诊断（diagnosing-bugs），再执行（implement）",
     "yunxiao.writeback.button": "回写云效",
     "yunxiao.writeback.done": "已回写",
@@ -2175,6 +2189,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.launch.fetching": "正在拉取议题详情与图片…",
     "plan.launch.batchGrillHint":
       "已开启批量盘问（测试技能）：澄清问题按轮次提出，每轮覆盖当前前沿的全部问题。",
+    "plan.launch.grillWithUiHint":
+      "已开启 UI 盘问（测试技能）：澄清问题在本地浏览器页面上展开——每题一张卡片，可任意顺序作答、逐题讨论，再统一 Send；作答期间 agent 终端保持等待。",
     "plan.launch.itemImages": "已就绪 {count} 张图片",
     "plan.launch.imagePartial": "{failed} 张图片下载失败，{downloaded} 张已就绪",
     "plan.launch.remove": "剔除",

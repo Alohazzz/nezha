@@ -16,7 +16,10 @@ import {
 } from "../../types";
 import {
   EMPTY_YUNXIAO_SETTINGS,
+  QUESTION_MODE_DIRECT_KEYS,
+  questionModeOf,
   type AppSettings,
+  type QuestionMode,
   type YunxiaoSettings,
 } from "../app-settings/types";
 import {
@@ -86,8 +89,9 @@ export function YunxiaoTodoDiscussionView({
   const [notes, setNotes] = useState("");
   // 「直接开始」的需求澄清开关：仅非 Bug 议题可勾，详情未就绪时禁用。
   const [clarifyFirst, setClarifyFirst] = useState(false);
-  // 应用级「批量盘问（测试技能）」开关：开启时澄清环节改走 batch-grill-me，仅影响文案提示。
-  const [batchGrill, setBatchGrill] = useState(false);
+  // 应用级「提问方式」开关（逐条 / 批量盘问 / UI 盘问，后两者互斥）：仅影响文案提示，
+  // 真正的节律由后端下发的「提问技能」参数决定。
+  const [questionMode, setQuestionMode] = useState<QuestionMode>("grilling");
   // 待办切换时重置议题相关状态（组件实例复用防串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
   if (openedTaskId !== task.id) {
@@ -108,7 +112,7 @@ export function YunxiaoTodoDiscussionView({
         const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
         setSettings(yunxiao);
         setAgentSettings(appSettings);
-        setBatchGrill(appSettings.batch_grill_enabled ?? false);
+        setQuestionMode(questionModeOf(appSettings));
         if (!yunxiao.token || !yunxiao.organizationId || !workitemId) return;
         const item = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
           token: yunxiao.token,
@@ -251,15 +255,11 @@ export function YunxiaoTodoDiscussionView({
                     disabled={!detail}
                     onChange={(e) => setClarifyFirst(e.target.checked)}
                   />
-                  {batchGrill
-                    ? t("yunxiao.direct.clarifyLabelBatch")
-                    : t("yunxiao.direct.clarifyLabel")}
+                  {t(QUESTION_MODE_DIRECT_KEYS[questionMode].clarify)}
                 </label>
                 <div style={s.directLaunchFlowHint}>
                   {clarifyFirst
-                    ? batchGrill
-                      ? t("yunxiao.direct.flowClarifyBatch")
-                      : t("yunxiao.direct.flowClarify")
+                    ? t(QUESTION_MODE_DIRECT_KEYS[questionMode].flow)
                     : t("yunxiao.direct.flowDirect")}
                 </div>
               </>

@@ -124,6 +124,9 @@ export interface AppSettings {
   /** 测试技能：开启后云效议题讨论链路（「直接开始（先澄清）」/「方案讨论」）改用
    *  `batch-grill-me` 批量盘问（一轮抛出全部前沿问题），替换逐条 grilling。 */
   batch_grill_enabled: boolean;
+  /** 测试技能：开启后在同样的链路改用 `grill-with-ui`，把问题放到本地浏览器页面上
+   *  （卡片式、任意顺序作答、每题独立讨论线程、可选可视化）。与 `batch_grill_enabled` 互斥。 */
+  grill_with_ui_enabled: boolean;
   /** 轻量 AI 辅助调用（任务命名/议题预填/汇总/知识沉淀/commit message）使用的模型；null = 跟随 Agent 默认 */
   claude_light_model: string | null;
   codex_light_model: string | null;
@@ -157,6 +160,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   use_sideloaded_conpty: true,
   system_notifications: true,
   batch_grill_enabled: false,
+  grill_with_ui_enabled: false,
   claude_light_model: null,
   codex_light_model: null,
   claude_light_reasoning_effort: null,
@@ -204,3 +208,40 @@ export const OPEN_APP_SETTINGS_EVENT = "nezha:open-app-settings";
 export interface SkillHubChangedDetail {
   projects?: unknown;
 }
+
+/**
+ * 提问方式：应用级设置里三个互斥开关的取值映射（与后端 `agent_assist::QuestionMode` 对齐）。
+ *
+ * 三者都只改「提问技能」参数，产物契约不受影响。`batch-grill-me` 与 `grill-with-ui`
+ * 在 UI 上互斥（保存命令也会强制），这里只做展示取值的收敛，兜底逻辑与后端一致：
+ * 万一两个开关同时为真，UI 盘问优先——它是更明确的一次选择。
+ */
+export type QuestionMode = "grilling" | "batch" | "ui";
+
+export function questionModeOf(
+  settings: { batch_grill_enabled?: boolean; grill_with_ui_enabled?: boolean } | null | undefined,
+): QuestionMode {
+  if (settings?.grill_with_ui_enabled) return "ui";
+  if (settings?.batch_grill_enabled) return "batch";
+  return "grilling";
+}
+
+/** 提问方式的技能名，用于提示文案里回显。 */
+export const QUESTION_MODE_SKILL: Record<QuestionMode, string> = {
+  grilling: "grilling",
+  batch: "batch-grill-me",
+  ui: "grill-with-ui",
+};
+
+/**
+ * 「直接开始」入口的文案键。用显式映射而不是模板字符串拼 key——
+ * `t()` 在键缺失时会把键名原样显示，拼错不会报错，只会在界面上露出 `…clarifyLabel.ui`。
+ */
+export const QUESTION_MODE_DIRECT_KEYS: Record<
+  QuestionMode,
+  { clarify: string; flow: string }
+> = {
+  grilling: { clarify: "yunxiao.direct.clarifyLabel", flow: "yunxiao.direct.flowClarify" },
+  batch: { clarify: "yunxiao.direct.clarifyLabelBatch", flow: "yunxiao.direct.flowClarifyBatch" },
+  ui: { clarify: "yunxiao.direct.clarifyLabelUi", flow: "yunxiao.direct.flowClarifyUi" },
+};

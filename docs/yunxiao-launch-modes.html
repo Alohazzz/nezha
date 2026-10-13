@@ -793,26 +793,28 @@
     </section>
 
     <section id="s11">
-      <h2><span class="num">11</span>批量盘问开关（实验性）</h2>
+      <h2><span class="num">11</span>提问方式开关（实验性）</h2>
       <p>默认情况下，需求澄清与方案讨论走的是<strong>决策树逐问</strong>：一次只问一个问题，每个问题先给推荐答案。议题多、设计树宽的时候，这种走法每个分支都要一次往返。</p>
+      <p>技能库提供两个<strong>互斥</strong>的「提问方式」开关，都只改<strong>提问的呈现与节律</strong>：</p>
       <p>开启「<strong>批量盘问</strong>」后，改成<strong>一轮抛出当前前沿的全部问题</strong>（每题附推荐答案），你回一次，Agent 再据回复重算前沿、问下一轮。同样的决策，把往返次数压下来。</p>
+      <p>开启「<strong>UI 盘问</strong>」后，问题改成开在<strong>本地浏览器页面</strong>上（界面已中文化，<strong>起页后自动打开浏览器</strong>）：每题一张卡片（选项 + 高亮推荐），可任意顺序作答，每题有独立讨论线程，可点「展开利弊」出优缺点对照表、「可视化」出原型或架构图；你点 Send 统一投递，点 Finish 收尾，Agent 随后产出设计文档。</p>
       <figure class="shot-md">
-        <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="批量盘问开关" />
-        <figcaption>应用设置 → 技能库 →「批量盘问（测试）」开关</figcaption>
+        <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="提问方式开关" />
+        <figcaption>应用设置 → 技能库 →「批量盘问 / UI 盘问（测试）」开关</figcaption>
       </figure>
       <table>
         <thead><tr><th>项目</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>开关位置</td><td>应用设置 → <strong>技能库</strong>（带「测试」徽标），为应用级设置</td></tr>
-          <tr><td>影响范围</td><td>只改<strong>提示词措辞</strong>：云效议题的「发起讨论」与「直接开始（先澄清）」会改走 <code>batch-grill-me</code></td></tr>
-          <tr><td>前置</td><td>需先在技能库<strong>安装</strong> <code>batch-grill-me</code> 技能，否则开关不起作用</td></tr>
+          <tr><td>开关位置</td><td>应用设置 → <strong>技能库</strong>（带「测试」徽标），为应用级设置；两个开关<strong>互斥</strong>，开启一个会自动关掉另一个</td></tr>
+          <tr><td>影响范围</td><td>只改<strong>提问方式</strong>：云效议题的「发起讨论」与「直接开始（先澄清）」会改走 <code>batch-grill-me</code> 或 <code>grill-with-ui</code>，产物契约不变</td></tr>
+          <tr><td>前置</td><td>需先在技能库<strong>安装</strong>对应技能；UI 盘问还要求本机有 Node 20+（Agent 会起一个本地页面服务）</td></tr>
           <tr><td>Bug 议题</td><td><strong>不受影响</strong>，保持一次一问的 <code>diagnosing-bugs</code> 根因取证循环</td></tr>
           <tr><td>不改变</td><td><code>plan.md</code> 结构、性能影响分析分支、<code>deps.json</code> 契约都不变</td></tr>
         </tbody>
       </table>
       <div class="callout warn">
         <span class="label">实验性</span>
-        这是<strong>实验性</strong>功能（界面带「测试」徽标）。它只切换提示词风格，不改变产物的契约；使用前请确认 <code>batch-grill-me</code> 技能已安装到项目。
+        两个开关都是<strong>实验性</strong>功能（界面带「测试」徽标），且互斥。它们只切换提问方式，不改变产物的契约；使用前请确认对应技能已安装到项目。
       </div>
     </section>
 
@@ -843,7 +845,8 @@
           <tr><td>并行改同一批文件 / 想让它串行</td><td>方案待办默认受 <code>[plan] max_concurrent</code> 约束（默认 1 = 串行），由 <code>deps.json</code> 拓扑顺序逐个放行。手动点 ▶ 也受同一闸门约束。</td></tr>
           <tr><td><code>deps.json</code> 写坏了会怎样</td><td>降级处理：给告警、少一道护栏，不会卡死任务；依赖成环时环上的边全部丢弃，门禁不会死锁。</td></tr>
           <tr><td>怎么把新议题挂到已有方案下</td><td>在「发起讨论」对话框里选「关联方案（作为子方案追加）」，选一个已定稿的主方案即可；不选就是独立方案。</td></tr>
-          <tr><td>开了「批量盘问」怎么没生效</td><td>需先在技能库安装 <code>batch-grill-me</code> 技能；该开关只改提示词风格，且 Bug 议题仍走一次一问的根因取证。</td></tr>
+          <tr><td>开了「批量盘问」怎么没生效</td><td>需先在技能库安装 <code>batch-grill-me</code> 技能；该开关只改提问方式，且 Bug 议题仍走一次一问的根因取证。</td></tr>
+          <tr><td>开了「UI 盘问」怎么没生效</td><td>需先在技能库安装 <code>grill-with-ui</code> 技能，并要求本机有 Node 20+（Agent 会起一个本地页面服务）；它与「批量盘问」互斥，检查另一个开关是否把本次切换顶掉了。</td></tr>
         </tbody>
       </table>
       <footer>Nezha 云效议题完整闭环 · 本页为静态说明文档，截图取自真实运行界面</footer>
