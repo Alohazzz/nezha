@@ -21,9 +21,11 @@ const outDir = join(root, "public", "help");
 const ENTRIES = [
   "operation-manual.html",
   "yunxiao-launch-modes.html",
+  "grill-with-ui.html",
   "screenshots/module-guide",
   "screenshots/yunxiao-launch-mode",
   "screenshots/plan-board",
+  "screenshots/grill-with-ui",
 ];
 
 /** 文档里引用的截图目录，逐图校验可发现断链。 */
@@ -64,6 +66,16 @@ const REQUIRED_ASSETS = [
   "screenshots/plan-board/02-board-light.png",
   "screenshots/plan-board/03-waiting-deps.png",
   "screenshots/plan-board/04-dep-chain.png",
+  // UI 盘问（grill-with-ui）说明文档引用的截图
+  "screenshots/grill-with-ui/01-question-card.png",
+  "screenshots/grill-with-ui/02-open-question.png",
+  "screenshots/grill-with-ui/03-nav-rounds.png",
+  "screenshots/grill-with-ui/04-discussion-thread.png",
+  "screenshots/grill-with-ui/05-explore-procon.png",
+  "screenshots/grill-with-ui/06-visual.png",
+  "screenshots/grill-with-ui/07-terms.png",
+  "screenshots/grill-with-ui/08-settings-toggles.png",
+  "screenshots/grill-with-ui/09-footer-staged.png",
 ];
 
 async function sync() {

@@ -470,6 +470,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "help.title": "Help Center",
     "help.doc.manual": "Operation Manual",
     "help.doc.yunxiao": "Yunxiao Issue Guide",
+    "help.doc.grill": "UI Grill Guide",
     "welcome.searchProjects": "Search projects",
     "welcome.openProject": "Open project",
     "welcome.local": "LOCAL",
@@ -1255,7 +1256,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.grillWithUi": "UI 盘问",
     "appSettings.grillWithUiToggle": "在本地浏览器页面上盘问",
     "appSettings.grillWithUiHint":
-      "测试技能，与「批量盘问」互斥（开启一个会自动关掉另一个）。开启后，同样的链路改用 grill-with-ui 技能：每题变成一张带选项的卡片，可任意顺序作答，每题独立讨论线程，可点「Explore deeper」出优缺点对照表、点「Visualize」出原型或架构图；agent 起一个本地页面并等你点 Send，盘问结束产出设计文档。需安装该技能并具备 Node 20+。",
+      "测试技能，与「批量盘问」互斥（开启一个会自动关掉另一个）。开启后，同样的链路改用 grill-with-ui 技能：每题变成一张带选项的卡片，可任意顺序作答，每题独立讨论线程，可点「展开利弊」出优缺点对照表、点「可视化」出原型或架构图；agent 起一个本地页面并自动打开浏览器等你点「发送」，盘问结束产出设计文档。需安装该技能并具备 Node 20+。",
     "appSettings.missingFlowSkill":
       "{agents} 尚未安装 {skill} 技能，云效任务将读不到该技能契约。请在技能库中安装。",
     "appSettings.terminalScrollback": "终端滚动缓冲",
@@ -1624,6 +1625,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "help.title": "帮助中心",
     "help.doc.manual": "操作手册",
     "help.doc.yunxiao": "云效议题详解",
+    "help.doc.grill": "UI 盘问说明",
     "welcome.searchProjects": "搜索项目",
     "welcome.openProject": "打开项目",
     "welcome.local": "本地",

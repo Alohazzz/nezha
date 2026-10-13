@@ -36,11 +36,34 @@ describe("HelpView", () => {
     const { container } = renderHelp("light");
 
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(2);
+    expect(tabs).toHaveLength(3);
+    expect(tabs.map((tb) => tb.textContent)).toEqual(["操作手册", "云效议题详解", "UI 盘问说明"]);
     await user.click(tabs[1]);
 
     expect(frameOf(container).getAttribute("src")).toBe(
       "help/yunxiao-launch-modes.html?embed=1&theme=light",
+    );
+  });
+
+  it("opens the UI grill guide from its tab and via a cross-document link", async () => {
+    const user = userEvent.setup();
+    const { container } = renderHelp("light");
+
+    // 第三个 tab 指向 UI 盘问说明
+    await user.click(screen.getAllByRole("tab")[2]);
+    expect(frameOf(container).getAttribute("src")).toBe(
+      "help/grill-with-ui.html?embed=1&theme=light",
+    );
+
+    // 其他文档内的交叉链接（host 转发）也应能切到该文档
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        data: { type: "nezha-help-open", file: "grill-with-ui.html" },
+      }),
+    );
+    expect(frameOf(container).getAttribute("src")).toBe(
+      "help/grill-with-ui.html?embed=1&theme=light",
     );
   });
 

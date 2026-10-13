@@ -797,7 +797,7 @@
       <p>默认情况下，需求澄清与方案讨论走的是<strong>决策树逐问</strong>：一次只问一个问题，每个问题先给推荐答案。议题多、设计树宽的时候，这种走法每个分支都要一次往返。</p>
       <p>技能库提供两个<strong>互斥</strong>的「提问方式」开关，都只改<strong>提问的呈现与节律</strong>：</p>
       <p>开启「<strong>批量盘问</strong>」后，改成<strong>一轮抛出当前前沿的全部问题</strong>（每题附推荐答案），你回一次，Agent 再据回复重算前沿、问下一轮。同样的决策，把往返次数压下来。</p>
-      <p>开启「<strong>UI 盘问</strong>」后，问题改成开在<strong>本地浏览器页面</strong>上（界面已中文化，<strong>起页后自动打开浏览器</strong>）：每题一张卡片（选项 + 高亮推荐），可任意顺序作答，每题有独立讨论线程，可点「展开利弊」出优缺点对照表、「可视化」出原型或架构图；你点 Send 统一投递，点 Finish 收尾，Agent 随后产出设计文档。</p>
+      <p>开启「<strong>UI 盘问</strong>」后，问题改成开在<strong>本地浏览器页面</strong>上（界面已中文化，<strong>起页后自动打开浏览器</strong>）：每题一张卡片（选项 + 高亮推荐），可任意顺序作答，每题有独立讨论线程，可点「展开利弊」出优缺点对照表、「可视化」出原型或架构图；你点 Send 统一投递，点 Finish 收尾，Agent 随后产出设计文档。详尽用法见 <a href="grill-with-ui.html">UI 盘问（grill-with-ui）使用说明</a>。</p>
       <figure class="shot-md">
         <img src="screenshots/yunxiao-launch-mode/11-batch-grill-setting.png" alt="提问方式开关" />
         <figcaption>应用设置 → 技能库 →「批量盘问 / UI 盘问（测试）」开关</figcaption>
@@ -806,7 +806,7 @@
         <thead><tr><th>项目</th><th>说明</th></tr></thead>
         <tbody>
           <tr><td>开关位置</td><td>应用设置 → <strong>技能库</strong>（带「测试」徽标），为应用级设置；两个开关<strong>互斥</strong>，开启一个会自动关掉另一个</td></tr>
-          <tr><td>影响范围</td><td>只改<strong>提问方式</strong>：云效议题的「发起讨论」与「直接开始（先澄清）」会改走 <code>batch-grill-me</code> 或 <code>grill-with-ui</code>，产物契约不变</td></tr>
+          <tr><td>影响范围</td><td>只改<strong>提问方式</strong>：云效议题的「发起讨论」与「直接开始（先澄清）」会改走 <code>batch-grill-me</code> 或 <code>grill-with-ui</code>（后者详见 <a href="grill-with-ui.html">UI 盘问说明</a>），产物契约不变</td></tr>
           <tr><td>前置</td><td>需先在技能库<strong>安装</strong>对应技能；UI 盘问还要求本机有 Node 20+（Agent 会起一个本地页面服务）</td></tr>
           <tr><td>Bug 议题</td><td><strong>不受影响</strong>，保持一次一问的 <code>diagnosing-bugs</code> 根因取证循环</td></tr>
           <tr><td>不改变</td><td><code>plan.md</code> 结构、性能影响分析分支、<code>deps.json</code> 契约都不变</td></tr>
@@ -898,7 +898,8 @@
   sections.forEach((sec) => {
     const a = document.createElement('a');
     a.href = '#' + sec.id;
-    a.textContent = h2Of(sec).textContent.replace(/\s+/g, ' ').trim();
+    // h2 里的序号 span 在目录中会与标题粘连（如「0一张图看全流程」），补一个空格。
+    a.textContent = h2Of(sec).textContent.replace(/^(\d+)/, '$1 ').replace(/\s+/g, ' ').trim();
     toc.appendChild(a);
   });
   const links = [...toc.querySelectorAll('a')];
