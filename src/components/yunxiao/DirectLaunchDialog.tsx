@@ -13,7 +13,8 @@ import {
   cycleEnabledAgent,
   type AgentEnabledState,
 } from "../../types";
-import type { AppSettings, YunxiaoSettings } from "../app-settings/types";
+import type { AppSettings, QuestionMode, YunxiaoSettings } from "../app-settings/types";
+import { QUESTION_MODE_DIRECT_KEYS, questionModeOf } from "../app-settings/types";
 import {
   buildYunxiaoIssueLink,
   getLastYunxiaoAgent,
@@ -75,8 +76,9 @@ export function DirectLaunchDialog({
   const [detail, setDetail] = useState<YunxiaoWorkitem | null>(null);
   const [detailState, setDetailState] = useState<"loading" | "done" | "failed">("loading");
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
-  // 应用级「批量盘问（测试技能）」开关：开启时澄清环节改走 batch-grill-me，仅影响文案提示。
-  const [batchGrill, setBatchGrill] = useState(false);
+  // 应用级「提问方式」开关（逐条 / 批量盘问 / UI 盘问，后两者互斥）：仅影响文案提示，
+  // 真正的节律由后端下发的「提问技能」参数决定。
+  const [questionMode, setQuestionMode] = useState<QuestionMode>("grilling");
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(targetProjectId) ?? "codex",
   );
@@ -119,7 +121,7 @@ export function DirectLaunchDialog({
     invoke<AppSettings>("load_app_settings")
       .then((appSettings) => {
         setAgentSettings(appSettings);
-        setBatchGrill(appSettings.batch_grill_enabled ?? false);
+        setQuestionMode(questionModeOf(appSettings));
         setAgent((prev) => (isAgentEnabled(appSettings, prev) ? prev : firstEnabledAgent(appSettings)));
       })
       .catch(() => undefined);
@@ -266,15 +268,11 @@ export function DirectLaunchDialog({
                   checked={clarifyFirst}
                   onChange={(e) => setClarifyFirst(e.target.checked)}
                 />
-                {batchGrill
-                  ? t("yunxiao.direct.clarifyLabelBatch")
-                  : t("yunxiao.direct.clarifyLabel")}
+                {t(QUESTION_MODE_DIRECT_KEYS[questionMode].clarify)}
               </label>
               <div style={s.directLaunchFlowHint}>
                 {clarifyFirst
-                  ? batchGrill
-                    ? t("yunxiao.direct.flowClarifyBatch")
-                    : t("yunxiao.direct.flowClarify")
+                  ? t(QUESTION_MODE_DIRECT_KEYS[questionMode].flow)
                   : t("yunxiao.direct.flowDirect")}
               </div>
             </>

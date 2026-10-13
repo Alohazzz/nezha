@@ -4,7 +4,7 @@ import type { ThemeVariant } from "../../types";
 import { useI18n } from "../../i18n";
 
 type HelpDoc = {
-  id: "manual" | "yunxiao";
+  id: "manual" | "yunxiao" | "grill";
   file: string;
   labelKey: string;
 };
@@ -12,6 +12,7 @@ type HelpDoc = {
 const HELP_DOCS: HelpDoc[] = [
   { id: "manual", file: "operation-manual.html", labelKey: "help.doc.manual" },
   { id: "yunxiao", file: "yunxiao-launch-modes.html", labelKey: "help.doc.yunxiao" },
+  { id: "grill", file: "grill-with-ui.html", labelKey: "help.doc.grill" },
 ];
 
 /**

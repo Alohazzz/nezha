@@ -667,20 +667,40 @@ const PLAN_DISCUSSION_SKILL: &str = "yunxiao-plan-discussion";
 /// （由议题整理，可按需先澄清/取证）——两者的产物契约与执行动作一致。
 const ISSUE_EXECUTION_SKILL: &str = "yunxiao-issue-execution";
 
-/// 默认提问技能：逐条盘问（一次只问一个问题）。技能正文按任务参数取值选择节律。
-const GRILLING_SKILL: &str = "grilling";
+/// 提问方式（应用级设置开关的三选一，互斥）。
+///
+/// 三者在提示词里只体现为一个「提问技能」参数：节律与呈现的语义由被引用技能正文定义，
+/// Nezha 只负责挑选，不注入与技能正文并列的流程散文。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuestionMode {
+    /// 逐条盘问（默认）：一次只问一个问题。
+    Grilling,
+    /// 批量盘问：把设计树当前「前沿」的全部问题一轮一次性抛出。
+    Batch,
+    /// UI 盘问：问题放到本地浏览器页面（卡片式、任意顺序作答、每题独立讨论线程、可选可视化）。
+    Ui,
+}
 
-/// 批量盘问技能（测试技能，SkillHub `batch-grill-me`）：把设计树当前「前沿」的全部问题
-/// 一轮一次性抛出。应用设置开关开启时作为「提问技能」参数传入，由技能正文决定节律。
-const BATCH_GRILL_SKILL: &str = "batch-grill-me";
+impl QuestionMode {
+    /// 对应的技能名（SkillHub 维护；未安装时引用方按逐条节律降级）。
+    fn skill(self) -> &'static str {
+        match self {
+            QuestionMode::Grilling => "grilling",
+            QuestionMode::Batch => "batch-grill-me",
+            QuestionMode::Ui => "grill-with-ui",
+        }
+    }
 
-/// 按应用设置选择本次会话的提问技能。取值的语义与节律由被引用技能正文定义，
-/// Nezha 只负责挑选——不再注入与技能正文并列的流程散文。
-fn question_skill(batch_grill: bool) -> &'static str {
-    if batch_grill {
-        BATCH_GRILL_SKILL
-    } else {
-        GRILLING_SKILL
+    /// 从应用设置的两个开关取值。两者本应互斥（保存命令与 normalize 都保证），
+    /// 万一同时为真，UI 盘问优先——它是更明确的一次选择，且不能让提示词出现两个节律。
+    pub fn from_settings(grill_with_ui: bool, batch_grill: bool) -> Self {
+        if grill_with_ui {
+            QuestionMode::Ui
+        } else if batch_grill {
+            QuestionMode::Batch
+        } else {
+            QuestionMode::Grilling
+        }
     }
 }
 
@@ -701,7 +721,7 @@ pub fn plan_discussion_instructions(
     plan_md_path: &str,
     deps_json_path: &str,
     has_bug: bool,
-    batch_grill: bool,
+    question_mode: QuestionMode,
 ) -> String {
     format!(
         "## 工作流程\n请读取并遵循 `{skill}` 技能，按其中的流程与产物契约完成本次讨论。\n\n\
@@ -711,7 +731,7 @@ pub fn plan_discussion_instructions(
 - 方案文档（绝对路径，技能中的落盘指令以此路径为准）：{plan_md_path}（目录不存在就先创建）\n\
 - 依赖文件（绝对路径，schema 与产出要求见技能「方案依赖文件」节）：{deps_json_path}",
         skill = PLAN_DISCUSSION_SKILL,
-        question_skill = question_skill(batch_grill),
+        question_skill = question_mode.skill(),
         issue_kind = issue_kind(has_bug, false),
         plan_md_path = plan_md_path,
         deps_json_path = deps_json_path,
@@ -746,20 +766,26 @@ pub async fn get_plan_discussion_instructions(
     })
     .await
     .map_err(|e| format!("方案目录解析线程错误: {e}"))??;
-    let batch_grill = batch_grill_enabled().await;
+    let question_mode = question_mode_from_settings().await;
     Ok(plan_discussion_instructions(
         &paths.0,
         &paths.1,
         has_bug,
-        batch_grill,
+        question_mode,
     ))
 }
 
-/// 读取应用级「批量盘问（测试技能）」开关；读盘放到阻塞线程，避免挡住异步运行时。
-async fn batch_grill_enabled() -> bool {
-    tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().batch_grill_enabled)
-        .await
-        .unwrap_or(false)
+/// 读取应用级「提问方式」开关（批量盘问 / UI 盘问，互斥）；读盘放到阻塞线程，避免挡住异步运行时。
+///
+/// 互斥的最终兜底在 `QuestionMode::from_settings`：即便 settings.json 被手工改成两开，
+/// 也只会选出一种节律下发给 agent。
+async fn question_mode_from_settings() -> QuestionMode {
+    tokio::task::spawn_blocking(|| {
+        let settings = crate::app_settings::load_settings_internal();
+        QuestionMode::from_settings(settings.grill_with_ui_enabled, settings.batch_grill_enabled)
+    })
+    .await
+    .unwrap_or(QuestionMode::Grilling)
 }
 
 /// 议题执行任务的完整指令：**技能指针 + 任务参数**。
@@ -777,7 +803,7 @@ pub fn issue_execution_instructions(
     task_id: &str,
     has_bug: bool,
     clarify_first: bool,
-    batch_grill: bool,
+    question_mode: QuestionMode,
     from_plan: bool,
 ) -> String {
     // 已定稿方案不重复盘问：方案已由讨论定稿（讨论阶段已问过），执行阶段再澄清会与方案打架。
@@ -798,14 +824,19 @@ pub fn issue_execution_instructions(
         },
         issue_kind = issue_kind(has_bug, from_plan),
         clarify = if clarify { "是" } else { "否" },
-        question_skill = question_skill(clarify && batch_grill),
+        // 不进入澄清时不发生提问，节律无意义——退回默认取值，避免提示词里出现用不上的技能名。
+        question_skill = if clarify {
+            question_mode.skill()
+        } else {
+            QuestionMode::Grilling.skill()
+        },
         task_id = task_id,
     )
 }
 
 /// 方案执行任务（已定稿方案 → 按方案逐议题执行）。
 pub fn plan_execution_instructions(task_id: &str) -> String {
-    issue_execution_instructions(task_id, false, false, false, true)
+    issue_execution_instructions(task_id, false, false, QuestionMode::Grilling, true)
 }
 
 /// 前端在「立即运行」方案执行待办前调用（prompt 已在生成待办时定稿，此命令仅供预览/重建）。
@@ -821,9 +852,9 @@ pub fn direct_execution_instructions(
     task_id: &str,
     has_bug: bool,
     clarify_first: bool,
-    batch_grill: bool,
+    question_mode: QuestionMode,
 ) -> String {
-    issue_execution_instructions(task_id, has_bug, clarify_first, batch_grill, false)
+    issue_execution_instructions(task_id, has_bug, clarify_first, question_mode, false)
 }
 
 /// 直接执行链路：议题列表 / 绑定待办「直接开始」时由前端调用组装 prompt。
@@ -838,12 +869,12 @@ pub async fn get_direct_execution_instructions(
     {
         return Err("非法的任务 ID".to_string());
     }
-    let batch_grill = batch_grill_enabled().await;
+    let question_mode = question_mode_from_settings().await;
     Ok(direct_execution_instructions(
         &task_id,
         has_bug.unwrap_or(false),
         clarify_first.unwrap_or(false),
-        batch_grill,
+        question_mode,
     ))
 }
 
@@ -1967,7 +1998,7 @@ mod tests {
             "H:/proj/.nezha/plans/p1/plan.md",
             "H:/proj/.nezha/plans/p1/deps.json",
             false,
-            false,
+            QuestionMode::Grilling,
         );
         // 技能引用 + plan.md 动态路径必须齐备；流程与文档契约文本由技能承载，不再内联。
         assert!(prompt.contains("yunxiao-plan-discussion"));
@@ -1982,7 +2013,7 @@ mod tests {
 
     #[test]
     fn direct_execution_instructions_compose_flow_and_drafts() {
-        let prompt = direct_execution_instructions("9001", true, false, false);
+        let prompt = direct_execution_instructions("9001", true, false, QuestionMode::Grilling);
         // 技能指针 + 任务参数：流程与产物契约由技能承载，不在提示词里复述。
         assert!(prompt.contains("`yunxiao-issue-execution` 技能"));
         assert!(prompt.contains("## 任务参数"));
@@ -1997,21 +2028,21 @@ mod tests {
 
     #[test]
     fn direct_execution_instructions_bug_hint_conditional() {
-        let no_bug = direct_execution_instructions("9002", false, false, false);
+        let no_bug = direct_execution_instructions("9002", false, false, QuestionMode::Grilling);
         assert!(no_bug.contains("议题类型：不含 Bug 类议题"));
         assert!(!no_bug.contains("含 Bug 缺陷类议题"));
     }
 
     #[test]
     fn direct_execution_instructions_clarify_first() {
-        let clarify = direct_execution_instructions("9003", false, true, false);
+        let clarify = direct_execution_instructions("9003", false, true, QuestionMode::Grilling);
         assert!(clarify.contains("先澄清：是"));
         assert!(clarify.contains("提问技能：`grilling`"));
         // 未勾选时不进入澄清。
-        let plain = direct_execution_instructions("9004", false, false, false);
+        let plain = direct_execution_instructions("9004", false, false, QuestionMode::Grilling);
         assert!(plain.contains("先澄清：否"));
         // Bug 路径优先：has_bug 为真时忽略 clarify_first，避免两个技能各问一轮。
-        let bug_with_clarify = direct_execution_instructions("9005", true, true, false);
+        let bug_with_clarify = direct_execution_instructions("9005", true, true, QuestionMode::Grilling);
         assert!(bug_with_clarify.contains("议题类型：含 Bug 缺陷类议题"));
         assert!(bug_with_clarify.contains("先澄清：否"));
     }
@@ -2019,24 +2050,72 @@ mod tests {
     #[test]
     fn direct_execution_instructions_batch_grill_swaps_question_skill() {
         // 开关开启且进入澄清：「提问技能」参数改为 batch-grill-me。
-        let batch = direct_execution_instructions("9006", false, true, true);
+        let batch = direct_execution_instructions("9006", false, true, QuestionMode::Batch);
         assert!(batch.contains("提问技能：`batch-grill-me`"));
         assert!(!batch.contains("提问技能：`grilling`"));
         // 未勾选澄清时开关不改变参数取值（澄清不发生，节律无意义）。
-        let plain = direct_execution_instructions("9007", false, false, true);
+        let plain = direct_execution_instructions("9007", false, false, QuestionMode::Batch);
         assert!(plain.contains("提问技能：`grilling`"));
         // Bug 路径仍优先：开了批量盘问也不进入澄清，参数保持默认。
-        let bug = direct_execution_instructions("9008", true, true, true);
+        let bug = direct_execution_instructions("9008", true, true, QuestionMode::Batch);
         assert!(bug.contains("议题类型：含 Bug 缺陷类议题"));
         assert!(bug.contains("先澄清：否"));
         assert!(bug.contains("提问技能：`grilling`"));
+    }
+
+    /// UI 盘问与批量盘问走同一条参数通路，只是取值不同——引用方技能契约不受影响。
+    #[test]
+    fn direct_execution_instructions_ui_mode_swaps_question_skill() {
+        let ui = direct_execution_instructions("9009", false, true, QuestionMode::Ui);
+        assert!(ui.contains("提问技能：`grill-with-ui`"));
+        assert!(!ui.contains("提问技能：`grilling`"));
+        assert!(!ui.contains("batch-grill-me"));
+        // 未勾选澄清时同样不发生提问，退回默认取值。
+        let plain = direct_execution_instructions("9011", false, false, QuestionMode::Ui);
+        assert!(plain.contains("提问技能：`grilling`"));
+        // Bug 路径优先级最高，UI 盘问也不介入根因取证。
+        let bug = direct_execution_instructions("9012", true, true, QuestionMode::Ui);
+        assert!(bug.contains("议题类型：含 Bug 缺陷类议题"));
+        assert!(bug.contains("先澄清：否"));
+        assert!(bug.contains("提问技能：`grilling`"));
+    }
+
+    /// 三个开关取值互斥：始终只有一个节律下发给 agent，避免提示词自相矛盾。
+    #[test]
+    fn question_mode_picks_exactly_one_skill() {
+        assert_eq!(QuestionMode::from_settings(false, false), QuestionMode::Grilling);
+        assert_eq!(QuestionMode::from_settings(false, true), QuestionMode::Batch);
+        assert_eq!(QuestionMode::from_settings(true, false), QuestionMode::Ui);
+        // 兜底：settings.json 被手工改成两开时，UI 盘问优先，不会同时出现两个技能名。
+        assert_eq!(QuestionMode::from_settings(true, true), QuestionMode::Ui);
+
+        assert_eq!(QuestionMode::Grilling.skill(), "grilling");
+        assert_eq!(QuestionMode::Batch.skill(), "batch-grill-me");
+        assert_eq!(QuestionMode::Ui.skill(), "grill-with-ui");
+    }
+
+    /// 方案讨论入口同样支持 UI 盘问取值。
+    #[test]
+    fn plan_discussion_passes_ui_mode_param() {
+        let ui = plan_discussion_instructions(
+            "H:/proj/.nezha/plans/p1/plan.md",
+            "H:/proj/.nezha/plans/p1/deps.json",
+            false,
+            QuestionMode::Ui,
+        );
+        assert!(ui.contains("`yunxiao-plan-discussion` 技能"));
+        assert!(ui.contains("提问技能：`grill-with-ui`"));
+        // 契约相关参数不变；也不内联任何流程散文。
+        assert!(ui.contains("H:/proj/.nezha/plans/p1/deps.json"));
+        assert!(!ui.contains("一次只问一个问题"));
+        assert!(!ui.contains("一轮一次性全部抛出"));
     }
 
     /// 两个执行入口共用同一技能指针与参数块，只差「方案来源」等取值——收敛的核心保证。
     #[test]
     fn execution_entries_share_one_skill_pointer() {
         let from_plan = plan_execution_instructions("9010");
-        let auto = direct_execution_instructions("9010", false, false, false);
+        let auto = direct_execution_instructions("9010", false, false, QuestionMode::Grilling);
         assert!(from_plan.contains("`yunxiao-issue-execution` 技能"));
         assert!(auto.contains("`yunxiao-issue-execution` 技能"));
         assert!(from_plan.contains("方案来源：已定稿"));
@@ -2058,7 +2137,7 @@ mod tests {
             "H:/proj/.nezha/plans/p1/plan.md",
             "H:/proj/.nezha/plans/p1/deps.json",
             false,
-            true,
+            QuestionMode::Batch,
         );
         assert!(batch.contains("`yunxiao-plan-discussion` 技能"));
         assert!(batch.contains("## 任务参数"));
@@ -2072,7 +2151,7 @@ mod tests {
             "H:/proj/.nezha/plans/p1/plan.md",
             "H:/proj/.nezha/plans/p1/deps.json",
             false,
-            false,
+            QuestionMode::Grilling,
         );
         assert!(plain.contains("提问技能：`grilling`"));
         assert!(!plain.contains("batch-grill-me"));
@@ -2081,7 +2160,7 @@ mod tests {
             "H:/proj/.nezha/plans/p1/plan.md",
             "H:/proj/.nezha/plans/p1/deps.json",
             true,
-            false,
+            QuestionMode::Grilling,
         );
         assert!(bug.contains("议题类型：含 Bug 缺陷类议题"));
     }
@@ -2372,7 +2451,7 @@ mod tests {
             "C:/p/.nezha/plans/1/plan.md",
             "C:/p/.nezha/plans/1/deps.json",
             true,
-            false,
+            QuestionMode::Grilling,
         );
         assert!(with_bug.contains("议题类型：含 Bug 缺陷类议题"));
         assert!(with_bug.contains("Bug 根因诊断"));
@@ -2381,7 +2460,7 @@ mod tests {
             "C:/p/.nezha/plans/1/plan.md",
             "C:/p/.nezha/plans/1/deps.json",
             false,
-            false,
+            QuestionMode::Grilling,
         );
         assert!(without_bug.contains("议题类型：不含 Bug 类议题"));
         // 「Bug 根因诊断」只作为技能小节名出现在参数说明里，取证方法论本身由技能承载。
