@@ -2701,6 +2701,9 @@ function App() {
   // 等待队列的自动接续：完全由 tasks / deps 状态派生（零定时器）。前置全部 done 后，
   // 按拓扑序 → executionOrder → createdAt 逐个放行；同一项目内默认串行（并发上限可配）。
   // 用 ref 持有「真正启动」函数，避免将其（每次渲染都变化）纳入 deps 造成死循环。
+  // 重启首拍 planDeps 可能还是空（tasks 先 set、refreshPlanDeps 不 await）：
+  // selectAutoStart 对「缓存无该方案条目」跳过不放行，deps 到位触发下一拍再判——
+  // 否则崩溃重启会把排队任务当无依赖直接起跑，绕过门禁与串行上限。
   const autoStartInFlightRef = useRef<Set<string>>(new Set());
   const autoStartRunRef = useRef<(taskId: string) => void>(() => {});
   autoStartRunRef.current = (taskId: string) => {

@@ -243,8 +243,8 @@ describe("selectAutoStart", () => {
           createdAt: 2,
         }),
       ],
-      // 空图：两者都无依赖 → 都可放行
-      depsByPlanId: {},
+      // 空依赖图：两者都无依赖 → 都可放行（注意与「缓存无条目=尚未加载」区分）
+      depsByPlanId: { p1: parsePlanDeps(null, ["QHDK-A", "QHDK-B"]) },
       planById,
       maxConcurrentByProjectId: { proj: 2 },
       defaultMaxConcurrent: 1,
@@ -290,7 +290,7 @@ describe("selectAutoStart", () => {
           status: "waiting_deps",
         }),
       ],
-      depsByPlanId: {},
+      depsByPlanId: { p1: parsePlanDeps(null, ["QHDK-A"]) },
       planById,
       maxConcurrentByProjectId: {},
       defaultMaxConcurrent: 1,
@@ -355,7 +355,23 @@ describe("「开始」一键启动：新待办一律 waiting_deps，由调度逐
     expect(startIds).toEqual([]);
   });
 
-  it("依赖缺失（deps.json 未解析）时视为无依赖，仅按串行逐个放行", () => {
+  it("deps.json 确实不存在（解析为空图）→ 视为无依赖，仅按串行逐个放行", () => {
+    const startIds = selectAutoStart({
+      tasks: createdWaiting(),
+      // 存量方案没有 deps.json：readPlanDepsFor 也会返回一个「missing 告警」的
+      // 空依赖图——缓存条目存在，只是图为空。这与「尚未加载」不同，按无依赖放行。
+      depsByPlanId: { p1: parsePlanDeps(null, ["QHDK-A", "QHDK-B", "QHDK-C"]) },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    // 无依赖 → A 可开工；串行上限 1 只放一个
+    expect(startIds).toEqual(["auto-0"]);
+  });
+
+  it("重启首拍 deps 尚未加载（缓存无该方案条目）→ 不放行，等 deps 到位再判（崩溃回归）", () => {
+    // 崩溃重启的真实时序：tasks 先 set，refreshPlanDeps 是 fire-and-forget，
+    // 此拍 planDeps 还是 {}。此前这条路径会把等待任务当「无依赖」直接放行。
     const startIds = selectAutoStart({
       tasks: createdWaiting(),
       depsByPlanId: {},
@@ -363,8 +379,7 @@ describe("「开始」一键启动：新待办一律 waiting_deps，由调度逐
       maxConcurrentByProjectId: {},
       defaultMaxConcurrent: 1,
     });
-    // 无依赖图 → A 可开工；串行上限 1 只放一个
-    expect(startIds).toEqual(["auto-0"]);
+    expect(startIds).toEqual([]);
   });
 });
 

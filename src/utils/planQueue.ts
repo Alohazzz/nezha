@@ -186,6 +186,7 @@ export function orderWaitingQueue(
 
 export interface AutoStartInput {
   tasks: readonly Task[];
+  /** planId → 已解析 deps。**条目缺失 = 尚未加载**（重启首拍），该方案本轮不放行。 */
   depsByPlanId: Readonly<Record<string, PlanDeps | undefined>>;
   planById: ReadonlyMap<string, Plan>;
   /** 项目级并发上限（未配置时用 defaultMaxConcurrent）。 */
@@ -198,6 +199,12 @@ export interface AutoStartInput {
  *
  * 只挑选「前置已全部满足（或用户已明确忽略依赖）」的 `waiting_deps` 任务，并按项目
  * 的空闲槽位截断——同一批被同一前置解锁的任务因此只会按顺序逐个放行，默认串行。
+ *
+ * 方案在依赖缓存里**没有条目** ≠ 无依赖，而是「deps 尚未加载」：崩溃重启后 tasks
+ * 先于 `refreshPlanDeps` 到位，首拍若按无依赖放行，等待任务会绕过门禁直接起跑
+ * （前置异常也拦不住）。因此这种方案本轮跳过——deps 到位后会触发下一拍再判。
+ * 真正的「无依赖」（存量方案无 deps.json）由 `readPlanDepsFor` 落成空图条目，
+ * 走 `evaluateTaskGate` 正常放行。
  */
 export function selectAutoStart(input: AutoStartInput): string[] {
   const { tasks, depsByPlanId, planById, maxConcurrentByProjectId, defaultMaxConcurrent } = input;
@@ -221,6 +228,7 @@ export function selectAutoStart(input: AutoStartInput): string[] {
 
     const startable = waiting.filter((task) => {
       if (task.planDepsIgnored) return true;
+      if (task.planId && !(task.planId in depsByPlanId)) return false;
       const deps = task.planId ? depsByPlanId[task.planId] : undefined;
       if (!deps) return true;
       return !evaluateTaskGate(task.yunxiaoSerialNumber ?? "", deps.graph, taskBySerial).blocked;
