@@ -30,15 +30,23 @@ pub fn extract_value_score_section(text: &str) -> Option<&str> {
     }
 }
 
-/// 从评分小节中解析核心指数（Req）或优先指数（Bug），取标签后的第一个数字。
+/// 从评分小节中解析核心指数（Req）/ 绩效指数或优先指数（Bug），取标签后的第一个数字。
+/// v2 评分（issue-value-scoring）Bug 用「绩效指数 = 优先指数 × 研发贡献系数」，
+/// 绩效导向，优先于旧「优先指数」；Req 仍取「核心指数」。旧格式（2026-10 前回写的
+/// 评论）继续兼容，回代历史议题不丢值。
 pub fn parse_value_score_index(section: &str) -> Option<f64> {
+    // 行标签按优先级排列：绩效指数（v2 Bug）> 核心指数（Req）> 优先指数（旧 Bug）。
+    for label in ["- 绩效指数：", "- 绩效指数:", "- 核心指数：", "- 核心指数:", "- 优先指数：", "- 优先指数:"] {
+        if let Some(value) = first_index_after(section, label) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn first_index_after(section: &str, prefix: &str) -> Option<f64> {
     for line in section.lines() {
-        let trimmed = line.trim();
-        let rest = ["- 核心指数：", "- 优先指数：", "- 核心指数:", "- 优先指数:"]
-            .iter()
-            .find_map(|prefix| trimmed.strip_prefix(prefix))
-            .map(str::trim);
-        if let Some(rest) = rest {
+        if let Some(rest) = line.trim().strip_prefix(prefix).map(str::trim) {
             if let Some(value) = first_number(rest) {
                 return Some(value);
             }
@@ -164,8 +172,21 @@ mod tests {
 
     #[test]
     fn parses_bug_priority_index() {
-        let section = "- 优先指数：**54.0** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0（无绕行）";
+        let section = "- 优先指数：**54.0** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0";
         assert_eq!(parse_value_score_index(section), Some(54.0));
+    }
+
+    #[test]
+    fn prefers_performance_index_over_priority_index() {
+        // v2 Bug 格式：绩效指数（进字段与月度汇总）优先于旧「优先指数」
+        let section = "- 优先指数：**54.0** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0\n- 绩效指数：**59.4** = 54.0 × 研发贡献系数 1.1";
+        assert_eq!(parse_value_score_index(section), Some(59.4));
+    }
+
+    #[test]
+    fn parses_performance_index_alone() {
+        let section = "- 绩效指数：**59.4** = 54.0 × 研发贡献系数 1.1（诊断与验证难度 5）";
+        assert_eq!(parse_value_score_index(section), Some(59.4));
     }
 
     #[test]

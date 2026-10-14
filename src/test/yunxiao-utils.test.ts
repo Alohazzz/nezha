@@ -417,6 +417,18 @@ describe("splitValueScoreSection", () => {
     expect(splitValueScoreSection(text).scoreValue).toBe(54);
   });
 
+  it("Bug 同时含优先指数与绩效指数时取绩效指数（v2）", () => {
+    const text = [
+      "## 价值评分（issue-value-scoring · 2026-10-14）",
+      "",
+      "- 优先指数：**54.0** = 严重 3 × 频率 3 × 范围 3 × 折减 1.0（无绕行）",
+      "- 绩效指数：**59.4** = 54.0 × 研发贡献系数 1.1（诊断与验证难度 5）",
+      "",
+      "- 定级：**P1**（修复成本 4）",
+    ].join("\n");
+    expect(splitValueScoreSection(text).scoreValue).toBe(59.4);
+  });
+
   it("无评分小节时原样返回", () => {
     const result = splitValueScoreSection("只有评论内容");
     expect(result.comment).toBe("只有评论内容");

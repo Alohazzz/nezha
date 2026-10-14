@@ -587,15 +587,20 @@ export function splitValueScoreSection(text: string): SplitValueScoreSection {
 }
 
 function parseValueScoreIndex(section: string): number | null {
-  for (const rawLine of section.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    const match = line.match(/^-\s*(?:核心指数|优先指数)[:：]\s*(.*)$/);
-    if (!match) continue;
-    const rest = match[1].replace(/\*/g, "").trim();
-    const number = rest.match(/-?\d+(?:\.\d+)?/);
-    if (number) {
-      const value = Number(number[0]);
-      if (Number.isFinite(value)) return value;
+  // 标签优先级：绩效指数（v2 Bug，绩效导向）> 核心指数（Req）> 优先指数（旧 Bug）。
+  // 旧格式保留兼容，历史评论回代不丢值。
+  const labels = ["核心指数", "绩效指数", "优先指数"];
+  for (const label of labels) {
+    for (const rawLine of section.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const match = line.match(new RegExp(`^-\\s*${label}[:：]\\s*(.*)$`));
+      if (!match) continue;
+      const rest = match[1].replace(/\*/g, "").trim();
+      const number = rest.match(/-?\d+(?:\.\d+)?/);
+      if (number) {
+        const value = Number(number[0]);
+        if (Number.isFinite(value)) return value;
+      }
     }
   }
   return null;
