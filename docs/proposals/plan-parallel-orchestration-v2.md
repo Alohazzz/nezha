@@ -229,8 +229,18 @@
 
 **目的**：在写任何代码之前，用真实仓库验证四个未知量。**全程零代码、零 Nezha 改动。**
 
-**前置**：HIS 主检出状态已知（脏点明确）、权限 `full_access`、Codex `multi_agent` 生效、
-选一个**真实的 3 条无依赖议题方案**。
+> 可执行步骤、编排者契约提示词与数据记录表见
+> [`plan-parallel-orchestration-v2-rehearsal.md`](./plan-parallel-orchestration-v2-rehearsal.md)。
+
+**样本**：测试项目 `H:\Project\nezha-plan-test-project` 上的 `fixture-plan-parallel`
+（TEST-101 / TEST-102 / TEST-103，`deps.json` 三条 `dependsOn` 全空；尾部判据是
+`npm test` 由 18 用例 / 15 通过 / 3 失败转为全绿）。该样本刻意保留了「两个议题改同一个文件
+的不同区域」这一合并面，专门验「分片改动能不能干净合并」。
+**不在 HIS 上试**——HIS 留到机制成立之后（本方案的三期集成），避免在真实业务仓库上
+验证尚未定型的流程。
+
+**前置**：权限 `full_access`（`workspace-write` 沙箱会挡掉 worktree 写入）、
+Codex `multi_agent` 生效（`spawn_agent` 可用）。
 
 **步骤**
 
@@ -241,9 +251,12 @@
    「只在 `<worktree 绝对路径>` 内改动 / 禁止一切 git 写操作 / 不构建 / 本议题范围白名单」。
 5. worker 汇报完工 → 逐个 `add -A` + commit（带 `#编号 closed`）→ 路径白名单校对，越界记数。
 6. 逐个 merge 进集成分支（记录冲突次数与解决方式）。
-7. 尾部：增量构建 → 记录首轮通过率与错误归属映射是否可行 → `code-review` → 修 → 重新构建。
+7. 尾部（测试项目上即 `npm test`，HIS 上为增量构建）→ 记录首轮通过率与错误归属映射是否可行
+   → `code-review` → 修 → 重新验证。
 8. 产出 3 份回写包 → 人工核对四个字段（`修改分支` / `修改文件` / `测试步骤` / 价值评分）。
-9. 一次性 merge 回主检出当前分支（**不推送**），核对主检出是否全程未被写。
+9. **本轮不真的落地**：主检出停在原分支不动，只用
+   `git merge-tree --write-tree <主检出分支> <集成分支>` 做落地冲突 dry-run，
+   核对主检出是否全程未被写。
 
 **指标**
 
