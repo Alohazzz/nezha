@@ -231,6 +231,12 @@
 
 > 可执行步骤、编排者契约提示词与数据记录表见
 > [`plan-parallel-orchestration-v2-rehearsal.md`](./plan-parallel-orchestration-v2-rehearsal.md)。
+>
+> **一期演练已完成（2026-10-14）**：结果见
+> [`plan-parallel-orchestration-v2-rehearsal-results.md`](./plan-parallel-orchestration-v2-rehearsal-results.md)。
+> 一句话——四条安全属性全部实测通过（零写入 / 一议题一 commit / 白名单 100% / dry-run 无冲突），
+> 但 50 分钟里约 40 分钟耗在子 agent 的协调与空转上；**瓶颈从 git 层转移到了协调层**。
+> 该报告对本章的 D4 / D7 / D10 有增补，并新增 **D12（worker 契约硬约束）**。
 
 **样本**：测试项目 `H:\Project\nezha-plan-test-project` 上的 `fixture-plan-parallel`
 （TEST-101 / TEST-102 / TEST-103，`deps.json` 三条 `dependsOn` 全空；尾部判据是
