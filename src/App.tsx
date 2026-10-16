@@ -81,7 +81,7 @@ import {
   shouldAutoCompleteOnStop,
   type PlanWaitingBadge,
 } from "./utils/planQueue";
-import { EMPTY_YUNXIAO_SETTINGS, type YunxiaoSettings } from "./components/app-settings/types";
+import { EMPTY_YUNXIAO_SETTINGS, type QuestionMode, type YunxiaoSettings } from "./components/app-settings/types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -2046,6 +2046,7 @@ function App() {
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
+    questionMode: QuestionMode,
   ) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task || task.status !== "todo" || !task.yunxiaoWorkitemId || task.planId) return;
@@ -2119,12 +2120,13 @@ function App() {
         return;
       }
 
-      // 4) 讨论指令 + prompt 组装（与联合分析同一套）。
+      // 4) 讨论指令 + prompt 组装（与联合分析同一套；提问方式由发起视图透传）。
       const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
       const instructions = await invoke<string>("get_plan_discussion_instructions", {
         projectPath: project.path,
         planId: plan.id,
         hasBug,
+        questionMode,
       });
       const link = yunxiao.projectId ? buildYunxiaoIssueLink(yunxiao.projectId, detail.id) : "";
       const prompt = buildPlanDiscussionPrompt({
@@ -2270,6 +2272,7 @@ function App() {
         taskId,
         hasBug,
         clarifyFirst: hasBug ? false : options.clarifyFirst,
+        questionMode: options.questionMode,
       });
       const prompt = buildDirectExecutionPrompt({
         issue: detail,
@@ -2308,6 +2311,7 @@ function App() {
     agent: AgentType,
     permissionMode: PermissionMode,
     clarifyFirst: boolean,
+    questionMode: QuestionMode,
   ) {
     const task = tasks.find((t) => t.id === taskId);
     if (!task || task.status !== "todo" || !task.yunxiaoWorkitemId || task.planId) return;
@@ -2358,12 +2362,13 @@ function App() {
         );
       }
 
-      // 3) 直接执行指令 + prompt 组装（议题即 spec，补充说明优先于议题描述）。
+      // 3) 直接执行指令 + prompt 组装（议题即 spec，补充说明优先于议题描述；提问方式由发起视图透传）。
       const hasBug = (detail.categoryId ?? "").trim().toLowerCase() === "bug";
       const instructions = await invoke<string>("get_direct_execution_instructions", {
         taskId: task.id,
         hasBug,
         clarifyFirst: hasBug ? false : clarifyFirst,
+        questionMode,
       });
       const prompt = buildDirectExecutionPrompt({
         issue: detail,

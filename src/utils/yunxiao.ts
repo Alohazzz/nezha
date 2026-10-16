@@ -9,6 +9,8 @@ import type {
 
 const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
 const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
+/** 上次选择的提问方式（全局，不分项目——节律与项目无关）。 */
+const LAST_QUESTION_MODE_KEY = "nezha:lastQuestionMode";
 const YUNXIAO_WORKITEM_BASE = "https://devops.aliyun.com/projex";
 const VALUE_SCORE_SECTION_HEADER = "## 价值评分";
 
@@ -78,6 +80,25 @@ export function getLastYunxiaoPermission(projectId: string): PermissionMode | nu
 export function setLastYunxiaoPermission(projectId: string, mode: PermissionMode): void {
   try {
     localStorage.setItem(`${YUNXIAO_LAST_PERMISSION_PREFIX}${projectId}`, mode);
+  } catch {
+    // localStorage 不可用（受限 webview 等）时不阻断流程
+  }
+}
+
+/** 读取上次选择的提问方式（发起入口三态 badge 预填；无记忆或值非法时返回 null）。 */
+export function getLastQuestionMode(): "grilling" | "batch" | "ui" | null {
+  try {
+    const value = localStorage.getItem(LAST_QUESTION_MODE_KEY);
+    return value === "grilling" || value === "batch" || value === "ui" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 记录上次选择的提问方式（localStorage 不可用时静默降级）。 */
+export function setLastQuestionMode(mode: "grilling" | "batch" | "ui"): void {
+  try {
+    localStorage.setItem(LAST_QUESTION_MODE_KEY, mode);
   } catch {
     // localStorage 不可用（受限 webview 等）时不阻断流程
   }

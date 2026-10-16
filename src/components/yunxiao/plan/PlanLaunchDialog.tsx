@@ -23,11 +23,16 @@ import {
 } from "./PlanLaunchItemList";
 import { PlanLaunchParentField } from "./PlanLaunchParentField";
 import type { QuestionMode, YunxiaoSettings } from "../../app-settings/types";
-import { questionModeOf } from "../../app-settings/types";
+import {
+  QUESTION_MODE_BADGE_KEYS,
+  cycleQuestionMode,
+} from "../../app-settings/types";
 import {
   buildYunxiaoIssueLink,
+  getLastQuestionMode,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
+  setLastQuestionMode,
   setLastYunxiaoAgent,
   setLastYunxiaoPermission,
 } from "../../../utils/yunxiao";
@@ -91,9 +96,11 @@ export function PlanLaunchDialog({
   const itemsRef = useRef(items);
   const [retryNonce, setRetryNonce] = useState(0);
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
-  // 应用级「提问方式」开关（逐条 / 批量盘问 / UI 盘问，后两者互斥）：仅影响文案提示，
-  // 真正的节律由后端下发的「提问技能」参数决定。
-  const [questionMode, setQuestionMode] = useState<QuestionMode>("grilling");
+  // 提问方式（逐条 / 批量盘问 / UI 盘问）：发起弹窗的三态循环 badge 现场选择，
+  // localStorage 记住上次；启动时随参数透传给后端指令命令，不再读应用设置。
+  const [questionMode, setQuestionMode] = useState<QuestionMode>(
+    () => getLastQuestionMode() ?? "grilling",
+  );
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(targetProjectId) ?? "codex",
   );
@@ -131,12 +138,9 @@ export function PlanLaunchDialog({
 
   // Agent 启用状态 + 已禁用 Agent 回退。
   useEffect(() => {
-    invoke<AgentEnabledState & { batch_grill_enabled?: boolean; grill_with_ui_enabled?: boolean }>(
-      "load_app_settings",
-    )
+    invoke<AgentEnabledState>("load_app_settings")
       .then((appSettings) => {
         setAgentSettings(appSettings);
-        setQuestionMode(questionModeOf(appSettings));
         setAgent((prev) => (isAgentEnabled(appSettings, prev) ? prev : firstEnabledAgent(appSettings)));
       })
       .catch(() => undefined);
@@ -237,6 +241,14 @@ export function PlanLaunchDialog({
     });
   }, [targetProjectId]);
 
+  const cycleQuestion = useCallback(() => {
+    setQuestionMode((prev) => {
+      const next = cycleQuestionMode(prev);
+      setLastQuestionMode(next);
+      return next;
+    });
+  }, []);
+
   const handleClose = useCallback(() => {
     // 非「发起」路径关闭 = 取消：清理 draft 方案。
     if (plan && !startedRef.current) {
@@ -257,6 +269,7 @@ export function PlanLaunchDialog({
         projectPath,
         planId: plan.id,
         hasBug,
+        questionMode,
       });
       // 追加子方案：注入上游方案议题清单 + plan.md 路径，供讨论 agent 判定跨方案依赖。
       const upstreamContext = buildAppendUpstreamContext({
@@ -305,6 +318,7 @@ export function PlanLaunchDialog({
     notes,
     agent,
     permission,
+    questionMode,
     parentPlanId,
     plans,
     tasks,
@@ -371,6 +385,14 @@ export function PlanLaunchDialog({
               {permissionLabel}
             </button>
           )}
+          <button
+            type="button"
+            style={s.yunxiaoAgentBadge}
+            onClick={cycleQuestion}
+            title={t("yunxiao.questionMode.badgeTitle")}
+          >
+            {t(QUESTION_MODE_BADGE_KEYS[questionMode])}
+          </button>
           {working && (
             <span style={s.planLaunchProgress}>{t("plan.launch.fetching")}</span>
           )}

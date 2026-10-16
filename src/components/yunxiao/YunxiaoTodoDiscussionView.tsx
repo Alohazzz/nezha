@@ -16,16 +16,18 @@ import {
 } from "../../types";
 import {
   EMPTY_YUNXIAO_SETTINGS,
-  QUESTION_MODE_DIRECT_KEYS,
-  questionModeOf,
+  QUESTION_MODE_BADGE_KEYS,
+  cycleQuestionMode,
   type AppSettings,
   type QuestionMode,
   type YunxiaoSettings,
 } from "../app-settings/types";
 import {
   buildYunxiaoIssueLink,
+  getLastQuestionMode,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
+  setLastQuestionMode,
   setLastYunxiaoAgent,
   setLastYunxiaoPermission,
 } from "../../utils/yunxiao";
@@ -63,6 +65,7 @@ export function YunxiaoTodoDiscussionView({
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
+    questionMode: QuestionMode,
   ) => void;
   /** 「直接开始」：待办原地转为直接执行任务（无方案、无讨论）。 */
   onStartDirect: (
@@ -71,6 +74,7 @@ export function YunxiaoTodoDiscussionView({
     agent: AgentType,
     permissionMode: PermissionMode,
     clarifyFirst: boolean,
+    questionMode: QuestionMode,
   ) => void;
 }) {
   const { t } = useI18n();
@@ -89,9 +93,11 @@ export function YunxiaoTodoDiscussionView({
   const [notes, setNotes] = useState("");
   // 「直接开始」的需求澄清开关：仅非 Bug 议题可勾，详情未就绪时禁用。
   const [clarifyFirst, setClarifyFirst] = useState(false);
-  // 应用级「提问方式」开关（逐条 / 批量盘问 / UI 盘问，后两者互斥）：仅影响文案提示，
-  // 真正的节律由后端下发的「提问技能」参数决定。
-  const [questionMode, setQuestionMode] = useState<QuestionMode>("grilling");
+  // 提问方式（逐条 / 批量盘问 / UI 盘问）：发起区常驻的三态循环 badge，localStorage
+  // 记住上次；讨论与直接开始两条链路都在启动时随参数透传，不再读应用设置。
+  const [questionMode, setQuestionMode] = useState<QuestionMode>(
+    () => getLastQuestionMode() ?? "grilling",
+  );
   // 待办切换时重置议题相关状态（组件实例复用防串台）。
   const [openedTaskId, setOpenedTaskId] = useState(task.id);
   if (openedTaskId !== task.id) {
@@ -112,7 +118,6 @@ export function YunxiaoTodoDiscussionView({
         const yunxiao = appSettings.yunxiao ?? EMPTY_YUNXIAO_SETTINGS;
         setSettings(yunxiao);
         setAgentSettings(appSettings);
-        setQuestionMode(questionModeOf(appSettings));
         if (!yunxiao.token || !yunxiao.organizationId || !workitemId) return;
         const item = await invoke<YunxiaoWorkitem>("yunxiao_get_workitem", {
           token: yunxiao.token,
@@ -161,6 +166,14 @@ export function YunxiaoTodoDiscussionView({
     });
   }, [task.projectId]);
 
+  const cycleQuestion = useCallback(() => {
+    setQuestionMode((prev) => {
+      const next = cycleQuestionMode(prev);
+      setLastQuestionMode(next);
+      return next;
+    });
+  }, []);
+
   const permissionLabel = useCallback(
     (mode: PermissionMode) => {
       if (mode === "full_access") return t("yunxiao.discussion.permYolo");
@@ -172,13 +185,13 @@ export function YunxiaoTodoDiscussionView({
 
   const handleStart = useCallback(() => {
     if (starting) return;
-    onStartDiscussion(task.id, notes, agent, permission);
-  }, [starting, notes, agent, permission, onStartDiscussion, task.id]);
+    onStartDiscussion(task.id, notes, agent, permission, questionMode);
+  }, [starting, notes, agent, permission, questionMode, onStartDiscussion, task.id]);
 
   const handleStartDirect = useCallback(() => {
     if (starting) return;
-    onStartDirect(task.id, notes, agent, permission, clarifyFirst);
-  }, [starting, notes, agent, permission, clarifyFirst, onStartDirect, task.id]);
+    onStartDirect(task.id, notes, agent, permission, clarifyFirst, questionMode);
+  }, [starting, notes, agent, permission, clarifyFirst, questionMode, onStartDirect, task.id]);
 
   return (
     <div style={s.yunxiaoDetailPane}>
@@ -248,18 +261,28 @@ export function YunxiaoTodoDiscussionView({
               <div style={s.directLaunchFlowBug}>{t("yunxiao.direct.flowBug")}</div>
             ) : (
               <>
-                <label style={s.directLaunchCheckboxLabel}>
-                  <input
-                    type="checkbox"
-                    checked={clarifyFirst}
-                    disabled={!detail}
-                    onChange={(e) => setClarifyFirst(e.target.checked)}
-                  />
-                  {t(QUESTION_MODE_DIRECT_KEYS[questionMode].clarify)}
-                </label>
+                <div style={s.directLaunchCheckboxRow}>
+                  <label style={s.directLaunchCheckboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={clarifyFirst}
+                      disabled={!detail}
+                      onChange={(e) => setClarifyFirst(e.target.checked)}
+                    />
+                    {t("yunxiao.direct.clarifyLabel")}
+                  </label>
+                  <button
+                    type="button"
+                    style={s.yunxiaoAgentBadge}
+                    onClick={cycleQuestion}
+                    title={t("yunxiao.questionMode.badgeTitle")}
+                  >
+                    {t(QUESTION_MODE_BADGE_KEYS[questionMode])}
+                  </button>
+                </div>
                 <div style={s.directLaunchFlowHint}>
                   {clarifyFirst
-                    ? t(QUESTION_MODE_DIRECT_KEYS[questionMode].flow)
+                    ? t("yunxiao.direct.flowClarify")
                     : t("yunxiao.direct.flowDirect")}
                 </div>
               </>

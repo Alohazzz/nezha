@@ -194,6 +194,7 @@ export function ProjectPage({
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
+    questionMode: "grilling" | "batch" | "ui",
   ) => void;
   /** 云效绑定待办「直接开始」：待办原地转为直接执行任务（无方案、无讨论）。 */
   onStartTodoYunxiaoDirect: (
@@ -202,6 +203,7 @@ export function ProjectPage({
     agent: AgentType,
     permissionMode: PermissionMode,
     clarifyFirst: boolean,
+    questionMode: "grilling" | "batch" | "ui",
   ) => void;
   /** 待办「发起讨论」进行中标记（锁定入口按钮）。 */
   todoDiscussionStarting: boolean;

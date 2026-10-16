@@ -691,15 +691,13 @@ impl QuestionMode {
         }
     }
 
-    /// 从应用设置的两个开关取值。两者本应互斥（保存命令与 normalize 都保证），
-    /// 万一同时为真，UI 盘问优先——它是更明确的一次选择，且不能让提示词出现两个节律。
-    pub fn from_settings(grill_with_ui: bool, batch_grill: bool) -> Self {
-        if grill_with_ui {
-            QuestionMode::Ui
-        } else if batch_grill {
-            QuestionMode::Batch
-        } else {
-            QuestionMode::Grilling
+    /// 解析前端弹窗选择器透传的取值；缺省或非法值一律回落逐条 grilling——
+    /// 提问方式由发起入口现场选择（localStorage 记忆上次选择），不再读应用设置。
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "batch" => QuestionMode::Batch,
+            "ui" => QuestionMode::Ui,
+            _ => QuestionMode::Grilling,
         }
     }
 }
@@ -738,12 +736,14 @@ pub fn plan_discussion_instructions(
     )
 }
 
-/// 前端拼「发起讨论」prompt 时调用。has_bug 由方案议题快照的类别推导（categoryId == bug）。
+/// 前端拼「发起讨论」prompt 时调用。has_bug 由方案议题快照的类别推导（categoryId == bug）；
+/// question_mode 由发起弹窗的提问方式选择器透传（缺省/非法回落逐条）。
 #[tauri::command]
 pub async fn get_plan_discussion_instructions(
     project_path: String,
     plan_id: String,
     has_bug: bool,
+    question_mode: Option<String>,
 ) -> Result<String, String> {
     let plan_id = plan_id.trim().to_string();
     if plan_id.is_empty() || plan_id.contains('/') || plan_id.contains('\\') || plan_id.contains("..")
@@ -766,26 +766,12 @@ pub async fn get_plan_discussion_instructions(
     })
     .await
     .map_err(|e| format!("方案目录解析线程错误: {e}"))??;
-    let question_mode = question_mode_from_settings().await;
     Ok(plan_discussion_instructions(
         &paths.0,
         &paths.1,
         has_bug,
-        question_mode,
+        QuestionMode::parse(question_mode.as_deref()),
     ))
-}
-
-/// 读取应用级「提问方式」开关（批量盘问 / UI 盘问，互斥）；读盘放到阻塞线程，避免挡住异步运行时。
-///
-/// 互斥的最终兜底在 `QuestionMode::from_settings`：即便 settings.json 被手工改成两开，
-/// 也只会选出一种节律下发给 agent。
-async fn question_mode_from_settings() -> QuestionMode {
-    tokio::task::spawn_blocking(|| {
-        let settings = crate::app_settings::load_settings_internal();
-        QuestionMode::from_settings(settings.grill_with_ui_enabled, settings.batch_grill_enabled)
-    })
-    .await
-    .unwrap_or(QuestionMode::Grilling)
 }
 
 /// 议题执行任务的完整指令：**技能指针 + 任务参数**。
@@ -857,24 +843,25 @@ pub fn direct_execution_instructions(
     issue_execution_instructions(task_id, has_bug, clarify_first, question_mode, false)
 }
 
-/// 直接执行链路：议题列表 / 绑定待办「直接开始」时由前端调用组装 prompt。
+/// 直接执行链路：议题列表 / 绑定待办「直接开始」时由前端调用组装 prompt；
+/// question_mode 由「先澄清」旁的提问方式选择器透传（缺省/非法回落逐条）。
 #[tauri::command]
 pub async fn get_direct_execution_instructions(
     task_id: String,
     has_bug: Option<bool>,
     clarify_first: Option<bool>,
+    question_mode: Option<String>,
 ) -> Result<String, String> {
     let task_id = task_id.trim().to_string();
     if task_id.is_empty() || task_id.contains('/') || task_id.contains('\\') || task_id.contains("..")
     {
         return Err("非法的任务 ID".to_string());
     }
-    let question_mode = question_mode_from_settings().await;
     Ok(direct_execution_instructions(
         &task_id,
         has_bug.unwrap_or(false),
         clarify_first.unwrap_or(false),
-        question_mode,
+        QuestionMode::parse(question_mode.as_deref()),
     ))
 }
 
@@ -2080,14 +2067,18 @@ mod tests {
         assert!(bug.contains("提问技能：`grilling`"));
     }
 
-    /// 三个开关取值互斥：始终只有一个节律下发给 agent，避免提示词自相矛盾。
+    /// 提问方式由发起弹窗选择器透传（字符串参数）：合法取值映射到唯一技能，
+    /// 缺省 / 非法值一律回落逐条 grilling，避免提示词出现两个节律。
     #[test]
-    fn question_mode_picks_exactly_one_skill() {
-        assert_eq!(QuestionMode::from_settings(false, false), QuestionMode::Grilling);
-        assert_eq!(QuestionMode::from_settings(false, true), QuestionMode::Batch);
-        assert_eq!(QuestionMode::from_settings(true, false), QuestionMode::Ui);
-        // 兜底：settings.json 被手工改成两开时，UI 盘问优先，不会同时出现两个技能名。
-        assert_eq!(QuestionMode::from_settings(true, true), QuestionMode::Ui);
+    fn question_mode_parse_picks_exactly_one_skill() {
+        assert_eq!(QuestionMode::parse(None), QuestionMode::Grilling);
+        assert_eq!(QuestionMode::parse(Some("grilling")), QuestionMode::Grilling);
+        assert_eq!(QuestionMode::parse(Some("batch")), QuestionMode::Batch);
+        assert_eq!(QuestionMode::parse(Some("ui")), QuestionMode::Ui);
+        // 宽容大小写与首尾空白（选择器取值固定，这里只防手写调用方）。
+        assert_eq!(QuestionMode::parse(Some(" UI ")), QuestionMode::Ui);
+        // 非法取值回落，不发空技能名。
+        assert_eq!(QuestionMode::parse(Some("nonsense")), QuestionMode::Grilling);
 
         assert_eq!(QuestionMode::Grilling.skill(), "grilling");
         assert_eq!(QuestionMode::Batch.skill(), "batch-grill-me");

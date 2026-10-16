@@ -31,10 +31,6 @@ export function SkillsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [knowledgeEnabled, setKnowledgeEnabled] = useState<boolean | null>(null);
   const [writebackBusy, setWritebackBusy] = useState(true);
-  const [batchGrill, setBatchGrill] = useState<boolean | null>(null);
-  const [batchGrillBusy, setBatchGrillBusy] = useState(true);
-  const [grillWithUi, setGrillWithUi] = useState<boolean | null>(null);
-  const [grillWithUiBusy, setGrillWithUiBusy] = useState(true);
   /** 云效任务提示词会引用、但启用 Agent 上缺健康安装的技能（技能名 → 缺哪些 Agent）。 */
   const [missingFlowSkills, setMissingFlowSkills] = useState<Array<{ skill: string; agents: AgentType[] }>>([]);
   /** 启用中的 Agent：云效任务只在启用的 Agent 上跑，提示据此收敛。 */
@@ -46,24 +42,18 @@ export function SkillsPanel() {
       .then((settings) => {
         if (!cancelled) {
           setKnowledgeEnabled(settings.knowledge?.enabled ?? true);
-          setBatchGrill(settings.batch_grill_enabled ?? false);
-          setGrillWithUi(settings.grill_with_ui_enabled ?? false);
           setEnabledAgents(enabledAgentTypes(settings));
         }
       })
       .catch(() => {
         if (!cancelled) {
           setKnowledgeEnabled(true);
-          setBatchGrill(false);
-          setGrillWithUi(false);
           setEnabledAgents([]);
         }
       })
       .finally(() => {
         if (!cancelled) {
           setWritebackBusy(false);
-          setBatchGrillBusy(false);
-          setGrillWithUiBusy(false);
         }
       });
     return () => {
@@ -185,41 +175,8 @@ export function SkillsPanel() {
     }
   }, [writebackBusy, knowledgeEnabled]);
 
-  const handleBatchGrillToggle = useCallback(async () => {
-    if (batchGrillBusy || batchGrill === null) return;
-    const enabled = !batchGrill;
-    setBatchGrillBusy(true);
-    setError(null);
-    try {
-      // 保存命令会强制互斥：开启本开关的同时关掉 UI 盘问，故两个开关一起刷新。
-      const next = await invoke<AppSettings>("save_batch_grill_enabled", { enabled });
-      setBatchGrill(next.batch_grill_enabled ?? enabled);
-      setGrillWithUi(next.grill_with_ui_enabled ?? false);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBatchGrillBusy(false);
-    }
-  }, [batchGrillBusy, batchGrill]);
-
-  const handleGrillWithUiToggle = useCallback(async () => {
-    if (grillWithUiBusy || grillWithUi === null) return;
-    const enabled = !grillWithUi;
-    setGrillWithUiBusy(true);
-    setError(null);
-    try {
-      const next = await invoke<AppSettings>("save_grill_with_ui_enabled", { enabled });
-      setGrillWithUi(next.grill_with_ui_enabled ?? enabled);
-      setBatchGrill(next.batch_grill_enabled ?? false);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setGrillWithUiBusy(false);
-    }
-  }, [grillWithUiBusy, grillWithUi]);
-
   // 云效任务提示词会按名引用技能；未安装时 Agent 读不到契约，流程静默降级
-  // （直接执行丢产物契约 / 批量盘问退回逐条）。Nezha 不做自动安装，改在设置页提示。
+  // （直接执行丢产物契约）。Nezha 不做自动安装，改在设置页提示。
   const hubPath = config?.hubPath ?? "";
   useEffect(() => {
     if (!hubPath) {
@@ -227,10 +184,9 @@ export function SkillsPanel() {
       return;
     }
     // 执行链路（直接开始 / 按方案执行）恒引用 yunxiao-issue-execution；
-    // 提问方式开关各自引用一个技能，两者互斥（至多一个为真）。
+    // 提问方式技能（grilling / batch-grill-me / grill-with-ui）由发起弹窗现场选择，
+    // 缺失时 agent 按逐条节律降级，不在此检查。
     const required = ["yunxiao-issue-execution"];
-    if (batchGrill === true) required.push("batch-grill-me");
-    if (grillWithUi === true) required.push("grill-with-ui");
     let cancelled = false;
     Promise.all(
       required.map(async (skill) => {
@@ -252,7 +208,7 @@ export function SkillsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [hubPath, batchGrill, grillWithUi, enabledAgents]);
+  }, [hubPath, enabledAgents]);
 
   const lastSyncedAt = config?.lastSyncedAt;
   const commit = config?.lastSyncedCommit;
@@ -409,58 +365,6 @@ export function SkillsPanel() {
           </span>
         </button>
         <span style={s.settingFieldHint}>{t("appSettings.knowledgeEnabledHint")}</span>
-      </div>
-
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>
-          {t("appSettings.batchGrill")}
-          <span style={s.settingFieldLabelBadge}>{t("appSettings.experimentalBadge")}</span>
-        </label>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={batchGrill === true}
-          aria-label={t("appSettings.batchGrill")}
-          disabled={batchGrillBusy}
-          data-checked={batchGrill === true}
-          data-disabled={batchGrillBusy}
-          onClick={() => void handleBatchGrillToggle()}
-          className="app-settings-toggle"
-        >
-          <span className="app-settings-toggle-label">
-            {t("appSettings.batchGrillToggle")}
-          </span>
-          <span className="app-settings-toggle-track">
-            <span className="app-settings-toggle-knob" />
-          </span>
-        </button>
-        <span style={s.settingFieldHint}>{t("appSettings.batchGrillHint")}</span>
-      </div>
-
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>
-          {t("appSettings.grillWithUi")}
-          <span style={s.settingFieldLabelBadge}>{t("appSettings.experimentalBadge")}</span>
-        </label>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={grillWithUi === true}
-          aria-label={t("appSettings.grillWithUi")}
-          disabled={grillWithUiBusy}
-          data-checked={grillWithUi === true}
-          data-disabled={grillWithUiBusy}
-          onClick={() => void handleGrillWithUiToggle()}
-          className="app-settings-toggle"
-        >
-          <span className="app-settings-toggle-label">
-            {t("appSettings.grillWithUiToggle")}
-          </span>
-          <span className="app-settings-toggle-track">
-            <span className="app-settings-toggle-knob" />
-          </span>
-        </button>
-        <span style={s.settingFieldHint}>{t("appSettings.grillWithUiHint")}</span>
       </div>
 
       {missingFlowSkills.length > 0 ? (

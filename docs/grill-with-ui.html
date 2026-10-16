@@ -160,17 +160,13 @@
     </section>
 
     <section id="s1">
-      <h2><span class="num">1</span>开启与前置条件</h2>
-      <p>在<strong>应用设置 → 技能库</strong>里打开「UI 盘问」开关。它带「测试」徽标，且与「批量盘问」<strong>互斥</strong>——开启一个会自动关掉另一个（两者都只改提问方式，同时生效会让下发的「提问技能」参数自相矛盾）。</p>
-      <figure class="shot-wide">
-        <img src="screenshots/grill-with-ui/08-settings-toggles.png" alt="应用设置 → 技能库 → 批量盘问 / UI 盘问 两个互斥开关" />
-        <figcaption>应用设置 → 技能库：两个「提问方式」开关，UI 盘问开启时批量盘问自动关闭</figcaption>
-      </figure>
+      <h2><span class="num">1</span>选择方式与前置条件</h2>
+      <p>在<strong>发起讨论的弹窗</strong>里选择提问方式：底部（或「先做需求澄清」勾选框旁边）有一个三态按钮——<strong>逐条盘问 → 批量盘问 → UI 盘问</strong>循环切换，点击切到「UI 盘问」即可。上一次的选择会被记住，下次打开弹窗自动带出。</p>
       <table>
         <thead><tr><th>项目</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>开关位置</td><td>应用设置 → <strong>技能库</strong>（带「测试」徽标），应用级设置、全局生效</td></tr>
-          <tr><td>前置①</td><td>需先在技能库<strong>安装</strong> <code>grill-with-ui</code> 技能，否则开关不起作用（设置页会提示未安装）</td></tr>
+          <tr><td>选择位置</td><td><strong>发起讨论弹窗 / 直接开始弹窗 / 待办讨论视图</strong>的提问方式按钮（逐条 → 批量 → UI 循环），三个入口共享、记忆上次选择</td></tr>
+          <tr><td>前置①</td><td>需先在技能库<strong>安装</strong> <code>grill-with-ui</code> 技能；未安装时 agent 会按逐条节律降级，弹窗选择不会生效</td></tr>
           <tr><td>前置②</td><td>本机需有 <strong>Node 20+</strong>：agent 会用它起一个只监听本机的页面服务</td></tr>
           <tr><td>生效范围</td><td>云效议题讨论链路：<strong>发起讨论</strong>（单条 / 合并 / 计划内）与 <strong>直接开始（先做需求澄清）</strong></td></tr>
           <tr><td>不生效</td><td>Bug 议题仍走 <code>diagnosing-bugs</code> 根因取证；已定稿方案的执行任务不再盘问</td></tr>
@@ -180,7 +176,7 @@
 
     <section id="s2">
       <h2><span class="num">2</span>发起一场盘问</h2>
-      <p>和平时一样发起讨论即可，勾选澄清（或在「直接开始」里勾「先做需求澄清」）后，agent 会改走 <code>grill-with-ui</code>，并打印一个本地地址。<strong>页面就绪后浏览器会自动打开</strong>，不需要你手动点链接。</p>
+      <p>和平时一样发起讨论，在弹窗里把提问方式切到「UI 盘问」，勾选澄清（或在「直接开始」里勾「先做需求澄清」）后启动，agent 会改走 <code>grill-with-ui</code>，并打印一个本地地址。<strong>页面就绪后浏览器会自动打开</strong>，不需要你手动点链接。</p>
       <figure>
         <img src="screenshots/grill-with-ui/01-question-card.png" alt="UI 盘问页面：左侧问题导航、中间问题卡片、右侧讨论线程" />
         <figcaption>盘问页面：左侧按轮次列出问题，中间是当前题目，右侧是这道题的讨论线程</figcaption>
@@ -293,12 +289,12 @@
       <table>
         <thead><tr><th>现象</th><th>说明 / 处理</th></tr></thead>
         <tbody>
-          <tr><td>开关开了没反应</td><td>先在<strong>技能库安装</strong> <code>grill-with-ui</code>；确认本机有 Node 20+；再确认议题不是 Bug（Bug 恒走根因取证）。另外它与「批量盘问」互斥，检查是否被另一个开关顶掉。</td></tr>
+          <tr><td>选了 UI 盘问没反应</td><td>先在<strong>技能库安装</strong> <code>grill-with-ui</code>；确认本机有 Node 20+；再确认议题不是 Bug（Bug 恒走根因取证）。未安装技能时 agent 会静默按逐条节律提问。</td></tr>
           <tr><td>浏览器没自动打开</td><td>终端里会打印本地地址，手动打开即可。无桌面环境 / 远程终端下自动打开会静默失败，这不影响盘问本身。</td></tr>
           <tr><td>页面开着但 agent 不理我</td><td>发送后 agent 需要一点时间处理。页面顶部会显示「Agent 工作中 · 用时」，此刻不必重复点发送；发送按钮本身也会带节流提示。</td></tr>
           <tr><td>不小心关掉了页面</td><td>地址仍在会话里，重新打开即可；已暂存的内容按浏览器存储保留，发送记录也会重放。</td></tr>
           <tr><td>想让图重画</td><td>在可视化右侧的反馈线程里说明要改什么，随下次发送一起提交；或在过期后点「重新生成」。</td></tr>
-          <tr><td>关掉开关后会怎样</td><td>提问方式退回此前的设置（批量盘问或逐条盘问），方案结构与产物契约不变。</td></tr>
+          <tr><td>想换回别的提问方式</td><td>在发起弹窗里把提问方式按钮切回「逐条盘问」或「批量盘问」即可；方案结构与产物契约不变。</td></tr>
         </tbody>
       </table>
     </section>
@@ -311,7 +307,7 @@
       </ul>
       <div class="callout warn">
         <span class="label">实验性</span>
-        本功能为<strong>测试技能</strong>（界面带「测试」徽标）。它只替代提问的呈现方式，方案文档结构、<code>deps.json</code> 契约、性能影响分析强制分支与 Bug 根因取证一律不变；若使用中遇到问题，关闭开关即可回到原先的提问方式。
+        本功能为<strong>测试技能</strong>。它只替代提问的呈现方式，方案文档结构、<code>deps.json</code> 契约、性能影响分析强制分支与 Bug 根因取证一律不变；若使用中遇到问题，在发起弹窗里把提问方式切回「逐条盘问」即可。
       </div>
     </section>
   </main>

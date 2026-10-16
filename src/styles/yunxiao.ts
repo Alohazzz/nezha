@@ -1516,6 +1516,12 @@ export const yunxiao = {
     padding: "10px 18px",
     borderTop: "1px solid var(--border-dim)",
   },
+  directLaunchCheckboxRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   directLaunchCheckboxLabel: {
     display: "inline-flex",
     alignItems: "center",

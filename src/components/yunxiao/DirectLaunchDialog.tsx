@@ -14,12 +14,14 @@ import {
   type AgentEnabledState,
 } from "../../types";
 import type { AppSettings, QuestionMode, YunxiaoSettings } from "../app-settings/types";
-import { QUESTION_MODE_DIRECT_KEYS, questionModeOf } from "../app-settings/types";
+import { QUESTION_MODE_BADGE_KEYS, cycleQuestionMode } from "../app-settings/types";
 import {
   buildYunxiaoIssueLink,
+  getLastQuestionMode,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
   normalizeIssueDescription,
+  setLastQuestionMode,
   setLastYunxiaoAgent,
   setLastYunxiaoPermission,
 } from "../../utils/yunxiao";
@@ -49,6 +51,8 @@ export interface DirectLaunchOptions {
   permissionMode: PermissionMode;
   /** 需求类议题「先澄清再执行」；Bug 议题恒为 false（Bug 走 diagnosing-bugs 取证）。 */
   clarifyFirst: boolean;
+  /** 澄清时的提问方式（弹窗三态 badge 的选择；不澄清时后端会忽略并回落逐条）。 */
+  questionMode: QuestionMode;
 }
 
 /**
@@ -76,9 +80,11 @@ export function DirectLaunchDialog({
   const [detail, setDetail] = useState<YunxiaoWorkitem | null>(null);
   const [detailState, setDetailState] = useState<"loading" | "done" | "failed">("loading");
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
-  // 应用级「提问方式」开关（逐条 / 批量盘问 / UI 盘问，后两者互斥）：仅影响文案提示，
-  // 真正的节律由后端下发的「提问技能」参数决定。
-  const [questionMode, setQuestionMode] = useState<QuestionMode>("grilling");
+  // 提问方式（逐条 / 批量盘问 / UI 盘问）：勾选「先澄清」后出现的同行三态循环 badge，
+  // localStorage 记住上次；启动时随参数透传给后端指令命令，不再读应用设置。
+  const [questionMode, setQuestionMode] = useState<QuestionMode>(
+    () => getLastQuestionMode() ?? "grilling",
+  );
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(targetProjectId) ?? "codex",
   );
@@ -121,7 +127,6 @@ export function DirectLaunchDialog({
     invoke<AppSettings>("load_app_settings")
       .then((appSettings) => {
         setAgentSettings(appSettings);
-        setQuestionMode(questionModeOf(appSettings));
         setAgent((prev) => (isAgentEnabled(appSettings, prev) ? prev : firstEnabledAgent(appSettings)));
       })
       .catch(() => undefined);
@@ -149,6 +154,14 @@ export function DirectLaunchDialog({
     });
   }, [targetProjectId]);
 
+  const cycleQuestion = useCallback(() => {
+    setQuestionMode((prev) => {
+      const next = cycleQuestionMode(prev);
+      setLastQuestionMode(next);
+      return next;
+    });
+  }, []);
+
   const handleStart = useCallback(async () => {
     if (starting) return;
     setStarting(true);
@@ -158,12 +171,13 @@ export function DirectLaunchDialog({
         agent,
         permissionMode: permission,
         clarifyFirst: bug ? false : clarifyFirst,
+        questionMode,
       });
     } catch {
       // 失败已由 App 层 toast + 任务置 failed 呈现；这里只解锁按钮允许重试。
       setStarting(false);
     }
-  }, [starting, onStart, notes, agent, permission, clarifyFirst, bug]);
+  }, [starting, onStart, notes, agent, permission, clarifyFirst, questionMode, bug]);
 
   const permissionLabel = useMemo(() => {
     if (permission === "full_access") return t("yunxiao.discussion.permYolo");
@@ -262,17 +276,29 @@ export function DirectLaunchDialog({
             </div>
           ) : (
             <>
-              <label style={s.directLaunchCheckboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={clarifyFirst}
-                  onChange={(e) => setClarifyFirst(e.target.checked)}
-                />
-                {t(QUESTION_MODE_DIRECT_KEYS[questionMode].clarify)}
-              </label>
+              <div style={s.directLaunchCheckboxRow}>
+                <label style={s.directLaunchCheckboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={clarifyFirst}
+                    onChange={(e) => setClarifyFirst(e.target.checked)}
+                  />
+                  {t("yunxiao.direct.clarifyLabel")}
+                </label>
+                {clarifyFirst && (
+                  <button
+                    type="button"
+                    style={s.yunxiaoAgentBadge}
+                    onClick={cycleQuestion}
+                    title={t("yunxiao.questionMode.badgeTitle")}
+                  >
+                    {t(QUESTION_MODE_BADGE_KEYS[questionMode])}
+                  </button>
+                )}
+              </div>
               <div style={s.directLaunchFlowHint}>
                 {clarifyFirst
-                  ? t(QUESTION_MODE_DIRECT_KEYS[questionMode].flow)
+                  ? t("yunxiao.direct.flowClarify")
                   : t("yunxiao.direct.flowDirect")}
               </div>
             </>
