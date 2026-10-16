@@ -1,5 +1,5 @@
 import { useState, memo } from "react";
-import { Trash2, Star, Play, GitBranch, Hourglass } from "lucide-react";
+import { Trash2, Star, Play, GitBranch, Hourglass, Loader2 } from "lucide-react";
 import { taskStatusI18nKey, type Task } from "../../types";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
@@ -25,8 +25,8 @@ export const TaskListItem = memo(
     onDelete: () => void;
     onToggleStar: () => void;
     onRunTodo?: () => void;
-    /** 等待前置角标：deps = 等前置，slot = 前置已满足、排队等并发槽位。 */
-    waitingBadgeKind?: "deps" | "slot";
+    /** 等待角标：deps = 等前置，slot = 前置已满足、排队等并发槽位，loading = 依赖尚未载入。 */
+    waitingBadgeKind?: "deps" | "slot" | "loading";
     waitingBadgeCount?: number;
     /** 存在异常/缺失前置（角标标红）。 */
     waitingBadgeBlocked?: boolean;
@@ -57,10 +57,16 @@ export const TaskListItem = memo(
             {t(`status.${taskStatusI18nKey(task.status)}`)}
             {waitingBadgeKind && (
               <span style={waitingBadgeBlocked ? s.taskWaitingBadgeBlocked : s.taskWaitingBadge}>
-                <Hourglass size={10} strokeWidth={2.2} />
+                {waitingBadgeKind === "loading" ? (
+                  <Loader2 size={10} strokeWidth={2.2} className="spin" />
+                ) : (
+                  <Hourglass size={10} strokeWidth={2.2} />
+                )}
                 {waitingBadgeKind === "slot"
                   ? t("plan.deps.waitingSlotBadge")
-                  : t("plan.deps.waitingBadge", { count: waitingBadgeCount ?? 0 })}
+                  : waitingBadgeKind === "loading"
+                    ? t("plan.deps.waitingLoadingBadge")
+                    : t("plan.deps.waitingBadge", { count: waitingBadgeCount ?? 0 })}
               </span>
             )}
             {task.status === "done" &&

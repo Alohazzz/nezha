@@ -55,10 +55,13 @@ import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
 import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
 import {
+  activeTasksInProject,
   buildTaskBySerial,
   evaluateTaskGate,
   planIssueSubjects,
+  resolveWaitReason,
   type PlanWaitingBadge,
+  type PlanWaitReason,
 } from "../utils/planQueue";
 import { planAncestorChain, planTitle } from "../utils/plan";
 import type { PlanDeps } from "../utils/planDeps";
@@ -440,6 +443,30 @@ export function ProjectPage({
       buildTaskBySerial(projectTasks),
     );
   }, [selectedTask, planDeps, projectTasks]);
+
+  /**
+   * 等待原因（等前置 / 等槽位 / 依赖尚未载入）与占槽任务。
+   *
+   * 视图不能只看 `entries.length === 0` 就断言「在排队」：deps 未载入时 gate 也是空
+   * entries，但项目里可能压根没有任务在跑——那时显示「等本项目空出槽位」自相矛盾。
+   * 原因判定统一走纯函数 `resolveWaitReason`，占槽任务直接复用调度器的活跃态定义。
+   */
+  const selectedTaskWait = useMemo(() => {
+    if (!selectedTask || selectedTask.status !== "waiting_deps") {
+      return { reason: "slot" as PlanWaitReason, activeTasks: [] as Task[] };
+    }
+    const depsLoaded = !selectedTask.planId || planDeps?.[selectedTask.planId] !== undefined;
+    return {
+      reason: resolveWaitReason(
+        { planId: selectedTask.planId, yunxiaoSerialNumber: selectedTask.yunxiaoSerialNumber },
+        selectedTaskGate,
+        depsLoaded,
+      ),
+      activeTasks: activeTasksInProject(projectTasks, project.id).filter(
+        (t) => t.id !== selectedTask.id,
+      ),
+    };
+  }, [selectedTask, selectedTaskGate, planDeps, projectTasks, project.id]);
   /**
    * 选中任务所属方案 + 其祖先链方案（追加子方案的上游）。两个下游派生都要用，
    * 单独缓存一次，避免各自重复 `plans.find` 与上溯。
@@ -585,9 +612,11 @@ export function ProjectPage({
             <WaitingDepsView
               task={selectedTask}
               plan={plans.find((p) => p.id === selectedTask.planId) ?? null}
+              reason={selectedTaskWait.reason}
               entries={selectedTaskGate.entries}
               subjects={selectedTaskSubjects}
               depPeerPlans={selectedTaskDepPeerPlans}
+              activeTasks={selectedTaskWait.activeTasks}
               onJump={onSelectTask}
               onCancelWait={onCancelWaitingDeps ?? (() => {})}
               onIgnoreRun={onIgnoreDepsAndRun ?? (() => {})}

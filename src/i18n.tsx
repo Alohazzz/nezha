@@ -803,6 +803,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "kanban.more": "+{count} more →",
     "plan.deps.waitingBadge": "Waiting {count}",
     "plan.deps.waitingSlotBadge": "Queued",
+    "plan.deps.waitingLoadingBadge": "Loading deps…",
     "plan.deps.waitingStarted": "Waiting for {count} prerequisite task(s); it starts automatically once they finish.",
     "plan.branch.drift":
       "The main working tree is on “{current}”, not the plan branch “{expected}” — this task would commit to the wrong branch. Switch back to the plan branch, then start again.",
@@ -816,6 +817,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.deps.checklistTitle": "Dependencies",
     "plan.deps.checklistHint":
       "This issue starts automatically once every dependency is done (same-project tasks run one at a time).",
+    "plan.deps.loadingTitle": "Checking dependencies",
+    "plan.deps.loadingHint":
+      "The dependency graph for this plan is still being loaded — the reason will show here in a moment.",
     "plan.deps.entryDone": "Done",
     "plan.deps.entryWaiting": "Not started",
     "plan.deps.entryAbnormal": "Dependency failed",
@@ -1976,6 +1980,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "kanban.more": "+{count} 更多 →",
     "plan.deps.waitingBadge": "等 {count} 项",
     "plan.deps.waitingSlotBadge": "排队中",
+    "plan.deps.waitingLoadingBadge": "读取依赖…",
     "plan.deps.waitingStarted": "正在等待 {count} 个前置任务，完成后会自动开始。",
     "plan.branch.drift":
       "主工作区当前在「{current}」分支上，不是计划分支「{expected}」——本任务的提交会落到错误的分支。请切回计划分支后重试。",
@@ -1986,6 +1991,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.deps.queuedHint": "前置已全部满足，本任务在等本项目空出并发槽位。",
     "plan.deps.checklistTitle": "前置依赖",
     "plan.deps.checklistHint": "前置全部完成后本任务会自动开始（同项目任务默认串行）。",
+    "plan.deps.loadingTitle": "正在读取依赖",
+    "plan.deps.loadingHint": "本方案的依赖图尚未载入，稍等片刻这里会显示真实的等待原因。",
     "plan.deps.entryDone": "已完成",
     "plan.deps.entryWaiting": "未开始",
     "plan.deps.entryAbnormal": "前置已失败",

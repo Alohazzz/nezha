@@ -12,6 +12,7 @@ import {
   orderWaitingQueue,
   resolveMaxConcurrent,
   resolvePlanTodoLaunch,
+  resolveWaitReason,
   selectAutoStart,
   shouldAutoCompleteOnStop,
 } from "../utils/planQueue";
@@ -475,6 +476,60 @@ describe("buildWaitingBadges", () => {
       {},
     );
     expect(badges.size).toBe(0);
+  });
+
+  it("方案 deps 未载入 → kind=loading（不能当「无依赖」报排队中）", () => {
+    const badges = buildWaitingBadges(
+      [
+        makeTask({
+          id: "ta",
+          planId: "p1",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "waiting_deps",
+        }),
+      ],
+      // 缓存里没有 p1 条目 = 尚未解析（重启首拍），而非「该方案无依赖」
+      {},
+    );
+    expect(badges.get("ta")).toEqual({ kind: "loading", count: 0, blocked: false });
+  });
+});
+
+describe("resolveWaitReason", () => {
+  it("有未满足前置 → deps（与 entries 数量无关）", () => {
+    expect(
+      resolveWaitReason(
+        { planId: "p1", yunxiaoSerialNumber: "QHDK-B" },
+        { unmet: ["QHDK-A"] },
+        true,
+      ),
+    ).toBe("deps");
+  });
+
+  it("前置全满足且有 deps → slot", () => {
+    expect(
+      resolveWaitReason(
+        { planId: "p1", yunxiaoSerialNumber: "QHDK-A" },
+        { unmet: [] },
+        true,
+      ),
+    ).toBe("slot");
+  });
+
+  it("deps 未载入 → loading（即使 unmet 为空）", () => {
+    expect(
+      resolveWaitReason(
+        { planId: "p1", yunxiaoSerialNumber: "QHDK-A" },
+        { unmet: [] },
+        false,
+      ),
+    ).toBe("loading");
+  });
+
+  it("无 planId 的等待任务没有依赖来源 → slot（不看载入状态）", () => {
+    expect(
+      resolveWaitReason({ yunxiaoSerialNumber: "" }, { unmet: [] }, false),
+    ).toBe("slot");
   });
 });
 
