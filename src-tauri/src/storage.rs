@@ -174,6 +174,15 @@ pub struct Task {
     /// 后端据此抑制「需要你的确认」系统通知（见 `event_watcher::emit_active_status`）。
     #[serde(rename = "unattended", default, skip_serializing_if = "Option::is_none")]
     pub unattended: Option<bool>,
+    /// 跨仓库任务上下文：附加项目的 id 列表（不含主项目）。任务启动时把各附加
+    /// 项目的 path 经 CLI `--add-dir` 授权给 agent（仅 claude/codex）；前端启动
+    /// 链路负责把 id 解析为路径并剔除已删除的项目，后端只收路径。
+    #[serde(
+        rename = "contextProjectIds",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub context_project_ids: Vec<String>,
 }
 
 /// 多议题联合方案（Plan）里的议题快照：发起时从云效列表抄录，预览/确认页离线可用。

@@ -22,6 +22,7 @@ import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector } from "./new-task/AgentPermSelector";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
 import { TaskModelSelector } from "./new-task/TaskModelSelector";
+import { ContextProjectsSelector } from "./new-task/ContextProjectsSelector";
 import { useI18n } from "../i18n";
 import { findProjectByName } from "../projectName";
 import { APP_PLATFORM } from "../platform";
@@ -51,6 +52,8 @@ export interface NewTaskDraft {
   pastedTexts?: PastedText[];
   launchMode?: LaunchMode;
   baseBranch?: string;
+  /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
+  contextProjectIds?: string[];
 }
 
 type CrossProjectFileMap = Map<string, FileEntry[]>;
@@ -100,6 +103,8 @@ export function NewTaskView({
     immediate: boolean;
     launchMode: LaunchMode;
     baseBranch: string;
+    /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
+    contextProjectIds: string[];
   }) => void;
   initialDraft?: NewTaskDraft | null;
   onCacheDraft?: (draft: NewTaskDraft | null) => void;
@@ -115,6 +120,10 @@ export function NewTaskView({
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>(initialDraft?.launchMode ?? "local");
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
+  // 跨仓库任务上下文：勾选的附加项目 id。DSH 无跨目录机制，切换到 DSH 时清空。
+  const [contextProjectIds, setContextProjectIds] = useState<string[]>(
+    initialDraft?.contextProjectIds ?? [],
+  );
 
   const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
@@ -168,6 +177,7 @@ export function NewTaskView({
     pastedTexts,
     launchMode,
     baseBranch,
+    contextProjectIds,
   });
   useEffect(() => {
     draftDataRef.current = {
@@ -180,6 +190,7 @@ export function NewTaskView({
       pastedTexts,
       launchMode,
       baseBranch,
+      contextProjectIds,
     };
   }, [
     agent,
@@ -191,6 +202,7 @@ export function NewTaskView({
     pastedTexts,
     launchMode,
     baseBranch,
+    contextProjectIds,
   ]);
   useEffect(() => {
     return () => {
@@ -223,6 +235,7 @@ export function NewTaskView({
         pastedTexts: data.pastedTexts,
         launchMode: data.launchMode,
         baseBranch: data.baseBranch,
+        contextProjectIds: data.contextProjectIds,
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,6 +277,21 @@ export function NewTaskView({
         }
       })
       .catch(() => {});
+    // 跨仓库任务上下文：恢复本项目上次勾选（App.tsx handleSubmitTask 写入）。
+    const contextKey = `nezha.contextProjects.${project.id}`;
+    try {
+      const raw = localStorage.getItem(contextKey);
+      if (raw) {
+        const ids = JSON.parse(raw);
+        if (Array.isArray(ids)) {
+          setContextProjectIds(ids.filter((x): x is string => typeof x === "string"));
+        }
+      } else {
+        setContextProjectIds([]);
+      }
+    } catch {
+      setContextProjectIds([]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
@@ -440,6 +468,7 @@ export function NewTaskView({
       immediate: true,
       launchMode: "local",
       baseBranch: "",
+      contextProjectIds: [],
     });
   }
 
@@ -475,6 +504,7 @@ export function NewTaskView({
       immediate,
       launchMode,
       baseBranch,
+      contextProjectIds,
     });
     editorHandle.clear();
     setIsEmpty(true);
@@ -672,6 +702,8 @@ export function NewTaskView({
             if (nextAgent !== agent) {
               setModel(undefined);
               setReasoningEffort(undefined);
+              // DSH 无跨目录机制：切到 DSH 时清空勾选，避免带着无效上下文启动。
+              if (nextAgent === "dsh") setContextProjectIds([]);
             }
             setAgent(nextAgent);
           }}
@@ -703,6 +735,30 @@ export function NewTaskView({
           onSetBaseBranch={setBaseBranch}
           onSetRepoPath={onSetRepoPath}
         />
+        {/* 跨仓库任务上下文（仅 claude/codex；DSH 无 --add-dir 对等机制） */}
+        {agent !== "dsh" && (
+          <ContextProjectsSelector
+            otherProjects={otherProjects.filter((p) => p.id !== project.id)}
+            selectedIds={contextProjectIds}
+            disabled={false}
+            onToggle={(id) =>
+              setContextProjectIds((prev) =>
+                prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+              )
+            }
+            onClear={() => setContextProjectIds([])}
+          />
+        )}
+        {agent === "dsh" && otherProjects.length > 0 && (
+          <ContextProjectsSelector
+            otherProjects={[]}
+            selectedIds={[]}
+            disabled
+            disabledReason={t("newTask.contextProjectsDshDisabled")}
+            onToggle={() => {}}
+            onClear={() => {}}
+          />
+        )}
       </div>
     </div>
   );

@@ -52,6 +52,8 @@ import {
   buildYunxiaoIssueLink,
   issueTag,
   isYunxiaoWorkitemImported,
+  getLastYunxiaoAgent,
+  getLastYunxiaoPermission,
   requiresSedimentation,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
@@ -1003,6 +1005,22 @@ function App() {
     }
   }
 
+  // 跨仓库任务上下文：把任务的 contextProjectIds 解析为附加目录路径。
+  // 附加项目已被删除时静默剔除（任务快照保留 id，不回写）；主项目自身与重复项剔除。
+  function resolveContextProjectPaths(task: Task): string[] | undefined {
+    const ids = task.contextProjectIds ?? [];
+    if (ids.length === 0 || task.agent === "dsh") return undefined;
+    const seen = new Set<string>([task.projectId]);
+    const paths: string[] = [];
+    for (const id of ids) {
+      const p = projects.find((proj) => proj.id === id);
+      if (!p || seen.has(p.id)) continue;
+      seen.add(p.id);
+      paths.push(p.path);
+    }
+    return paths.length > 0 ? paths : undefined;
+  }
+
   async function invokeRunTask(
     task: Task,
     projectPath: string,
@@ -1029,6 +1047,8 @@ function App() {
       requireSediment: requiresSedimentation(task),
       // 无人值守：后端据此抑制「需要你的确认」系统通知（前端仍靠 awaiting_review 自动收尾）。
       unattended: task.unattended === true,
+      // 跨仓库任务上下文：附加项目目录（后端校验后注入 --add-dir）。
+      contextProjectPaths: resolveContextProjectPaths(task),
       onOutput: tm.createOutputChannel(task.id),
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1051,6 +1071,7 @@ function App() {
       launchMode,
       baseBranch,
       repoPath,
+      contextProjectIds,
     }: {
       prompt: string;
       agent: AgentType;
@@ -1065,6 +1086,8 @@ function App() {
       /** 任务关联的 git 根（worktree 创建于此目录的 .nezha/worktrees）。
        *  缺省时回落 project.path，向后兼容老调用方。 */
       repoPath?: string;
+      /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
+      contextProjectIds?: string[];
     },
   ) {
     const effectiveRepoPath = repoPath ?? project.path;
@@ -1073,6 +1096,14 @@ function App() {
     if (launchMode === "worktree" && !baseBranch) {
       showToast(t("toast.worktreeBaseRequired"), "warning");
       return;
+    }
+
+    // 记住本项目的上次附加仓库选择，作为下一次新建任务的默认值。
+    const contextKey = `nezha.contextProjects.${project.id}`;
+    if (contextProjectIds && contextProjectIds.length > 0) {
+      localStorage.setItem(contextKey, JSON.stringify(contextProjectIds));
+    } else {
+      localStorage.removeItem(contextKey);
     }
 
     // 1) 立即把任务推到 state 让 view 切到 RunningView。worktree 字段先留空，
@@ -1090,6 +1121,11 @@ function App() {
       status: immediate ? "pending" : "todo",
       createdAt: now,
       updatedAt: now,
+      // DSH 无跨目录机制，不落字段
+      contextProjectIds:
+        agent !== "dsh" && contextProjectIds && contextProjectIds.length > 0
+          ? [...contextProjectIds]
+          : undefined,
     };
     setTasks((prev) => {
       const next = [baseTask, ...prev];
@@ -1571,6 +1607,8 @@ function App() {
       requireSediment: requiresSedimentation(task),
       // 无人值守：恢复后同样抑制「需要你的确认」通知。
       unattended: task.unattended === true,
+      // 跨仓库任务上下文：与 run_task 一致，按任务快照重放附加仓库授权。
+      contextProjectPaths: resolveContextProjectPaths(task),
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
@@ -2011,6 +2049,82 @@ function App() {
     const plan = plans.find((p) => p.id === planId);
     if (!plan || !planLifecycleActions(plan).canCancel) return;
     updatePlan(plan.projectId, planId, { status: "cancelled" });
+  }
+
+  // ── 议题列表「按议题 ID 反查方案」的快捷动作 ────────────────────────────────
+
+  /**
+   * 「删除重议」级联：先取消仍在跑的讨论任务（挂着 planId 的任务不取消会导致
+   * delete_yunxiao_plan 被引用检查拒绝），再删方案记录与目录。新讨论由调用方
+   * （议题列表）随后走与「发起讨论」完全一致的入口——打开发起对话框。
+   */
+  async function handleRediscussIssue(issue: YunxiaoWorkitem) {
+    const planInfo = plans
+      .filter((p) => p.status !== "cancelled" && p.issues.some((i) => i.workitemId === issue.id))
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!planInfo) return;
+    const discussion = tasks.find(
+      (t) => t.yunxiaoPlanDiscussion && t.planId === planInfo.id,
+    );
+    if (discussion && isActiveTaskStatus(discussion.status)) {
+      handleCancelTask(discussion.id);
+      // cancel_task 是异步杀进程：等一拍再删，规避引用检查与状态回写的竞态。
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    await handleRemovePlanRecord(planInfo.id);
+  }
+
+  /**
+   * 「执行方案」（议题行 / 查看方案弹窗的快捷执行）：与方案预览页「开始」同一链路——
+   * handleGeneratePlanTodos(autoStart: true)，按 deps.json 拓扑生成待办并串行放行。
+   * Agent/权限取该项目上次选择（与 PlanPreviewPanel 同口径）。
+   */
+  async function handleStartPlanFromIssue(planId: string): Promise<boolean> {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return false;
+    if (plan.status === "draft") return false;
+    try {
+      const appSettings = await invoke<AgentEnabledState>("load_app_settings");
+      const preferred = getLastYunxiaoAgent(plan.projectId) ?? "codex";
+      return await handleGeneratePlanTodos({
+        planId: plan.id,
+        issues: plan.issues,
+        agent: isAgentEnabled(appSettings, preferred) ? preferred : firstEnabledAgent(appSettings),
+        permissionMode: getLastYunxiaoPermission(plan.projectId) ?? "ask",
+        autoStart: true,
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /** 「继续讨论」：resume 断掉的讨论任务（failed/cancelled/interrupted → 恢复会话）。 */
+  function handleResumeDiscussion(planId: string) {
+    const discussion = tasks.find((t) => t.yunxiaoPlanDiscussion && t.planId === planId);
+    if (!discussion) return;
+    if (isActiveTaskStatus(discussion.status)) {
+      // 还活着（含 input_required）：直接跳到任务终端。
+      locateDiscussionTask(discussion.id);
+      return;
+    }
+    handleResumeTask(discussion.id);
+  }
+
+  /** 跳到任务所在项目并选中（讨论任务 / 直接执行任务通用）。 */
+  function locateDiscussionTask(taskId: string) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    enterProjectFromKanban(project, task.id);
+  }
+
+  /** 议题行「取消方案」（executing 逃生通道）：留存态取消，占用释放后可重新讨论。 */
+  function handleCancelIssuePlan(issue: YunxiaoWorkitem) {
+    const planInfo = plans
+      .filter((p) => p.status !== "cancelled" && p.issues.some((i) => i.workitemId === issue.id))
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (planInfo) handleCancelPlan(planInfo.id);
   }
 
   /** 归档（AR1）：从看板主视图移出（展示层动作，不改 status）。 */
@@ -3555,6 +3669,10 @@ function App() {
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleRemovePlanRecord}
             onDeleteYunxiaoPlan={handleDeletePlan}
+            onStartYunxiaoPlanExecution={handleStartPlanFromIssue}
+            onRediscussYunxiaoIssue={handleRediscussIssue}
+            onResumeYunxiaoDiscussion={handleResumeDiscussion}
+            onCancelYunxiaoIssuePlan={handleCancelIssuePlan}
             onLocateTask={(taskId) => {
               const task = tasks.find((t) => t.id === taskId);
               if (!task) return;

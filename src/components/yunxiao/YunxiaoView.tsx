@@ -22,6 +22,11 @@ import {
   getYunxiaoProduct,
   isYunxiaoWorkitemImported,
 } from "../../utils/yunxiao";
+import {
+  buildIssuePlanInfoMap,
+  getIssuePlanInfo,
+  type YunxiaoIssuePlanInfo,
+} from "../../utils/yunxiaoPlanState";
 import { useI18n } from "../../i18n";
 import { useToast } from "../Toast";
 import { YunxiaoHeader } from "./YunxiaoHeader";
@@ -30,6 +35,7 @@ import { YunxiaoImportBar } from "./YunxiaoImportBar";
 import { useYunxiaoFilters } from "./useYunxiaoFilters";
 import { YunxiaoConnectForm } from "./YunxiaoConnectForm";
 import { YunxiaoIssueList } from "./YunxiaoIssueList";
+import { IssuePlanViewDialog } from "./IssuePlanViewDialog";
 import { YunxiaoProjectSelect } from "./YunxiaoProjectSelect";
 import { useYunxiaoCloudProjects } from "./useYunxiaoCloudProjects";
 import { PlanLaunchDialog } from "./plan/PlanLaunchDialog";
@@ -63,6 +69,11 @@ export function YunxiaoView({
   onStartDirectExecution,
   onCancelPlan,
   onSetParentPlan,
+  onLocateTask,
+  onStartPlanExecution,
+  onRediscussIssue,
+  onResumeDiscussion,
+  onCancelIssuePlan,
   deliveryPlans = [],
   onDeliveryPlansChange = () => undefined,
 }: {
@@ -87,6 +98,16 @@ export function YunxiaoView({
   onCancelPlan: (planId: string) => void | Promise<void>;
   /** 关联方案变更（追加子方案）：写入 draft 方案的 parentPlanId。 */
   onSetParentPlan: (planId: string, parentPlanId: string | undefined) => void;
+  /** 跳到任务所在项目并选中（需要回答 / 讨论中 / 直接执行占用的去回答）。 */
+  onLocateTask: (taskId: string) => void;
+  /** 「执行方案 / 继续执行」：按 deps 拓扑生成待办并串行放行（autoStart 链路）。 */
+  onStartPlanExecution: (planId: string) => Promise<boolean>;
+  /** 「删除重议」：级联取消讨论任务 + 删方案记录与目录。 */
+  onRediscussIssue: (issue: YunxiaoWorkitem) => void | Promise<void>;
+  /** 「继续讨论」：resume 断掉的讨论任务。 */
+  onResumeDiscussion: (planId: string) => void;
+  /** 「取消方案」：留存态取消（executing 的逃生通道）。 */
+  onCancelIssuePlan: (issue: YunxiaoWorkitem) => void;
   /** 交付计划（DeliveryPlan）：「添加到计划」目标与成员徽标数据源。 */
   deliveryPlans?: DeliveryPlan[];
   onDeliveryPlansChange?: (plans: DeliveryPlan[]) => void;
@@ -285,6 +306,39 @@ export function YunxiaoView({
   const importedIds = useMemo(
     () => collectOccupiedYunxiaoWorkitemIds(tasks, plans),
     [tasks, plans],
+  );
+
+  // 议题 → 方案状态反查（badge + 行内动作的唯一数据源）。跟随任务/方案状态实时更新：
+  // 讨论任务转 input_required、方案定稿等都会触发重算。
+  const planInfoByIssueId = useMemo(
+    () => buildIssuePlanInfoMap(visibleIssues, tasks, plans),
+    [visibleIssues, tasks, plans],
+  );
+
+  // 「查看方案」弹窗的议题（null = 未打开；弹窗内按反查结果取方案与讨论任务）。
+  const [viewPlanIssueId, setViewPlanIssueId] = useState<string | null>(null);
+  const viewPlanInfo: YunxiaoIssuePlanInfo | null = viewPlanIssueId
+    ? getIssuePlanInfo(viewPlanIssueId, tasks, plans)
+    : null;
+  const viewPlanProject =
+    viewPlanInfo?.plan != null
+      ? projects.find((p) => p.id === viewPlanInfo.plan?.projectId) ?? null
+      : null;
+
+  // 「执行方案」进行中标记（弹窗按钮锁定；生成待办 + 启动是异步链路）。
+  const [planExecutionStarting, setPlanExecutionStarting] = useState(false);
+  const handleStartPlanFromDialog = useCallback(
+    async (planId: string) => {
+      if (planExecutionStarting) return;
+      setPlanExecutionStarting(true);
+      try {
+        const ok = await onStartPlanExecution(planId);
+        if (ok) setViewPlanIssueId(null);
+      } finally {
+        setPlanExecutionStarting(false);
+      }
+    },
+    [planExecutionStarting, onStartPlanExecution],
   );
 
   // ── 多议题联合分析：勾选 + 底部操作栏 + 发起对话框 ─────────────────────────
@@ -603,12 +657,33 @@ export function YunxiaoView({
             loading={loading}
             loadingMore={loadingMore}
             importedIds={importedIds}
+            planInfoByIssueId={planInfoByIssueId}
             selectedIds={selectedIssueIds}
             selectionMode={selectionMode}
             onToggleSelect={handleToggleSelect}
             onDiscuss={handleDiscussIssue}
             onDirectStart={handleDirectStartIssue}
             onAddToPlan={(issue) => setAddToPlanIssues([issue])}
+            onViewPlan={(issue) => setViewPlanIssueId(issue.id)}
+            onOpenTask={(issue) => {
+              const info = planInfoByIssueId.get(issue.id);
+              if (info?.task) onLocateTask(info.task.id);
+            }}
+            onResumeDiscussion={(issue) => {
+              const info = planInfoByIssueId.get(issue.id);
+              if (info?.plan) onResumeDiscussion(info.plan.id);
+            }}
+            onStartPlan={(issue) => {
+              const info = planInfoByIssueId.get(issue.id);
+              if (info?.plan) void onStartPlanExecution(info.plan.id);
+            }}
+            onRediscuss={(issue) => {
+              void Promise.resolve(onRediscussIssue(issue)).then(() => {
+                // 删除完成后走与「发起讨论」完全一致的入口：打开发起对话框（N=1）。
+                handleDiscussIssue(issue);
+              });
+            }}
+            onCancelPlan={onCancelIssuePlan}
             planNamesByWorkitem={
               new Map(
                 deliveryPlans.flatMap((p) =>
@@ -711,6 +786,36 @@ export function YunxiaoView({
             setDirectIssue(null);
           }}
           onClose={() => setDirectIssue(null)}
+        />
+      )}
+      {viewPlanInfo?.plan && viewPlanProject && (
+        <IssuePlanViewDialog
+          key={viewPlanInfo.plan.id}
+          plan={viewPlanInfo.plan}
+          discussionTask={viewPlanInfo.task}
+          projectPath={viewPlanProject.path}
+          starting={planExecutionStarting}
+          onStart={() => {
+            if (viewPlanInfo.plan) void handleStartPlanFromDialog(viewPlanInfo.plan.id);
+          }}
+          onResumeDiscussion={() => {
+            if (viewPlanInfo.plan) onResumeDiscussion(viewPlanInfo.plan.id);
+            setViewPlanIssueId(null);
+          }}
+          onRediscuss={() => {
+            const issue = visibleIssues.find((i) => i.id === viewPlanIssueId);
+            if (!issue || !viewPlanInfo.plan) return;
+            void Promise.resolve(onRediscussIssue(issue)).then(() => {
+              setViewPlanIssueId(null);
+              handleDiscussIssue(issue);
+            });
+          }}
+          onCancelPlan={() => {
+            const issue = visibleIssues.find((i) => i.id === viewPlanIssueId);
+            if (issue) onCancelIssuePlan(issue);
+            setViewPlanIssueId(null);
+          }}
+          onClose={() => setViewPlanIssueId(null)}
         />
       )}
     </div>

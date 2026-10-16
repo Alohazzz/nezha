@@ -40,9 +40,9 @@ export interface PlanTaskGate {
 
 /** 任务列表行 / 详情页用的等待角标信息。 */
 export interface PlanWaitingBadge {
-  /** deps = 还在等前置；slot = 前置已满足、在排队等并发槽位。 */
-  kind: "deps" | "slot";
-  /** 等待中的前置数量（slot 恒为 0）。 */
+  /** deps = 还在等前置；slot = 前置已满足、在排队等并发槽位；loading = 依赖尚未载入。 */
+  kind: "deps" | "slot" | "loading";
+  /** 等待中的前置数量（slot / loading 恒为 0）。 */
   count: number;
   /** 存在异常/缺失前置（UI 标红）。 */
   blocked: boolean;
@@ -140,6 +140,31 @@ export function hasFreeSlot(
 /** 列出本项目仍占用槽位的任务（供「排队原因」展示：谁在跑）。 */
 export function activeTasksInProject(tasks: readonly Task[], projectId: string): Task[] {
   return tasks.filter((task) => task.projectId === projectId && isActiveTaskStatus(task.status));
+}
+
+/**
+ * `waiting_deps` 任务的等待**原因**——三种情形在 UI 上给的信息完全不同，不能混成
+ * 一句「等待」：
+ *
+ * - `deps`：还有硬前置没完成（含异常/缺失，此时 entries 非空、`needsOverride` 可能为真）；
+ * - `slot`：前置已全部满足，但同项目没有空闲并发槽位（在排队，列出占槽任务给用户看谁在跑）；
+ * - `loading`：本方案的 deps 尚未解析进缓存（重启首拍 / 刚生成待办）。此时 gate 分支
+ *   与「无前置」长得一样（都是空 entries），但**不是**在排队——显示成「排队中」会让用户
+ *   对着一个没有任何任务在跑的项目读到「等本项目空出槽位」，自相矛盾。
+ *
+ * 判定顺序：deps 未加载 → loading；有未满足前置 → deps；否则 slot。
+ */
+export type PlanWaitReason = "deps" | "slot" | "loading";
+
+export function resolveWaitReason(
+  task: Pick<Task, "planId" | "yunxiaoSerialNumber">,
+  gate: Pick<PlanTaskGate, "unmet">,
+  /** 该任务所属方案的 deps 是否已载入缓存（无 planId 视为已载入）。 */
+  depsLoaded: boolean,
+): PlanWaitReason {
+  // 无 planId 的等待任务（存量的手工等待）没有任何依赖来源，只能是等槽位。
+  if (task.planId && !depsLoaded) return "loading";
+  return gate.unmet.length > 0 ? "deps" : "slot";
 }
 
 function planRankMap(
@@ -253,6 +278,11 @@ export function buildWaitingBadges(
   for (const task of tasks) {
     if (task.status !== "waiting_deps") continue;
     const deps = task.planId ? depsByPlanId[task.planId] : undefined;
+    // deps 未载入（缓存缺该方案条目）≠ 无依赖：报「排队中」会与「没有任何任务在跑」矛盾。
+    if (task.planId && !deps) {
+      badges.set(task.id, { kind: "loading", count: 0, blocked: false });
+      continue;
+    }
     const gate = deps
       ? evaluateTaskGate(task.yunxiaoSerialNumber ?? "", deps.graph, taskBySerial)
       : { unmet: [], needsOverride: [], blocked: false, entries: [] };

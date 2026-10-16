@@ -410,6 +410,9 @@ export interface Task {
    * （`ask`/`auto_edit` 会停在 `input_required` 挂死）。见 `planQueue.resolvePlanTodoLaunch`。
    */
   unattended?: boolean;
+  /** 跨仓库任务上下文：附加项目的 id 列表（不含主项目）。启动时经 CLI `--add-dir`
+   *  授权 agent 读写（仅 claude/codex；DSH 忽略）。附加项目被删除时前端静默剔除。 */
+  contextProjectIds?: string[];
 }
 
 /** 多议题联合方案（Plan）的议题快照：发起时从云效列表抄录，预览/确认页离线可用。 */

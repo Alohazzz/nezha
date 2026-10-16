@@ -1,4 +1,4 @@
-import type { DeliveryPlan, Task } from "../../types";
+import type { DeliveryPlan, Project, Task } from "../../types";
 
 export interface WorktreeScopeOption {
   key: string;
@@ -17,15 +17,23 @@ export function batchScopeKey(batch: DeliveryPlan, projectPath: string): string 
   return batch.useWorktree === false ? "" : batchWorktreePath(batch, projectPath);
 }
 
-/** selector 只展示真实可进入的 worktree；失效批次留给 PR 面板清理，不静默改写记录。 */
+/** selector 只展示真实可进入的 worktree；失效批次留给 PR 面板清理，不静默改写记录。
+ *  选中任务带跨仓库上下文（contextProjectIds）时，附加项目作为额外作用域并列，
+ *  让 Git 变更 / 历史面板可以直接切到该仓库处置任务产生的变更。 */
 export function buildWorktreeScopeOptions({
   tasks,
   batches,
   projectPath,
+  selectedTask,
+  projects = [],
 }: {
   tasks: Task[];
   batches: DeliveryPlan[];
   projectPath: string;
+  /** 当前选中任务：其 contextProjectIds 决定列出哪些附加项目仓库。 */
+  selectedTask?: Task | null;
+  /** 全部项目列表，用于把附加项目 id 解析为名称/路径。 */
+  projects?: Project[];
 }): WorktreeScopeOption[] {
   const seen = new Set<string>();
   const options: WorktreeScopeOption[] = [{ key: "", label: "主检出" }];
@@ -48,6 +56,18 @@ export function buildWorktreeScopeOptions({
     if (seen.has(key)) continue;
     seen.add(key);
     options.push({ key, label: `WorkTree · ${batch.branch}`, description: key });
+  }
+
+  const contextIds = selectedTask?.contextProjectIds ?? [];
+  for (const id of contextIds) {
+    const ctxProject = projects.find((p) => p.id === id);
+    if (!ctxProject || seen.has(ctxProject.path)) continue;
+    seen.add(ctxProject.path);
+    options.push({
+      key: ctxProject.path,
+      label: `Repo · ${ctxProject.name}`,
+      description: ctxProject.path,
+    });
   }
 
   return options;

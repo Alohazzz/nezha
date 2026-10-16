@@ -1654,6 +1654,19 @@ export const yunxiao = {
     border: "1px solid var(--border-dim)",
     background: "var(--bg-card)",
   },
+  // 查看方案弹窗的行内二次确认条（删除重议 / 取消方案）：
+  // 插在头部与正文之间，不弹二级框——破坏性操作就地确认。
+  yunxiaoIssuePlanConfirmBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "8px 18px",
+    borderTop: "1px solid var(--border-dim)",
+    borderBottom: "1px solid var(--border-dim)",
+    background: "var(--bg-hover)",
+    fontSize: 12,
+    color: "var(--text-primary)",
+  },
   planLinkedHead: {
     display: "flex",
     alignItems: "center",
