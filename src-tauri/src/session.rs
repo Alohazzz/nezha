@@ -1983,6 +1983,46 @@ fn format_timestamp_ms(ms: i64) -> String {
         .unwrap_or_else(|| ms.to_string())
 }
 
+// ── Codex thread_name 读取 ──────────────────────────────────────────────────
+
+/// 读取 Codex CLI 的线程命名索引 `~/.codex/session_index.jsonl`，
+/// 返回指定 session 对应的 `thread_name`。
+///
+/// Codex 会在首条用户消息后数秒内写入首版名字（清洗自 prompt），并在后续轮次
+/// 用对话内容二次改写成更准的主题；用户在 TUI 里手动改名同样落在此文件。
+/// 文件很小（每线程一行），任务状态变化时重读毫无压力。
+pub(crate) fn read_codex_thread_name(session_id: &str) -> Option<String> {
+    if session_id.trim().is_empty() {
+        return None;
+    }
+    let home = crate::platform::home_dir()?;
+    let index_path = home.join(".codex").join("session_index.jsonl");
+    let content = std::fs::read_to_string(&index_path).ok()?;
+    // 每行一个 JSON：{"id": "<session_id>", "thread_name": "...", "updated_at": "..."}。
+    // 文件按 updated_at 追加/更新，同 id 可能出现多行，取最后一条命中的。
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty() && line.contains(session_id))
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value.get("id").and_then(|v| v.as_str()) == Some(session_id))
+        .filter_map(|value| {
+            value
+                .get("thread_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .last()
+}
+
+/// 供前端按需查询 Codex 自动主题：传入 codexSessionId，命中返回名字，未命中返回 null。
+#[tauri::command]
+pub async fn get_codex_thread_name(session_id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || read_codex_thread_name(&session_id))
+        .await
+        .map_err(|e| format!("读取 Codex thread_name 线程错误: {}", e))
+}
+
 // ── 测试 ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2310,5 +2350,19 @@ mod tests {
             .expect("temp dir export path should validate");
         assert!(canonical.is_absolute());
         assert_eq!(canonical.extension().and_then(|e| e.to_str()), Some("md"));
+    }
+
+    #[test]
+    fn read_codex_thread_name_rejects_empty_session_id() {
+        assert!(read_codex_thread_name("").is_none());
+        assert!(read_codex_thread_name("   ").is_none());
+    }
+
+    #[test]
+    fn read_codex_thread_name_handles_missing_index_file() {
+        // 不假定用户机器上存在 ~/.codex/session_index.jsonl；查不到就返回 None，
+        // 绝不能 Err/panic——该命令会被前端在任务状态变化时频繁调用。
+        // 用一个几乎不可能存在的 session_id 查询即可覆盖「文件缺失/未命中」两条路径。
+        assert!(read_codex_thread_name("00000000-0000-0000-0000-000000000000").is_none());
     }
 }

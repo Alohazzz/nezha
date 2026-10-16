@@ -445,6 +445,7 @@ pub fn run() {
             git::generate_commit_message,
             git::discover_git_roots,
             agent_assist::generate_task_name,
+            session::get_codex_thread_name,
             agent_assist::get_plan_discussion_instructions,
             agent_assist::get_plan_execution_instructions,
             agent_assist::get_direct_execution_instructions,

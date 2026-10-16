@@ -93,6 +93,7 @@ import { isHideWindowShortcut, isToggleKanbanShortcut } from "./shortcuts";
 import { APP_PLATFORM } from "./platform";
 import { useTerminalManager } from "./hooks/useTerminalManager";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
+import { useCodexAutoName } from "./hooks/useCodexAutoName";
 import { useI18n } from "./i18n";
 import {
   normalizeProjectNameInput,
@@ -455,6 +456,11 @@ function App() {
   );
   const { scheduleForDoneTask } = useWorktreeDiffStats({
     projects,
+    tasks,
+    setTasks,
+    persistTasks: persistTasksForHook,
+  });
+  useCodexAutoName({
     tasks,
     setTasks,
     persistTasks: persistTasksForHook,
