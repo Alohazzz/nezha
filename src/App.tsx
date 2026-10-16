@@ -1003,6 +1003,22 @@ function App() {
     }
   }
 
+  // 跨仓库任务上下文：把任务的 contextProjectIds 解析为附加目录路径。
+  // 附加项目已被删除时静默剔除（任务快照保留 id，不回写）；主项目自身与重复项剔除。
+  function resolveContextProjectPaths(task: Task): string[] | undefined {
+    const ids = task.contextProjectIds ?? [];
+    if (ids.length === 0 || task.agent === "dsh") return undefined;
+    const seen = new Set<string>([task.projectId]);
+    const paths: string[] = [];
+    for (const id of ids) {
+      const p = projects.find((proj) => proj.id === id);
+      if (!p || seen.has(p.id)) continue;
+      seen.add(p.id);
+      paths.push(p.path);
+    }
+    return paths.length > 0 ? paths : undefined;
+  }
+
   async function invokeRunTask(
     task: Task,
     projectPath: string,
@@ -1029,6 +1045,8 @@ function App() {
       requireSediment: requiresSedimentation(task),
       // 无人值守：后端据此抑制「需要你的确认」系统通知（前端仍靠 awaiting_review 自动收尾）。
       unattended: task.unattended === true,
+      // 跨仓库任务上下文：附加项目目录（后端校验后注入 --add-dir）。
+      contextProjectPaths: resolveContextProjectPaths(task),
       onOutput: tm.createOutputChannel(task.id),
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1051,6 +1069,7 @@ function App() {
       launchMode,
       baseBranch,
       repoPath,
+      contextProjectIds,
     }: {
       prompt: string;
       agent: AgentType;
@@ -1065,6 +1084,8 @@ function App() {
       /** 任务关联的 git 根（worktree 创建于此目录的 .nezha/worktrees）。
        *  缺省时回落 project.path，向后兼容老调用方。 */
       repoPath?: string;
+      /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
+      contextProjectIds?: string[];
     },
   ) {
     const effectiveRepoPath = repoPath ?? project.path;
@@ -1073,6 +1094,14 @@ function App() {
     if (launchMode === "worktree" && !baseBranch) {
       showToast(t("toast.worktreeBaseRequired"), "warning");
       return;
+    }
+
+    // 记住本项目的上次附加仓库选择，作为下一次新建任务的默认值。
+    const contextKey = `nezha.contextProjects.${project.id}`;
+    if (contextProjectIds && contextProjectIds.length > 0) {
+      localStorage.setItem(contextKey, JSON.stringify(contextProjectIds));
+    } else {
+      localStorage.removeItem(contextKey);
     }
 
     // 1) 立即把任务推到 state 让 view 切到 RunningView。worktree 字段先留空，
@@ -1090,6 +1119,11 @@ function App() {
       status: immediate ? "pending" : "todo",
       createdAt: now,
       updatedAt: now,
+      // DSH 无跨目录机制，不落字段
+      contextProjectIds:
+        agent !== "dsh" && contextProjectIds && contextProjectIds.length > 0
+          ? [...contextProjectIds]
+          : undefined,
     };
     setTasks((prev) => {
       const next = [baseTask, ...prev];
@@ -1571,6 +1605,8 @@ function App() {
       requireSediment: requiresSedimentation(task),
       // 无人值守：恢复后同样抑制「需要你的确认」通知。
       unattended: task.unattended === true,
+      // 跨仓库任务上下文：与 run_task 一致，按任务快照重放附加仓库授权。
+      contextProjectPaths: resolveContextProjectPaths(task),
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),

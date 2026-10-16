@@ -72,4 +72,33 @@ describe("buildWorktreeScopeOptions", () => {
     expect(options[1]?.key).toBe("H:/project/.nezha/worktrees/batch-1");
     expect(options[1]?.description).toBe("H:/project/.nezha/worktrees/batch-1");
   });
+
+  it("lists context projects of the selected task as repo scopes", () => {
+    const options = buildWorktreeScopeOptions({
+      tasks: [],
+      batches: [],
+      projectPath: "H:/project",
+      selectedTask: { ...task, contextProjectIds: ["ctx-1", "ghost"] },
+      projects: [
+        { id: "ctx-1", name: "frontend", path: "H:/frontend", lastOpenedAt: 1 },
+        { id: "other", name: "unrelated", path: "H:/other", lastOpenedAt: 1 },
+      ],
+    });
+
+    expect(options).toEqual([
+      { key: "", label: "主检出" },
+      { key: "H:/frontend", label: "Repo · frontend", description: "H:/frontend" },
+    ]);
+  });
+
+  it("omits context scopes without a selected task", () => {
+    const options = buildWorktreeScopeOptions({
+      tasks: [{ ...task, contextProjectIds: ["ctx-1"] }],
+      batches: [],
+      projectPath: "H:/project",
+      projects: [{ id: "ctx-1", name: "frontend", path: "H:/frontend", lastOpenedAt: 1 }],
+    });
+
+    expect(options).toEqual([{ key: "", label: "主检出" }]);
+  });
 });

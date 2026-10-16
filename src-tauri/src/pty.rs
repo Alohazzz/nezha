@@ -120,6 +120,32 @@ fn validate_task_project_path(project_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 校验跨仓库任务上下文的附加目录列表（canonicalize 去重）。
+/// 单个目录非法（不存在 / 非目录 / 非绝对路径）时直接报错——附加上下文是用户
+/// 显式勾选的，静默降级会让 agent 拿到不完整的上下文而用户不知情。
+/// canonicalize 是阻塞 I/O，调用方需放进 `spawn_blocking`。
+fn validate_task_context_dirs(dirs: &[String]) -> Result<Vec<String>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(dirs.len());
+    for dir in dirs {
+        let path = Path::new(dir);
+        if !path.is_absolute() {
+            return Err(format!("Context directory must be absolute: {dir}"));
+        }
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("Cannot resolve context directory {dir}: {}", e))?;
+        if !canonical.is_dir() {
+            return Err(format!("Context directory is not a directory: {dir}"));
+        }
+        let key = canonical.to_string_lossy().to_string();
+        if seen.insert(key) {
+            out.push(dir.clone());
+        }
+    }
+    Ok(out)
+}
+
 fn has_task_session(app: &AppHandle, task_id: &str, is_codex: bool) -> bool {
     let tm = app.state::<TaskManager>();
     if is_codex {
@@ -1288,6 +1314,9 @@ pub async fn run_task(
     require_sediment: Option<bool>,
     // 无人值守：为真时 event_watcher 抑制「需要你的确认」系统通知（一轮结束由前端自动收尾）。
     unattended: Option<bool>,
+    // 跨仓库任务上下文：附加项目目录（前端已按任务 contextProjectIds 解析为 path），
+    // 注入为 CLI `--add-dir`（仅 claude/codex；DSH 忽略）。
+    context_project_paths: Option<Vec<String>>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1297,6 +1326,17 @@ pub async fn run_task(
         MAX_REASONING_EFFORT_BYTES,
     )?;
     let sediment_required = require_sediment.unwrap_or(false);
+    let context_project_paths = match context_project_paths {
+        Some(dirs) if !dirs.is_empty() => {
+            let dirs = dirs.clone();
+            Some(
+                tokio::task::spawn_blocking(move || validate_task_context_dirs(&dirs))
+                    .await
+                    .map_err(|e| format!("context dirs 校验线程错误: {e}"))??,
+            )
+        }
+        _ => None,
+    };
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1478,6 +1518,13 @@ pub async fn run_task(
             model.as_deref(),
             reasoning_effort.as_deref(),
         );
+        // 跨仓库任务上下文：附加目录与主 workspace 一并可写（CLI 原生支持，可重复）。
+        if let Some(ref dirs) = context_project_paths {
+            for dir in dirs {
+                c.arg("--add-dir");
+                c.arg(dir);
+            }
+        }
         // Codex 对非 managed 的 command hook 默认要求 trust,Nezha 注入的是新 hash 会被
         // skip;由 Nezha 注入、来源可信,这里免 trust 直接运行。必须在 `--`/prompt 之前。
         if use_hooks {
@@ -1496,6 +1543,13 @@ pub async fn run_task(
             model.as_deref(),
             reasoning_effort.as_deref(),
         );
+        // 跨仓库任务上下文：附加目录跟随主 permission mode（可读可编辑）。
+        if let Some(ref dirs) = context_project_paths {
+            for dir in dirs {
+                c.arg("--add-dir");
+                c.arg(dir);
+            }
+        }
         // Claude >= 2.1.87：通过 --session-id 指定会话，跳过 /status 发现
         if let Some(ref sid) = pre_session_id {
             c.arg("--session-id");
@@ -1758,6 +1812,8 @@ pub async fn resume_task(
     require_sediment: Option<bool>,
     // 见 `run_task`：恢复后同样抑制「需要你的确认」通知。
     unattended: Option<bool>,
+    // 见 `run_task`：恢复时同样按任务快照重放附加仓库上下文。
+    context_project_paths: Option<Vec<String>>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1767,6 +1823,17 @@ pub async fn resume_task(
         MAX_REASONING_EFFORT_BYTES,
     )?;
     let sediment_required = require_sediment.unwrap_or(false);
+    let context_project_paths = match context_project_paths {
+        Some(dirs) if !dirs.is_empty() => {
+            let dirs = dirs.clone();
+            Some(
+                tokio::task::spawn_blocking(move || validate_task_context_dirs(&dirs))
+                    .await
+                    .map_err(|e| format!("context dirs 校验线程错误: {e}"))??,
+            )
+        }
+        _ => None,
+    };
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks
@@ -1858,6 +1925,13 @@ pub async fn resume_task(
             model.as_deref(),
             reasoning_effort.as_deref(),
         );
+        // 跨仓库任务上下文：与 run_task 同样在 `resume` 子命令之前注入。
+        if let Some(ref dirs) = context_project_paths {
+            for dir in dirs {
+                c.arg("--add-dir");
+                c.arg(dir);
+            }
+        }
         // Nezha 注入的 hook 默认未信任会被 Codex skip;来源可信,免 trust 直接运行。
         if use_hooks {
             c.arg("--dangerously-bypass-hook-trust");
@@ -1873,6 +1947,13 @@ pub async fn resume_task(
             model.as_deref(),
             reasoning_effort.as_deref(),
         );
+        // 跨仓库任务上下文：附加目录跟随主 permission mode（可读可编辑）。
+        if let Some(ref dirs) = context_project_paths {
+            for dir in dirs {
+                c.arg("--add-dir");
+                c.arg(dir);
+            }
+        }
         c.arg("--resume");
         c.arg(&session_id);
         // 同 run_task:hooks + force_default_tui 共用 --settings 通道。

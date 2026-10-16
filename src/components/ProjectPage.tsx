@@ -720,8 +720,14 @@ export function ProjectPage({
   }, [selectedTask?.worktreePath, selectedTask?.worktreeDiscarded]);
 
   const worktreeOptions = useMemo(() => {
-    return buildWorktreeScopeOptions({ tasks: projectTasks, batches, projectPath: project.path });
-  }, [projectTasks, batches, project.path]);
+    return buildWorktreeScopeOptions({
+      tasks: projectTasks,
+      batches,
+      projectPath: project.path,
+      selectedTask,
+      projects: allProjects,
+    });
+  }, [projectTasks, batches, project.path, selectedTask, allProjects]);
 
   // 已选中的失效批次不再出现在 selector 里；回落主检出，避免文件树/Git 面板继续访问空路径。
   useEffect(() => {
