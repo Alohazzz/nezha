@@ -19,6 +19,8 @@ export type PlanEndPreset = "all" | "week" | "month" | "custom";
 const YUNXIAO_FILTERS_PREFIX = "nezha:yunxiaoFilters:";
 const SEARCH_DEBOUNCE_MS = 250;
 const FILTER_DEBOUNCE_MS = 300;
+/** 字段 ID 探测兜底超时：网络挂死时也要放行首查，避免列表永久空白。 */
+const FIELD_PROBE_TIMEOUT_MS = 5000;
 
 /**
  * 云效议题页的过滤状态：搜索防抖、我负责的、状态多选、版本多选、状态/版本选项缓存、
@@ -59,6 +61,8 @@ export function useYunxiaoFilters(
   // 「计划完成时间」「所属产品」自定义字段 ID（conditions 条件依赖；null = 未探测或不存在）。
   const [planEndFieldId, setPlanEndFieldId] = useState<string | null>(null);
   const [productFieldId, setProductFieldId] = useState<string | null>(null);
+  /** 字段 ID 探测已结束（成功 / 失败 / 超时）：首查等它，否则会漏掉时间条件。 */
+  const [fieldProbeSettled, setFieldProbeSettled] = useState(false);
   const [currentUser, setCurrentUser] = useState<YunxiaoUserRef | null>(null);
   const [currentUserError, setCurrentUserError] = useState(false);
   const [currentUserIdInput, setCurrentUserIdInput] = useState("");
@@ -104,6 +108,8 @@ export function useYunxiaoFilters(
   // 过滤偏好：按项目从 localStorage 恢复。恢复值同步写入 debounced 态
   // （挂载恢复不是用户连续点击，无需防抖）——否则首查会以无条件发出，
   // 出现「过滤已选中但列表显示全部」的竞态（issue：云效列表过滤失效）。
+  // 字段 ID 一并恢复：探测是异步 HTTP，若等探测完成才拼条件，
+  // 首查必然不带已保存的计划完成时间过滤（初始化全量列表问题）。
   useEffect(() => {
     if (!enabled || !projectId) return;
     const raw = localStorage.getItem(`${YUNXIAO_FILTERS_PREFIX}${projectId}`);
@@ -114,6 +120,8 @@ export function useYunxiaoFilters(
           versionIds?: unknown;
           products?: unknown;
           planEndPreset?: unknown;
+          planEndFieldId?: unknown;
+          productFieldId?: unknown;
         })
       : null;
     const assigned = saved?.assignedToMe === true;
@@ -132,6 +140,14 @@ export function useYunxiaoFilters(
       saved?.planEndPreset === "custom"
         ? saved.planEndPreset
         : "all";
+    const cachedPlanEndFieldId =
+      typeof saved?.planEndFieldId === "string" && saved.planEndFieldId.length > 0
+        ? saved.planEndFieldId
+        : null;
+    const cachedProductFieldId =
+      typeof saved?.productFieldId === "string" && saved.productFieldId.length > 0
+        ? saved.productFieldId
+        : null;
     setAssignedToMe(assigned);
     setSelectedStatusIds(statusIds);
     setSelectedVersionIds(versionIds);
@@ -144,10 +160,14 @@ export function useYunxiaoFilters(
     setDebouncedVersionIds(versionIds);
     setDebouncedProducts(products);
     setDebouncedPlanEndPreset(preset);
+    // 字段 ID 同步恢复 + 交由后台探测刷新：首查 conditions 即可带时间条件。
+    setPlanEndFieldId(cachedPlanEndFieldId);
+    setProductFieldId(cachedProductFieldId);
     setLoadedFiltersProjectId(projectId);
   }, [enabled, projectId]);
 
   // 过滤偏好：按项目持久化（仅在该项目的值已恢复后写入，避免切换项目时覆盖）。
+  // 字段 ID 跟随写入：下次挂载首查即可带时间条件，不必等异步探测。
   useEffect(() => {
     if (!enabled || !projectId) return;
     if (loadedFiltersProjectId !== projectId) return;
@@ -159,6 +179,8 @@ export function useYunxiaoFilters(
         versionIds: selectedVersionIds,
         products: selectedProducts,
         planEndPreset,
+        planEndFieldId,
+        productFieldId,
       }),
     );
   }, [
@@ -170,6 +192,8 @@ export function useYunxiaoFilters(
     selectedVersionIds,
     selectedProducts,
     planEndPreset,
+    planEndFieldId,
+    productFieldId,
   ]);
 
   // 当前用户：优先用设置缓存，否则调 /platform/user 自动识别并持久化。
@@ -343,12 +367,17 @@ export function useYunxiaoFilters(
   }, []);
 
   // 自定义字段 ID 探测：「计划完成时间」「所属产品」按名称查（后端有进程内缓存）。
-  // 任一探测失败/字段不存在静默置 null——对应过滤器退化为纯展示，不阻塞列表。
+  // 恢复流程已从 localStorage 同步恢复了上次探测结果——探测只做后台刷新，
+  // 不再先清空（清空会让首查丢掉已保存的计划完成时间过滤）。
+  // 探测失败/字段不存在时保留缓存值继续可用；本项目从无缓存则保持 null
+  // ——对应过滤器退化为纯展示，不阻塞列表（filtersReady 的超时兜底负责放行）。
   useEffect(() => {
     if (!enabled || !projectId) return;
     let cancelled = false;
-    setPlanEndFieldId(null);
-    setProductFieldId(null);
+    setFieldProbeSettled(false);
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) setFieldProbeSettled(true);
+    }, FIELD_PROBE_TIMEOUT_MS);
     (async () => {
       const probe = async (fieldName: string): Promise<string | null> => {
         try {
@@ -369,11 +398,14 @@ export function useYunxiaoFilters(
         probe(YUNXIAO_PRODUCT_FIELD_NAME),
       ]);
       if (cancelled) return;
-      if (planEnd) setPlanEndFieldId(planEnd);
-      if (product) setProductFieldId(product);
+      window.clearTimeout(timeoutId);
+      setPlanEndFieldId((prev) => planEnd ?? prev);
+      setProductFieldId((prev) => product ?? prev);
+      setFieldProbeSettled(true);
     })();
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
     };
   }, [enabled, settings.token, settings.organizationId, projectId, categories]);
 
@@ -418,8 +450,17 @@ export function useYunxiaoFilters(
     ],
   );
 
-  /** 本项目的过滤偏好已恢复（首查应等待此标志，避免无条件请求先发出）。 */
-  const filtersReady = enabled && loadedFiltersProjectId === projectId;
+  /**
+   * 本项目的过滤偏好已恢复（首查应等待此标志，避免无条件请求先发出）。
+   * 另：选了时间预设但字段 ID 尚无缓存（首次使用该项目）时，首查也要等探测
+   * 结束——否则会先发一次无条件查询、渲染全量列表，探测回来才重查校正。
+   * 「不过滤时间」或已有字段 ID（含 localStorage 恢复值）时不等待，零延迟。
+   */
+  const needsPlanEndFieldId = debouncedPlanEndPreset !== "all" && !planEndFieldId;
+  const filtersReady =
+    enabled &&
+    loadedFiltersProjectId === projectId &&
+    (!needsPlanEndFieldId || fieldProbeSettled);
 
   return {
     query,
