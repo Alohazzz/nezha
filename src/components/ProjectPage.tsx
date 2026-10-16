@@ -19,6 +19,7 @@ import type {
   YunxiaoWritebackDraft,
   YunxiaoWritebackResult,
 } from "../types";
+import type { QuestionMode } from "./app-settings/types";
 import { TaskPanel } from "./TaskPanel";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import { RunningView } from "./RunningView";
@@ -194,7 +195,7 @@ export function ProjectPage({
     notes: string,
     agent: AgentType,
     permissionMode: PermissionMode,
-    questionMode: "grilling" | "batch" | "ui",
+    questionMode: QuestionMode,
   ) => void;
   /** 云效绑定待办「直接开始」：待办原地转为直接执行任务（无方案、无讨论）。 */
   onStartTodoYunxiaoDirect: (
@@ -203,7 +204,7 @@ export function ProjectPage({
     agent: AgentType,
     permissionMode: PermissionMode,
     clarifyFirst: boolean,
-    questionMode: "grilling" | "batch" | "ui",
+    questionMode: QuestionMode,
   ) => void;
   /** 待办「发起讨论」进行中标记（锁定入口按钮）。 */
   todoDiscussionStarting: boolean;

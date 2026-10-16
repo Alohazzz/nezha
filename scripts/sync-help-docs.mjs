@@ -74,7 +74,6 @@ const REQUIRED_ASSETS = [
   "screenshots/grill-with-ui/05-explore-procon.png",
   "screenshots/grill-with-ui/06-visual.png",
   "screenshots/grill-with-ui/07-terms.png",
-  "screenshots/grill-with-ui/08-settings-toggles.png",
   "screenshots/grill-with-ui/09-footer-staged.png",
 ];
 

@@ -167,12 +167,13 @@ export function YunxiaoTodoDiscussionView({
   }, [task.projectId]);
 
   const cycleQuestion = useCallback(() => {
-    setQuestionMode((prev) => {
-      const next = cycleQuestionMode(prev);
-      setLastQuestionMode(next);
-      return next;
-    });
+    setQuestionMode((prev) => cycleQuestionMode(prev));
   }, []);
+
+  // 写记忆放 updater 外：updater 要求纯函数（StrictMode 下会双调用）。
+  useEffect(() => {
+    setLastQuestionMode(questionMode);
+  }, [questionMode]);
 
   const permissionLabel = useCallback(
     (mode: PermissionMode) => {

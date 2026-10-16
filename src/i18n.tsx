@@ -1048,9 +1048,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.launch.close": "Close",
     "plan.launch.fetching": "Fetching issue details and images…",
     "plan.launch.batchGrillHint":
-      "Batch-grill (experimental skill) is on: clarifying questions are asked in rounds, each round covering the whole current frontier.",
+      "Batch grill: clarifying questions are asked in rounds, each round covering the whole current frontier.",
     "plan.launch.grillWithUiHint":
-      "UI grill (experimental skill) is on: clarifying questions open on a local browser page — answer cards in any order, one thread per question, then Send. The agent's terminal keeps waiting while you answer.",
+      "UI grill: clarifying questions open on a local browser page — answer cards in any order, one thread per question, then Send. The agent's terminal keeps waiting while you answer.",
     "plan.launch.itemImages": "{count} image(s) ready",
     "plan.launch.imagePartial": "{failed} image(s) failed, {downloaded} ready",
     "plan.launch.remove": "Exclude",
@@ -2176,9 +2176,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.launch.close": "关闭",
     "plan.launch.fetching": "正在拉取议题详情与图片…",
     "plan.launch.batchGrillHint":
-      "已开启批量盘问（测试技能）：澄清问题按轮次提出，每轮覆盖当前前沿的全部问题。",
+      "批量盘问：澄清问题按轮次提出，每轮覆盖当前前沿的全部问题。",
     "plan.launch.grillWithUiHint":
-      "已开启 UI 盘问（测试技能）：澄清问题在本地浏览器页面上展开——每题一张卡片，可任意顺序作答、逐题讨论，再统一 Send；作答期间 agent 终端保持等待。",
+      "UI 盘问：澄清问题在本地浏览器页面上展开——每题一张卡片，可任意顺序作答、逐题讨论，再统一 Send；作答期间 agent 终端保持等待。",
     "plan.launch.itemImages": "已就绪 {count} 张图片",
     "plan.launch.imagePartial": "{failed} 张图片下载失败，{downloaded} 张已就绪",
     "plan.launch.remove": "剔除",

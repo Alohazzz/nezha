@@ -6,6 +6,7 @@ import type {
   Task,
   YunxiaoWorkitem,
 } from "../types";
+import type { QuestionMode } from "../components/app-settings/types";
 
 const YUNXIAO_LAST_AGENT_PREFIX = "nezha:lastYunxiaoAgent:";
 const YUNXIAO_LAST_PERMISSION_PREFIX = "nezha:lastYunxiaoPermission:";
@@ -86,7 +87,7 @@ export function setLastYunxiaoPermission(projectId: string, mode: PermissionMode
 }
 
 /** 读取上次选择的提问方式（发起入口三态 badge 预填；无记忆或值非法时返回 null）。 */
-export function getLastQuestionMode(): "grilling" | "batch" | "ui" | null {
+export function getLastQuestionMode(): QuestionMode | null {
   try {
     const value = localStorage.getItem(LAST_QUESTION_MODE_KEY);
     return value === "grilling" || value === "batch" || value === "ui" ? value : null;
@@ -96,7 +97,7 @@ export function getLastQuestionMode(): "grilling" | "batch" | "ui" | null {
 }
 
 /** 记录上次选择的提问方式（localStorage 不可用时静默降级）。 */
-export function setLastQuestionMode(mode: "grilling" | "batch" | "ui"): void {
+export function setLastQuestionMode(mode: QuestionMode): void {
   try {
     localStorage.setItem(LAST_QUESTION_MODE_KEY, mode);
   } catch {
