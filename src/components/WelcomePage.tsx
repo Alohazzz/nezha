@@ -120,6 +120,10 @@ export function WelcomePage({
   onSetYunxiaoPlanParent,
   onDeleteYunxiaoPlan,
   onLocateTask,
+  onStartYunxiaoPlanExecution,
+  onRediscussYunxiaoIssue,
+  onResumeYunxiaoDiscussion,
+  onCancelYunxiaoIssuePlan,
   plans,
   deliveryPlans,
   onDeliveryPlansChange,
@@ -172,6 +176,14 @@ export function WelcomePage({
   onDeleteYunxiaoPlan?: (planId: string) => void | Promise<void>;
   /** 定位到某个任务的窗口（taskId 为任务 id）：进入其项目工作区并选中该任务。 */
   onLocateTask?: (taskId: string) => void;
+  /** 议题列表「执行方案 / 继续执行」：按 deps 拓扑生成待办并串行放行。 */
+  onStartYunxiaoPlanExecution: (planId: string) => Promise<boolean>;
+  /** 议题列表「删除重议」：级联取消讨论任务 + 删方案记录与目录。 */
+  onRediscussYunxiaoIssue: (issue: YunxiaoWorkitem) => void | Promise<void>;
+  /** 议题列表「继续讨论」：resume 断掉的讨论任务。 */
+  onResumeYunxiaoDiscussion: (planId: string) => void;
+  /** 议题列表「取消方案」：留存态取消（executing 的逃生通道）。 */
+  onCancelYunxiaoIssuePlan: (issue: YunxiaoWorkitem) => void;
   plans: Plan[];
   /** 交付计划（DeliveryPlan）：欢迎页「计划」视图展示＋任务绑定源。 */
   deliveryPlans: DeliveryPlan[];
@@ -330,6 +342,14 @@ export function WelcomePage({
             onStartDirectExecution={onStartYunxiaoDirectExecution}
             onCancelPlan={onCancelYunxiaoPlan}
             onSetParentPlan={onSetYunxiaoPlanParent}
+            onLocateTask={(taskId) => {
+              onLocateTask?.(taskId);
+              setView("projects");
+            }}
+            onStartPlanExecution={onStartYunxiaoPlanExecution}
+            onRediscussIssue={onRediscussYunxiaoIssue}
+            onResumeDiscussion={onResumeYunxiaoDiscussion}
+            onCancelIssuePlan={onCancelYunxiaoIssuePlan}
             deliveryPlans={deliveryPlans}
             onDeliveryPlansChange={onDeliveryPlansChange}
           />

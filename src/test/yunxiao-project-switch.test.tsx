@@ -102,6 +102,11 @@ describe("YunxiaoView 议题区项目切换", () => {
             onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
             onSetParentPlan={vi.fn()}
+            onLocateTask={vi.fn()}
+            onStartPlanExecution={vi.fn()}
+            onRediscussIssue={vi.fn()}
+            onResumeDiscussion={vi.fn()}
+            onCancelIssuePlan={vi.fn()}
           />
         </ToastProvider>
       </I18nProvider>,

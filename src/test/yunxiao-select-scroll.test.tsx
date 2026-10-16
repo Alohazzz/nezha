@@ -74,6 +74,11 @@ describe("YunxiaoView 连接配置：项目下拉滚动", () => {
             onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
             onSetParentPlan={vi.fn()}
+            onLocateTask={vi.fn()}
+            onStartPlanExecution={vi.fn()}
+            onRediscussIssue={vi.fn()}
+            onResumeDiscussion={vi.fn()}
+            onCancelIssuePlan={vi.fn()}
           />
         </ToastProvider>
       </I18nProvider>,

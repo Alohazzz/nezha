@@ -1,6 +1,17 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Cloud, ExternalLink, Loader2, Zap } from "lucide-react";
+import {
+  CircleStop,
+  Cloud,
+  ExternalLink,
+  Eye,
+  Loader2,
+  MessageSquareText,
+  Play,
+  RefreshCw,
+  Terminal,
+  Zap,
+} from "lucide-react";
 import type { YunxiaoWorkitem } from "../../types";
 import {
   buildYunxiaoIssueLink,
@@ -12,6 +23,7 @@ import {
   isYunxiaoIssueOverdue,
   type YunxiaoStatusTone,
 } from "../../utils/yunxiao";
+import type { YunxiaoIssuePlanInfo, YunxiaoIssuePlanState } from "../../utils/yunxiaoPlanState";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
@@ -29,6 +41,29 @@ const TYPE_CHIP_STYLE: Record<"blue" | "red", React.CSSProperties> = {
   red: s.yunxiaoStatusChipRed,
 };
 
+/** 方案状态徽标：语义色向云效四色系靠拢（需要回答最扎眼用 orange）。 */
+const PLAN_STATE_BADGE_STYLE: Record<YunxiaoIssuePlanState, React.CSSProperties | null> = {
+  none: null,
+  discussing: s.yunxiaoStatusChipBlue,
+  awaiting_input: s.yunxiaoStatusChipOrange,
+  discussion_broken: s.yunxiaoStatusChipOrange,
+  finalized: s.yunxiaoStatusChipGreen,
+  executing: s.yunxiaoStatusChipGreen,
+  completed: s.yunxiaoStatusChipGrey,
+  direct_task: s.yunxiaoStatusChipGrey,
+};
+
+const PLAN_STATE_LABEL_KEY: Record<YunxiaoIssuePlanState, string | null> = {
+  none: null,
+  discussing: "yunxiao.planState.discussing",
+  awaiting_input: "yunxiao.planState.awaitingInput",
+  discussion_broken: "yunxiao.planState.discussionBroken",
+  finalized: "yunxiao.planState.finalized",
+  executing: "yunxiao.planState.executing",
+  completed: "yunxiao.planState.completed",
+  direct_task: "yunxiao.planState.directTask",
+};
+
 function formatDate(ts: number | undefined): string {
   if (!ts) return "";
   try {
@@ -44,12 +79,19 @@ export function YunxiaoIssueList({
   loading,
   loadingMore,
   importedIds,
+  planInfoByIssueId,
   selectedIds,
   selectionMode,
   onToggleSelect,
   onDiscuss,
   onDirectStart,
   onAddToPlan,
+  onViewPlan,
+  onOpenTask,
+  onResumeDiscussion,
+  onStartPlan,
+  onRediscuss,
+  onCancelPlan,
   planNamesByWorkitem,
   onLoadMore,
   yunxiaoProjectId,
@@ -62,18 +104,32 @@ export function YunxiaoIssueList({
   loading: boolean;
   loadingMore: boolean;
   importedIds: ReadonlySet<string>;
+  /** 议题 → 方案状态反查结果（App 层批量派生，决定 badge 与行内动作）。 */
+  planInfoByIssueId: ReadonlyMap<string, YunxiaoIssuePlanInfo>;
   /** 多选模式下的已选议题 id。 */
   selectedIds: ReadonlySet<string>;
   /** 是否处于多选模式（已选 ≥1 时为 true，隐藏单条发起讨论按钮）。 */
   selectionMode: boolean;
   /** 勾选/取消勾选（imported 议题由父级拦截置灰）。 */
   onToggleSelect: (issue: YunxiaoWorkitem) => void;
-  /** 行内单条「发起讨论」快捷入口（与多选发起同一链路）。 */
+  /** 行内单条「发起讨论」快捷入口（与多选发起同一链路；仅无方案议题显示）。 */
   onDiscuss: (issue: YunxiaoWorkitem) => void;
-  /** 行内单条「直接开始」快捷入口（跳过讨论，直接创建执行任务）。 */
+  /** 行内单条「直接开始」快捷入口（仅无方案议题显示；有方案议题走方案链路）。 */
   onDirectStart: (issue: YunxiaoWorkitem) => void;
-  /** 行内单条「加到计划」快捷入口。 */
+  /** 行内单条「加到计划」快捷入口（仅无方案议题显示）。 */
   onAddToPlan: (issue: YunxiaoWorkitem) => void;
+  /** 查看方案弹窗。 */
+  onViewPlan: (issue: YunxiaoWorkitem) => void;
+  /** 跳到讨论任务（需要回答 / 讨论中）。 */
+  onOpenTask: (issue: YunxiaoWorkitem) => void;
+  /** 继续讨论（resume 断掉的讨论任务）。 */
+  onResumeDiscussion: (issue: YunxiaoWorkitem) => void;
+  /** 执行整个方案（finalized，按 deps 拓扑一键全部启动）。 */
+  onStartPlan: (issue: YunxiaoWorkitem) => void;
+  /** 删除重议（级联：取消讨论任务 → 删方案 → 自动发起新讨论）。 */
+  onRediscuss: (issue: YunxiaoWorkitem) => void;
+  /** 取消方案（executing 的逃生通道；确认在弹窗内）。 */
+  onCancelPlan: (issue: YunxiaoWorkitem) => void;
   /** workitemId → 所属计划名（单计划归属）；已有计划的议题显示徽标不再提供添加。 */
   planNamesByWorkitem: ReadonlyMap<string, string>;
   onLoadMore: () => void;
@@ -102,6 +158,11 @@ export function YunxiaoIssueList({
       ) : (
         issues.map((issue) => {
           const imported = importedIds.has(issue.id);
+          const planInfo = planInfoByIssueId.get(issue.id);
+          const hasPlan = !!planInfo && planInfo.state !== "none" && planInfo.state !== "direct_task";
+          const badgeKey = planInfo ? PLAN_STATE_LABEL_KEY[planInfo.state] : null;
+          const badgeStyle = planInfo ? PLAN_STATE_BADGE_STYLE[planInfo.state] : null;
+          const actions = planInfo?.actions;
           const hover = hoverIssueId === issue.id;
           const checked = selectedIds.has(issue.id);
           const priority = getYunxiaoPriority(issue);
@@ -149,6 +210,17 @@ export function YunxiaoIssueList({
                     <span style={TYPE_CHIP_STYLE[typeBadge.tone]}>{t(typeBadge.labelKey)}</span>
                   )}
                   <span style={STATUS_CHIP_STYLE[statusTone]}>{statusLabel}</span>
+                  {badgeKey && badgeStyle && (
+                    <button
+                      type="button"
+                      style={{ ...badgeStyle, border: "none", cursor: "pointer" }}
+                      title={t("yunxiao.planState.viewHint")}
+                      onClick={() => onViewPlan(issue)}
+                    >
+                      <Eye size={10} strokeWidth={2.4} />
+                      {t(badgeKey)}
+                    </button>
+                  )}
                   {planEnd !== undefined && (
                     <span style={overdue ? s.yunxiaoPlanEndOverdue : s.yunxiaoPlanEndBadge}>
                       {t("yunxiao.planEnd.prefix")}
@@ -179,11 +251,101 @@ export function YunxiaoIssueList({
                 <span style={s.yunxiaoMetaBadge}>
                   在计划 {planNamesByWorkitem.get(issue.id)}
                 </span>
-              ) : imported ? (
-                <span style={s.yunxiaoImportedBadge}>
-                  <Check size={12} strokeWidth={2.5} />
-                  {t("yunxiao.imported")}
-                </span>
+              ) : hasPlan && actions ? (
+                /* 方案内议题：动作按状态机分支（badge 本身可点查看方案，这里给快捷动作）。 */
+                <div className="row-actions" data-testid={`yunxiao-issue-actions-${issue.id}`}>
+                  {actions.openTask && (
+                    <button
+                      type="button"
+                      className="row-actions-btn"
+                      data-tone={planInfo?.state === "awaiting_input" ? "primary" : "secondary"}
+                      onClick={() => onOpenTask(issue)}
+                    >
+                      <MessageSquareText size={12} strokeWidth={2.2} />
+                      {t(
+                        planInfo?.state === "awaiting_input"
+                          ? "yunxiao.issueActions.answer"
+                          : "yunxiao.issueActions.openTask",
+                      )}
+                    </button>
+                  )}
+                  {actions.resumeDiscussion && (
+                    <button
+                      type="button"
+                      className="row-actions-btn"
+                      data-tone="primary"
+                      onClick={() => onResumeDiscussion(issue)}
+                    >
+                      <RefreshCw size={12} strokeWidth={2.2} />
+                      {t("yunxiao.issueActions.resumeDiscussion")}
+                    </button>
+                  )}
+                  {actions.startPlan && (
+                    <button
+                      type="button"
+                      className="row-actions-btn"
+                      data-tone="primary"
+                      onClick={() => onStartPlan(issue)}
+                    >
+                      <Play size={12} strokeWidth={2.2} fill="currentColor" />
+                      {t("yunxiao.issueActions.startPlan")}
+                    </button>
+                  )}
+                  {actions.continuePlan && (
+                    <button
+                      type="button"
+                      className="row-actions-btn"
+                      data-tone="primary"
+                      onClick={() => onViewPlan(issue)}
+                    >
+                      <Play size={12} strokeWidth={2.2} fill="currentColor" />
+                      {t("yunxiao.issueActions.continuePlan")}
+                    </button>
+                  )}
+                  {actions.view && (
+                    <button
+                      type="button"
+                      className="row-actions-btn row-actions-secondary"
+                      data-tone="secondary"
+                      onClick={() => onViewPlan(issue)}
+                    >
+                      <Eye size={12} strokeWidth={2.2} />
+                      {t("yunxiao.issueActions.view")}
+                    </button>
+                  )}
+                  {actions.rediscuss && (
+                    <button
+                      type="button"
+                      className="row-actions-btn row-actions-secondary"
+                      data-tone="secondary"
+                      onClick={() => onRediscuss(issue)}
+                    >
+                      {t("yunxiao.issueActions.rediscuss")}
+                    </button>
+                  )}
+                  {actions.cancelPlan && (
+                    <button
+                      type="button"
+                      className="row-actions-btn row-actions-secondary"
+                      data-tone="danger"
+                      onClick={() => onCancelPlan(issue)}
+                    >
+                      <CircleStop size={12} strokeWidth={2.2} />
+                      {t("yunxiao.issueActions.cancelPlan")}
+                    </button>
+                  )}
+                </div>
+              ) : planInfo?.state === "direct_task" ? (
+                <button
+                  type="button"
+                  className="row-actions-btn"
+                  data-tone="secondary"
+                  style={{ visibility: "visible" }}
+                  onClick={() => onOpenTask(issue)}
+                >
+                  <Terminal size={12} strokeWidth={2.2} />
+                  {t("yunxiao.issueActions.locateTask")}
+                </button>
               ) : !selectionMode ? (
                 /* 顺序：次级动作在左（收起时不占视觉），主操作永远在最右——悬停现身时主操作不位移。 */
                 <div className="row-actions" data-testid={`yunxiao-issue-actions-${issue.id}`}>

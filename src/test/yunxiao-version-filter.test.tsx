@@ -103,6 +103,11 @@ describe("YunxiaoView 版本过滤", () => {
             onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
             onSetParentPlan={vi.fn()}
+            onLocateTask={vi.fn()}
+            onStartPlanExecution={vi.fn()}
+            onRediscussIssue={vi.fn()}
+            onResumeDiscussion={vi.fn()}
+            onCancelIssuePlan={vi.fn()}
           />
         </ToastProvider>
       </I18nProvider>,

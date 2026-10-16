@@ -98,6 +98,11 @@ describe("YunxiaoView 添加到计划：勾选数与加入数一致", () => {
             onStartDirectExecution={vi.fn()}
             onCancelPlan={vi.fn()}
             onSetParentPlan={vi.fn()}
+            onLocateTask={vi.fn()}
+            onStartPlanExecution={vi.fn()}
+            onRediscussIssue={vi.fn()}
+            onResumeDiscussion={vi.fn()}
+            onCancelIssuePlan={vi.fn()}
           />
         </ToastProvider>
       </I18nProvider>,

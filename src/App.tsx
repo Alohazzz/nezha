@@ -52,6 +52,8 @@ import {
   buildYunxiaoIssueLink,
   issueTag,
   isYunxiaoWorkitemImported,
+  getLastYunxiaoAgent,
+  getLastYunxiaoPermission,
   requiresSedimentation,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
@@ -2049,6 +2051,82 @@ function App() {
     updatePlan(plan.projectId, planId, { status: "cancelled" });
   }
 
+  // ── 议题列表「按议题 ID 反查方案」的快捷动作 ────────────────────────────────
+
+  /**
+   * 「删除重议」级联：先取消仍在跑的讨论任务（挂着 planId 的任务不取消会导致
+   * delete_yunxiao_plan 被引用检查拒绝），再删方案记录与目录。新讨论由调用方
+   * （议题列表）随后走与「发起讨论」完全一致的入口——打开发起对话框。
+   */
+  async function handleRediscussIssue(issue: YunxiaoWorkitem) {
+    const planInfo = plans
+      .filter((p) => p.status !== "cancelled" && p.issues.some((i) => i.workitemId === issue.id))
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!planInfo) return;
+    const discussion = tasks.find(
+      (t) => t.yunxiaoPlanDiscussion && t.planId === planInfo.id,
+    );
+    if (discussion && isActiveTaskStatus(discussion.status)) {
+      handleCancelTask(discussion.id);
+      // cancel_task 是异步杀进程：等一拍再删，规避引用检查与状态回写的竞态。
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    await handleRemovePlanRecord(planInfo.id);
+  }
+
+  /**
+   * 「执行方案」（议题行 / 查看方案弹窗的快捷执行）：与方案预览页「开始」同一链路——
+   * handleGeneratePlanTodos(autoStart: true)，按 deps.json 拓扑生成待办并串行放行。
+   * Agent/权限取该项目上次选择（与 PlanPreviewPanel 同口径）。
+   */
+  async function handleStartPlanFromIssue(planId: string): Promise<boolean> {
+    const plan = plans.find((p) => p.id === planId);
+    if (!plan) return false;
+    if (plan.status === "draft") return false;
+    try {
+      const appSettings = await invoke<AgentEnabledState>("load_app_settings");
+      const preferred = getLastYunxiaoAgent(plan.projectId) ?? "codex";
+      return await handleGeneratePlanTodos({
+        planId: plan.id,
+        issues: plan.issues,
+        agent: isAgentEnabled(appSettings, preferred) ? preferred : firstEnabledAgent(appSettings),
+        permissionMode: getLastYunxiaoPermission(plan.projectId) ?? "ask",
+        autoStart: true,
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /** 「继续讨论」：resume 断掉的讨论任务（failed/cancelled/interrupted → 恢复会话）。 */
+  function handleResumeDiscussion(planId: string) {
+    const discussion = tasks.find((t) => t.yunxiaoPlanDiscussion && t.planId === planId);
+    if (!discussion) return;
+    if (isActiveTaskStatus(discussion.status)) {
+      // 还活着（含 input_required）：直接跳到任务终端。
+      locateDiscussionTask(discussion.id);
+      return;
+    }
+    handleResumeTask(discussion.id);
+  }
+
+  /** 跳到任务所在项目并选中（讨论任务 / 直接执行任务通用）。 */
+  function locateDiscussionTask(taskId: string) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const project = projects.find((p) => p.id === task.projectId);
+    if (!project) return;
+    enterProjectFromKanban(project, task.id);
+  }
+
+  /** 议题行「取消方案」（executing 逃生通道）：留存态取消，占用释放后可重新讨论。 */
+  function handleCancelIssuePlan(issue: YunxiaoWorkitem) {
+    const planInfo = plans
+      .filter((p) => p.status !== "cancelled" && p.issues.some((i) => i.workitemId === issue.id))
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (planInfo) handleCancelPlan(planInfo.id);
+  }
+
   /** 归档（AR1）：从看板主视图移出（展示层动作，不改 status）。 */
   function handleArchivePlan(planId: string) {
     const plan = plans.find((p) => p.id === planId);
@@ -3591,6 +3669,10 @@ function App() {
             onStartYunxiaoDirectExecution={handleStartYunxiaoDirectExecution}
             onCancelYunxiaoPlan={handleRemovePlanRecord}
             onDeleteYunxiaoPlan={handleDeletePlan}
+            onStartYunxiaoPlanExecution={handleStartPlanFromIssue}
+            onRediscussYunxiaoIssue={handleRediscussIssue}
+            onResumeYunxiaoDiscussion={handleResumeDiscussion}
+            onCancelYunxiaoIssuePlan={handleCancelIssuePlan}
             onLocateTask={(taskId) => {
               const task = tasks.find((t) => t.id === taskId);
               if (!task) return;
