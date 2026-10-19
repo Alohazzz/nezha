@@ -524,6 +524,7 @@ pub fn run() {
             delivery_plan::update_delivery_plan_target,
             delivery_plan::close_delivery_plan,
             delivery_plan::merge_delivery_plan,
+            delivery_plan::sync_delivery_plan_mr,
             delivery_plan::check_delivery_plan_branch,
             delivery_plan::check_plan_branch_checkout,
             delivery_plan::open_delivery_plan_worktree,

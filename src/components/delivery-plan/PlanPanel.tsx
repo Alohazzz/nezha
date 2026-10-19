@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FolderOpen, Plus, Send, Trash2 } from "lucide-react";
 import { appConfirm } from "../AppConfirmDialog";
@@ -148,6 +148,35 @@ export function PlanPanel({
     return next;
   }, [yunxiaoSettings]);
 
+  const selectedProject = projects.find((p) => p.id === projectId);
+  // 重拉列表是「读改写全量」：要用最新的其它项目计划做基底，不能捕获挂载时的闭包。
+  const deliveryPlansRef = useRef(deliveryPlans);
+  deliveryPlansRef.current = deliveryPlans;
+
+  // 进视图 / 切项目时重拉一次磁盘上的计划：提交 MR、合并收敛等动作可能发生在其它视图
+  // （合并中心），全局 deliveryPlans 只在启动时加载过，不重拉会一直显示陈旧状态。
+  useEffect(() => {
+    if (!selectedProject) return;
+    let cancelled = false;
+    invoke<DeliveryPlan[]>("list_delivery_plans", {
+      projectId: selectedProject.id,
+      projectPath: selectedProject.path,
+    })
+      .then((list) => {
+        if (cancelled || !Array.isArray(list)) return;
+        onDeliveryPlansChange([
+          ...deliveryPlansRef.current.filter((p) => p.projectId !== selectedProject.id),
+          ...list,
+        ]);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // deliveryPlans 不进依赖：它被本 effect 改写，进依赖会自激循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProject?.id, selectedProject?.path, onDeliveryPlansChange]);
+
   const scopedPlans = useMemo(
     () =>
       deliveryPlans.filter(
@@ -166,6 +195,31 @@ export function PlanPanel({
   useEffect(() => {
     setSelectedIssuesById(new Map());
   }, [selectedPlanId]);
+
+  // 选中「待评审」计划时核对一次平台状态：MR 可能已经在云效侧被合并 / 关闭，
+  // 磁盘上的 review 需要收敛。失败静默（离线时下次进入再试）。
+  useEffect(() => {
+    const plan = selected;
+    if (!plan || plan.status !== "review" || !plan.mrId || !selectedProject) return;
+    let cancelled = false;
+    invoke<DeliveryPlan>("sync_delivery_plan_mr", {
+      projectPath: selectedProject.path,
+      projectId: plan.projectId,
+      planId: plan.id,
+      checkGitFallback: false,
+    })
+      .then((updated) => {
+        if (cancelled || !updated?.id) return;
+        onDeliveryPlansChange(
+          deliveryPlansRef.current.map((p) => (p.id === updated.id ? updated : p)),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.status, selected?.mrId, selectedProject?.path]);
 
   const issueRows = useMemo(() => {
     if (!selected) return [];
@@ -565,8 +619,14 @@ export function PlanPanel({
           batch={submitPlan}
           projectId={project.id}
           projectPath={project.path}
+          onDone={(updated) => {
+            // 提交 MR 成功后后端已写 status=review：立刻同步到列表，避免界面停留在「进行中」。
+            onDeliveryPlansChange(
+              deliveryPlans.map((p) => (p.id === updated.id ? updated : p)),
+            );
+            setSubmitPlan(null);
+          }}
           onClose={() => setSubmitPlan(null)}
-          onDone={() => setSubmitPlan(null)}
         />
       )}
       {launchIssues && project && (

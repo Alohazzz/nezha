@@ -420,6 +420,11 @@ function App() {
   const backfillHandlerRef = useRef<(() => Promise<void>) | null>(null);
   const backfillProcessingRef = useRef<Set<string>>(new Set());
   tasksRef.current = tasks;
+  // 合并中心的任务回调里要按分支反查计划 / 项目：事件监听只建一次，必须读 ref 拿最新值。
+  const deliveryPlansRef = useRef<DeliveryPlan[]>([]);
+  const projectsRef = useRef<Project[]>([]);
+  deliveryPlansRef.current = deliveryPlans;
+  projectsRef.current = projects;
   backfillHandlerRef.current = handleScanBackfillDrafts;
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
@@ -436,9 +441,13 @@ function App() {
   // 「恢复会话再发」时暂存的待发送输入：resume_task 启动的 PTY 会缓冲写入，
   // invoke 完成后补发 send_input 即可（决策 9）。
   const pendingResumeInputRef = useRef<Record<string, string>>({});
-  // 由「合并审核」发起的 codeup 审查/冲突任务，任务结束后需清理临时 worktree。
+  // 由「合并审核」发起的 codeup 审查/冲突/合并任务，任务结束后需清理临时 worktree。
+  // sourceBranch 用于合并成功后反查交付计划（一个计划一条分支）并收敛其状态。
   const codeupTaskCleanupRef = useRef<
-    Record<string, { repository: string; mrId: number; repositoryId?: string; kind?: string }>
+    Record<
+      string,
+      { repository: string; mrId: number; repositoryId?: string; kind?: string; sourceBranch?: string }
+    >
   >({});
 
   const formatSaveProjectsError = useCallback(
@@ -870,16 +879,14 @@ function App() {
             if (codeupCleanup.kind === "merge" && status === "done") {
               // 分支合并任务：已由 Agent 用 git 将合并结果推送到目标分支完成合并，无需再调 Codeup 接口。
               showToast("MR 已通过 git 推送合并到目标分支", "success");
-              invoke("codeup_cleanup_mr", {
-                repository: codeupCleanup.repository,
-                mrId: String(codeupCleanup.mrId),
-              }).catch(() => {});
-            } else {
-              invoke("codeup_cleanup_mr", {
-                repository: codeupCleanup.repository,
-                mrId: String(codeupCleanup.mrId),
-              }).catch(() => {});
+              // 合并动作发生在 Codeup 之外（直接 push），计划不会自己收敛：
+              // 按源分支反查交付计划，让后端核对 MR / git 状态后写 merged。
+              void syncDeliveryPlanAfterMerge(codeupCleanup.sourceBranch);
             }
+            invoke("codeup_cleanup_mr", {
+              repository: codeupCleanup.repository,
+              mrId: String(codeupCleanup.mrId),
+            }).catch(() => {});
           }
         }
         if (status === "done") scheduleForDoneTask(task_id);
@@ -951,6 +958,36 @@ function App() {
     const task = tasksRef.current.find((candidate) => candidate.id === taskId);
     const label = task?.name ?? task?.prompt.slice(0, 60) ?? taskId;
     return label;
+  }
+
+  /**
+   * 合并中心的分支合并任务成功后收敛交付计划。
+   *
+   * 合并由 Agent 直接 `git push` 到目标分支完成，Codeup 上的 MR 状态可能仍是评审中，
+   * 因此让后端核对「MR 状态 + 源分支是否已全部进入目标分支」后写 status=merged。
+   * 按源分支反查计划（一个计划一条分支）；不属于任何计划的 MR 直接跳过。
+   */
+  async function syncDeliveryPlanAfterMerge(sourceBranch?: string) {
+    const branch = sourceBranch?.trim();
+    if (!branch) return;
+    const plan = deliveryPlansRef.current.find(
+      (p) => p.branch === branch && p.status !== "merged" && p.status !== "closed",
+    );
+    if (!plan) return;
+    const project = projectsRef.current.find((p) => p.id === plan.projectId);
+    if (!project) return;
+    try {
+      const updated = await invoke<DeliveryPlan>("sync_delivery_plan_mr", {
+        projectPath: project.path,
+        projectId: plan.projectId,
+        planId: plan.id,
+        checkGitFallback: true,
+      });
+      setDeliveryPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    } catch (e) {
+      // 收敛失败不打扰用户：合并本身已成功，计划状态可在下次进「计划」视图时重拉修正。
+      console.warn("[delivery-plan] sync after merge failed:", e);
+    }
   }
 
   async function handleOpen() {
@@ -1297,6 +1334,7 @@ function App() {
       mrId: mr.localId,
       repositoryId: mr.repositoryId,
       kind,
+      sourceBranch: mr.sourceBranch,
     };
 
     // 4) 后台创建该 MR 的代码文件夹（fetch 源/目标分支 + checkout 源分支）。

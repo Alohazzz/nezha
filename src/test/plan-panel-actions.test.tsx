@@ -33,14 +33,17 @@ const projects = [{ id: "p1", path: "H:/Project", name: "HIS" }] as Project[];
 const tasks = [] as Task[];
 const plans = [] as Plan[];
 
-const renderView = (batch: DeliveryPlan) =>
+const renderView = (
+  batch: DeliveryPlan,
+  onDeliveryPlansChange: (plans: DeliveryPlan[]) => void = () => undefined,
+) =>
   render(
     <PlanPanel
       projects={projects}
       tasks={tasks}
       plans={plans}
       deliveryPlans={[batch]}
-      onDeliveryPlansChange={() => undefined}
+      onDeliveryPlansChange={onDeliveryPlansChange}
       onGoYunxiao={() => undefined}
       onStartDirectExecution={() => undefined}
       onCreatePlan={() => ({
@@ -92,6 +95,30 @@ describe("PlanPanel", () => {
 });
 
 describe("SubmitMrDialog", () => {
+  it("writes the review-state plan returned by the backend back into the list", async () => {
+    const inv = vi.mocked(invoke);
+    const reviewed: DeliveryPlan = { ...baseBatch, status: "review", mrId: "301" };
+    inv.mockImplementation((command: string) => {
+      if (command === "codeup_branch_managers") return Promise.resolve([]);
+      if (command === "codeup_list_members") return Promise.resolve([]);
+      if (command === "codeup_create_mr") return Promise.resolve(reviewed);
+      if (command === "list_delivery_plans") return Promise.resolve([baseBatch]);
+      return Promise.resolve(null);
+    });
+    const onDeliveryPlansChange = vi.fn();
+
+    renderView(baseBatch, onDeliveryPlansChange);
+    fireEvent.click(await screen.findByRole("button", { name: /提交 MR/ }));
+    fireEvent.click(screen.getByRole("button", { name: /提交到 Codeup/ }));
+
+    // 后端返回的 review 计划必须写回列表：否则界面停在「进行中」，再点提交会被后端拒绝。
+    await waitFor(() => {
+      expect(onDeliveryPlansChange).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ id: "b1", status: "review" })]),
+      );
+    });
+  });
+
   it("prefills reviewers from the target branch rule and submits them as names", async () => {
     const inv = vi.mocked(invoke);
     inv.mockImplementation((command: string) => {

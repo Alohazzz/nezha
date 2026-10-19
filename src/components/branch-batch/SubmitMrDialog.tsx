@@ -14,7 +14,8 @@ export function SubmitMrDialog({
   projectPath: string;
   projectId: string;
   batch: DeliveryPlan;
-  onDone: () => void;
+  /** 提交成功后的最新计划记录（后端已把 status 写成 review）：由调用方写回列表。 */
+  onDone?: (updated: DeliveryPlan) => void;
   onClose: () => void;
 }) {
   /** 审核人（人名）。与「发起合并请求」弹层同一套选择器，由后端解析成云效用户 ID。 */
@@ -51,21 +52,22 @@ export function SubmitMrDialog({
     setBusy(true);
     setError("");
     try {
-      await invoke("codeup_create_mr", {
+      const updated = await invoke<DeliveryPlan>("codeup_create_mr", {
         projectPath,
         repoPath: batch.worktreeRepo ?? null,
         projectId,
         planId: batch.id,
         reviewers,
       });
-      onDone();
+      // 后端返回的计划已是 review：交给调用方写回列表，避免「提交成功但界面仍显示进行中」。
+      onDone?.(updated ?? { ...batch, status: "review" });
       onClose();
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
-  }, [busy, missingTarget, reviewers, projectPath, projectId, batch.id, batch.worktreeRepo, onDone, onClose]);
+  }, [busy, missingTarget, reviewers, projectPath, projectId, batch, onDone, onClose]);
 
   return (
     <div className="build-dialog-overlay">

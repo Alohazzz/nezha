@@ -519,6 +519,156 @@ pub fn close_delivery_plan(
     Ok(result)
 }
 
+/// MR 状态对应的计划收敛动作（纯函数，留测试接缝）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanMrOutcome {
+    /// 仍在评审 / 待合并：计划至多推进到 review。
+    Review,
+    /// MR 已合并：计划收敛到 merged。
+    Merged,
+    /// MR 被关闭 / 拒绝：计划收敛到 closed。
+    Closed,
+}
+
+/// 云效 MR 状态 → 收敛动作。
+///
+/// **必须按值匹配**：`TO_BE_MERGED`（待合并）含 `MERGED` 子串，用 `contains` 会把
+/// 「还在评审」误判成「已合并」。未知状态按「仍有活跃 MR」处理（计划至少是 review）。
+fn plan_outcome_for_mr_state(mr_state: &str) -> PlanMrOutcome {
+    match mr_state.trim().to_ascii_uppercase().as_str() {
+        "MERGED" => PlanMrOutcome::Merged,
+        "CLOSED" | "REJECTED" => PlanMrOutcome::Closed,
+        _ => PlanMrOutcome::Review,
+    }
+}
+
+/// 云效 MR 状态 → `DeliveryPlan.mrStatus`（对齐 TS 侧 `MrStatus` 联合类型）。
+fn mr_status_for_state(mr_state: &str) -> &'static str {
+    match mr_state.trim().to_ascii_uppercase().as_str() {
+        "MERGED" => "merged",
+        "CLOSED" => "closed",
+        "REJECTED" => "rejected",
+        "APPROVED" | "TO_BE_MERGED" => "approved",
+        _ => "opened",
+    }
+}
+
+/// 源分支的提交是否已全部进入目标分支（`target..source` 计数为 0）。
+///
+/// 合并中心的分支合并是由 Agent 直接 `git push` 到目标分支完成的，云效上的 MR 记录
+/// 可能仍停在评审中；此时以 git 事实兜底，避免计划永远不收敛。
+async fn source_merged_into_target(
+    project_path: &str,
+    repo_path: Option<&str>,
+    source_branch: &str,
+    target_branch: &str,
+) -> bool {
+    if source_branch.trim().is_empty() || target_branch.trim().is_empty() {
+        return false;
+    }
+    let Ok(cwd) = resolve_repo_path(project_path, repo_path).await else {
+        return false;
+    };
+    matches!(
+        crate::codeup::source_branch_ahead_count(&cwd, source_branch, target_branch, true).await,
+        Some(0)
+    )
+}
+
+/// 按 Codeup MR 的实时状态收敛交付计划状态。
+///
+/// 调用时机：合并中心的分支合并任务成功后（`check_git_fallback = true`，允许用 git
+/// 事实兜底），以及计划详情的手动刷新（`false`，只信平台状态）。
+///
+/// 终态（merged / closed）不回退；没有 `mrId` 的计划视为从未提交过 MR，原样返回。
+#[tauri::command]
+pub async fn sync_delivery_plan_mr(
+    project_path: String,
+    project_id: String,
+    plan_id: String,
+    check_git_fallback: bool,
+) -> Result<DeliveryPlan, String> {
+    let read_project = project_id.clone();
+    let read_plan = plan_id.clone();
+    let batch = tokio::task::spawn_blocking(move || {
+        load_project_batches_sync(read_project)?
+            .into_iter()
+            .find(|b| b.id == read_plan)
+            .ok_or_else(|| "DeliveryPlan not found".to_string())
+    })
+    .await
+    .map_err(|e| format!("Sync plan MR task panicked: {e}"))??;
+
+    let Some(mr_id) = batch.mr_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok(batch);
+    };
+    if matches!(batch.status.as_str(), "merged" | "closed") {
+        return Ok(batch);
+    }
+    let mr_id = mr_id.to_string();
+
+    let mr_state = crate::codeup::fetch_mr_state(
+        &project_path,
+        batch.worktree_repo.as_deref(),
+        &mr_id,
+    )
+    .await
+    .ok();
+    let mut outcome = mr_state.as_deref().map(plan_outcome_for_mr_state);
+    if check_git_fallback
+        && !matches!(
+            outcome,
+            Some(PlanMrOutcome::Merged) | Some(PlanMrOutcome::Closed)
+        )
+        && source_merged_into_target(
+            &project_path,
+            batch.worktree_repo.as_deref(),
+            &batch.branch,
+            &batch.target_branch,
+        )
+        .await
+    {
+        outcome = Some(PlanMrOutcome::Merged);
+    }
+    let Some(outcome) = outcome else {
+        return Err("无法获取 MR 状态（云效不可达），计划状态未变更".to_string());
+    };
+
+    tokio::task::spawn_blocking(move || -> Result<DeliveryPlan, String> {
+        let mut batches = load_project_batches_sync(project_id.clone())?;
+        let plan = batches
+            .iter_mut()
+            .find(|b| b.id == plan_id)
+            .ok_or_else(|| "DeliveryPlan not found".to_string())?;
+        plan.mr_status = Some(match mr_state {
+            Some(state) => mr_status_for_state(&state).to_string(),
+            // 平台状态没拿到但 git 已确认落地：按 merged 记录。
+            None => "merged".to_string(),
+        });
+        match outcome {
+            PlanMrOutcome::Merged => {
+                plan.status = "merged".to_string();
+                plan.closed_at.get_or_insert_with(now_ms);
+            }
+            PlanMrOutcome::Closed => {
+                plan.status = "closed".to_string();
+                plan.closed_at.get_or_insert_with(now_ms);
+            }
+            PlanMrOutcome::Review => {
+                // 有活跃 MR 的计划至少是「待评审」；已进入 review 的不重复改写。
+                if plan.status == "active" {
+                    plan.status = "review".to_string();
+                }
+            }
+        }
+        let result = plan.clone();
+        save_project_batches_sync(project_id, batches)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("Sync plan MR task panicked: {e}"))?
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct MergeBatchResult {
     pub message: String,
@@ -1082,6 +1232,51 @@ fn run_git_ref(cwd: &str, reference: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mr_state_maps_to_expected_plan_outcome() {
+        assert_eq!(
+            plan_outcome_for_mr_state("MERGED"),
+            PlanMrOutcome::Merged
+        );
+        // 关键回归：TO_BE_MERGED 含 MERGED 子串，按值匹配不能误判成已合并。
+        assert_eq!(
+            plan_outcome_for_mr_state("TO_BE_MERGED"),
+            PlanMrOutcome::Review
+        );
+        assert_eq!(
+            plan_outcome_for_mr_state("UNDER_REVIEW"),
+            PlanMrOutcome::Review
+        );
+        assert_eq!(
+            plan_outcome_for_mr_state("APPROVED"),
+            PlanMrOutcome::Review
+        );
+        assert_eq!(
+            plan_outcome_for_mr_state("CLOSED"),
+            PlanMrOutcome::Closed
+        );
+        assert_eq!(
+            plan_outcome_for_mr_state("REJECTED"),
+            PlanMrOutcome::Closed
+        );
+        // 大小写 / 空白容错。
+        assert_eq!(
+            plan_outcome_for_mr_state(" merged "),
+            PlanMrOutcome::Merged
+        );
+    }
+
+    #[test]
+    fn mr_state_maps_to_mr_status_field() {
+        assert_eq!(mr_status_for_state("MERGED"), "merged");
+        assert_eq!(mr_status_for_state("CLOSED"), "closed");
+        assert_eq!(mr_status_for_state("REJECTED"), "rejected");
+        assert_eq!(mr_status_for_state("APPROVED"), "approved");
+        assert_eq!(mr_status_for_state("TO_BE_MERGED"), "approved");
+        assert_eq!(mr_status_for_state("UNDER_REVIEW"), "opened");
+        assert_eq!(mr_status_for_state("unknown"), "opened");
+    }
 
     #[test]
     fn branch_name_follows_his_type_version_target_desc_shape() {
