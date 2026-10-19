@@ -587,12 +587,16 @@ fn load_plan(project_id: &str, plan_id: &str) -> Result<DeliveryPlan, String> {
         .ok_or_else(|| "DeliveryPlan not found".to_string())
 }
 
-/// 查询 Codeup 上该 MR 当前是否已合并（状态归一化为含 "MERGED"）。
-pub(crate) async fn batch_mr_is_merged(
+/// 读取 Codeup 上单个 MR 的归一化状态（大写，如 `MERGED` / `UNDER_REVIEW` / `CLOSED`）。
+///
+/// 抽出来供两条链路共用：删除计划的「已合并」门禁（`batch_mr_is_merged`）与交付计划
+/// 状态同步（`delivery_plan::sync_delivery_plan_mr`）。解析口径只此一处，避免两边对
+/// `state` / `status` 字段的取舍漂移。
+pub(crate) async fn fetch_mr_state(
     project_path: &str,
     repo_path: Option<&str>,
     mr_id: &str,
-) -> Result<bool, String> {
+) -> Result<String, String> {
     let (token, org_id) = load_creds().await?;
     let repo = resolve_codeup_repo(project_path, repo_path).await?;
     let repos = fetch_codeup_repositories().await?;
@@ -605,13 +609,23 @@ pub(crate) async fn batch_mr_is_merged(
     let json: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析 MR 状态失败: {e}"))?;
     let item = json.get("result").unwrap_or(&json);
-    let state = item
+    Ok(item
         .get("state")
         .or_else(|| item.get("status"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
-        .to_uppercase();
-    Ok(state.contains("MERGED"))
+        .to_uppercase())
+}
+
+/// 查询 Codeup 上该 MR 当前是否已合并（状态归一化为含 "MERGED"）。
+pub(crate) async fn batch_mr_is_merged(
+    project_path: &str,
+    repo_path: Option<&str>,
+    mr_id: &str,
+) -> Result<bool, String> {
+    Ok(fetch_mr_state(project_path, repo_path, mr_id)
+        .await?
+        .contains("MERGED"))
 }
 
 /// 组织成员（`GET /oapi/v1/platform/organizations/{org}/members` 分页返回）。
@@ -871,7 +885,7 @@ fn ref_exists(dir: &str, name: &str) -> bool {
 ///
 /// 拦下是否可靠：`origin/<target>..<source>` 计数为 0 说明源分支是目标 ref 的祖先，
 /// 而目标 ref 不会比远端更新（只能由 fetch 前进），故源分支也确实不含远端目标没有的提交。
-async fn source_branch_ahead_count(
+pub(crate) async fn source_branch_ahead_count(
     dir: &str,
     source: &str,
     target: &str,
