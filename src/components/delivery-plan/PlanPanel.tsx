@@ -76,6 +76,7 @@ export function PlanPanel({
   onSetParentPlan,
   onOpenWorkitem,
   onDeletePlan,
+  onReleaseWorkitemFromPlans,
   onLocateSchemeTask,
 }: {
   projects: Project[];
@@ -106,6 +107,9 @@ export function PlanPanel({
   onOpenWorkitem?: (planId: string) => void;
   /** 删除方案（预览弹窗内的删除按钮走这条链路）。 */
   onDeletePlan?: (planId: string) => void | Promise<void>;
+  /** 「移出计划」成功后的级联：把议题从仍占用它的方案快照剔除（剔空取消），
+   *  解除云效议题列表的已导入判定。 */
+  onReleaseWorkitemFromPlans?: (workitemId: string) => void;
   /** 定位到方案最新执行任务的窗口（从欢迎页直达项目工作区）。 */
   onLocateSchemeTask?: (taskId: string) => void;
 }) {
@@ -372,6 +376,9 @@ export function PlanPanel({
         organizationId: settings.organizationId,
       });
       onDeliveryPlansChange(deliveryPlans.map((p) => (p.id === plan.id ? plan : p)));
+      // 级联释放：交付计划移除后，仍被方案快照占用的议题会继续命中云效议题
+      // 列表的已导入守卫（用户视角即"移除了却不允许导入"），这里一并剔除。
+      onReleaseWorkitemFromPlans?.(workitemId);
       setSelectedIssuesById((prev) => {
         if (!prev.has(workitemId)) return prev;
         const next = new Map(prev);

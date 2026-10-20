@@ -124,6 +124,7 @@ export function WelcomePage({
   onRediscussYunxiaoIssue,
   onResumeYunxiaoDiscussion,
   onCancelYunxiaoIssuePlan,
+  onReleaseWorkitemFromPlans,
   plans,
   deliveryPlans,
   onDeliveryPlansChange,
@@ -184,6 +185,8 @@ export function WelcomePage({
   onResumeYunxiaoDiscussion: (planId: string) => void;
   /** 议题列表「取消方案」：留存态取消（executing 的逃生通道）。 */
   onCancelYunxiaoIssuePlan: (issue: YunxiaoWorkitem) => void;
+  /** 「移出交付计划」级联：把议题从关联方案快照剔除（剔空取消），解除议题占用。 */
+  onReleaseWorkitemFromPlans: (workitemId: string) => void;
   plans: Plan[];
   /** 交付计划（DeliveryPlan）：欢迎页「计划」视图展示＋任务绑定源。 */
   deliveryPlans: DeliveryPlan[];
@@ -329,6 +332,7 @@ export function WelcomePage({
             onCancelPlan={onCancelYunxiaoPlan}
             onSetParentPlan={onSetYunxiaoPlanParent}
             onDeletePlan={onDeleteYunxiaoPlan}
+            onReleaseWorkitemFromPlans={onReleaseWorkitemFromPlans}
             onLocateSchemeTask={onLocateTask}
           />
         ) : view === "yunxiao" ? (

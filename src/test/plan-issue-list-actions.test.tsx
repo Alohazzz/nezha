@@ -75,6 +75,7 @@ function renderPanel(overrides: {
   plans?: Plan[];
   onCreatePlan?: (projectId: string, issues: PlanIssue[]) => Plan;
   onStartPlanDiscussion?: () => void;
+  onReleaseWorkitemFromPlans?: (workitemId: string) => void;
 } = {}) {
   return render(
     <I18nProvider>
@@ -90,6 +91,7 @@ function renderPanel(overrides: {
         onStartPlanDiscussion={overrides.onStartPlanDiscussion ?? (() => undefined)}
         onCancelPlan={() => undefined}
         onSetParentPlan={() => undefined}
+        onReleaseWorkitemFromPlans={overrides.onReleaseWorkitemFromPlans}
       />
     </I18nProvider>,
   );
@@ -200,6 +202,17 @@ describe("计划详情议题表：云效链接 / 单条讨论 / 合并讨论", (
         expect.objectContaining({ workitemId: "w-8" }),
       ),
     );
+  });
+
+  it("移出计划成功后级联解除方案占用（否则云效议题列表仍判已导入）", async () => {
+    const onReleaseWorkitemFromPlans = vi.fn<(workitemId: string) => void>();
+    const user = userEvent.setup();
+    renderPanel({ onReleaseWorkitemFromPlans });
+
+    const cell = screen.getByTestId("plan-issue-actions-w-8");
+    await user.click(within(cell).getByRole("button", { name: "移出计划" }));
+
+    await waitFor(() => expect(onReleaseWorkitemFromPlans).toHaveBeenCalledWith("w-8"));
   });
 
   it("勾选多条后「合并讨论」把整批议题合成一份方案", async () => {

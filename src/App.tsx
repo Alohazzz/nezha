@@ -54,6 +54,7 @@ import {
   isYunxiaoWorkitemImported,
   getLastYunxiaoAgent,
   getLastYunxiaoPermission,
+  releaseWorkitemFromPlans,
   requiresSedimentation,
   YUNXIAO_KNOWLEDGE_BASE_PROJECT_ID,
 } from "./utils/yunxiao";
@@ -2170,6 +2171,23 @@ function App() {
     if (planInfo) handleCancelPlan(planInfo.id);
   }
 
+  /**
+   * 「移出交付计划」的级联释放：交付计划成员移除后，把该议题从仍占用它的
+   * 方案快照里一并剔除（剔空置 cancelled 并落盘），否则云效议题列表的
+   * 已导入守卫继续命中，议题永远无法重新导入。
+   */
+  function handleReleaseWorkitemFromPlans(workitemId: string) {
+    const plan = plans.find(
+      (p) => p.status !== "cancelled" && p.issues.some((i) => i.workitemId === workitemId),
+    );
+    if (!plan) return;
+    setPlans((prev) => {
+      const next = releaseWorkitemFromPlans(prev, workitemId);
+      persistProjectPlans(plan.projectId, next);
+      return next;
+    });
+  }
+
   /** 归档（AR1）：从看板主视图移出（展示层动作，不改 status）。 */
   function handleArchivePlan(planId: string) {
     const plan = plans.find((p) => p.id === planId);
@@ -3716,6 +3734,7 @@ function App() {
             onRediscussYunxiaoIssue={handleRediscussIssue}
             onResumeYunxiaoDiscussion={handleResumeDiscussion}
             onCancelYunxiaoIssuePlan={handleCancelIssuePlan}
+            onReleaseWorkitemFromPlans={handleReleaseWorkitemFromPlans}
             onLocateTask={(taskId) => {
               const task = tasks.find((t) => t.id === taskId);
               if (!task) return;
