@@ -34,14 +34,32 @@ pub fn extract_value_score_section(text: &str) -> Option<&str> {
 /// v2 评分（issue-value-scoring）Bug 用「绩效指数 = 优先指数 × 研发贡献系数」，
 /// 绩效导向，优先于旧「优先指数」；Req 仍取「核心指数」。旧格式（2026-10 前回写的
 /// 评论）继续兼容，回代历史议题不丢值。
+/// 容错：模型偶尔把「指数」写成「指标」（如「核心指标：19.2」，QHDK 实例导致字段
+/// 回写为空），两词等价接受；中文/英文冒号都认。
 pub fn parse_value_score_index(section: &str) -> Option<f64> {
-    // 行标签按优先级排列：绩效指数（v2 Bug）> 核心指数（Req）> 优先指数（旧 Bug）。
-    for label in ["- 绩效指数：", "- 绩效指数:", "- 核心指数：", "- 核心指数:", "- 优先指数：", "- 优先指数:"] {
-        if let Some(value) = first_index_after(section, label) {
+    // 行标签按优先级排列：绩效（v2 Bug）> 核心（Req）> 优先（旧 Bug）；
+    // 「指数/指标」两变体 ×「：/:」两冒号由 expand_label 展开生成。
+    for label in expand_label("- 绩效")
+        .into_iter()
+        .chain(expand_label("- 核心"))
+        .chain(expand_label("- 优先"))
+    {
+        if let Some(value) = first_index_after(section, &label) {
             return Some(value);
         }
     }
     None
+}
+
+/// 生成一个标签前缀的全部变体：`指数`/`指标` × 中文冒号/英文冒号。
+fn expand_label(prefix: &str) -> Vec<String> {
+    let mut variants = Vec::with_capacity(4);
+    for word in ["指数", "指标"] {
+        for colon in ["：", ":"] {
+            variants.push(format!("{prefix}{word}{colon}"));
+        }
+    }
+    variants
 }
 
 fn first_index_after(section: &str, prefix: &str) -> Option<f64> {
@@ -202,6 +220,30 @@ mod tests {
             None
         );
         assert_eq!(parse_value_score_index(""), None);
+    }
+
+    #[test]
+    fn parses_index_label_typo_zhibiao() {
+        // 实例：模型把「核心指数」写成「核心指标」，导致字段回写为空——必须兜底。
+        let section = "- 核心指标：19.2 = (3 × 4 × 2) × 交付复杂度系数 0.8";
+        assert_eq!(parse_value_score_index(section), Some(19.2));
+        assert_eq!(
+            parse_value_score_index("- 绩效指标：59.4 = 54.0 × 研发贡献系数 1.1"),
+            Some(59.4)
+        );
+    }
+
+    #[test]
+    fn parses_half_width_colon_variants() {
+        assert_eq!(parse_value_score_index("- 核心指数: 50"), Some(50.0));
+        assert_eq!(parse_value_score_index("- 绩效指标: 59.4"), Some(59.4));
+    }
+
+    #[test]
+    fn zhibiao_does_not_shadow_priority_order() {
+        // 「指标」容错不得改变优先级：绩效行存在时核心行（无论指数/指标）不生效。
+        let section = "- 核心指标：19.2\n- 绩效指数：59.4";
+        assert_eq!(parse_value_score_index(section), Some(59.4));
     }
 
     #[test]

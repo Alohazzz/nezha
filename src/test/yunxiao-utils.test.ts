@@ -10,6 +10,7 @@ import {
   isYunxiaoWorkitemImported,
   issueTag,
   messageHasIssueTag,
+  releaseWorkitemFromPlans,
   requiresSedimentation,
   splitValueScoreSection,
 } from "../utils/yunxiao";
@@ -100,6 +101,60 @@ describe("isYunxiaoWorkitemImported", () => {
       ],
     });
     expect(isYunxiaoWorkitemImported([discussion], [other], WORKITEM_ID)).toBe(false);
+  });
+});
+
+describe("releaseWorkitemFromPlans", () => {
+  const WORKITEM_ID = "741d91e70b392b65ef95604c1f";
+
+  it("从非 cancelled 方案剔除议题，议题随之解除占用", () => {
+    const plan = basePlan({ status: "executing" });
+    const [next] = releaseWorkitemFromPlans([plan], WORKITEM_ID);
+    expect(next.issues).toHaveLength(0);
+    expect(isYunxiaoWorkitemImported([], [next], WORKITEM_ID)).toBe(false);
+  });
+
+  it("剔除后方案为空时置为 cancelled（空方案无存续意义，也避免反查命中）", () => {
+    const plan = basePlan({ status: "executing" });
+    const [next] = releaseWorkitemFromPlans([plan], WORKITEM_ID);
+    expect(next.status).toBe("cancelled");
+  });
+
+  it("方案还有其他议题时只摘除目标议题，状态不动", () => {
+    const plan = basePlan({
+      status: "executing",
+      issues: [
+        {
+          workitemId: WORKITEM_ID,
+          serialNumber: "QHDK-1",
+          subject: "目标",
+          category: "Req",
+        },
+        { workitemId: "other", serialNumber: "QHDK-2", subject: "其他", category: "Bug" },
+      ],
+    });
+    const [next] = releaseWorkitemFromPlans([plan], WORKITEM_ID);
+    expect(next.status).toBe("executing");
+    expect(next.issues.map((i) => i.workitemId)).toEqual(["other"]);
+  });
+
+  it("已取消方案原样保留（不产生无意义的更新）", () => {
+    const plan = basePlan({ status: "cancelled" });
+    const [next] = releaseWorkitemFromPlans([plan], WORKITEM_ID);
+    expect(next).toBe(plan);
+  });
+
+  it("不命中任何方案时原数组原样返回", () => {
+    const plans = [basePlan({}), basePlan({ id: "plan-2" })];
+    expect(releaseWorkitemFromPlans(plans, "miss")).toEqual(plans);
+  });
+
+  it("同议题出现在多个方案时全部剔除", () => {
+    const newer = basePlan({ status: "executing", createdAt: 2 });
+    const older = basePlan({ id: "plan-0", status: "draft", createdAt: 1 });
+    const next = releaseWorkitemFromPlans([older, newer], WORKITEM_ID);
+    expect(next.map((p) => p.status)).toEqual(["cancelled", "cancelled"]);
+    expect(next.every((p) => p.issues.length === 0)).toBe(true);
   });
 });
 
@@ -434,6 +489,15 @@ describe("splitValueScoreSection", () => {
     expect(result.comment).toBe("只有评论内容");
     expect(result.scoreSection).toBeNull();
     expect(result.scoreValue).toBeNull();
+  });
+
+  it("「指数」笔误为「指标」时仍解析（实例：核心指标：19.2 导致字段回写为空）", () => {
+    const text = [
+      "## 价值评分（issue-value-scoring · 2026-10-20）",
+      "",
+      "- 核心指标：19.2 = (3 × 4 × 2) × 交付复杂度系数 0.8",
+    ].join("\n");
+    expect(splitValueScoreSection(text).scoreValue).toBe(19.2);
   });
 
   it("小节在末尾时评论只保留前文", () => {

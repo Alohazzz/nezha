@@ -538,6 +538,29 @@ export function isYunxiaoWorkitemImported(
 }
 
 /**
+ * 「移出交付计划」的级联释放：把议题从所有非 cancelled 方案的成员快照里剔除，
+ * 剔空的方案置为 cancelled（空方案无存续意义，也与占用口径一致——cancelled
+ * 方案不占用议题）。不改任务直接绑定：若仍有任务绑着该议题，占用照旧，
+ * 由任务自己的生命周期（删除/取消）释放。返回新数组，不原地修改。
+ */
+export function releaseWorkitemFromPlans(
+  plans: readonly Plan[],
+  workitemId: string,
+): Plan[] {
+  if (!workitemId) return [...plans];
+  return plans.map((plan) => {
+    if (plan.status === "cancelled") return plan;
+    if (!plan.issues.some((issue) => issue.workitemId === workitemId)) return plan;
+    const issues = plan.issues.filter((issue) => issue.workitemId !== workitemId);
+    return {
+      ...plan,
+      issues,
+      status: issues.length === 0 ? "cancelled" : plan.status,
+    };
+  });
+}
+
+/**
  * 该任务启动时是否要求产出知识沉淀产物。
  *
  * 只有**云效议题的执行类任务**（方案执行 / 直接执行）为真：它们有议题上下文、改动
@@ -611,7 +634,10 @@ export function splitValueScoreSection(text: string): SplitValueScoreSection {
 function parseValueScoreIndex(section: string): number | null {
   // 标签优先级：绩效指数（v2 Bug，绩效导向）> 核心指数（Req）> 优先指数（旧 Bug）。
   // 旧格式保留兼容，历史评论回代不丢值。
-  const labels = ["核心指数", "绩效指数", "优先指数"];
+  // 「指数」兼容「指标」（模型偶发笔误「核心指标」导致字段回写为空）。
+  const labels = ["核心", "绩效", "优先"].flatMap((prefix) =>
+    ["指数", "指标"].map((suffix) => prefix + suffix),
+  );
   for (const label of labels) {
     for (const rawLine of section.split(/\r?\n/)) {
       const line = rawLine.trim();
