@@ -1505,13 +1505,18 @@ function App() {
     void beginTaskRun(task, project);
   }
 
-  /** 该方案待办所在项目是否还有空闲并发槽位（与自动接续共用同一上限）。 */
+  /**
+   * 该方案待办所在槽位池是否空闲（与自动接续共用同一上限）。
+   * 方案待办按「项目+方案」分池：只看同方案的活跃任务，不同方案可并行；
+   * 普通任务落项目公共池，与一切互斥。
+   */
   function hasFreeScheduledSlot(task: Task): boolean {
     return hasFreeSlot(
       tasks,
       task.projectId,
       planMaxConcurrentRef.current[task.projectId],
       DEFAULT_PLAN_MAX_CONCURRENT,
+      task.planId,
     );
   }
 

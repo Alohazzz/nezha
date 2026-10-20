@@ -132,6 +132,19 @@ describe("countOccupiedSlots", () => {
     expect(countOccupiedSlots(tasks, "p")).toBe(1);
     expect(countOccupiedSlots(tasks, "q")).toBe(1);
   });
+
+  it("方案分池：带 planId 只数同方案活跃任务，不同方案互不占槽", () => {
+    const tasks = [
+      makeTask({ id: "a1", projectId: "p", planId: "p1", status: "running" }),
+      makeTask({ id: "a2", projectId: "p", planId: "p2", status: "running" }),
+      makeTask({ id: "a3", projectId: "p", planId: "p1", status: "running" }),
+      makeTask({ id: "plain", projectId: "p", status: "running" }),
+    ];
+    expect(countOccupiedSlots(tasks, "p", "p1")).toBe(2);
+    expect(countOccupiedSlots(tasks, "p", "p2")).toBe(1);
+    // 公共池：普通任务本身（方案任务在各自池里，不计入公共池计数）
+    expect(countOccupiedSlots(tasks, "p")).toBe(1);
+  });
 });
 
 describe("orderWaitingQueue", () => {
@@ -207,10 +220,11 @@ describe("selectAutoStart", () => {
     expect(startIds).toEqual(["tb"]);
   });
 
-  it("默认串行：同项目有活跃任务时不放行（等槽位）", () => {
-    const startIds = selectAutoStart({
+  it("同方案已有活跃任务时不放行（等槽位）；不同方案的活跃任务不阻塞", () => {
+    // 同方案（p1）的 running 任务占满本方案槽位 → 不放行
+    const blocked = selectAutoStart({
       tasks: [
-        makeTask({ id: "running", projectId: "proj", status: "running" }),
+        makeTask({ id: "running", projectId: "proj", planId: "p1", status: "running" }),
         makeTask({
           id: "tb",
           planId: "p1",
@@ -223,7 +237,45 @@ describe("selectAutoStart", () => {
       maxConcurrentByProjectId: {},
       defaultMaxConcurrent: 1,
     });
-    expect(startIds).toEqual([]);
+    expect(blocked).toEqual([]);
+
+    // 另一方案（p2）的任务在跑 → 不同池，不阻塞本方案
+    const parallel = selectAutoStart({
+      tasks: [
+        makeTask({ id: "otherPlan", projectId: "proj", planId: "p2", status: "running" }),
+        makeTask({
+          id: "tb",
+          planId: "p1",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "waiting_deps",
+        }),
+      ],
+      depsByPlanId: { p1: CHAIN, p2: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(parallel).toEqual(["tb"]);
+  });
+
+  it("普通任务（无 planId）占用项目公共池，与方案任务互斥", () => {
+    // 普通任务跑主工作区，方案待办不得与其并发
+    const blockedByPlain = selectAutoStart({
+      tasks: [
+        makeTask({ id: "plain", projectId: "proj", status: "running" }),
+        makeTask({
+          id: "tb",
+          planId: "p1",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "waiting_deps",
+        }),
+      ],
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(blockedByPlain).toEqual([]);
   });
 
   it("并发上限 2 时，同项目同时放行两个满足条件的等待任务", () => {
@@ -342,10 +394,24 @@ describe("「开始」一键启动：新待办一律 waiting_deps，由调度逐
     expect(startIds).toEqual(["auto-1"]);
   });
 
-  it("项目已有活跃任务时不抢跑（全部等待，等槽位）", () => {
+  it("普通任务占用主工作区时不抢跑（全部等待，等槽位）", () => {
     const startIds = selectAutoStart({
       tasks: [
         makeTask({ id: "busy", projectId: "proj", status: "running" }),
+        ...createdWaiting(),
+      ],
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(startIds).toEqual([]);
+  });
+
+  it("同方案活跃任务占用时不抢跑；完成各方案间互不影响", () => {
+    const startIds = selectAutoStart({
+      tasks: [
+        makeTask({ id: "busy", projectId: "proj", planId: "p1", status: "running" }),
         ...createdWaiting(),
       ],
       depsByPlanId: { p1: CHAIN },
@@ -414,6 +480,32 @@ describe("hasFreeSlot（手动启动与自动接续共用的串行守卫，L1）
     expect(
       hasFreeSlot([makeTask({ id: "busy", projectId: "q", status: "running" })], "p", undefined, 1),
     ).toBe(true);
+  });
+
+  it("方案分池：另一方案的活跃任务不占本方案槽位", () => {
+    expect(
+      hasFreeSlot(
+        [makeTask({ id: "busy", projectId: "p", planId: "p2", status: "running" })],
+        "p",
+        undefined,
+        1,
+        "p1",
+      ),
+    ).toBe(true);
+  });
+
+  it("方案池仍与同方案活跃任务、普通任务互斥", () => {
+    const samePlan = [makeTask({ id: "busy", projectId: "p", planId: "p1", status: "running" })];
+    const plain = [makeTask({ id: "plain", projectId: "p", status: "running" })];
+    expect(hasFreeSlot(samePlan, "p", undefined, 1, "p1")).toBe(false);
+    expect(hasFreeSlot(plain, "p", undefined, 1, "p1")).toBe(false);
+  });
+
+  it("普通任务与全部活跃任务互斥（含各方案任务）", () => {
+    const busy = [
+      makeTask({ id: "planTask", projectId: "p", planId: "p1", status: "running" }),
+    ];
+    expect(hasFreeSlot(busy, "p", undefined, 1)).toBe(false);
   });
 
   it("并发上限放开到 2 时，已有 1 个活跃任务仍可启动", () => {

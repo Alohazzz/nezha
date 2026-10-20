@@ -55,7 +55,7 @@ import { PlanTaskView } from "./yunxiao/plan/PlanTaskView";
 import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
 import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
 import {
-  activeTasksInProject,
+  activeTasksInPool,
   buildTaskBySerial,
   evaluateTaskGate,
   planIssueSubjects,
@@ -450,6 +450,7 @@ export function ProjectPage({
    * 视图不能只看 `entries.length === 0` 就断言「在排队」：deps 未载入时 gate 也是空
    * entries，但项目里可能压根没有任务在跑——那时显示「等本项目空出槽位」自相矛盾。
    * 原因判定统一走纯函数 `resolveWaitReason`，占槽任务直接复用调度器的活跃态定义。
+   * 槽位按方案分池：占槽任务只列同方案的（不同方案的在跑任务不阻塞本任务）。
    */
   const selectedTaskWait = useMemo(() => {
     if (!selectedTask || selectedTask.status !== "waiting_deps") {
@@ -462,7 +463,7 @@ export function ProjectPage({
         selectedTaskGate,
         depsLoaded,
       ),
-      activeTasks: activeTasksInProject(projectTasks, project.id).filter(
+      activeTasks: activeTasksInPool(projectTasks, project.id, selectedTask.planId).filter(
         (t) => t.id !== selectedTask.id,
       ),
     };

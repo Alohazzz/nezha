@@ -810,10 +810,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "plan.branch.detached":
       "The main working tree is on a detached HEAD, not the plan branch “{expected}” — this task would commit to the wrong branch. Check out the plan branch, then start again.",
     "plan.deps.queuedStarted":
-      "Another task in this project is already running — queued; it starts as soon as a slot frees up.",
+      "Another task of this plan is already running — queued; it starts as soon as a slot frees up.",
     "plan.deps.queueTitle": "Queued",
     "plan.deps.queuedHint":
-      "Dependencies are already satisfied; this task is waiting for a free concurrency slot in this project.",
+      "Dependencies are already satisfied; this task is waiting for a free concurrency slot for this plan (different plans run in parallel).",
     "plan.deps.checklistTitle": "Dependencies",
     "plan.deps.checklistHint":
       "This issue starts automatically once every dependency is done (same-project tasks run one at a time).",
@@ -1986,11 +1986,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "主工作区当前在「{current}」分支上，不是计划分支「{expected}」——本任务的提交会落到错误的分支。请切回计划分支后重试。",
     "plan.branch.detached":
       "主工作区处于游离 HEAD，不在计划分支「{expected}」上——本任务的提交会落到错误的分支。请检出计划分支后重试。",
-    "plan.deps.queuedStarted": "同项目已有任务在运行，本任务已排队，槽位空出后自动开始。",
+    "plan.deps.queuedStarted": "同方案已有任务在运行，本任务已排队，槽位空出后自动开始。",
     "plan.deps.queueTitle": "排队中",
-    "plan.deps.queuedHint": "前置已全部满足，本任务在等本项目空出并发槽位。",
+    "plan.deps.queuedHint": "前置已全部满足，本任务在等本方案空出并发槽位（不同方案可并行）。",
     "plan.deps.checklistTitle": "前置依赖",
-    "plan.deps.checklistHint": "前置全部完成后本任务会自动开始（同项目任务默认串行）。",
+    "plan.deps.checklistHint": "前置全部完成后本任务会自动开始（同方案任务默认串行）。",
     "plan.deps.loadingTitle": "正在读取依赖",
     "plan.deps.loadingHint": "本方案的依赖图尚未载入，稍等片刻这里会显示真实的等待原因。",
     "plan.deps.entryDone": "已完成",
