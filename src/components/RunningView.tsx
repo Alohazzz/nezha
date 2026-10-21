@@ -761,6 +761,7 @@ export function RunningView({
             terminalScrollback={terminalScrollback}
             monoFontFamily={monoFontFamily}
             isActive={visible}
+            agentActive={isActive}
             initialData={restoreState.initialData}
             initialSnapshot={restoreState.initialSnapshot}
           />

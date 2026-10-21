@@ -26,6 +26,7 @@ import {
   refreshTerminalDisplay,
   unregisterActiveTerminal,
 } from "./terminalShared";
+import { applyTerminalMouseModeReset } from "./terminalModeReset";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import "@xterm/xterm/css/xterm.css";
@@ -44,6 +45,10 @@ interface TerminalViewProps {
   terminalScrollback: TerminalScrollback;
   monoFontFamily: FontFamily;
   isActive?: boolean;
+  /** 上游 agent 是否处于活跃状态（pending/running/input_required/awaiting_review）。
+   *  false→true 转换不处理；true→false（任务退出）时清掉运行期程序可能残留的
+   *  鼠标上报模式，否则拖选与滚轮会被继续转发给已退出的 PTY 程序。 */
+  agentActive?: boolean;
   initialData?: string;
   initialSnapshot?: string;
   onSnapshot?: (snapshot: string) => void;
@@ -60,6 +65,7 @@ export function TerminalView({
   terminalScrollback,
   monoFontFamily,
   isActive = true,
+  agentActive = true,
   initialData,
   initialSnapshot,
   onSnapshot,
@@ -287,6 +293,19 @@ export function TerminalView({
       terminalRef.current.options.cursorBlink = isActive;
     }
   }, [isActive]);
+
+  // 任务退出时兜底关闭鼠标上报模式（见 terminalModeReset 注释）：程序异常退出
+  // 未发 DECCLRST 1000/1002/1003 时，拖选与滚轮会被永久转发给死掉的 PTY 对端。
+  // 用 ref 追踪上一个值，只在 true→false 转换时触发，初始 false（如恢复一个
+  // 已退出任务）不写——那时终端刚重挂，模式本来就是干净的。
+  const agentActivePrevRef = useRef(agentActive);
+  useEffect(() => {
+    if (agentActivePrevRef.current && !agentActive) {
+      const term = terminalRef.current;
+      if (term) applyTerminalMouseModeReset(term);
+    }
+    agentActivePrevRef.current = agentActive;
+  }, [agentActive]);
 
   useEffect(() => {
     if (!terminalRef.current || !containerRef.current) return;
