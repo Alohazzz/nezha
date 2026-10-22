@@ -27,6 +27,7 @@ import {
   unregisterActiveTerminal,
 } from "./terminalShared";
 import { applyTerminalMouseModeReset } from "./terminalModeReset";
+import { attachShiftWheelScroll } from "./terminalShiftWheel";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import "@xterm/xterm/css/xterm.css";
@@ -161,6 +162,12 @@ export function TerminalView({
       onInputRef.current(data),
     );
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+    // Shift+滚轮强制本地处理（见 terminalShiftWheel 注释）：Codex 0.16x 运行期
+    // 开启鼠标上报后，xterm 把滚轮转发给 PTY 且 alt buffer 下 Shift 滚轮成死区。
+    // 方向键走 guarded forwarder 与用户键入同路进 PTY stdin。
+    const disposeShiftWheel = attachShiftWheelScroll(container, () => terminalRef.current, (data) =>
+      forwardXtermData(data),
+    );
 
     const terminalGeneration = onRegisterRef.current(writer.write);
 
@@ -245,6 +252,7 @@ export function TerminalView({
       webglHandle.dispose();
       disposeScrollbarAutoHide();
       disposeMacWebKitGuard();
+      disposeShiftWheel();
       disposeInputFix();
       disposeSmartCopy();
       disposeCopyOnSelect();

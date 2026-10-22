@@ -22,6 +22,7 @@ import {
   unregisterActiveTerminal,
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
+import { attachShiftWheelScroll } from "./terminalShiftWheel";
 import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import { Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -153,6 +154,12 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         invoke("send_input", { taskId: shellId, data }).catch(() => {});
       });
       const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
+      // 同 TerminalView：Shift+滚轮强制本地处理，绕开 xterm alt buffer 死区。
+      const disposeShiftWheel = attachShiftWheelScroll(
+        container,
+        () => terminalRef.current,
+        (data) => forwardXtermData(data),
+      );
 
       const fit = () => {
         if (cleaned) return;
@@ -258,6 +265,7 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         webglHandle.dispose();
         disposeScrollbarAutoHide();
         disposeMacWebKitGuard();
+        disposeShiftWheel();
         disposeInputFix();
         term.dispose();
         invoke("kill_shell", { shellId }).catch(() => {});
