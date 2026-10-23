@@ -335,6 +335,46 @@ export interface PendingMrCreateReceipt {
   reason: string;
 }
 
+/** Codex 任务的运行通道：pty = 现有终端 TUI；structured = codex app-server 结构化接入（issue #116）。 */
+export type TaskRunMode = "pty" | "structured";
+
+/**
+ * structured 任务的 Channel 数据帧（后端 `task_bridge::emit_stream_event`，Stage 2）。
+ * 经 `run_task` 的 `onOutput` Channel 直投（与 PTY 字节流同通路，绕开事件总线广播）；
+ * 前端 `useCodexStream`（阶段 3）按 `type` 分发。payload 形状随 type 不同：
+ * - `item`：上游 `ThreadItem`（`type` 判别联合，camelCase）；
+ * - `agentMessageDelta` / `reasoningDelta` / `commandOutputDelta`：`{ delta: string }`；
+ * - `tokenUsage`：`{ total: TokenUsageBreakdown, last: ..., modelContextWindow: number }`。
+ */
+export interface CodexStreamFrame {
+  taskId: string;
+  type:
+    | "item"
+    | "agentMessageDelta"
+    | "reasoningDelta"
+    | "commandOutputDelta"
+    | "tokenUsage";
+  phase: "started" | "completed" | "delta" | "updated";
+  threadId: string;
+  turnId: string;
+  payload: unknown;
+}
+
+/** structured 任务命令执行审批事件（`codex-approval-requested`，阶段 3 渲染审批卡片）。 */
+export interface CodexApprovalRequest {
+  /** 后端追加：审批所属任务。 */
+  task_id: string;
+  /** 原样带回 `respond_codex_approval` 的请求 id（服务端反向请求 id 空间）。 */
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  command: string;
+  cwd: string;
+  /** 服务端建议的合法决策子集；缺省视为全部可用。 */
+  availableDecisions?: string[];
+  [key: string]: unknown;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -342,6 +382,8 @@ export interface Task {
   prompt: string;
   agent: AgentType;
   permissionMode: PermissionMode;
+  /** 运行通道（仅 agent=codex 时生效）；缺省回落 pty。云效直发任务后端强制 pty（2.2a 防线）。 */
+  runMode?: TaskRunMode;
   /** 缺省时沿用 agent 自身默认模型。保存任务快照，避免设置目录变化影响 resume/fork。 */
   model?: string;
   /** 缺省时沿用 agent 自身默认思考深度。 */

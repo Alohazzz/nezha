@@ -29,8 +29,10 @@ use tokio::time::timeout;
 pub mod approval;
 pub mod events;
 pub mod rpc;
+pub mod task_bridge;
 
 pub use events::{CodexEvent, ThreadInfo};
+pub use task_bridge::StructuredTaskEntry;
 
 use rpc::{IncomingFrame, PendingTable, RequestIdAllocator, RpcError};
 
@@ -437,8 +439,14 @@ impl CodexAppServerSession {
         }
     }
 
-    /// 优雅关闭:关 stdin → 等 2s → 杀 → 再等 1s(kill_on_drop 最终兜底)。
+    /// 优雅关闭：关 stdin → 等 2s → 杀 → 再等 1s(kill_on_drop 最终兜底)。
     pub async fn shutdown(self) {
+        Self::shutdown_shared(Arc::new(self)).await;
+    }
+
+    /// `Arc` 持有者专用的关闭入口：会话表里的句柄是 `Arc`，取消/完成路径
+    /// 取走后直接调用，不必拆 Arc。
+    pub async fn shutdown_shared(self: Arc<Self>) {
         // 关 stdin 触发对端 EOF;锁内只做 shutdown 调用,不持锁做别的 I/O
         {
             let mut stdin = self.core.stdin.lock().await;

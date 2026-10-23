@@ -1075,6 +1075,15 @@ function App() {
       prompt: task.prompt,
       agent: task.agent,
       permissionMode: task.permissionMode,
+      // 运行通道（2.2）：仅 Codex + 用户显式选择 structured 时生效；
+      // 云效直发任务强制 pty（2.2a 前端防线，后端入口按 yunxiaoWorkitemId 再兜一层）。
+      runMode:
+        task.agent === "codex" &&
+        task.runMode === "structured" &&
+        !task.yunxiaoWorkitemId
+          ? "structured"
+          : "pty",
+      yunxiaoWorkitemId: task.yunxiaoWorkitemId,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
       images,
