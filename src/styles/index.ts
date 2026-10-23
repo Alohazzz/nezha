@@ -2,6 +2,7 @@ import type React from "react";
 
 import { common } from "./common";
 import { branchBatch } from "./branch-batch";
+import { codexStream } from "./codex-stream";
 import { deliveryPlan } from "./delivery-plan";
 import { dialogs } from "./dialogs";
 import { font } from "./font";
@@ -36,6 +37,7 @@ const s = {
   ...weeklyReport,
   ...yunxiao,
   ...branchBatch,
+  ...codexStream,
   ...deliveryPlan,
   ...update,
   ...planBoard,
@@ -45,6 +47,7 @@ const s = {
 export default s;
 
 export {
+  codexStream,
   common,
   branchBatch,
   dialogs,

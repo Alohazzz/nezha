@@ -1,0 +1,150 @@
+import { memo, useEffect, useRef } from "react";
+import { useI18n } from "../../i18n";
+import s from "../../styles";
+import type { CodexStreamEntry } from "../../hooks/useCodexStream";
+import type { CodexTokenUsage } from "../../types";
+import {
+  CodexAgentMessageEntry,
+  CodexCommandEntry,
+  CodexFallbackEntry,
+  CodexFileChangeEntry,
+  CodexMcpToolCallEntry,
+  CodexPlanEntry,
+  CodexReasoningEntry,
+  CodexUserMessageEntry,
+} from "./CodexEntryItems";
+import { CodexApprovalCard } from "./CodexApprovalCard";
+
+/** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。 */
+const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | null }) {
+  const { t } = useI18n();
+  if (!usage) return null;
+  const total = usage.total;
+  const ctxWindow = usage.modelContextWindow;
+  const ctxUsed = total.inputTokens + total.outputTokens;
+
+  const fmt = (n: number) => {
+    if (n < 1000) return String(n);
+    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+    return `${(n / 1_000_000).toFixed(1)}M`;
+  };
+
+  const ctxPercent =
+    ctxWindow && ctxWindow > 0 ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : null;
+
+  return (
+    <div style={s.codexUsageBar}>
+      <span>
+        {t("running.tokens")} {fmt(total.totalTokens)}
+      </span>
+      {ctxPercent !== null && (
+        <>
+          <div style={s.codexUsageMeter}>
+            <div
+              style={{
+                ...s.codexUsageMeterFill,
+                width: `${ctxPercent}%`,
+                ...(ctxPercent > 80 ? s.codexUsageMeterFillWarn : {}),
+              }}
+            />
+          </div>
+          <span>
+            {t("running.context")} {fmt(ctxUsed)} / {fmt(ctxWindow!)} ({ctxPercent}%)
+          </span>
+        </>
+      )}
+    </div>
+  );
+});
+
+function EntryRenderer({ entry, streamingId }: { entry: CodexStreamEntry; streamingId: string | null }) {
+  switch (entry.kind) {
+    case "userMessage":
+      return <CodexUserMessageEntry item={entry.item} />;
+    case "agentMessage":
+      return <CodexAgentMessageEntry item={entry.item} />;
+    case "plan":
+      return <CodexPlanEntry item={entry.item} />;
+    case "reasoning":
+      return <CodexReasoningEntry item={entry.item} />;
+    case "commandExecution":
+      return (
+        <CodexCommandEntry
+          item={entry.item}
+          streaming={streamingId !== null && entry.item.id === streamingId}
+        />
+      );
+    case "fileChange":
+      return <CodexFileChangeEntry item={entry.item} />;
+    case "mcpToolCall":
+      return <CodexMcpToolCallEntry item={entry.item} />;
+    default:
+      return <CodexFallbackEntry itemType={entry.item.type} />;
+  }
+}
+
+/**
+ * structured 任务实时流视图（issue #116 阶段 3）。
+ * 数据由 `useCodexStream`（App 层接线 Channel）喂入；本组件只负责渲染 +
+ * 跟随滚动 + 审批卡片置底。
+ */
+export function CodexStreamView({
+  entries,
+  usage,
+  approval,
+  onApprovalResolved,
+  running,
+  statusText,
+}: {
+  entries: CodexStreamEntry[];
+  usage: CodexTokenUsage | null;
+  approval: Parameters<typeof CodexApprovalCard>[0]["request"] | null;
+  onApprovalResolved: () => void;
+  running: boolean;
+  statusText?: string | null;
+}) {
+  const { t } = useI18n();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+
+  // 用户主动上滚即停止跟随；滚回底部恢复跟随（终端自动滚动同款交互）
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [entries]);
+
+  const lastCommandId = [...entries]
+    .reverse()
+    .find((e) => e.kind === "commandExecution" && e.item.status === "inProgress");
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+      <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
+        {entries.length === 0 && !statusText && (
+          <div style={s.codexStreamEmpty}>
+            {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
+          </div>
+        )}
+        {entries.map((entry, i) => (
+          <EntryRenderer
+            key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
+            entry={entry}
+            streamingId={
+              lastCommandId && "item" in lastCommandId ? (lastCommandId.item.id ?? null) : null
+            }
+          />
+        ))}
+        {statusText && <div style={s.codexStreamEmpty}>{statusText}</div>}
+        {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+      </div>
+      <UsageBar usage={usage} />
+    </div>
+  );
+}

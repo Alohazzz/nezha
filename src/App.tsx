@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { appConfirm } from "./components/AppConfirmDialog";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
@@ -9,6 +9,7 @@ import type {
   Task,
   TaskStatus,
   AgentType,
+  TaskRunMode,
   PermissionMode,
   CodeupMr,
   ThemeMode,
@@ -95,6 +96,7 @@ import { useToast } from "./components/Toast";
 import { isHideWindowShortcut, isToggleKanbanShortcut } from "./shortcuts";
 import { APP_PLATFORM } from "./platform";
 import { useTerminalManager } from "./hooks/useTerminalManager";
+import { useCodexStream } from "./hooks/useCodexStream";
 import { useWorktreeDiffStats } from "./hooks/useWorktreeDiffStats";
 import { useCodexAutoName } from "./hooks/useCodexAutoName";
 import { useI18n } from "./i18n";
@@ -438,6 +440,10 @@ function App() {
   const [pendingPlanPreviewId, setPendingPlanPreviewId] = useState<string | null>(null);
 
   const tm = useTerminalManager();
+  // codex structured 流（issue #116 阶段 3）：per-task 归并模型 + RAF 批量 setState。
+  // 数据仍走 run_task 的 onOutput Channel 直投，但 structured 任务在这里自建
+  // Channel 直投 ingestFrameLine，不经过 useTerminalManager 的 PTY 字节管道。
+  const codexStream = useCodexStream();
   const pendingResumeStartsRef = useRef<Record<string, () => void>>({});
   // 「恢复会话再发」时暂存的待发送输入：resume_task 启动的 PTY 会缓冲写入，
   // invoke 完成后补发 send_input 即可（决策 9）。
@@ -1067,6 +1073,28 @@ function App() {
     realProjectPath: string,
   ) {
     await armTerminalReady(task.id);
+    // 运行通道（2.2）：仅 Codex + 用户显式选择 structured 时生效；
+    // 云效直发任务强制 pty（2.2a 前端防线，后端入口按 yunxiaoWorkitemId 再兜一层）。
+    const runMode =
+      task.agent === "codex" &&
+      task.runMode === "structured" &&
+      !task.yunxiaoWorkitemId
+        ? "structured"
+        : "pty";
+    // structured：Channel 数据是 JSON 帧，直投 useCodexStream 归并，不经
+    // useTerminalManager 的 PTY 字节管道/终端 buffer（阶段 3 分流，见 hook 注释）。
+    // 重跑/续跑前清掉上一轮的流数据与残留审批卡片。
+    if (runMode === "structured") {
+      codexStream.resetTask(task.id);
+    }
+    const onOutput =
+      runMode === "structured"
+        ? (() => {
+            const channel = new Channel<string>();
+            channel.onmessage = (line) => codexStream.ingestFrameLine(task.id, line);
+            return channel;
+          })()
+        : tm.createOutputChannel(task.id);
     invoke("run_task", {
       taskId: task.id,
       taskName: task.name ?? "",
@@ -1075,14 +1103,7 @@ function App() {
       prompt: task.prompt,
       agent: task.agent,
       permissionMode: task.permissionMode,
-      // 运行通道（2.2）：仅 Codex + 用户显式选择 structured 时生效；
-      // 云效直发任务强制 pty（2.2a 前端防线，后端入口按 yunxiaoWorkitemId 再兜一层）。
-      runMode:
-        task.agent === "codex" &&
-        task.runMode === "structured" &&
-        !task.yunxiaoWorkitemId
-          ? "structured"
-          : "pty",
+      runMode,
       yunxiaoWorkitemId: task.yunxiaoWorkitemId,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
@@ -1096,11 +1117,15 @@ function App() {
       unattended: task.unattended === true,
       // 跨仓库任务上下文：附加项目目录（后端校验后注入 --add-dir）。
       contextProjectPaths: resolveContextProjectPaths(task),
-      onOutput: tm.createOutputChannel(task.id),
+      onOutput,
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
-      tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
-      updateTaskStatus(task.id, "failed", undefined, msg);
+      if (runMode === "structured") {
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      } else {
+        tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
+        updateTaskStatus(task.id, "failed", undefined, msg);
+      }
     });
   }
 
@@ -1118,6 +1143,7 @@ function App() {
       launchMode,
       baseBranch,
       repoPath,
+      runMode,
       contextProjectIds,
     }: {
       prompt: string;
@@ -1133,6 +1159,8 @@ function App() {
       /** 任务关联的 git 根（worktree 创建于此目录的 .nezha/worktrees）。
        *  缺省时回落 project.path，向后兼容老调用方。 */
       repoPath?: string;
+      /** codex 运行通道（3.4）：structured 仅 agent=codex 时有意义。 */
+      runMode?: TaskRunMode;
       /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
       contextProjectIds?: string[];
     },
@@ -1165,6 +1193,8 @@ function App() {
       permissionMode,
       model,
       reasoningEffort,
+      // 运行通道仅 codex 有意义；structured 与云效互斥（云效直发后端强制 pty）
+      runMode: agent === "codex" && runMode === "structured" ? "structured" : undefined,
       status: immediate ? "pending" : "todo",
       createdAt: now,
       updatedAt: now,
@@ -3664,6 +3694,8 @@ function App() {
               onRegisterTerminal={tm.handleRegisterTerminal}
               onTerminalReady={handleTerminalReady}
               onSnapshot={tm.handleSnapshot}
+              getCodexStream={codexStream.getStream}
+              onCodexApprovalResolved={codexStream.setApprovalResolved}
               onBack={handleBack}
               onSwitchProject={handleProjectClick}
               onCommitProjectOrder={handleCommitProjectOrder}

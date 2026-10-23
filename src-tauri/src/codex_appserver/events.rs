@@ -49,9 +49,9 @@ pub enum CodexEvent {
     TurnCompleted { thread_id: String, turn: TurnSummary },
     ItemStarted { thread_id: String, turn_id: String, item: proto::ThreadItem },
     ItemCompleted { thread_id: String, turn_id: String, item: proto::ThreadItem },
-    AgentMessageDelta { thread_id: String, turn_id: String, delta: String },
-    ReasoningSummaryDelta { thread_id: String, turn_id: String, delta: String },
-    CommandExecutionOutputDelta { thread_id: String, turn_id: String, delta: String },
+    AgentMessageDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
+    ReasoningSummaryDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
+    CommandExecutionOutputDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
     TokenUsageUpdated { thread_id: String, usage: proto::ThreadTokenUsage },
     /// 命令执行审批反向请求(`item/commandExecution/requestApproval`)。
     /// `request_id` 必须原样带回 `respond_approval`;决策合法性校验在 approval.rs。
@@ -188,6 +188,7 @@ fn parse_notification(method: &str, params: Option<Value>) -> Result<CodexEvent,
             CodexEvent::AgentMessageDelta {
                 thread_id: wire.thread_id,
                 turn_id: wire.turn_id,
+                item_id: wire.item_id,
                 delta: wire.delta,
             }
         }
@@ -198,6 +199,7 @@ fn parse_notification(method: &str, params: Option<Value>) -> Result<CodexEvent,
             CodexEvent::ReasoningSummaryDelta {
                 thread_id: wire.thread_id,
                 turn_id: wire.turn_id,
+                item_id: wire.item_id,
                 delta: wire.delta,
             }
         }
@@ -208,6 +210,7 @@ fn parse_notification(method: &str, params: Option<Value>) -> Result<CodexEvent,
             CodexEvent::CommandExecutionOutputDelta {
                 thread_id: wire.thread_id,
                 turn_id: wire.turn_id,
+                item_id: wire.item_id,
                 delta: wire.delta,
             }
         }

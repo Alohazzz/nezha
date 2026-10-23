@@ -181,13 +181,15 @@ async fn handle_event(
                 codex_app_server_protocol::TurnStatus::InProgress => true,
             }
         }
-        CodexEvent::ApprovalRequested { params, .. } => {
+        CodexEvent::ApprovalRequested { request_id, params } => {
             // 反向请求已在 mod.rs 入审批表；这里广播 UI 事件 + 状态。
-            // params 是上游类型（Serialize），直接序列化给前端展示命令/cwd/建议决策。
+            // params 是上游类型（Serialize），直接序列化给前端展示命令/cwd/建议决策；
+            // request_id 必须随事件下发——前端审批卡片回传 respond_codex_approval 全靠它。
             match serde_json::to_value(&params) {
                 Ok(mut payload) => {
                     if let Some(obj) = payload.as_object_mut() {
                         obj.insert("task_id".to_string(), serde_json::json!(task_id));
+                        obj.insert("request_id".to_string(), serde_json::json!(request_id));
                     }
                     let _ = app.emit("codex-approval-requested", payload);
                 }
@@ -212,36 +214,37 @@ async fn handle_event(
         CodexEvent::Ignored { .. } | CodexEvent::Unknown { .. } => true,
         CodexEvent::Initialized { .. } | CodexEvent::ThreadStatusChanged { .. } => true,
         CodexEvent::TurnStarted { .. } => true,
-        // 数据面事件统一进 Channel（前端按 type 分发）
+        // 数据面事件统一进 Channel（前端按 type 分发）。delta 类事件带 item_id，
+        // 前端靠它把流式增量归并到 item/started 建立的那条条目上。
         CodexEvent::ItemStarted { thread_id, turn_id, item } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, "item", "started", &item);
+            emit_stream_event(on_output, task_id, thread_id, turn_id, None, "item", "started", &item);
             true
         }
         CodexEvent::ItemCompleted { thread_id, turn_id, item } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, "item", "completed", &item);
+            emit_stream_event(on_output, task_id, thread_id, turn_id, None, "item", "completed", &item);
             true
         }
-        CodexEvent::AgentMessageDelta { thread_id, turn_id, delta } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, "agentMessageDelta", "delta", &serde_json::json!({ "delta": delta }));
+        CodexEvent::AgentMessageDelta { thread_id, turn_id, item_id, delta } => {
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "agentMessageDelta", "delta", &serde_json::json!({ "delta": delta }));
             true
         }
-        CodexEvent::ReasoningSummaryDelta { thread_id, turn_id, delta } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, "reasoningDelta", "delta", &serde_json::json!({ "delta": delta }));
+        CodexEvent::ReasoningSummaryDelta { thread_id, turn_id, item_id, delta } => {
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "reasoningDelta", "delta", &serde_json::json!({ "delta": delta }));
             true
         }
-        CodexEvent::CommandExecutionOutputDelta { thread_id, turn_id, delta } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, "commandOutputDelta", "delta", &serde_json::json!({ "delta": delta }));
+        CodexEvent::CommandExecutionOutputDelta { thread_id, turn_id, item_id, delta } => {
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "commandOutputDelta", "delta", &serde_json::json!({ "delta": delta }));
             true
         }
         CodexEvent::TokenUsageUpdated { thread_id, usage } => {
-            emit_stream_event(on_output, task_id, thread_id, String::new(), "tokenUsage", "updated", &usage);
+            emit_stream_event(on_output, task_id, thread_id, String::new(), None, "tokenUsage", "updated", &usage);
             true
         }
     }
 }
 
 /// 数据面事件 → Channel 结构化 JSON（前端 `useCodexStream` 消费）。
-/// 顶层形状：`{ taskId, type, phase, threadId, turnId, payload }`。
+/// 顶层形状：`{ taskId, type, phase, itemId?, threadId, turnId, payload }`。
 /// Channel 是 per-task 独占通路（与 PTY 的 on_output 同款直投，绕开事件总线
 /// 广播——这是终端红线的同款约束），生命周期事件（task-status 等）才走 emit。
 fn emit_stream_event(
@@ -249,6 +252,7 @@ fn emit_stream_event(
     task_id: &str,
     thread_id: String,
     turn_id: String,
+    item_id: Option<String>,
     kind: &str,
     phase: &str,
     payload: &impl serde::Serialize,
@@ -257,6 +261,7 @@ fn emit_stream_event(
         task_id,
         kind,
         phase,
+        item_id: item_id.as_deref(),
         thread_id: &thread_id,
         turn_id: &turn_id,
         payload: serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
@@ -265,7 +270,7 @@ fn emit_stream_event(
     let _ = on_output.send(line);
 }
 
-/// Channel 数据帧。字段名 camelCase 对齐前端约定。
+/// Channel 数据帧。字段名 camelCase 对齐前端约定；itemId 仅 delta 类事件携带。
 #[derive(serde::Serialize)]
 struct StreamFrame<'a> {
     #[serde(rename = "taskId")]
@@ -273,6 +278,8 @@ struct StreamFrame<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
     phase: &'a str,
+    #[serde(rename = "itemId", skip_serializing_if = "Option::is_none")]
+    item_id: Option<&'a str>,
     #[serde(rename = "threadId")]
     thread_id: &'a str,
     #[serde(rename = "turnId")]
@@ -484,6 +491,7 @@ mod tests {
             task_id: "t1",
             kind: "agentMessageDelta",
             phase: "delta",
+            item_id: Some("item1"),
             thread_id: "th1",
             turn_id: "turn1",
             payload: serde_json::json!({ "delta": "hi" }),
@@ -491,8 +499,22 @@ mod tests {
         let v = serde_json::to_value(&frame).unwrap();
         assert_eq!(v["taskId"], "t1");
         assert_eq!(v["type"], "agentMessageDelta");
+        assert_eq!(v["itemId"], "item1");
         assert_eq!(v["threadId"], "th1");
         assert_eq!(v["turnId"], "turn1");
         assert_eq!(v["payload"]["delta"], "hi");
+
+        // item 类事件不带 itemId：字段应整体省略而不是下发 null
+        let frame = StreamFrame {
+            task_id: "t1",
+            kind: "item",
+            phase: "started",
+            item_id: None,
+            thread_id: "th1",
+            turn_id: "turn1",
+            payload: serde_json::json!({ "type": "agentMessage" }),
+        };
+        let v = serde_json::to_value(&frame).unwrap();
+        assert!(v.get("itemId").is_none());
     }
 }

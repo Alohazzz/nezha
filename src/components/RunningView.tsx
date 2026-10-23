@@ -9,10 +9,12 @@ import type {
   FontFamily,
   ThemeVariant,
 } from "../types";
+import type { CodexStreamState } from "../hooks/useCodexStream";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
 import { SessionView } from "./SessionView";
+import { CodexStreamView } from "./codex-stream/CodexStreamView";
 import { buildDefaultForkTaskName, SessionActionsMenu } from "./running-view/SessionActionsMenu";
 import { useToast } from "./Toast";
 import { writeClipboardText } from "./file-explorer/clipboard";
@@ -107,6 +109,8 @@ export function RunningView({
   onTerminalReady,
   onSnapshot,
   getRestoreState,
+  codexStream,
+  onCodexApprovalResolved,
   onRename,
   onGenerateName,
   themeVariant,
@@ -136,6 +140,9 @@ export function RunningView({
   onTerminalReady: (generation: number) => void;
   onSnapshot?: (snapshot: string) => void;
   getRestoreState?: () => { initialData?: string; initialSnapshot?: string };
+  /** 非空 = structured 任务：主内容区渲染结构化流视图而非终端（issue #116 阶段 3）。 */
+  codexStream?: CodexStreamState;
+  onCodexApprovalResolved?: () => void;
   onRename: (name: string) => void;
   onGenerateName: () => Promise<void>;
   themeVariant: ThemeVariant;
@@ -685,8 +692,19 @@ export function RunningView({
         )}
       </div>
 
-      {/* Main content: terminal when active, session view when done/failed. */}
+      {/* Main content: terminal when active, session view when done/failed.
+          structured 任务（codexStream 非空）渲染结构化流视图，不进终端红线链路。 */}
       {isDetached || isInterrupted ? (
+        codexStream ? (
+          <CodexStreamView
+            entries={codexStream.entries}
+            usage={codexStream.usage}
+            approval={null}
+            onApprovalResolved={() => {}}
+            running={false}
+            statusText={t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+          />
+        ) : (
         <div style={s.interruptedSessionWrap}>
           <div ref={interruptedBannerRef} style={s.interruptedBanner}>
             <div style={s.interruptedBannerIcon}>
@@ -740,7 +758,24 @@ export function RunningView({
             </div>
           )}
         </div>
+        )
       ) : isActive || !sessionPath ? (
+        codexStream ? (
+          <CodexStreamView
+            entries={codexStream.entries}
+            usage={codexStream.usage}
+            approval={codexStream.approval}
+            onApprovalResolved={() => onCodexApprovalResolved?.()}
+            running={isActive}
+            statusText={
+              task.status === "failed"
+                ? (task.failureReason ?? t("task.failed"))
+                : task.status === "cancelled"
+                  ? t("task.cancelled")
+                  : undefined
+            }
+          />
+        ) : (
         <div style={s.terminalContainer}>
           <TerminalView
             key={`${task.id}-${runCount}`}
@@ -766,6 +801,7 @@ export function RunningView({
             initialSnapshot={restoreState.initialSnapshot}
           />
         </div>
+        )
       ) : (
         <SessionView sessionPath={sessionPath} />
       )}

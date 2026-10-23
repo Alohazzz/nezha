@@ -72,6 +72,7 @@ import { useToast } from "./Toast";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import { useKnowledgePending } from "../hooks/useKnowledgePending";
 import { resolveProjectGitContext, useGitRoots } from "../hooks/useGitRoots";
+import type { CodexStreamState } from "../hooks/useCodexStream";
 import { useI18n } from "../i18n";
 
 /** 发送目标兜底：存活任务自动判定 → 全死时最近任务（让「恢复会话/新建」入口可达） */
@@ -133,6 +134,8 @@ export function ProjectPage({
   onRegisterTerminal,
   onTerminalReady,
   onSnapshot,
+  getCodexStream,
+  onCodexApprovalResolved,
   onBack,
   onSwitchProject,
   onCommitProjectOrder,
@@ -265,6 +268,9 @@ export function ProjectPage({
   ) => number;
   onTerminalReady: (taskId: string, generation: number) => void;
   onSnapshot: (taskId: string, snapshot: string) => void;
+  /** codex structured 流快照（issue #116 阶段 3）；structured 任务渲染流视图用。 */
+  getCodexStream?: (taskId: string) => CodexStreamState;
+  onCodexApprovalResolved?: (taskId: string) => void;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
   onCommitProjectOrder: (draggedId: string, beforeId: string | null, visibleIds: string[]) => void;
@@ -552,6 +558,16 @@ export function ProjectPage({
                 onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
                 onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
                 getRestoreState={() => getTaskRestoreState(task.id)}
+                codexStream={
+                  task.runMode === "structured" && getCodexStream
+                    ? getCodexStream(task.id)
+                    : undefined
+                }
+                onCodexApprovalResolved={
+                  onCodexApprovalResolved
+                    ? () => onCodexApprovalResolved(task.id)
+                    : undefined
+                }
                 onRename={(name) => onRenameTask(task.id, name)}
                 onGenerateName={() => onGenerateTaskName(task.id)}
                 themeVariant={themeVariant}

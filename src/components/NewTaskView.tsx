@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { TriangleAlert, Sparkles } from "lucide-react";
-import type { Project, AgentType, PermissionMode, GitRoot } from "../types";
+import type { Project, AgentType, PermissionMode, GitRoot, TaskRunMode } from "../types";
 import { isAgentEnabled, firstEnabledAgent, enabledAgentTypes } from "../types";
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -21,6 +21,7 @@ import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector } from "./new-task/AgentPermSelector";
 import { LaunchModeSelector, type LaunchMode } from "./new-task/LaunchModeSelector";
+import { RunModeSelector } from "./new-task/RunModeSelector";
 import { TaskModelSelector } from "./new-task/TaskModelSelector";
 import { ContextProjectsSelector } from "./new-task/ContextProjectsSelector";
 import { useI18n } from "../i18n";
@@ -57,6 +58,9 @@ export interface NewTaskDraft {
 }
 
 type CrossProjectFileMap = Map<string, FileEntry[]>;
+
+/** codex 运行通道的 localStorage 记忆键（3.4：记住上次选择，全局非按项目）。 */
+const RUN_MODE_STORAGE_KEY = "nezha.codexRunMode";
 
 function parseFileEntry(f: string): FileEntry {
   const parts = f.split("/");
@@ -103,6 +107,8 @@ export function NewTaskView({
     immediate: boolean;
     launchMode: LaunchMode;
     baseBranch: string;
+    /** codex 运行通道（3.4）：structured 仅 agent=codex 时有意义，其余取值被忽略。 */
+    runMode: TaskRunMode;
     /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
     contextProjectIds: string[];
   }) => void;
@@ -119,6 +125,11 @@ export function NewTaskView({
   );
   const [planMode, setPlanMode] = useState(initialDraft?.planMode ?? false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>(initialDraft?.launchMode ?? "local");
+  // codex 运行通道（issue #116 3.4）：缺省 pty；localStorage 记住上次选择（跨项目全局）。
+  const [runMode, setRunMode] = useState<TaskRunMode>(() => {
+    const saved = localStorage.getItem(RUN_MODE_STORAGE_KEY);
+    return saved === "structured" ? "structured" : "pty";
+  });
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
   // 跨仓库任务上下文：勾选的附加项目 id。DSH 无跨目录机制，切换到 DSH 时清空。
   const [contextProjectIds, setContextProjectIds] = useState<string[]>(
@@ -468,6 +479,7 @@ export function NewTaskView({
       immediate: true,
       launchMode: "local",
       baseBranch: "",
+      runMode,
       contextProjectIds: [],
     });
   }
@@ -504,6 +516,7 @@ export function NewTaskView({
       immediate,
       launchMode,
       baseBranch,
+      runMode,
       contextProjectIds,
     });
     editorHandle.clear();
@@ -735,6 +748,16 @@ export function NewTaskView({
           onSetBaseBranch={setBaseBranch}
           onSetRepoPath={onSetRepoPath}
         />
+        {/* codex 运行通道（3.4）：structured = app-server 卡片视图；选择全局记忆 */}
+        {agent === "codex" && (
+          <RunModeSelector
+            runMode={runMode}
+            onSetRunMode={(mode) => {
+              setRunMode(mode);
+              localStorage.setItem(RUN_MODE_STORAGE_KEY, mode);
+            }}
+          />
+        )}
         {/* 跨仓库任务上下文（仅 claude/codex；DSH 无 --add-dir 对等机制） */}
         {agent !== "dsh" && (
           <ContextProjectsSelector
