@@ -1,11 +1,12 @@
 import { Terminal } from "@xterm/xterm";
 import { afterEach, describe, expect, it } from "vitest";
-import { attachShiftWheelScroll } from "../components/terminalShiftWheel";
+import { attachWheelScroll } from "../components/terminalWheel";
 
-// 背景：Codex 0.16x TUI 运行期开启鼠标上报（DECSET ?1000h/?1002h/?1006h）后，
-// xterm 把滚轮转发给 PTY；且 alt buffer 分支对 Shift 滚轮 cancel 吞掉（死区）。
-// 本模块在 capture 阶段拦截 Shift+wheel：alt buffer 合成方向键发 PTY stdin，
-// normal buffer 本地 scrollLines。xterm 6.0.0 bundle 实证见 terminalShiftWheel.ts。
+// 背景：Codex 0.16x TUI 运行期开启鼠标上报（DECSET ?1002h/?1006h），xterm 原生
+// 转发在真机上不可靠（依赖 renderer 尺寸 / smooth-scroll 状态，可能静默丢弃）。
+// 本模块在 capture 阶段接管滚轮：上报开启时合成 SGR 滚轮事件、无上报的经典
+// 全屏程序（less/vim）合成方向键、normal buffer 本地 scrollLines。
+// 不需要 Shift——普通滚轮直接生效，Shift 保留兼容但行为相同。
 
 function installXtermJsdomShims() {
   if (typeof window.matchMedia !== "function") {
@@ -48,9 +49,18 @@ const container = () => {
   return el;
 };
 
-function wheel(el: HTMLElement, opts: { deltaY: number; shiftKey?: boolean }): void {
+function wheel(
+  el: HTMLElement,
+  opts: { deltaY: number; shiftKey?: boolean; deltaMode?: number },
+): void {
   el.dispatchEvent(
-    new WheelEvent("wheel", { deltaY: opts.deltaY, shiftKey: opts.shiftKey ?? false, bubbles: true, cancelable: true }),
+    new WheelEvent("wheel", {
+      deltaY: opts.deltaY,
+      shiftKey: opts.shiftKey ?? false,
+      deltaMode: opts.deltaMode ?? WheelEvent.DOM_DELTA_LINE,
+      bubbles: true,
+      cancelable: true,
+    }),
   );
 }
 
@@ -62,25 +72,28 @@ afterEach(() => {
 
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
-describe("shift+wheel forced local handling", () => {
-  it("alt buffer with mouse reporting: shift+wheel sends SGR wheel events (not arrows)", async () => {
+describe("wheel local takeover", () => {
+  it("alt buffer with mouse reporting: plain wheel sends SGR wheel events (no Shift needed)", async () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();
-    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
     try {
       // Codex TUI 形态：alt buffer + drag 上报 + SGR 坐标 + DECCKM。
-      // 方向键在这里是错的：Codex composer 把它当上下键切输入历史。
       term.write("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?1h");
       await tick();
       expect(term.buffer.active.type).toBe("alternate");
       expect(term.modes.mouseTrackingMode).toBe("drag");
-      expect(term.modes.applicationCursorKeysMode).toBe(true);
 
-      wheel(el, { deltaY: -120, shiftKey: true });
-      wheel(el, { deltaY: 120, shiftKey: true });
+      wheel(el, { deltaY: -1 }); // 无修饰键
+      wheel(el, { deltaY: 1 });
       // SGR 滚轮：64=up 65=down，坐标取屏幕中心（80x24 → 41;13）
       expect(sent).toEqual(["\x1b[<64;41;13M", "\x1b[<65;41;13M"]);
+
+      // Shift 修饰滚轮行为相同（兼容旧肌肉记忆）
+      sent.length = 0;
+      wheel(el, { deltaY: -1, shiftKey: true });
+      expect(sent).toEqual(["\x1b[<64;41;13M"]);
     } finally {
       dispose();
     }
@@ -90,13 +103,13 @@ describe("shift+wheel forced local handling", () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();
-    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
     try {
       // 经典全屏程序（less/vim）：DECCKM 开 → ESCO 前缀
       term.write("\x1b[?1049h\x1b[?1h");
       await tick();
       expect(term.modes.applicationCursorKeysMode).toBe(true);
-      wheel(el, { deltaY: -120, shiftKey: true });
+      wheel(el, { deltaY: -1 });
       expect(sent).toEqual(["\x1bOA"]);
     } finally {
       dispose();
@@ -107,18 +120,18 @@ describe("shift+wheel forced local handling", () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();
-    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
     try {
       term.write("\x1b[?1049h");
       await tick();
-      wheel(el, { deltaY: 120, shiftKey: true });
+      wheel(el, { deltaY: 1 });
       expect(sent).toEqual(["\x1b[B"]);
     } finally {
       dispose();
     }
   });
 
-  it("normal buffer: shift+wheel scrolls locally, nothing reflows to stdin", async () => {
+  it("normal buffer: wheel scrolls locally, nothing reflows to stdin", async () => {
     const term = current = mountTerminal();
     // 造出 scrollback：写满屏再换行
     term.write(Array.from({ length: 60 }, (_, i) => `line-${i}\r\n`).join(""));
@@ -127,45 +140,49 @@ describe("shift+wheel forced local handling", () => {
     expect(term.buffer.active.baseY).toBeGreaterThan(0);
     const sent: string[] = [];
     const el = container();
-    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
     try {
-      // jsdom 无 renderer，Viewport 未初始化（scrollLines 走 core 路径，viewportY
-      // 表现与真机不同），这里只锁行为分流：normal buffer 不发方向键进 stdin。
-      // 滚动本身在真机由 term.scrollLines 接管（WebGL renderer 下 Viewport 生效）。
-      wheel(el, { deltaY: 120, shiftKey: true });
-      wheel(el, { deltaY: -120, shiftKey: true });
+      // jsdom 无 renderer，Viewport 未初始化，viewportY 断言不可靠；锁行为分流：
+      // normal buffer 不发方向键/SGR 进 stdin，滚动由 term.scrollLines 接管。
+      wheel(el, { deltaY: 3 });
+      wheel(el, { deltaY: -3 });
       expect(sent).toEqual([]);
     } finally {
       dispose();
     }
   });
 
-  it("plain wheel (no shift) is untouched — xterm native dispatch keeps working", () => {
+  it("pixel-mode wheel accumulates across events before synthesizing input", async () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();
-    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
     try {
-      const seen: string[] = [];
-      term.onData((d) => seen.push(d));
-      wheel(el, { deltaY: 120 });
-      // 本模块不拦截、不发送；xterm 自身（jsdom 无 renderer）不产生输入
-      expect(sent).toEqual([]);
-      expect(seen).toEqual([]);
+      term.write("\x1b[?1049h\x1b[?1002h\x1b[?1006h");
+      await tick();
+      // 触控板：100px ≈ 3 行；50px = 1.5 行 → 立即发 1 条，余 0.5 进 carry
+      wheel(el, { deltaY: 50, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
+      expect(sent).toEqual(["\x1b[<65;41;13M"]);
+      // 再 50px：carry 0.5 + 1.5 = 2 行 → 累计共 3 条
+      wheel(el, { deltaY: 50, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
+      expect(sent.length).toBe(3);
     } finally {
       dispose();
     }
   });
 
-  it("zero-deltaY and dispose behavior", () => {
+  it("zero-deltaY, ctrl/meta combos, and dispose are inert", () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();
-    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
-    wheel(el, { deltaY: 0, shiftKey: true });
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
+    wheel(el, { deltaY: 0 });
+    el.dispatchEvent(
+      new WheelEvent("wheel", { deltaY: 100, ctrlKey: true, bubbles: true, cancelable: true }),
+    );
     expect(sent).toEqual([]);
     dispose();
-    wheel(el, { deltaY: 120, shiftKey: true });
+    wheel(el, { deltaY: 1 });
     expect(sent).toEqual([]);
   });
 });

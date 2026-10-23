@@ -27,7 +27,7 @@ import {
   unregisterActiveTerminal,
 } from "./terminalShared";
 import { applyTerminalMouseModeReset } from "./terminalModeReset";
-import { attachShiftWheelScroll } from "./terminalShiftWheel";
+import { attachWheelScroll } from "./terminalWheel";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import "@xterm/xterm/css/xterm.css";
@@ -162,10 +162,11 @@ export function TerminalView({
       onInputRef.current(data),
     );
     const disposeMacWebKitGuard = attachMacWebKitTerminalGuard({ term, container, writer });
-    // Shift+滚轮强制本地处理（见 terminalShiftWheel 注释）：Codex 0.16x 运行期
-    // 开启鼠标上报后，xterm 把滚轮转发给 PTY 且 alt buffer 下 Shift 滚轮成死区。
-    // 方向键走 guarded forwarder 与用户键入同路进 PTY stdin。
-    const disposeShiftWheel = attachShiftWheelScroll(container, () => terminalRef.current, (data) =>
+    // 滚轮本地接管（见 terminalWheel 注释）：Codex 0.16x 运行期开启鼠标上报后，
+    // xterm 原生转发在真机上不可靠（依赖 renderer 尺寸 / smooth-scroll 状态），
+    // 普通滚轮可能静默失效；capture 阶段直接合成 SGR 滚轮/方向键直投 PTY。
+    // 方向键/SGR 走 guarded forwarder 与用户键入同路进 PTY stdin。
+    const disposeWheel = attachWheelScroll(container, () => terminalRef.current, (data) =>
       forwardXtermData(data),
     );
 
@@ -252,7 +253,7 @@ export function TerminalView({
       webglHandle.dispose();
       disposeScrollbarAutoHide();
       disposeMacWebKitGuard();
-      disposeShiftWheel();
+      disposeWheel();
       disposeInputFix();
       disposeSmartCopy();
       disposeCopyOnSelect();
