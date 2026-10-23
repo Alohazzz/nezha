@@ -23,6 +23,7 @@ import {
 } from "./terminalShared";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import { attachWheelScroll } from "./terminalWheel";
+import { attachSelectionForce } from "./terminalSelectionForce";
 import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import { Plus, Terminal as TerminalIcon, Trash2, X } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -160,6 +161,8 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         () => terminalRef.current,
         (data) => forwardXtermData(data),
       );
+      // 同 TerminalView：拖选强制本地化（鼠标上报开启时普通拖选也有高亮）。
+      const disposeSelectionForce = attachSelectionForce(container, () => terminalRef.current);
 
       const fit = () => {
         if (cleaned) return;
@@ -266,6 +269,7 @@ const ShellTerminalInstance = forwardRef<ShellTerminalInstanceHandle, {
         disposeScrollbarAutoHide();
         disposeMacWebKitGuard();
         disposeWheel();
+        disposeSelectionForce();
         disposeInputFix();
         term.dispose();
         invoke("kill_shell", { shellId }).catch(() => {});

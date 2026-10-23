@@ -28,6 +28,7 @@ import {
 } from "./terminalShared";
 import { applyTerminalMouseModeReset } from "./terminalModeReset";
 import { attachWheelScroll } from "./terminalWheel";
+import { attachSelectionForce } from "./terminalSelectionForce";
 import { attachLinuxIMEFix, attachMacWebKitShiftInputFix } from "./terminalInputFix";
 import { createGuardedForwarder, createTerminalReplyGuard } from "./terminalReplyGuard";
 import "@xterm/xterm/css/xterm.css";
@@ -169,6 +170,11 @@ export function TerminalView({
     const disposeWheel = attachWheelScroll(container, () => terminalRef.current, (data) =>
       forwardXtermData(data),
     );
+    // 拖选强制本地化（见 terminalSelectionForce 注释）：Codex 0.16x 运行期开启
+    // 鼠标上报后 xterm disable 了选区服务，普通拖选无高亮；重派发 Shift 事件
+    // 走 xterm 本地选区分支。必须与 MacWebKit guard 共存——guard 用 pointer
+    // 事件体系，本模块拦 mouse 事件体系，互不干扰。
+    const disposeSelectionForce = attachSelectionForce(container, () => terminalRef.current);
 
     const terminalGeneration = onRegisterRef.current(writer.write);
 
@@ -254,6 +260,7 @@ export function TerminalView({
       disposeScrollbarAutoHide();
       disposeMacWebKitGuard();
       disposeWheel();
+      disposeSelectionForce();
       disposeInputFix();
       disposeSmartCopy();
       disposeCopyOnSelect();
