@@ -62,14 +62,24 @@ export function attachWheelScroll(
       carryBufferType = bufferType;
     }
 
-    // 归一为「行数」：像素模式累加取整，行/页模式直接换算。
+    // 归一为「行数」：像素模式累加，≥0.5 行即发（攒整数会让轻滚迟滞、不跟手），
+    // remainder 保留到下一事件；行/页模式直接换算。
     let lines: number;
     if (e.deltaMode === WheelEvent.DOM_DELTA_PIXEL) {
       pixelCarry += e.deltaY / PIXELS_PER_LINE;
-      const whole = Math.trunc(pixelCarry);
-      if (whole === 0) return;
-      pixelCarry -= whole;
-      lines = whole;
+      const sign = Math.sign(pixelCarry);
+      const abs = Math.abs(pixelCarry);
+      const whole = Math.floor(abs);
+      const frac = abs - whole;
+      if (whole > 0) {
+        pixelCarry = sign * frac;
+        lines = sign * whole;
+      } else if (frac >= 0.5) {
+        pixelCarry = 0;
+        lines = sign;
+      } else {
+        return;
+      }
     } else if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) {
       lines = e.deltaY;
     } else {
@@ -77,20 +87,24 @@ export function attachWheelScroll(
     }
 
     if (bufferType === "alternate") {
+      // 同一事件内同方向的多次合并在**一次** sendInput 里发出：每条独立
+      // sendInput = 一次 invoke("send_input") IPC 往返，加速滚动时一帧可达
+      // 多次，逐条发是「滚动不跟手」的主因。TUI 逐条解析拼接后的序列，语义不变。
+      const n = Math.min(Math.abs(lines), 30); // 单事件上限，防狂发
+      let payload: string;
       if (term.modes.mouseTrackingMode !== "none") {
         // SGR 滚轮：64=up 65=down，1-based 坐标取屏幕中心。
         const button = lines > 0 ? 65 : 64;
         const col = Math.max(1, Math.min(term.cols, Math.floor(term.cols / 2) + 1));
         const row = Math.max(1, Math.min(term.rows, Math.floor(term.rows / 2) + 1));
-        const n = Math.min(Math.abs(lines), 10); // 单事件上限，防狂发
-        for (let i = 0; i < n; i++) sendInput(`\x1b[<${button};${col};${row}M`);
+        payload = `\x1b[<${button};${col};${row}M`.repeat(n);
       } else {
         // 经典全屏程序：滚轮语义 = 方向键。
         const prefix = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
         const key = lines > 0 ? "B" : "A";
-        const n = Math.min(Math.abs(lines), 10);
-        for (let i = 0; i < n; i++) sendInput(`${prefix}${key}`);
+        payload = `${prefix}${key}`.repeat(n);
       }
+      sendInput(payload);
     } else {
       term.scrollLines(lines);
     }

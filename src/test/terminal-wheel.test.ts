@@ -90,6 +90,11 @@ describe("wheel local takeover", () => {
       // SGR 滚轮：64=up 65=down，坐标取屏幕中心（80x24 → 41;13）
       expect(sent).toEqual(["\x1b[<64;41;13M", "\x1b[<65;41;13M"]);
 
+      // 同事件多行合并为一次 sendInput（修滚动不跟手：每次 sendInput 是一次 IPC）
+      sent.length = 0;
+      wheel(el, { deltaY: 3 });
+      expect(sent).toEqual(["\x1b[<65;41;13M".repeat(3)]);
+
       // Shift 修饰滚轮行为相同（兼容旧肌肉记忆）
       sent.length = 0;
       wheel(el, { deltaY: -1, shiftKey: true });
@@ -163,9 +168,19 @@ describe("wheel local takeover", () => {
       // 触控板：100px ≈ 3 行；50px = 1.5 行 → 立即发 1 条，余 0.5 进 carry
       wheel(el, { deltaY: 50, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
       expect(sent).toEqual(["\x1b[<65;41;13M"]);
-      // 再 50px：carry 0.5 + 1.5 = 2 行 → 累计共 3 条
-      wheel(el, { deltaY: 50, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
-      expect(sent.length).toBe(3);
+      // 微位移 10px = 0.3 行；carry 0.5（上轮余数）+0.3 = 0.8 ≥ 0.5 → 发 1 条
+      sent.length = 0;
+      wheel(el, { deltaY: 10, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
+      expect(sent).toEqual(["\x1b[<65;41;13M"]);
+      // 不足阈值的小位移被攒住：重置 carry 后 10px = 0.3 < 0.5 → 不发
+      sent.length = 0;
+      wheel(el, { deltaY: -50, deltaMode: WheelEvent.DOM_DELTA_PIXEL }); // 反向消耗 carry
+      sent.length = 0;
+      wheel(el, { deltaY: 10, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
+      expect(sent).toEqual([]);
+      // 再 40px：carry 0.3+0.4=0.7 ≥ 0.5 → 发 1 条
+      wheel(el, { deltaY: 40, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
+      expect(sent).toEqual(["\x1b[<65;41;13M"]);
     } finally {
       dispose();
     }
