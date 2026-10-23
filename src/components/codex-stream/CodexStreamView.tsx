@@ -14,6 +14,7 @@ import {
   CodexUserMessageEntry,
 } from "./CodexEntryItems";
 import { CodexApprovalCard } from "./CodexApprovalCard";
+import { CodexFollowUpBox } from "./CodexFollowUpBox";
 
 /** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。 */
 const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | null }) {
@@ -95,6 +96,8 @@ export function CodexStreamView({
   onApprovalResolved,
   running,
   statusText,
+  followUpBusy,
+  onFollowUp,
 }: {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
@@ -102,6 +105,9 @@ export function CodexStreamView({
   onApprovalResolved: () => void;
   running: boolean;
   statusText?: string | null;
+  /** 非空 = 显示继续对话输入框（done 态）；提交回调走 thread/resume 通道。 */
+  onFollowUp?: (text: string) => void;
+  followUpBusy?: boolean;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -143,6 +149,9 @@ export function CodexStreamView({
         ))}
         {statusText && <div style={s.codexStreamEmpty}>{statusText}</div>}
         {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+        {!running && onFollowUp && (
+          <CodexFollowUpBox busy={followUpBusy} onSubmit={onFollowUp} />
+        )}
       </div>
       <UsageBar usage={usage} />
     </div>

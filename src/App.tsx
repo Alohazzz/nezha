@@ -1065,6 +1065,41 @@ function App() {
     return paths.length > 0 ? paths : undefined;
   }
 
+  // structured 任务的继续对话（done 态输入框）：thread/resume + turn/start。
+  // 会话按 codexSessionId（thread id）从 rollout 恢复，任务状态经 task-status 事件回 running。
+  const [followUpBusyTaskId, setFollowUpBusyTaskId] = useState<string | null>(null);
+  const handleFollowUpStructured = useCallback(
+    async (task: Task, text: string) => {
+      if (followUpBusyTaskId) return;
+      if (!task.codexSessionId) {
+        showToast(t("toast.followUpNoSession"), "error");
+        return;
+      }
+      setFollowUpBusyTaskId(task.id);
+      const channel = new Channel<string>();
+      channel.onmessage = (line) => codexStream.ingestFrameLine(task.id, line);
+      // 先清上一轮流数据再喂新一轮（与 invokeRunTask 的分流口径一致）
+      codexStream.resetTask(task.id);
+      try {
+        await invoke("resume_codex_structured", {
+          taskId: task.id,
+          projectPath: projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "",
+          permissionMode: task.permissionMode,
+          threadId: task.codexSessionId,
+          prompt: text,
+          onOutput: channel,
+        });
+      } catch (err) {
+        showToast(t("toast.followUpFailed", { error: String(err) }), "error");
+        codexStream.resetTask(task.id);
+      } finally {
+        setFollowUpBusyTaskId(null);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [followUpBusyTaskId, codexStream],
+  );
+
   async function invokeRunTask(
     task: Task,
     projectPath: string,
@@ -3696,6 +3731,8 @@ function App() {
               onSnapshot={tm.handleSnapshot}
               getCodexStream={codexStream.getStream}
               onCodexApprovalResolved={codexStream.setApprovalResolved}
+              onFollowUpStructured={handleFollowUpStructured}
+              followUpBusyTaskId={followUpBusyTaskId}
               onBack={handleBack}
               onSwitchProject={handleProjectClick}
               onCommitProjectOrder={handleCommitProjectOrder}

@@ -304,7 +304,55 @@ impl CodexAppServerSession {
         Ok(info)
     }
 
-    /// 异步启动一个 turn:立即返回 turn id,完成靠 `TurnCompleted` 事件(D3)。
+    /// 按 threadId 恢复已有 thread（done 后继续对话，阶段 4 增强）。
+    /// rollout 文件从磁盘加载回上下文；path 仅作一致性校验传回。
+    pub async fn resume_thread(&self, thread_id: &str) -> Result<ThreadInfo, SessionError> {
+        let params = json!({ "threadId": thread_id });
+        let result = self
+            .request("thread/resume", params)
+            .await
+            .map_err(|e| SessionError::Protocol(format!("thread/resume: {e}")))?;
+        // 与 start_thread 同款宽松解析（上游 Thread Serialize-only / 键位膨胀）
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ThreadWire {
+            id: String,
+            #[serde(default)]
+            session_id: String,
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            model: Option<String>,
+            #[serde(default)]
+            model_provider: Option<String>,
+            #[serde(default)]
+            cwd: Option<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ResumeResultWire {
+            thread: ThreadWire,
+        }
+        let response: ResumeResultWire = serde_json::from_value(result)
+            .map_err(|e| SessionError::Protocol(format!("parse thread/resume: {e}")))?;
+        let info = ThreadInfo {
+            id: response.thread.id.clone(),
+            session_id: {
+                if response.thread.session_id.is_empty() {
+                    response.thread.id.clone()
+                } else {
+                    response.thread.session_id.clone()
+                }
+            },
+            path: response.thread.path.as_ref().map(|p| strip_verbatim_prefix(p)),
+            model: response.thread.model.clone(),
+            model_provider: response.thread.model_provider.clone(),
+            cwd: response.thread.cwd.clone(),
+            _rest: serde_json::Value::Null,
+        };
+        self.core.status.lock().thread = Some(info.clone());
+        Ok(info)
+    }
     pub async fn start_turn(&self, prompt: &str) -> Result<String, SessionError> {
         let thread_id = self
             .core

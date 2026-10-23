@@ -111,6 +111,8 @@ export function RunningView({
   getRestoreState,
   codexStream,
   onCodexApprovalResolved,
+  onFollowUp,
+  followUpBusy,
   onRename,
   onGenerateName,
   themeVariant,
@@ -143,6 +145,9 @@ export function RunningView({
   /** 非空 = structured 任务：主内容区渲染结构化流视图而非终端（issue #116 阶段 3）。 */
   codexStream?: CodexStreamState;
   onCodexApprovalResolved?: () => void;
+  /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。 */
+  onFollowUp?: (text: string) => void;
+  followUpBusy?: boolean;
   onRename: (name: string) => void;
   onGenerateName: () => Promise<void>;
   themeVariant: ThemeVariant;
@@ -166,7 +171,10 @@ export function RunningView({
       : task.agent === "dsh"
         ? task.dshSessionId
         : task.claudeSessionId;
-  const resumeAvailable = task.agent === "dsh" || !!resumeSessionId;
+  // structured 任务首期不支持恢复（阶段 2 决议：interrupted/failed 均按 failed 收口，
+  // resume 走 PTY 会破坏 structured 语义），隐藏恢复入口。
+  const isStructured = task.runMode === "structured";
+  const resumeAvailable = !isStructured && (task.agent === "dsh" || !!resumeSessionId);
   const restoreState = getRestoreState?.() ?? {};
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
@@ -313,6 +321,7 @@ export function RunningView({
 
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const load = () => {
       invoke<SessionMetrics>("read_session_metrics", { sessionPath: activeSessionPath })
@@ -325,12 +334,20 @@ export function RunningView({
           });
         })
         .catch(() => {
-          if (!cancelled) {
-            setMetricsState({
-              sessionPath: activeSessionPath,
-              status: "failed",
-              metrics: null,
-            });
+          if (cancelled) return;
+          setMetricsState({
+            sessionPath: activeSessionPath,
+            status: "failed",
+            metrics: null,
+          });
+          // 会话文件由 agent 异步落盘：task-session 事件（thread/started）先于
+          // 文件创建到达时，非活跃任务不再有轮询兜底，会永久停在 failed 红点。
+          // 非活跃时延迟补试一次，文件就绪后自愈。
+          if (!isActive && retryTimer === null) {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              if (!cancelled) load();
+            }, 5000);
           }
         });
     };
@@ -343,6 +360,10 @@ export function RunningView({
       if (timer !== null) {
         clearInterval(timer);
         timer = null;
+      }
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
       }
     };
   }, [sessionPath, isActive, projectActive]);
@@ -774,6 +795,8 @@ export function RunningView({
                   ? t("task.cancelled")
                   : undefined
             }
+            onFollowUp={task.status === "done" ? onFollowUp : undefined}
+            followUpBusy={followUpBusy}
           />
         ) : (
         <div style={s.terminalContainer}>

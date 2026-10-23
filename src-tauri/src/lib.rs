@@ -426,6 +426,7 @@ pub fn run() {
             pty::resume_task,
             pty::fork_task,
             codex_appserver::task_bridge::respond_codex_approval,
+            codex_appserver::task_bridge::resume_codex_structured,
             pty::arm_terminal_ready,
             pty::terminal_ready,
             pty::cancel_task,

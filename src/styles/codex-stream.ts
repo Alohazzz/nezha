@@ -286,6 +286,63 @@ export const codexStream = {
     background: "var(--color-warning)",
   },
 
+  // ── 继续对话输入框（done 态底部）────────────────────────────────────────────
+
+  codexFollowUpWrap: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    marginTop: "auto",
+    paddingTop: 8,
+    flexShrink: 0,
+  },
+
+  codexFollowUpBox: {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: 8,
+    border: "1px solid var(--border-strong)",
+    borderRadius: 10,
+    background: "var(--bg-input)",
+    padding: "8px 10px",
+  },
+
+  codexFollowUpBoxFocused: {
+    borderColor: "var(--accent)",
+  },
+
+  codexFollowUpInput: {
+    flex: 1,
+    border: "none",
+    outline: "none",
+    background: "transparent",
+    color: "var(--text-primary)",
+    fontSize: 13,
+    lineHeight: 1.5,
+    resize: "none",
+    maxHeight: 160,
+    fontFamily: "inherit",
+  },
+
+  codexFollowUpSendBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "6px 14px",
+    borderRadius: 8,
+    border: "none",
+    background: "var(--accent)",
+    color: "var(--bg-root)",
+    fontSize: 12.5,
+    cursor: "pointer",
+    flexShrink: 0,
+  },
+
+  codexFollowUpSendBtnDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
+  },
+
   // ── 用户消息气泡 ──────────────────────────────────────────────────────────
 
   codexUserBubbleWrap: {

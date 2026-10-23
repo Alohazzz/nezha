@@ -69,6 +69,22 @@ pub async fn spawn_session(
     Ok(session)
 }
 
+/// spawn 会话并按 threadId 恢复既有 thread（done 后继续对话，阶段 4 增强）。
+/// 恢复复用当前 permissionMode 的审批/沙箱档——thread/resume 的 override 参数
+/// 缺省时沿用 thread 原设置，这里显式传入与 Nezha 权限档保持一致。
+pub async fn spawn_session_resume(
+    agent_bin: &str,
+    cwd: &str,
+    permission_mode: &str,
+    thread_id: &str,
+) -> Result<CodexAppServerSession, SessionError> {
+    let (approval_policy, sandbox) = permission_mode_to_policy(permission_mode);
+    let request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
+    let session = CodexAppServerSession::spawn(request).await?;
+    session.resume_thread(thread_id).await?;
+    Ok(session)
+}
+
 /// 注册会话到 TaskManager（cancel/complete/respond 命令可寻址）。
 pub fn register_session(
     task_manager: &crate::TaskManager,
@@ -326,6 +342,83 @@ fn emit_failed(app: &AppHandle, task_id: &str, reason: &str) {
         crate::system_notify::NotifyCategory::Failed,
         Some(reason),
     );
+}
+
+/// structured 任务的继续对话（done 后输入框提交，阶段 4 增强）：
+/// spawn 新 app-server 进程 → `thread/resume` 恢复上下文 → 重挂 forwarder → 发起新 turn。
+/// 与 `run_structured_task` 同序登记；失败即返回 Err，前端 toast。
+pub async fn resume_structured_task(
+    app: AppHandle,
+    task_manager: &crate::TaskManager,
+    task_id: String,
+    project_path: String,
+    permission_mode: String,
+    thread_id: String,
+    prompt: String,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
+    let session = spawn_session_resume(
+        &launch_spec.program,
+        &project_path,
+        &permission_mode,
+        &thread_id,
+    )
+    .await
+    .map_err(|e| format!("codex app-server resume failed: {e:?}"))?;
+    let session = Arc::new(session);
+
+    // 与 run_task 同序的登记：清取消/手动完成标记（done 后继续对话是新的一轮）。
+    task_manager.cancelled_tasks.lock().remove(&task_id);
+    task_manager.manually_completed_tasks.lock().remove(&task_id);
+    task_manager.unattended_tasks.lock().remove(&task_id);
+    task_manager.task_names.lock().remove(&task_id);
+
+    register_session(task_manager, &task_id, session.clone());
+    let events = session.subscribe();
+    let errors = session.subscribe_errors();
+    // 继续对话默认有人值守：unattended=false 让完成通知正常发。
+    spawn_forwarder(app.clone(), task_id.clone(), false, on_output, events, errors);
+
+    let _ = app.emit(
+        "task-status",
+        serde_json::json!({ "task_id": task_id, "status": "running" }),
+    );
+
+    session
+        .start_turn(&prompt)
+        .await
+        .map_err(|e| format!("turn/start failed: {e:?}"))?;
+    Ok(())
+}
+
+/// structured 任务的继续对话命令（前端 done 态输入框提交）。
+/// `threadId` 用任务快照里的 `codexSessionId`（thread id，rollout 可从磁盘恢复）。
+#[tauri::command]
+pub async fn resume_codex_structured(
+    app: AppHandle,
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    project_path: String,
+    permission_mode: String,
+    thread_id: String,
+    prompt: String,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    if prompt.trim().is_empty() {
+        return Err("prompt is empty".to_string());
+    }
+    resume_structured_task(
+        app,
+        &task_manager,
+        task_id,
+        project_path,
+        permission_mode,
+        thread_id,
+        prompt,
+        on_output,
+    )
+    .await
 }
 
 /// structured 任务的取消：中断运行中的 turn 后优雅关闭会话。

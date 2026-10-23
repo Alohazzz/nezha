@@ -136,6 +136,8 @@ export function ProjectPage({
   onSnapshot,
   getCodexStream,
   onCodexApprovalResolved,
+  onFollowUpStructured,
+  followUpBusyTaskId,
   onBack,
   onSwitchProject,
   onCommitProjectOrder,
@@ -271,6 +273,9 @@ export function ProjectPage({
   /** codex structured 流快照（issue #116 阶段 3）；structured 任务渲染流视图用。 */
   getCodexStream?: (taskId: string) => CodexStreamState;
   onCodexApprovalResolved?: (taskId: string) => void;
+  /** structured 任务 done 态继续对话（thread/resume 通道）。 */
+  onFollowUpStructured?: (task: Task, text: string) => void;
+  followUpBusyTaskId?: string | null;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
   onCommitProjectOrder: (draggedId: string, beforeId: string | null, visibleIds: string[]) => void;
@@ -568,6 +573,12 @@ export function ProjectPage({
                     ? () => onCodexApprovalResolved(task.id)
                     : undefined
                 }
+                onFollowUp={
+                  task.runMode === "structured" && onFollowUpStructured
+                    ? (text) => onFollowUpStructured(task, text)
+                    : undefined
+                }
+                followUpBusy={followUpBusyTaskId === task.id}
                 onRename={(name) => onRenameTask(task.id, name)}
                 onGenerateName={() => onGenerateTaskName(task.id)}
                 themeVariant={themeVariant}
