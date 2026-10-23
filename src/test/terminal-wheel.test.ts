@@ -86,19 +86,48 @@ describe("wheel local takeover", () => {
       expect(term.modes.mouseTrackingMode).toBe("drag");
 
       wheel(el, { deltaY: -1 }); // 无修饰键
+      await tick(35); // 跨过 30ms 节流窗口
       wheel(el, { deltaY: 1 });
       // SGR 滚轮：64=up 65=down，坐标取屏幕中心（80x24 → 41;13）
       expect(sent).toEqual(["\x1b[<64;41;13M", "\x1b[<65;41;13M"]);
 
-      // 同事件多行合并为一次 sendInput（修滚动不跟手：每次 sendInput 是一次 IPC）
+      // 同事件多行合并为一次 sendInput（每次 sendInput 是一次 IPC）
+      await tick(35);
       sent.length = 0;
       wheel(el, { deltaY: 3 });
       expect(sent).toEqual(["\x1b[<65;41;13M".repeat(3)]);
 
       // Shift 修饰滚轮行为相同（兼容旧肌肉记忆）
+      await tick(35);
       sent.length = 0;
       wheel(el, { deltaY: -1, shiftKey: true });
       expect(sent).toEqual(["\x1b[<64;41;13M"]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("throttle window coalesces bursts and caps packets to keep TUI queue drained", async () => {
+    const term = current = mountTerminal();
+    const sent: string[] = [];
+    const el = container();
+    const dispose = attachWheelScroll(el, () => term, (d) => sent.push(d));
+    try {
+      term.write("\x1b[?1049h\x1b[?1002h\x1b[?1006h");
+      await tick();
+      // 首事件立即发
+      wheel(el, { deltaY: 1 });
+      expect(sent).toEqual(["\x1b[<65;41;13M"]);
+      // 30ms 窗口内的连续事件只累加、不发（TUI 每条滚轮都全屏重绘，
+      // 发快了在 PTY 队列积压 → 越滚越滞后）
+      sent.length = 0;
+      wheel(el, { deltaY: 10 });
+      wheel(el, { deltaY: 10 });
+      expect(sent).toEqual([]);
+      // 窗口过后的下一事件：发包并截到单包上限 3（10+10+1=21 行 → 3 条，超出丢弃）
+      await tick(35);
+      wheel(el, { deltaY: 1 });
+      expect(sent).toEqual(["\x1b[<65;41;13M".repeat(3)]);
     } finally {
       dispose();
     }
@@ -169,16 +198,20 @@ describe("wheel local takeover", () => {
       wheel(el, { deltaY: 50, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
       expect(sent).toEqual(["\x1b[<65;41;13M"]);
       // 微位移 10px = 0.3 行；carry 0.5（上轮余数）+0.3 = 0.8 ≥ 0.5 → 发 1 条
+      await tick(35);
       sent.length = 0;
       wheel(el, { deltaY: 10, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
       expect(sent).toEqual(["\x1b[<65;41;13M"]);
-      // 不足阈值的小位移被攒住：重置 carry 后 10px = 0.3 < 0.5 → 不发
-      sent.length = 0;
-      wheel(el, { deltaY: -50, deltaMode: WheelEvent.DOM_DELTA_PIXEL }); // 反向消耗 carry
+      // 不足阈值的小位移被攒住：反向 50px 把 carry 消耗成负余数后，
+      // 10px = 0.3 < 0.5 → 不发（注意反向本身也受节流，需跨窗口）
+      await tick(35);
+      wheel(el, { deltaY: -50, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
+      await tick(35);
       sent.length = 0;
       wheel(el, { deltaY: 10, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
       expect(sent).toEqual([]);
       // 再 40px：carry 0.3+0.4=0.7 ≥ 0.5 → 发 1 条
+      await tick(35);
       wheel(el, { deltaY: 40, deltaMode: WheelEvent.DOM_DELTA_PIXEL });
       expect(sent).toEqual(["\x1b[<65;41;13M"]);
     } finally {

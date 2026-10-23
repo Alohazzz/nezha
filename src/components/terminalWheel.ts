@@ -28,6 +28,13 @@ import type { Terminal } from "@xterm/xterm";
 /** 与 xterm consumeWheelEvent 的 DOM_DELTA_PIXEL 常量对齐：100px ≈ 3 行。 */
 const PIXELS_PER_LINE = 100 / 3;
 
+/** 滚动输入节流窗口：TUI 每条滚轮输入都触发全屏重绘，消费速度固定；
+ *  30ms ≈ 每秒最多 ~33 行滚动输入，足够覆盖任何合理滚速且不积压队列。 */
+const THROTTLE_MS = 30;
+
+/** 单包最大行数：窗口结束时一次发出，超出部分丢弃（best-effort）。 */
+const MAX_LINES_PER_PACKET = 3;
+
 function isWheelEventRelevant(e: WheelEvent): boolean {
   return e.deltaY !== 0 && !e.ctrlKey && !e.metaKey;
 }
@@ -46,6 +53,9 @@ export function attachWheelScroll(
   // 触控板像素模式的小位移累加器（跨行才合成一次输入）；重置时机为 buffer 切换。
   let pixelCarry = 0;
   let carryBufferType: string | null = null;
+  // 滚动输入节流：窗口内只累加 pendingLines，窗口到点后的下一事件发包。
+  let throttleUntil = 0;
+  let pendingLines = 0;
 
   const handleWheel = (e: WheelEvent) => {
     if (!isWheelEventRelevant(e)) return;
@@ -60,6 +70,8 @@ export function attachWheelScroll(
     if (bufferType !== carryBufferType) {
       pixelCarry = 0;
       carryBufferType = bufferType;
+      throttleUntil = 0;
+      pendingLines = 0;
     }
 
     // 归一为「行数」：像素模式累加，≥0.5 行即发（攒整数会让轻滚迟滞、不跟手），
@@ -87,21 +99,33 @@ export function attachWheelScroll(
     }
 
     if (bufferType === "alternate") {
-      // 同一事件内同方向的多次合并在**一次** sendInput 里发出：每条独立
-      // sendInput = 一次 invoke("send_input") IPC 往返，加速滚动时一帧可达
-      // 多次，逐条发是「滚动不跟手」的主因。TUI 逐条解析拼接后的序列，语义不变。
-      const n = Math.min(Math.abs(lines), 30); // 单事件上限，防狂发
+      // 发送节流（修「前几行正常、越滚越滞后」）：TUI 每收 1 条滚轮就全屏
+      // 重绘，消费速度固定；发快了输入在 PTY 队列积压，视觉滞后越来越长。
+      // 因此按 30ms 窗口节流，窗口内只累加行数、发一次、单包上限 3 行——
+      // 超出的丢弃（终端滚动是 best-effort，高速时少滚几行无感知，换来的是
+      // 队列不积压、每次滚动即时响应）。
+      const now = performance.now();
+      if (now < throttleUntil) {
+        pendingLines += lines;
+        return;
+      }
+      const accumulated = pendingLines + lines;
+      pendingLines = 0;
+      throttleUntil = now + THROTTLE_MS;
+      const n = Math.min(Math.abs(accumulated), MAX_LINES_PER_PACKET);
+      if (n === 0) return;
+      const dir = accumulated > 0 ? 1 : -1;
       let payload: string;
       if (term.modes.mouseTrackingMode !== "none") {
         // SGR 滚轮：64=up 65=down，1-based 坐标取屏幕中心。
-        const button = lines > 0 ? 65 : 64;
+        const button = dir > 0 ? 65 : 64;
         const col = Math.max(1, Math.min(term.cols, Math.floor(term.cols / 2) + 1));
         const row = Math.max(1, Math.min(term.rows, Math.floor(term.rows / 2) + 1));
         payload = `\x1b[<${button};${col};${row}M`.repeat(n);
       } else {
         // 经典全屏程序：滚轮语义 = 方向键。
         const prefix = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
-        const key = lines > 0 ? "B" : "A";
+        const key = dir > 0 ? "B" : "A";
         payload = `${prefix}${key}`.repeat(n);
       }
       sendInput(payload);
