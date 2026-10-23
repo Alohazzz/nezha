@@ -63,27 +63,47 @@ afterEach(() => {
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 
 describe("shift+wheel forced local handling", () => {
-  it("alt buffer: shift+wheel sends arrow keys to stdin, honoring DECCKM", async () => {
+  it("alt buffer with mouse reporting: shift+wheel sends SGR wheel events (not arrows)", async () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();
     const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
     try {
-      // Codex TUI 形态：进 alt buffer + 开鼠标上报 + application cursor keys
-      term.write("\x1b[?1049h\x1b[?1002h\x1b[?1h");
+      // Codex TUI 形态：alt buffer + drag 上报 + SGR 坐标 + DECCKM。
+      // 方向键在这里是错的：Codex composer 把它当上下键切输入历史。
+      term.write("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?1h");
       await tick();
       expect(term.buffer.active.type).toBe("alternate");
+      expect(term.modes.mouseTrackingMode).toBe("drag");
       expect(term.modes.applicationCursorKeysMode).toBe(true);
 
       wheel(el, { deltaY: -120, shiftKey: true });
       wheel(el, { deltaY: 120, shiftKey: true });
-      expect(sent).toEqual(["\x1bOA", "\x1bOB"]);
+      // SGR 滚轮：64=up 65=down，坐标取屏幕中心（80x24 → 41;13）
+      expect(sent).toEqual(["\x1b[<64;41;13M", "\x1b[<65;41;13M"]);
     } finally {
       dispose();
     }
   });
 
-  it("alt buffer without DECCKM uses CSI arrows", async () => {
+  it("alt buffer without mouse reporting falls back to arrows, honoring DECCKM", async () => {
+    const term = current = mountTerminal();
+    const sent: string[] = [];
+    const el = container();
+    const dispose = attachShiftWheelScroll(el, () => term, (d) => sent.push(d));
+    try {
+      // 经典全屏程序（less/vim）：DECCKM 开 → ESCO 前缀
+      term.write("\x1b[?1049h\x1b[?1h");
+      await tick();
+      expect(term.modes.applicationCursorKeysMode).toBe(true);
+      wheel(el, { deltaY: -120, shiftKey: true });
+      expect(sent).toEqual(["\x1bOA"]);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("alt buffer without mouse reporting and without DECCKM uses CSI arrows", async () => {
     const term = current = mountTerminal();
     const sent: string[] = [];
     const el = container();

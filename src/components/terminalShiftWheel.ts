@@ -13,10 +13,13 @@ import type { Terminal } from "@xterm/xterm";
  *    缺的只是 Shift+滚轮。
  *
  * 因此在 capture 阶段（先于 xterm 的 wheel listener）拦截 Shift+wheel：
- * - alt buffer：合成方向键发往 PTY stdin（TUI 自己滚动它的滚动区），DECCKM
- *   对齐 xterm 内部逻辑（applicationCursorKeysMode ? ESCO A/B : ESC[ A/B）。
- *   走 onInput 与用户键入同路；方向键不是终端应答，replyGuard 必然放行；
- * - normal buffer：term.scrollLines 本地滚视口，Codex 的鼠标上报完全无关。
+ * - alt buffer + 鼠标上报开启（Codex 0.16x 运行期的形态）：合成 SGR 滚轮事件
+ *   （`ESC[<64/65;col;rowM`）发往 PTY stdin，与 xterm 原生转发的格式一致，TUI
+ *   拿它滚自己的滚动区。**不能发方向键**——Codex composer 会把方向键当上下键
+ *   切换输入历史（2026-10 用户实测回归：切任务回来 Shift+滚轮打历史）；
+ * - alt buffer + 无鼠标上报（less / vim 等经典全屏程序）：合成方向键，DECCKM
+ *   对齐 xterm 内部逻辑（applicationCursorKeysMode ? ESCO A/B : ESC[ A/B）；
+ * - normal buffer：term.scrollLines 本地滚视口，鼠标上报完全无关。
  *
  * 仅 Shift+wheel 被拦截；无修饰键的滚轮保持 xterm 原生分发（鼠标上报开启时
  * 转发给 TUI 是预期行为，Codex 用它做自身滚动）。
@@ -33,7 +36,7 @@ function isShiftWheel(e: WheelEvent): boolean {
  * 在容器上挂 capture 阶段 wheel 监听。返回 dispose 函数。
  *
  * `sendInput` 是 TerminalView / ShellTerminalPanel 已有的 PTY stdin 通路
- * （guarded forwarder 包裹的 onInput）；本模块只合成方向键，不会写入终端画面。
+ * （guarded forwarder 包裹的 onInput）；本模块只合成输入序列，不写终端画面。
  */
 export function attachShiftWheelScroll(
   container: HTMLElement,
@@ -50,11 +53,22 @@ export function attachShiftWheelScroll(
     e.stopPropagation();
     const delta = e.deltaY > 0 ? SCROLL_LINES_PER_EVENT : -SCROLL_LINES_PER_EVENT;
     if (term.buffer.active.type === "alternate") {
-      // 全屏 TUI：滚轮语义 = 方向键。DECCKM 决定 ESCO / ESC[ 前缀，
-      // 与 xterm 内部（bundle 中 hasScrollback 分支）的合成逻辑一致。
-      const prefix = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
-      const key = e.deltaY > 0 ? "B" : "A";
-      sendInput(`${prefix}${key}`);
+      if (term.modes.mouseTrackingMode !== "none") {
+        // TUI 开了鼠标上报（Codex 0.16x 运行期 ?1002h+?1006h）：合成 SGR 滚轮
+        // 事件回传，与 xterm 原生转发的格式一致（<64=上滚 <65=下滚，SGR 1-based
+        // 坐标；ratatui 类 TUI 只按方向处理滚动区，坐标取屏幕中心即可）。
+        // 方向键在这里是错的——Codex composer 会把它当上下键切输入历史。
+        const button = e.deltaY > 0 ? 65 : 64;
+        const col = Math.max(1, Math.min(term.cols, Math.floor(term.cols / 2) + 1));
+        const row = Math.max(1, Math.min(term.rows, Math.floor(term.rows / 2) + 1));
+        sendInput(`\x1b[<${button};${col};${row}M`);
+      } else {
+        // 无鼠标上报的经典全屏程序（less / vim）：滚轮语义 = 方向键。
+        // DECCKM 决定 ESCO / ESC[ 前缀，与 xterm 内部合成逻辑一致。
+        const prefix = term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
+        const key = e.deltaY > 0 ? "B" : "A";
+        sendInput(`${prefix}${key}`);
+      }
     } else {
       term.scrollLines(delta);
     }
