@@ -581,4 +581,121 @@ export const codexStream = {  codexStreamRoot: {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
+
+  // ── diff 视图（issue #117 T4：hunk 结构 + 两段式高亮 + 截断入口）────────────
+
+  /** 单文件卡头：文件名 chip + 变更徽标 + +N/−N（多文件子卡共用）。 */
+  codexDiffFileHead: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "6px 12px",
+    borderBottom: "1px solid var(--border-dim)",
+    fontSize: 11.5,
+  },
+
+  codexDiffFileName: {
+    fontFamily: "var(--font-mono)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    minWidth: 0,
+    color: "var(--text-primary)",
+  },
+
+  /** rename 的 old → new 路径提示。 */
+  codexDiffRenamePath: {
+    color: "var(--text-hint)",
+    fontFamily: "var(--font-mono)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    flexShrink: 2,
+    minWidth: 0,
+  },
+
+  /** 变更性质徽标（added / deleted / renamed / modified），色由 data-kind 选择器出。 */
+  codexDiffBadge: {
+    fontSize: 10,
+    fontWeight: 600,
+    padding: "1px 7px",
+    borderRadius: 8,
+    flexShrink: 0,
+    letterSpacing: 0.2,
+  },
+
+  codexDiffStats: {
+    marginLeft: "auto",
+    fontFamily: "var(--font-mono)",
+    fontSize: 11,
+    flexShrink: 0,
+  },
+
+  codexDiffStatAdd: {
+    color: "var(--color-success)",
+  },
+
+  codexDiffStatDel: {
+    color: "var(--color-error)",
+    marginLeft: 6,
+  },
+
+  /** diff 行容器：hunk 结构下的块级行，行号槽 + 内容（shiki token HTML 注入点）。 */
+  codexDiffLineRow: {
+    display: "block",
+    whiteSpace: "pre",
+    minHeight: "1.45em",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    lineHeight: 1.45,
+  },
+
+  /** 行号槽：旧/新行号右对齐，不可选中。 */
+  codexDiffLineNo: {
+    display: "inline-block",
+    width: 34,
+    paddingRight: 8,
+    textAlign: "right",
+    color: "var(--text-hint)",
+    userSelect: "none",
+    fontSize: 10,
+  },
+
+  /** 多文件父卡子项行（文件头行可点击展开）。 */
+  codexDiffChildWrap: {
+    borderTop: "1px solid var(--border-dim)",
+  },
+
+  /** 截断 footer：提示 + 跳转 GitChanges 面板入口。 */
+  codexDiffTruncateFooter: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 12px",
+    borderTop: "1px solid var(--border-dim)",
+    fontSize: 11,
+    color: "var(--text-hint)",
+    background: "var(--bg-root)",
+  },
+
+  codexDiffTruncateJump: {
+    border: "none",
+    background: "none",
+    padding: 0,
+    fontSize: 11,
+    color: "var(--accent)",
+    cursor: "pointer",
+    textDecoration: "underline",
+    textUnderlineOffset: 2,
+    fontFamily: "inherit",
+    flexShrink: 0,
+  },
+
+  /** hunk 头行（@@ … @@）。 */
+  codexDiffHunkHeader: {
+    display: "block",
+    color: "var(--text-hint)",
+    background: "var(--bg-subtle)",
+    userSelect: "none",
+  },
 } satisfies Record<string, React.CSSProperties>;

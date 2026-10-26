@@ -162,3 +162,42 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   -webkit-background-clip: text;
   animation: codex-tool-shimmer 1.6s linear infinite;
 }
+
+/* ── T4 diff 视图（issue #117）────────────────────────────────────────────────
+ * 变更性质徽标按 data-kind 出色；diff 行按 data-type 出 +/- 底色。
+ * 两段式渲染：plain 阶段同底色；shiki 高亮后 token 色由注入的 HTML span 自带。 */
+
+.codex-stream-diff-badge[data-kind="added"] {
+  background: var(--diff-status-added-bg, rgba(80, 200, 120, 0.16));
+  color: var(--diff-status-added-fg, var(--color-success));
+}
+.codex-stream-diff-badge[data-kind="deleted"] {
+  background: var(--diff-status-deleted-bg, rgba(220, 80, 80, 0.16));
+  color: var(--diff-status-deleted-fg, var(--color-error));
+}
+.codex-stream-diff-badge[data-kind="renamed"] {
+  background: var(--diff-status-renamed-bg, rgba(93, 124, 255, 0.16));
+  color: var(--diff-status-renamed-fg, var(--accent));
+}
+.codex-stream-diff-badge[data-kind="modified"] {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.codex-stream-diff-row[data-type="add"] {
+  background: var(--diff-add-bg, rgba(80, 200, 120, 0.1));
+  color: var(--diff-add-fg, var(--color-success));
+}
+.codex-stream-diff-row[data-type="del"] {
+  background: var(--diff-delete-bg, rgba(220, 80, 80, 0.1));
+  color: var(--diff-delete-fg, var(--color-error));
+}
+.codex-stream-diff-row[data-type="meta"] {
+  color: var(--text-hint);
+  user-select: none;
+}
+
+/* shiki 高亮注入的 token span：色彩自带 inline style，这里只管字体继承 */
+.codex-stream-diff-code span {
+  font-family: inherit;
+}

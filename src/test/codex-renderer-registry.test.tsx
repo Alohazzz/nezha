@@ -173,11 +173,14 @@ describe("codex file change card", () => {
     renderView([fileChangeEntry]);
     // 摘要行可见（路径），diff 内容不可见
     expect(screen.getByRole("button", { name: /src\/app\.ts/ })).toBeTruthy();
-    expect(screen.queryByText(/\+new/)).toBeNull();
+    expect(screen.queryByText("new")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /src\/app\.ts/ }));
-    expect(screen.getByText("+new")).toBeTruthy();
-    expect(screen.getByText("-old")).toBeTruthy();
+    // T4 起 diff 行有结构：行内容去掉 +/- 前缀、按 data-type 标类型
+    expect(screen.getByText("new")).toBeTruthy();
+    expect(screen.getByText("old")).toBeTruthy();
+    expect(document.querySelector('.codex-stream-diff-row[data-type="add"]')).not.toBeNull();
+    expect(document.querySelector('.codex-stream-diff-row[data-type="del"]')).not.toBeNull();
   });
 });
 

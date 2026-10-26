@@ -28,8 +28,9 @@ import { CodexUserMessageEntry } from "./CodexUserMessageEntry";
 // 本身持有各自的精确 item 类型。全部 renderer 经 memo 依赖 entry/item 引用
 // （T1 保证 delta 产生新引用），无自定义比较器。
 
-/** 单个 renderer 的统一入参：整个 entry 下传（含 revision）。 */
-type EntryProps = { entry: CodexStreamEntry };
+/** 单个 renderer 的统一入参：整个 entry 下传（含 revision）。
+ * onOpenGitChanges：截断 diff 的跳转入口（GitChanges 右面板），仅 fileChange 用。 */
+type EntryProps = { entry: CodexStreamEntry; onOpenGitChanges?: () => void };
 
 type EntryRenderer = (props: EntryProps) => ReactNode;
 
@@ -41,7 +42,13 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
   commandExecution: ({ entry }) => (
     <CodexCommandEntry item={entry.item as CodexCommandExecutionItem} revision={entry.revision} />
   ),
-  fileChange: ({ entry }) => <CodexFileChangeEntry item={entry.item as CodexFileChangeItem} revision={entry.revision} />,
+  fileChange: ({ entry, onOpenGitChanges }) => (
+    <CodexFileChangeEntry
+      item={entry.item as CodexFileChangeItem}
+      revision={entry.revision}
+      onOpenGitChanges={onOpenGitChanges}
+    />
+  ),
   mcpToolCall: ({ entry }) => <CodexMcpToolCallEntry item={entry.item as CodexMcpToolCallItem} revision={entry.revision} />,
   fallback: ({ entry }) => <CodexFallbackEntry item={entry.item as CodexItemFallback} />,
 };
