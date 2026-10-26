@@ -9,7 +9,7 @@ import {
   FileEdit,
   ListTodo,
   Plug,
-  TerminalSquare,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import type {
@@ -24,6 +24,7 @@ import type {
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { CodexMarkdown } from "./CodexMarkdown";
+import { CodexToolCard } from "./CodexToolCard";
 
 // 条目状态点的颜色语义：running=提示色 / completed=成功 / failed|declined=错误
 function statusDotColor(status: string): string {
@@ -109,77 +110,78 @@ export const CodexPlanEntry = memo(function CodexPlanEntry({ item }: { item: Cod
   );
 });
 
-/** 命令执行：头部（命令 + 状态）+ 可折叠输出。流式期间输出自动展开。 */
+/** 命令执行（issue #117 T2 迁移示范）：骨架管行为（折叠持久 / 自动边沿 / 失败
+ * tooltip），本卡只管内容渲染（输出尾部 + 复制全文）。行为矩阵：默认收起、
+ * 流式中自动展开、完成自动收起。`streaming` 保留在签名上兼容视图层调用，
+ * 自动展开语义由骨架的 running 边沿覆盖（revision 变化走 memo 引用）。 */
 export const CodexCommandEntry = memo(function CodexCommandEntry({
   item,
-  streaming,
 }: {
   item: CodexCommandExecutionItem;
   streaming?: boolean;
+  revision?: number;
 }) {
   const { t } = useI18n();
   const running = item.status === "inProgress";
-  const [expanded, setExpanded] = useState(running || streaming === true);
-  const [copied, setCopied] = useState(false);
+  const failed = item.status === "failed" || item.status === "declined";
+  const status: "running" | "ok" | "failed" = running ? "running" : failed ? "failed" : "ok";
   const hasOutput = Boolean(item.aggregatedOutput);
+  const duration = formatDuration(item.durationMs);
+
+  return (
+    <CodexToolCard
+      entryId={item.id}
+      icon={<SquareTerminal size={11} />}
+      category="Command"
+      text={item.command}
+      status={status}
+      statusLabel={item.exitCode !== null && item.exitCode !== 0 ? `exit ${item.exitCode}` : undefined}
+      failureDetail={failed ? item.aggregatedOutput : null}
+      collapsible={hasOutput}
+      autoExpandWhileRunning
+      autoCollapseOnDone
+      meta={
+        <>
+          {item.exitCode !== null && item.exitCode !== 0 && (
+            <span style={{ ...s.codexToolMeta, ...s.codexToolMetaError }}>
+              exit {item.exitCode}
+            </span>
+          )}
+          {duration && <span style={s.codexToolMeta}>{duration}</span>}
+        </>
+      }
+    >
+      <CommandOutputBody output={item.aggregatedOutput} copyLabel={t("common.copy")} />
+    </CodexToolCard>
+  );
+});
+
+/** 命令输出体：pre + 复制全文按钮（内容渲染保持原样，迁出 inline style）。 */
+function CommandOutputBody({ output, copyLabel }: { output: string | null; copyLabel: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!output) return null;
 
   const handleCopy = () => {
-    if (!item.aggregatedOutput) return;
-    navigator.clipboard.writeText(item.aggregatedOutput).then(() => {
+    navigator.clipboard.writeText(output).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
   };
 
-  const duration = formatDuration(item.durationMs);
   return (
-    <div style={s.codexEntryCard}>
+    <div style={s.codexCommandOutputWrap}>
+      <pre style={s.codexEntryBody}>{output}</pre>
       <button
         type="button"
-        style={s.codexEntryHeader}
-        onClick={() => hasOutput && setExpanded((e) => !e)}
-        disabled={!hasOutput}
+        className="codex-stream-copy-btn"
+        title={copied ? undefined : copyLabel}
+        onClick={handleCopy}
       >
-        {running ? (
-          <CircleDashed size={12} className="spin" style={{ flexShrink: 0 }} />
-        ) : (
-          <span style={{ ...s.codexStatusDot, background: statusDotColor(item.status) }} />
-        )}
-        <TerminalSquare size={11} style={{ color: "var(--text-hint)", flexShrink: 0 }} />
-        <span style={s.codexEntryHeaderLabel}>{item.command}</span>
-        {item.exitCode !== null && item.exitCode !== 0 && (
-          <span style={{ ...s.codexEntryHeaderMeta, color: "var(--color-error)" }}>
-            exit {item.exitCode}
-          </span>
-        )}
-        {duration && <span style={s.codexEntryHeaderMeta}>{duration}</span>}
+        {copied ? <Check size={12} /> : <Copy size={12} />}
       </button>
-      {expanded && hasOutput && (
-        <div style={{ position: "relative" }}>
-          <pre style={s.codexEntryBody}>{item.aggregatedOutput}</pre>
-          <button
-            type="button"
-            title={copied ? undefined : t("common.copy")}
-            onClick={handleCopy}
-            style={{
-              position: "absolute",
-              top: 4,
-              right: 6,
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              padding: 2,
-              color: "var(--text-muted)",
-              display: "flex",
-            }}
-          >
-            {copied ? <Check size={12} /> : <Copy size={12} />}
-          </button>
-        </div>
-      )}
     </div>
   );
-});
+}
 
 /** 文件变更：逐文件渲染 diff（unified diff 文本，行级着色）。 */
 export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({

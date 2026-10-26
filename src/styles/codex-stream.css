@@ -1,0 +1,85 @@
+/* codex-stream 伪类 / 状态选择器 / 动画（issue #117 T2 统一工具卡骨架）。
+ * CSS-in-JS 对象表达不了的 :hover / :focus-visible / [data-*] / @keyframes 一律放这里；
+ * 静态布局在 codex-stream.ts。 */
+
+/* ── 工具卡摘要行交互态 ─────────────────────────────────────────────────── */
+
+.codex-stream-tool-header:hover {
+  background: var(--bg-subtle);
+}
+
+.codex-stream-tool-header:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 状态词语义色（summary 行右侧 Running / Done / Failed） */
+.codex-stream-tool-card[data-status="ok"] .codex-stream-tool-status {
+  color: var(--color-success);
+}
+
+.codex-stream-tool-card[data-status="running"] .codex-stream-tool-status {
+  color: var(--accent);
+}
+
+/* 失败态状态词：虚线下划线（user story 12）；可点击触发详情时才显 pointer */
+.codex-stream-tool-status[data-status="failed"] {
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+}
+
+button.codex-stream-tool-status[data-status="failed"] {
+  cursor: pointer;
+}
+
+button.codex-stream-tool-status[data-status="failed"]:hover {
+  color: var(--color-error);
+  opacity: 0.85;
+}
+
+/* ── 命令卡输出复制按钮（原 inline style 迁出）────────────────────────────── */
+
+.codex-stream-copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--text-muted);
+  display: flex;
+}
+
+.codex-stream-copy-btn:hover {
+  color: var(--text-primary);
+}
+
+/* ── 运行态：类别标签文案扫光（user story 16）──────────────────────────────
+ * 纯 background-position 动画（GPU 合成友好），不用旋转图标/spinner。
+ * 大量并发卡片同时扫光也不占渲染主循环。 */
+
+@keyframes codex-tool-shimmer {
+  0% {
+    background-position: -120% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+
+.codex-stream-tool-category[data-running] {
+  background: linear-gradient(
+    100deg,
+    var(--bg-subtle) 0%,
+    var(--bg-subtle) 38%,
+    var(--accent) 50%,
+    var(--bg-subtle) 62%,
+    var(--bg-subtle) 100%
+  );
+  background-size: 220% 100%;
+  color: transparent;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: codex-tool-shimmer 1.6s linear infinite;
+}
