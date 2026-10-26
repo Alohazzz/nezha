@@ -1,8 +1,7 @@
 import type React from "react";
 
 /** codex structured 流视图（issue #116 阶段 3）：条目流 / 审批卡片 / usage 条。 */
-export const codexStream = {
-  codexStreamRoot: {
+export const codexStream = {  codexStreamRoot: {
     flex: 1,
     overflowY: "auto",
     padding: "16px 28px 32px",
@@ -360,5 +359,150 @@ export const codexStream = {
     lineHeight: 1.6,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
+  },
+
+  // ── 统一工具卡骨架（issue #117 T2）─────────────────────────────────────────
+  // 伪类 / data-* 状态选择器 / shimmer keyframes 在 codex-stream.css。
+
+  codexToolCard: {
+    border: "1px solid var(--border-dim)",
+    borderRadius: 8,
+    overflow: "hidden",
+    fontSize: 12.5,
+    background: "var(--bg-root)",
+    flexShrink: 0,
+  },
+
+  codexToolHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    padding: "6px 10px",
+    background: "var(--bg-input)",
+    borderBottom: "1px solid transparent",
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    width: "100%",
+    border: "none",
+    cursor: "pointer",
+    textAlign: "left",
+  },
+
+  codexToolHeaderExpanded: {
+    borderBottom: "1px solid var(--border-dim)",
+  },
+
+  codexToolIcon: {
+    display: "flex",
+    alignItems: "center",
+    color: "var(--text-hint)",
+    flexShrink: 0,
+  },
+
+  codexToolCategory: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "1px 7px",
+    borderRadius: 9,
+    background: "var(--bg-subtle)",
+    color: "var(--text-muted)",
+    fontSize: 10.5,
+    fontWeight: 600,
+    letterSpacing: "0.02em",
+    flexShrink: 0,
+    whiteSpace: "nowrap",
+  },
+
+  codexToolText: {
+    fontFamily: "var(--font-mono)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    flex: 1,
+    minWidth: 0,
+  },
+
+  codexToolMeta: {
+    color: "var(--text-hint)",
+    fontSize: 11,
+    flexShrink: 0,
+  },
+
+  codexToolMetaError: {
+    color: "var(--color-error)",
+  },
+
+  codexToolStatus: {
+    fontSize: 11,
+    flexShrink: 0,
+    color: "var(--text-hint)",
+    display: "inline-flex",
+    alignItems: "center",
+    background: "none",
+    border: "none",
+    cursor: "default",
+    padding: 0,
+    fontFamily: "inherit",
+  },
+
+  codexToolStatusFailed: {
+    color: "var(--color-error)",
+    cursor: "help",
+  },
+
+  codexToolChevron: {
+    flexShrink: 0,
+    color: "var(--text-hint)",
+  },
+
+  codexToolBody: {
+    background: "var(--bg-root)",
+  },
+
+  // 命令卡输出体：相对定位容器，复制按钮绝对定位右上（原 inline style 迁出）
+  codexCommandOutputWrap: {
+    position: "relative",
+  },
+
+  codexToolFailPopover: {
+    maxWidth: 460,
+    background: "var(--bg-root)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: 8,
+    padding: 10,
+    boxShadow: "0 6px 24px rgba(0,0,0,0.25)",
+    zIndex: 60,
+  },
+
+  codexToolFailPre: {
+    margin: 0,
+    maxHeight: 220,
+    overflowY: "auto",
+    fontSize: 11,
+    lineHeight: 1.5,
+    fontFamily: "var(--font-mono)",
+    color: "var(--color-error)",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+
+  codexToolFailCopy: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 4,
+    background: "var(--bg-input)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 5,
+    color: "var(--text-muted)",
+    cursor: "pointer",
+  },
+
+  codexToolFailCopied: {
+    color: "var(--color-success)",
+    borderColor: "var(--color-success)",
   },
 } satisfies Record<string, React.CSSProperties>;
