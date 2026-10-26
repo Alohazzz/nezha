@@ -50,9 +50,9 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
   );
 });
 
-function EntryRenderer({ entry }: { entry: CodexStreamEntry }) {
+function EntryRenderer({ entry, onOpenGitChanges }: { entry: CodexStreamEntry; onOpenGitChanges?: () => void }) {
   const render = codexEntryRenderers[entry.kind];
-  return <>{render({ entry })}</>;
+  return <>{render({ entry, onOpenGitChanges })}</>;
 }
 
 /**
@@ -69,6 +69,7 @@ export function CodexStreamView({
   statusText,
   followUpBusy,
   onFollowUp,
+  onOpenGitChanges,
 }: {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
@@ -79,6 +80,8 @@ export function CodexStreamView({
   /** 非空 = 显示继续对话输入框（done 态）；提交回调走 thread/resume 通道。 */
   onFollowUp?: (text: string) => void;
   followUpBusy?: boolean;
+  /** 截断 diff → GitChanges 右面板的跳转入口（openRightPanel("git-changes")）。 */
+  onOpenGitChanges?: () => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -109,6 +112,7 @@ export function CodexStreamView({
           <EntryRenderer
             key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
             entry={entry}
+            onOpenGitChanges={onOpenGitChanges}
           />
         ))}
         {statusText && <div style={s.codexStreamEmpty}>{statusText}</div>}

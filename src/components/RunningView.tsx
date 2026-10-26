@@ -113,6 +113,7 @@ export function RunningView({
   onCodexApprovalResolved,
   onFollowUp,
   followUpBusy,
+  onOpenGitChanges,
   onRename,
   onGenerateName,
   themeVariant,
@@ -148,6 +149,8 @@ export function RunningView({
   /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。 */
   onFollowUp?: (text: string) => void;
   followUpBusy?: boolean;
+  /** 截断 diff → GitChanges 右面板的跳转入口（issue #117 T4）。 */
+  onOpenGitChanges?: () => void;
   onRename: (name: string) => void;
   onGenerateName: () => Promise<void>;
   themeVariant: ThemeVariant;
@@ -724,6 +727,7 @@ export function RunningView({
             onApprovalResolved={() => {}}
             running={false}
             statusText={t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+            onOpenGitChanges={onOpenGitChanges}
           />
         ) : (
         <div style={s.interruptedSessionWrap}>
@@ -797,6 +801,7 @@ export function RunningView({
             }
             onFollowUp={task.status === "done" ? onFollowUp : undefined}
             followUpBusy={followUpBusy}
+            onOpenGitChanges={onOpenGitChanges}
           />
         ) : (
         <div style={s.terminalContainer}>

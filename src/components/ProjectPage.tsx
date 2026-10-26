@@ -579,6 +579,7 @@ export function ProjectPage({
                     : undefined
                 }
                 followUpBusy={followUpBusyTaskId === task.id}
+                onOpenGitChanges={() => openRightPanel("git-changes")}
                 onRename={(name) => onRenameTask(task.id, name)}
                 onGenerateName={() => onGenerateTaskName(task.id)}
                 themeVariant={themeVariant}
