@@ -11,6 +11,7 @@ type ApprovalAction = "approve" | "decline" | "cancel";
  * 命令执行审批卡片：sticky 底部展示，三按钮决策。
  * `request_id` 原样回传 `respond_codex_approval`（服务端反向请求 id 空间）；
  * 决策不在服务端 `availableDecisions` 建议子集内时后端报错，前端 toast 由调用方处理。
+ * hover / disabled 视觉走 codex-stream.css 的伪类（#117 T3 迁出 inline style）。
  */
 export function CodexApprovalCard({
   request,
@@ -21,7 +22,6 @@ export function CodexApprovalCard({
 }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
-  const [hovered, setHovered] = useState<string | null>(null);
 
   const respond = useCallback(
     async (action: ApprovalAction) => {
@@ -54,9 +54,7 @@ export function CodexApprovalCard({
         <ShieldAlert size={13} />
         <span>{t("codex.approval.title")}</span>
         {typeof request.reason === "string" && request.reason && (
-          <span style={{ fontWeight: 400, fontSize: 11.5, color: "var(--text-muted)" }}>
-            {request.reason}
-          </span>
+          <span style={s.codexApprovalReason}>{request.reason}</span>
         )}
       </div>
       {typeof request.command === "string" && request.command && (
@@ -65,19 +63,12 @@ export function CodexApprovalCard({
       {typeof request.cwd === "string" && request.cwd && (
         <div style={s.codexApprovalMeta}>cwd: {request.cwd}</div>
       )}
-      <div style={s.codexApprovalActions}>
+      <div style={s.codexApprovalActions} className="codex-stream-approval-actions">
         <button
           type="button"
+          className="approve"
           disabled={busy || !allowed("accept")}
-          style={{
-            ...s.codexApprovalApproveBtn,
-            ...(hovered === "approve" && allowed("accept")
-              ? s.codexApprovalApproveBtnHover
-              : {}),
-            ...((busy || !allowed("accept")) ? s.codexApprovalBtnDisabled : {}),
-          }}
-          onMouseEnter={() => setHovered("approve")}
-          onMouseLeave={() => setHovered(null)}
+          style={s.codexApprovalApproveBtn}
           onClick={() => respond("approve")}
         >
           <Check size={12} strokeWidth={2.5} />
@@ -85,16 +76,9 @@ export function CodexApprovalCard({
         </button>
         <button
           type="button"
+          className="decline"
           disabled={busy || !allowed("decline")}
-          style={{
-            ...s.codexApprovalDeclineBtn,
-            ...(hovered === "decline" && allowed("decline")
-              ? s.codexApprovalDeclineBtnHover
-              : {}),
-            ...((busy || !allowed("decline")) ? s.codexApprovalBtnDisabled : {}),
-          }}
-          onMouseEnter={() => setHovered("decline")}
-          onMouseLeave={() => setHovered(null)}
+          style={s.codexApprovalDeclineBtn}
           onClick={() => respond("decline")}
         >
           <X size={12} strokeWidth={2.5} />
@@ -103,12 +87,7 @@ export function CodexApprovalCard({
         <button
           type="button"
           disabled={busy || !allowed("cancel")}
-          style={{
-            ...s.codexApprovalCancelBtn,
-            ...((busy || !allowed("cancel")) ? s.codexApprovalBtnDisabled : {}),
-          }}
-          onMouseEnter={() => setHovered("cancel")}
-          onMouseLeave={() => setHovered(null)}
+          style={s.codexApprovalCancelBtn}
           onClick={() => respond("cancel")}
         >
           <X size={12} strokeWidth={2.5} />

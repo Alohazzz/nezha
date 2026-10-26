@@ -10,6 +10,14 @@ export const codexStream = {  codexStreamRoot: {
     gap: 14,
   },
 
+  codexStreamViewRoot: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    minHeight: 0,
+  },
+
   codexStreamEmpty: {
     color: "var(--text-hint)",
     fontSize: 13,
@@ -92,6 +100,11 @@ export const codexStream = {  codexStreamRoot: {
     color: "var(--text-primary)",
   },
 
+  // CodexMarkdown 超长退纯文本形态（原 inline whiteSpace 合并迁出）
+  codexMarkdownPlain: {
+    whiteSpace: "pre-wrap",
+  },
+
   codexReasoningBlock: {
     borderLeft: "2px solid var(--border-dim)",
     marginLeft: 4,
@@ -115,6 +128,113 @@ export const codexStream = {  codexStreamRoot: {
     color: "var(--text-hint)",
     fontSize: 11.5,
     fontStyle: "italic",
+  },
+
+  // ── 计划条目（不折叠形态）──────────────────────────────────────────────────
+
+  codexPlanCard: {
+    border: "1px dashed var(--border-dim)",
+    borderRadius: 8,
+    overflow: "hidden",
+    fontSize: 12.5,
+    background: "var(--bg-root)",
+    flexShrink: 0,
+  },
+
+  codexPlanHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    padding: "6px 12px",
+    background: "var(--bg-input)",
+    borderBottom: "1px solid var(--border-dim)",
+    color: "var(--text-secondary)",
+    fontSize: 12,
+  },
+
+  codexPlanIcon: {
+    flexShrink: 0,
+  },
+
+  codexPlanBody: {
+    padding: "8px 12px",
+  },
+
+  // ── 结构化小节（MCP 参数 / 结果分离；fallback 原始 JSON）───────────────────
+
+  codexEntrySection: {
+    padding: "8px 12px",
+    borderTop: "1px solid var(--border-dim)",
+  },
+
+  codexEntrySectionLabel: {
+    fontSize: 10.5,
+    fontWeight: 600,
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    color: "var(--text-hint)",
+    marginBottom: 4,
+  },
+
+  codexEntrySectionEmpty: {
+    fontSize: 11.5,
+    color: "var(--text-hint)",
+    fontStyle: "italic",
+  },
+
+  codexEntryJsonPre: {
+    margin: 0,
+    padding: 0,
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    lineHeight: 1.5,
+    color: "var(--text-secondary)",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflowX: "auto",
+  },
+
+  // ── 文件变更卡（骨架化后的 diff 文本着色；hunk 高亮是 T4）──────────────────
+
+  codexDiffMovePath: {
+    color: "var(--text-hint)",
+    wordBreak: "break-all",
+  },
+
+  codexDiffKindBadge: {
+    fontSize: 10,
+    fontWeight: 600,
+    padding: "0 6px",
+    borderRadius: 8,
+    background: "var(--bg-subtle)",
+    color: "var(--text-muted)",
+    flexShrink: 0,
+  },
+
+  codexDiffLine: {
+    display: "block",
+    color: "var(--text-secondary)",
+  },
+
+  codexDiffLineAdd: {
+    display: "block",
+    color: "var(--color-success)",
+    background: "rgba(80, 200, 120, 0.08)",
+  },
+
+  codexDiffLineDel: {
+    display: "block",
+    color: "var(--color-error)",
+    background: "rgba(220, 80, 80, 0.08)",
+  },
+
+  codexEntryBodyFailed: {
+    margin: 0,
+    padding: "8px 12px",
+    fontSize: 11.5,
+    fontFamily: "var(--font-mono)",
+    color: "var(--color-error)",
+    background: "var(--bg-root)",
   },
 
   // ── 审批卡片 ──────────────────────────────────────────────────────────────
@@ -183,9 +303,10 @@ export const codexStream = {  codexStreamRoot: {
     cursor: "pointer",
   },
 
-  codexApprovalApproveBtnHover: {
-    background: "var(--color-success)",
-    color: "var(--bg-root)",
+  codexApprovalReason: {
+    fontWeight: 400,
+    fontSize: 11.5,
+    color: "var(--text-muted)",
   },
 
   codexApprovalDeclineBtn: {
@@ -201,10 +322,6 @@ export const codexStream = {  codexStreamRoot: {
     cursor: "pointer",
   },
 
-  codexApprovalDeclineBtnHover: {
-    background: "var(--bg-input)",
-  },
-
   codexApprovalCancelBtn: {
     display: "flex",
     alignItems: "center",
@@ -216,11 +333,6 @@ export const codexStream = {  codexStreamRoot: {
     color: "var(--color-error)",
     fontSize: 12.5,
     cursor: "pointer",
-  },
-
-  codexApprovalBtnDisabled: {
-    opacity: 0.5,
-    cursor: "not-allowed",
   },
 
   // ── 文件变更 diff ─────────────────────────────────────────────────────────
@@ -306,10 +418,6 @@ export const codexStream = {  codexStreamRoot: {
     padding: "8px 10px",
   },
 
-  codexFollowUpBoxFocused: {
-    borderColor: "var(--accent)",
-  },
-
   codexFollowUpInput: {
     flex: 1,
     border: "none",
@@ -335,11 +443,6 @@ export const codexStream = {  codexStreamRoot: {
     fontSize: 12.5,
     cursor: "pointer",
     flexShrink: 0,
-  },
-
-  codexFollowUpSendBtnDisabled: {
-    opacity: 0.45,
-    cursor: "not-allowed",
   },
 
   // ── 用户消息气泡 ──────────────────────────────────────────────────────────
@@ -388,10 +491,6 @@ export const codexStream = {  codexStreamRoot: {
     textAlign: "left",
   },
 
-  codexToolHeaderExpanded: {
-    borderBottom: "1px solid var(--border-dim)",
-  },
-
   codexToolIcon: {
     display: "flex",
     alignItems: "center",
@@ -430,6 +529,8 @@ export const codexStream = {  codexStreamRoot: {
 
   codexToolMetaError: {
     color: "var(--color-error)",
+    fontSize: 11,
+    flexShrink: 0,
   },
 
   codexToolStatus: {
@@ -443,11 +544,6 @@ export const codexStream = {  codexStreamRoot: {
     cursor: "default",
     padding: 0,
     fontFamily: "inherit",
-  },
-
-  codexToolStatusFailed: {
-    color: "var(--color-error)",
-    cursor: "help",
   },
 
   codexToolChevron: {
@@ -484,25 +580,5 @@ export const codexStream = {  codexStreamRoot: {
     color: "var(--color-error)",
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
-  },
-
-  codexToolFailCopy: {
-    position: "absolute",
-    top: 6,
-    right: 6,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 4,
-    background: "var(--bg-input)",
-    border: "1px solid var(--border-dim)",
-    borderRadius: 5,
-    color: "var(--text-muted)",
-    cursor: "pointer",
-  },
-
-  codexToolFailCopied: {
-    color: "var(--color-success)",
-    borderColor: "var(--color-success)",
   },
 } satisfies Record<string, React.CSSProperties>;

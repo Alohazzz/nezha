@@ -3,22 +3,15 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { CodexStreamEntry } from "../../hooks/useCodexStream";
 import type { CodexTokenUsage } from "../../types";
-import {
-  CodexAgentMessageEntry,
-  CodexCommandEntry,
-  CodexFallbackEntry,
-  CodexFileChangeEntry,
-  CodexMcpToolCallEntry,
-  CodexPlanEntry,
-  CodexReasoningEntry,
-  CodexUserMessageEntry,
-} from "./CodexEntryItems";
+import { codexEntryRenderers } from "./codexRenderers";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexFollowUpBox } from "./CodexFollowUpBox";
 
-/** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。 */
+/** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。
+ * 填充条宽度为动态百分比，经 ref 写 CSS 变量（规范禁 inline style 对象）。 */
 const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | null }) {
   const { t } = useI18n();
+  const fillRef = useRef<HTMLDivElement | null>(null);
   if (!usage) return null;
   const total = usage.total;
   const ctxWindow = usage.modelContextWindow;
@@ -33,6 +26,11 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
   const ctxPercent =
     ctxWindow && ctxWindow > 0 ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : null;
 
+  const writeFillWidth = (el: HTMLDivElement | null) => {
+    fillRef.current = el;
+    if (el && ctxPercent !== null) el.style.setProperty("width", `${ctxPercent}%`);
+  };
+
   return (
     <div style={s.codexUsageBar}>
       <span>
@@ -41,13 +39,7 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
       {ctxPercent !== null && (
         <>
           <div style={s.codexUsageMeter}>
-            <div
-              style={{
-                ...s.codexUsageMeterFill,
-                width: `${ctxPercent}%`,
-                ...(ctxPercent > 80 ? s.codexUsageMeterFillWarn : {}),
-              }}
-            />
+            <div ref={writeFillWidth} className="codex-stream-usage-fill" data-warn={ctxPercent > 80 || undefined} />
           </div>
           <span>
             {t("running.context")} {fmt(ctxUsed)} / {fmt(ctxWindow!)} ({ctxPercent}%)
@@ -58,36 +50,15 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
   );
 });
 
-function EntryRenderer({ entry, streamingId }: { entry: CodexStreamEntry; streamingId: string | null }) {
-  switch (entry.kind) {
-    case "userMessage":
-      return <CodexUserMessageEntry item={entry.item} />;
-    case "agentMessage":
-      return <CodexAgentMessageEntry item={entry.item} />;
-    case "plan":
-      return <CodexPlanEntry item={entry.item} />;
-    case "reasoning":
-      return <CodexReasoningEntry item={entry.item} />;
-    case "commandExecution":
-      return (
-        <CodexCommandEntry
-          item={entry.item}
-          streaming={streamingId !== null && entry.item.id === streamingId}
-        />
-      );
-    case "fileChange":
-      return <CodexFileChangeEntry item={entry.item} />;
-    case "mcpToolCall":
-      return <CodexMcpToolCallEntry item={entry.item} />;
-    default:
-      return <CodexFallbackEntry itemType={entry.item.type} />;
-  }
+function EntryRenderer({ entry }: { entry: CodexStreamEntry }) {
+  const render = codexEntryRenderers[entry.kind];
+  return <>{render({ entry })}</>;
 }
 
 /**
- * structured 任务实时流视图（issue #116 阶段 3）。
- * 数据由 `useCodexStream`（App 层接线 Channel）喂入；本组件只负责渲染 +
- * 跟随滚动 + 审批卡片置底。
+ * structured 任务实时流视图（issue #116 阶段 3；#117 T3 起条目渲染经
+ * codexRenderers 注册表分发）。数据由 `useCodexStream`（App 层接线 Channel）
+ * 喂入；本组件只负责渲染 + 跟随滚动 + 审批卡片置底。
  */
 export function CodexStreamView({
   entries,
@@ -126,12 +97,8 @@ export function CodexStreamView({
     el.scrollTop = el.scrollHeight;
   }, [entries]);
 
-  const lastCommandId = [...entries]
-    .reverse()
-    .find((e) => e.kind === "commandExecution" && e.item.status === "inProgress");
-
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+    <div style={s.codexStreamViewRoot}>
       <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
         {entries.length === 0 && !statusText && (
           <div style={s.codexStreamEmpty}>
@@ -142,9 +109,6 @@ export function CodexStreamView({
           <EntryRenderer
             key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
             entry={entry}
-            streamingId={
-              lastCommandId && "item" in lastCommandId ? (lastCommandId.item.id ?? null) : null
-            }
           />
         ))}
         {statusText && <div style={s.codexStreamEmpty}>{statusText}</div>}

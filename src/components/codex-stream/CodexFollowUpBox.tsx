@@ -33,7 +33,7 @@ export function CodexFollowUpBox({
 
   return (
     <div style={s.codexFollowUpWrap}>
-      <div style={{ ...s.codexFollowUpBox, ...(focused ? s.codexFollowUpBoxFocused : {}) }}>
+      <div style={s.codexFollowUpBox} className="codex-stream-followup-box" data-focused={focused || undefined}>
         <textarea
           ref={inputRef}
           rows={1}
@@ -55,10 +55,7 @@ export function CodexFollowUpBox({
         <button
           type="button"
           disabled={!canSend}
-          style={{
-            ...s.codexFollowUpSendBtn,
-            ...(!canSend ? s.codexFollowUpSendBtnDisabled : {}),
-          }}
+          style={s.codexFollowUpSendBtn}
           onClick={submit}
           title={t("codex.followUp.send")}
         >
