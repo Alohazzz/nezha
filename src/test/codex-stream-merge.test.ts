@@ -272,6 +272,21 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     expect(model.usage).toBeNull();
   });
 
+  it("parses but ignores turnLifecycle frames (T5 placeholder — no entry, no state change)", () => {
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("started", { type: "agentMessage", id: "msg-1", text: "hello" }),
+      // turn 生命周期帧：合法帧型但归并层忽略（spec #117 可选交付占位）
+      line("turnLifecycle", { phase: "started", payload: { turn: 2 } }),
+      line("turnLifecycle", { phase: "completed", payload: { turn: 2, durationMs: 1200 } }),
+      deltaLine("agentMessageDelta", "msg-1", " world"),
+    ]);
+    // 分隔帧不影响条目流：仍是 1 条消息条目，delta 照常归并
+    expect(kinds(model)).toEqual(["agentMessage"]);
+    expect(itemOf(model.entries[0]).text).toBe("hello world");
+    expect(model.usage).toBeNull();
+  });
+
   it("keeps byId consistent with entries through replacements", () => {
     const model = createStreamModel();
     feed(model, [
