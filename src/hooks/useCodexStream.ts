@@ -150,6 +150,28 @@ export function useCodexStream() {
     });
   }, []);
 
+  // 乐观用户气泡（Paseo 式 composer 的本地回显）：composer 提交后立即插入，
+  // 不等上游 item/userMessage 帧——resume 通道重放时上游帧会带来权威条目，
+  // 与本条共存可接受（id 不同），steer 通道上游不回显用户文本，本条是唯一显示。
+  const appendLocalUserMessage = useCallback((taskId: string, text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    let model = modelsRef.current.get(taskId);
+    if (!model) {
+      model = createStreamModel();
+      modelsRef.current.set(taskId, model);
+    }
+    const entry: CodexStreamEntry = {
+      kind: "userMessage",
+      revision: 0,
+      item: { type: "userMessage", id: `__local_${Date.now()}`, content: [{ type: "text", text: trimmed }] },
+    };
+    model.entries.push(entry);
+    if (entry.item.id) model.byId.set(entry.item.id, entry);
+    dirtyRef.current.add(taskId);
+    scheduleFlush();
+  }, [scheduleFlush]);
+
   const getStream = useCallback(
     (taskId: string): CodexStreamState => snapshot[taskId] ?? emptyState(),
     [snapshot],
@@ -162,5 +184,5 @@ export function useCodexStream() {
     };
   }, []);
 
-  return { ingestFrameLine: ingest, getStream, setApprovalResolved, resetTask };
+  return { ingestFrameLine: ingest, getStream, setApprovalResolved, resetTask, appendLocalUserMessage };
 }

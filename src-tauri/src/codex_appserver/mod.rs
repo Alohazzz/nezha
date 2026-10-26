@@ -411,8 +411,9 @@ impl CodexAppServerSession {
         Ok(())
     }
 
-    /// 向运行中的 turn 追加输入(上游 `turn/steer`)。测试用,阶段 2 的
-    /// 「继续/追加指令」交互也走这里。
+    /// 向运行中的 turn 追加输入(上游 `turn/steer`)。composer 的「运行中发送」
+    /// 走这里。`expectedTurnId` 是上游的乐观锁前置条件:必须等于当前活跃 turn,
+    /// 不匹配(如 turn 恰好刚结束)服务端直接拒绝。
     pub async fn steer(&self, text: &str) -> Result<(), SessionError> {
         let (thread_id, turn_id) = {
             let status = self.core.status.lock();
@@ -425,7 +426,7 @@ impl CodexAppServerSession {
         };
         let params = json!({
             "threadId": thread_id,
-            "turnId": turn_id,
+            "expectedTurnId": turn_id,
             "input": [{ "type": "text", "text": text }],
         });
         self.request("turn/steer", params)
