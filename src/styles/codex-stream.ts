@@ -195,38 +195,9 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   // ── 文件变更卡（骨架化后的 diff 文本着色；hunk 高亮是 T4）──────────────────
-
-  codexDiffMovePath: {
-    color: "var(--text-hint)",
-    wordBreak: "break-all",
-  },
-
-  codexDiffKindBadge: {
-    fontSize: 10,
-    fontWeight: 600,
-    padding: "0 6px",
-    borderRadius: 8,
-    background: "var(--bg-subtle)",
-    color: "var(--text-muted)",
-    flexShrink: 0,
-  },
-
-  codexDiffLine: {
-    display: "block",
-    color: "var(--text-secondary)",
-  },
-
-  codexDiffLineAdd: {
-    display: "block",
-    color: "var(--color-success)",
-    background: "rgba(80, 200, 120, 0.08)",
-  },
-
-  codexDiffLineDel: {
-    display: "block",
-    color: "var(--color-error)",
-    background: "rgba(220, 80, 80, 0.08)",
-  },
+  // review fix：删除无引用的死键 codexDiffMovePath / codexDiffKindBadge /
+  // codexDiffLine / codexDiffLineAdd / codexDiffLineDel——diff 行着色走
+  // codex-stream.css 的 [data-type] 选择器，这里不是活路径。
 
   codexEntryBodyFailed: {
     margin: 0,
@@ -336,19 +307,7 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   // ── 文件变更 diff ─────────────────────────────────────────────────────────
-
-  codexDiffFileHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "4px 12px",
-    fontSize: 11.5,
-    fontFamily: "var(--font-mono)",
-    color: "var(--text-secondary)",
-    background: "var(--bg-input)",
-    borderTop: "1px solid var(--border-dim)",
-    wordBreak: "break-all",
-  },
+  // review fix：孤儿键 codexDiffFileHeader 已删（多文件子卡头用的是 codexDiffFileHead）。
 
   codexDiffPre: {
     margin: 0,

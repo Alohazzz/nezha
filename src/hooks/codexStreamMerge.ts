@@ -149,12 +149,22 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
   }
 }
 
-/** 5000 条内存护栏：超出后丢最老条目并清理 byId（原 hook 逻辑迁入，语义不变）。 */
+/** 5000 条内存护栏：超出后丢最老条目并清理 byId。占位条目（id 为空的流式
+ * __delta_* 条目）也要按插入时的身份键清掉，否则 byId 残留泄漏。 */
 function enforceEntryLimit(model: StreamModel): void {
   if (model.entries.length <= MAX_ENTRIES) return;
   const dropped = model.entries.splice(0, model.entries.length - MAX_ENTRIES);
   for (const d of dropped) {
-    if (d.item && "id" in d.item && d.item.id) model.byId.delete(d.item.id);
+    const id = d.item && "id" in d.item ? d.item.id : undefined;
+    if (id) {
+      model.byId.delete(id);
+    } else {
+      // 无 id 的占位条目：只有 agentMessage / reasoning 两种 delta 占位，
+      // 按 applyFrame 的 `__delta_<type>` 键同步清理（commandOutputDelta 占位
+      // 从不建条目，无须处理）
+      model.byId.delete("__delta_agentMessageDelta");
+      model.byId.delete("__delta_reasoningDelta");
+    }
   }
 }
 

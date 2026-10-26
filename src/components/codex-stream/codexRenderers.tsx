@@ -29,8 +29,9 @@ import { CodexUserMessageEntry } from "./CodexUserMessageEntry";
 // （T1 保证 delta 产生新引用），无自定义比较器。
 
 /** 单个 renderer 的统一入参：整个 entry 下传（含 revision）。
- * onOpenGitChanges：截断 diff 的跳转入口（GitChanges 右面板），仅 fileChange 用。 */
-type EntryProps = { entry: CodexStreamEntry; onOpenGitChanges?: () => void };
+ * onOpenGitChanges：截断 diff 的跳转入口（GitChanges 右面板），仅 fileChange 用。
+ * entryIndex：视图层位置序号，仅 fallback 用（无 id 条目的展开键消歧）。 */
+type EntryProps = { entry: CodexStreamEntry; onOpenGitChanges?: () => void; entryIndex?: number };
 
 type EntryRenderer = (props: EntryProps) => ReactNode;
 
@@ -50,5 +51,7 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
     />
   ),
   mcpToolCall: ({ entry }) => <CodexMcpToolCallEntry item={entry.item as CodexMcpToolCallItem} revision={entry.revision} />,
-  fallback: ({ entry }) => <CodexFallbackEntry item={entry.item as CodexItemFallback} />,
+  fallback: ({ entry, entryIndex }) => (
+    <CodexFallbackEntry item={entry.item as CodexItemFallback} entryIndex={entryIndex} />
+  ),
 };

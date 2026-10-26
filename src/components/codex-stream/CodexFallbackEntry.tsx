@@ -12,13 +12,21 @@ import { formatJsonText } from "./codexEntryShared";
 
 export const CodexFallbackEntry = memo(function CodexFallbackEntry({
   item,
+  entryIndex,
 }: {
   item: CodexItemFallback;
+  /** 视图层位置序号：id 缺失时并入展开持久化键，避免不同条目互相串展开态
+   * （review fix：`unknown-${type}` 会让多个无 id 同类条目共享一张卡）。 */
+  entryIndex?: number;
 }) {
   const { t } = useI18n();
+  const entryId =
+    typeof item.id === "string" && item.id
+      ? item.id
+      : `unknown-${item.type}-${typeof entryIndex === "number" ? entryIndex : "x"}`;
   return (
     <CodexToolCard
-      entryId={typeof item.id === "string" && item.id ? item.id : `unknown-${item.type}`}
+      entryId={entryId}
       icon={<PackageOpen size={11} />}
       category={item.type}
       text={t("codex.fallback.hint")}

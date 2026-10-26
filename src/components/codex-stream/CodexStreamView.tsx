@@ -50,9 +50,17 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
   );
 });
 
-function EntryRenderer({ entry, onOpenGitChanges }: { entry: CodexStreamEntry; onOpenGitChanges?: () => void }) {
+function EntryRenderer({
+  entry,
+  onOpenGitChanges,
+  entryIndex,
+}: {
+  entry: CodexStreamEntry;
+  onOpenGitChanges?: () => void;
+  entryIndex?: number;
+}) {
   const render = codexEntryRenderers[entry.kind];
-  return <>{render({ entry, onOpenGitChanges })}</>;
+  return <>{render({ entry, onOpenGitChanges, entryIndex })}</>;
 }
 
 /**
@@ -112,6 +120,7 @@ export function CodexStreamView({
           <EntryRenderer
             key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
             entry={entry}
+            entryIndex={i}
             onOpenGitChanges={onOpenGitChanges}
           />
         ))}

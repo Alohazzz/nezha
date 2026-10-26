@@ -579,7 +579,7 @@ export function ProjectPage({
                     : undefined
                 }
                 followUpBusy={followUpBusyTaskId === task.id}
-                onOpenGitChanges={() => openRightPanel("git-changes")}
+                onOpenGitChanges={handleOpenGitChanges}
                 onRename={(name) => onRenameTask(task.id, name)}
                 onGenerateName={() => onGenerateTaskName(task.id)}
                 themeVariant={themeVariant}
@@ -913,6 +913,10 @@ export function ProjectPage({
     setShowShellTerminal(false);
     setShellProjectPath(project.path);
   }, [project.path]);
+
+  // 稳定引用（review fix）：每次渲染新建箭头会击穿 RunningView → CodexStreamView
+  // 的 memo 链，diff 截断跳转入口统一走这个回调。
+  const handleOpenGitChanges = useCallback(() => openRightPanel("git-changes"), [openRightPanel]);
 
   const handleNewTask = useCallback(() => {
     clearFileAndDiff();

@@ -254,6 +254,32 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     expect(model.byId.size).toBe(MAX_ENTRIES);
   });
 
+  it("evicts __delta_* placeholder byId keys when id-less entries are dropped", () => {
+    // 回归（review P2）：无 id 的流式占位条目按 __delta_<type> 键进 byId；
+    // 驱逐时若不清理，占位键会永久残留（泄漏 + 指向已驱逐条目）。
+    const model = createStreamModel();
+    const lines: string[] = [
+      // started 未到：两条占位条目（agentMessage / reasoning 各一）
+      deltaLine("agentMessageDelta", "", "stream-a"),
+      deltaLine("reasoningDelta", "", "stream-b"),
+    ];
+    const total = MAX_ENTRIES + 10;
+    for (let i = 0; i < total; i++) {
+      lines.push(itemLine("completed", { type: "userMessage", id: `um-${i}`, content: [] }));
+    }
+    feed(model, lines);
+
+    expect(model.entries.length).toBe(MAX_ENTRIES);
+    // 占位条目已被挤出窗口
+    expect(model.byId.has("__delta_agentMessageDelta")).toBe(false);
+    expect(model.byId.has("__delta_reasoningDelta")).toBe(false);
+    // 占位键不在 byId 里，条目也不在 entries 里——无残留
+    for (const key of model.byId.keys()) {
+      expect(key.startsWith("__delta_")).toBe(false);
+    }
+    expect(model.byId.size).toBe(MAX_ENTRIES);
+  });
+
   it("silently ignores non-JSON lines and malformed frames", () => {
     const model = createStreamModel();
     feed(model, [
@@ -298,13 +324,25 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
 
     const assertConsistent = () => {
       const seen = new Set<string>();
+      // 无 id 占位条目 → 插入侧身份键 __delta_<type>（agentMessage/reasoning 两种）
+      const placeholders = new Set<string>();
       for (const entry of model.entries) {
         const id = itemOf(entry).id as string | undefined;
-        if (!id) continue;
-        expect(model.byId.get(id)).toBe(entry);
-        seen.add(id);
+        if (id) {
+          expect(model.byId.get(id)).toBe(entry);
+          seen.add(id);
+        } else {
+          const kind = (entry as { kind: string }).kind;
+          const key = kind === "agentMessage" ? "__delta_agentMessageDelta" : "__delta_reasoningDelta";
+          expect(model.byId.get(key)).toBe(entry);
+          placeholders.add(key);
+        }
       }
-      expect(model.byId.size).toBe(seen.size);
+      // byId 与 entries 严格一一对应：不得残留已被驱逐/替换掉的键
+      expect(model.byId.size).toBe(seen.size + placeholders.size);
+      for (const key of model.byId.keys()) {
+        expect(seen.has(key) || placeholders.has(key)).toBe(true);
+      }
     };
     assertConsistent();
 

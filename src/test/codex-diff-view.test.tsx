@@ -1,8 +1,16 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { CodexDiffView, CODEX_DIFF_MAX_ROWS } from "../components/codex-stream/CodexDiffView";
 import type { CodexDiffFile } from "../components/codex-stream/codexDiffParse";
+
+// shiki 动态 import 打桩：主包/语言包不得真加载（红线），只统计高亮入口调用次数
+// ——「高亮是否收敛」最稳的可观测量（review finding：truncated 每渲染新对象导致
+// 高亮 effect 无限循环，调用数会随计时器推进持续增长）。
+const { getSingletonHighlighterMock } = vi.hoisted(() => ({
+  getSingletonHighlighterMock: vi.fn(),
+}));
+vi.mock("shiki", () => ({ getSingletonHighlighter: getSingletonHighlighterMock }));
 
 // ── 组件接缝（issue #117 T4）──────────────────────────────────────────────────
 // 只断言外部可观察行为：截断 footer + 跳转回调、竞态下不产生过期更新。
@@ -10,6 +18,7 @@ import type { CodexDiffFile } from "../components/codex-stream/codexDiffParse";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  getSingletonHighlighterMock.mockReset();
 });
 
 function makeFile(addedRows: number): CodexDiffFile {
@@ -85,5 +94,49 @@ describe("CodexDiffView race safety", () => {
         resolve();
       }, 120);
     });
+  });
+});
+
+describe("CodexDiffView review regressions", () => {
+  it("highlight settles exactly once for a .ts diff (no re-highlight loop)", async () => {
+    // 回归（review P0）：truncated 之前是每渲染新建的普通对象且在高亮 effect 依赖
+    // 里 → highlight → setState → 新 identity → cleanup → 再 highlight……死循环。
+    // 修复后 useMemo 稳定引用：idle 回调只触发一次 shiki 入口调用。
+    getSingletonHighlighterMock.mockResolvedValue({
+      codeToTokens: () => ({ tokens: [[" "]] }),
+    });
+    renderDiffView(makeFile(3));
+
+    // 推进空闲兜底（jsdom 无 requestIdleCallback → 50ms setTimeout）+ shiki 微任务
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 150));
+    });
+    const callsAfterSettle = getSingletonHighlighterMock.mock.calls.length;
+    expect(callsAfterSettle).toBeGreaterThanOrEqual(1);
+
+    // 再推 further 计时周期：已收敛的视图不得再次触发高亮
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 150));
+    });
+    expect(getSingletonHighlighterMock.mock.calls.length).toBe(callsAfterSettle);
+  });
+
+  it("renders plain-phase rows as raw text (no double escaping)", () => {
+    // 回归（review P1）：无猜测语言（.unknown 扩展名）时 JSX 文本节点再包一层
+    // escapeHtml 会把 `<` 渲染成字面 `&lt;`。React 文本自带转义，直接渲染原文。
+    const file = makeFile(2);
+    file.path = "src/data.unknown";
+    render(
+      <I18nProvider>
+        <CodexDiffView file={file} maxRows={5} />
+      </I18nProvider>,
+    );
+    const codeRows = document.querySelectorAll(".codex-stream-diff-code");
+    expect(codeRows).toHaveLength(2);
+    // textContent 含行号槽（add 行新行号 1/2）；内容槽是最后一个 span
+    const contentSpan = codeRows[0].lastElementChild;
+    expect(contentSpan?.textContent).toBe("line 0");
+    expect(codeRows[0].innerHTML).not.toContain("&amp;");
+    expect(codeRows[0].innerHTML).not.toContain("&lt;");
   });
 });

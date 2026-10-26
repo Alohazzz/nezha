@@ -139,6 +139,29 @@ describe("codex renderer registry", () => {
     expect(screen.getByText(/"level"/)).toBeTruthy();
     expect(screen.getByText(/3/)).toBeTruthy();
   });
+
+  it("gives id-less fallback entries independent expansion keys via positional index", () => {
+    // 回归（review P2）：多个无 id 同类条目之前共用 unknown-<type> 键——展开一个
+    // 两个全开。现在展开键并入视图位置序号，各自独立。
+    const idless: CodexStreamEntry = {
+      kind: "fallback",
+      revision: 0,
+      item: { type: "wizardSpell", payload: { level: 7 } } as typeof fallbackEntry.item,
+    };
+    renderView([fallbackEntry, idless]);
+
+    const headers = screen.getAllByRole("button", { name: /wizardSpell/ });
+    expect(headers).toHaveLength(2);
+    // 展开第一个：只有第一个卡体的 JSON 可见（默认都收起）
+    fireEvent.click(headers[0]);
+    expect(screen.getByText(/"level"/)).toBeTruthy();
+    // 第二张卡仍收起：它的 payload 键 "level: 7" 不出现（两张卡都含 "level" 字样，
+    // 靠展开按钮 data-expanded 状态区分更稳）
+    const expandedFlags = screen
+      .getAllByRole("button", { name: /wizardSpell/ })
+      .map((b) => b.getAttribute("data-expanded"));
+    expect(expandedFlags).toEqual(["true", null]);
+  });
 });
 
 // ── MCP 卡：参数与结果分离（user story 11）───────────────────────────────────

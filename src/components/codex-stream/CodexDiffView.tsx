@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 // 类型-only 导入（编译期擦除，不产生静态依赖；先例：AgentConfigPanel 的
 // import type { Highlighter }）。运行时的 import("shiki") 仍是动态红线内的唯一入口。
 import type { BundledLanguage, BundledTheme, CodeToTokensOptions } from "shiki";
@@ -11,7 +11,6 @@ import {
   truncateCodexDiffFile,
   type CodexDiffFile,
   type CodexDiffRow,
-  type TruncatedCodexDiffFile,
 } from "./codexDiffParse";
 
 // ── diff 两段式渲染（issue #117 T4）────────────────────────────────────────────
@@ -113,7 +112,10 @@ export const CodexDiffView = memo(function CodexDiffView({
   const { t } = useI18n();
   const variant = useCodexThemeVariant();
   const shikiTheme = SHIKI_THEME_BY_VARIANT[variant];
-  const truncated: TruncatedCodexDiffFile = truncateCodexDiffFile(file, maxRows);
+  // useMemo 稳定引用（fix review：直接 const 每渲染新对象 → effect 依赖比较
+  // 永远不等 → 高亮 effect 无限循环：highlight → setState → 新 identity →
+  // cleanup setState(null) → 再 highlight……）。file / maxRows 不变时保持同一引用。
+  const truncated = useMemo(() => truncateCodexDiffFile(file, maxRows), [file, maxRows]);
   const lang = guessDiffLanguage(file.path);
   // tokenHtml：行下标 → 高亮 HTML；null = 纯文本阶段（首帧）或高亮失败
   const [tokenHtml, setTokenHtml] = useState<DiffTokenMap | null>(null);
@@ -170,7 +172,9 @@ export const CodexDiffView = memo(function CodexDiffView({
                 {html ? (
                   <span dangerouslySetInnerHTML={{ __html: html }} />
                 ) : (
-                  <span>{escapeHtml(row.content)}</span>
+                  // React 文本节点自带转义——这里直接渲染原文（fix review：
+                  // 之前 escapeHtml 后作为 JSX 文本会双重转义，`<` 显示成 `&lt;`）
+                  <span>{row.content}</span>
                 )}
               </span>
             );
@@ -180,7 +184,10 @@ export const CodexDiffView = memo(function CodexDiffView({
       {truncated.truncated && (
         <div style={s.codexDiffTruncateFooter} data-testid="codex-diff-truncated">
           <span>
-            {t("codex.diff.truncated", { count: truncated.omittedRows })}
+            {t("codex.diff.truncated", {
+              count: truncated.omittedRows,
+              limit: maxRows,
+            })}
           </span>
           {onOpenFullDiff && (
             <button

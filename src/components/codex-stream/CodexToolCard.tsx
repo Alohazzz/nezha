@@ -73,16 +73,27 @@ function FailedDetailPopover({ detail, label }: { detail: string; label: string 
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
+      {/* review fix：触发器不能是 <button>——它嵌在摘要行按钮里是非法嵌套 HTML。
+      改为 span 触发 + stopPropagation：点击「Failed」只开 tooltip，不冒泡切换卡片体。 */}
       <Popover.Trigger asChild>
-        <button
-          type="button"
+        <span
+          role="button"
+          tabIndex={0}
           className="codex-stream-tool-status"
           data-status="failed"
           title={t("codex.tool.failedDetail")}
           style={s.codexToolStatus}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen((v) => !v);
+            }
+          }}
         >
           {label}
-        </button>
+        </span>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
@@ -162,6 +173,10 @@ export const CodexToolCard = memo(function CodexToolCard({
     if (stored !== undefined) return stored;
     return defaultExpanded || (autoExpandWhileRunning && status === "running");
   });
+  // expandedStateRef：effect 内读当前展开态（review fix：副作用不得放进
+  // setExpanded updater——React 严格模式 / 并发重试会多次调用 updater）。
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
 
   // ── 手动优先：用户 toggle 过的条目，自动逻辑永久让位 ─────────────────────
   const manualWinsRef = useRef(false);
@@ -214,13 +229,12 @@ export const CodexToolCard = memo(function CodexToolCard({
     const prev = prevRevisionRef.current;
     prevRevisionRef.current = typeof streamingRevision === "number" ? streamingRevision : null;
     if (prev === null && typeof streamingRevision === "number") {
-      // 首个 revision 到达：流式确认开始 → 展开
-      setExpanded((was) => {
-        if (was) return was;
+      // 首个 revision 到达：流式确认开始 → 展开（副作用在 updater 外执行）
+      if (!expandedRef.current) {
+        setExpanded(true);
         writeExpansion(entryId, true);
         onToggleExpand?.(true);
-        return true;
-      });
+      }
     }
   }, [
     streamingRevision,
@@ -241,17 +255,55 @@ export const CodexToolCard = memo(function CodexToolCard({
     });
   }, [entryId, onToggleExpand]);
 
-  // ── 不折叠形态：children 直接渲染 ──────────────────────────────────────────
-  if (!collapsible) {
-    return <div style={s.codexToolCard}>{children}</div>;
-  }
-
   const running = status === "running";
   const failed = status === "failed";
   const label =
     statusLabel ??
     (running ? t("codex.tool.running") : failed ? t("codex.tool.failed") : t("codex.tool.done"));
   const showFailTooltip = failed && typeof failureDetail === "string" && failureDetail.length > 0;
+
+  // 摘要行内容（可折叠 / 不折叠两形态共用；review fix：不折叠形态也要渲染摘要行，
+  // 否则无输出的命令卡 / 无参 MCP 卡只剩一个空边框盒）。
+  const summaryRow = (
+    <>
+      <span style={s.codexToolIcon}>{icon}</span>
+      <span
+        className="codex-stream-tool-category"
+        style={s.codexToolCategory}
+        data-running={running || undefined}
+      >
+        {category}
+      </span>
+      <span style={s.codexToolText}>{text}</span>
+      {meta}
+      {showFailTooltip ? (
+        <FailedDetailPopover detail={failureDetail!} label={statusLabel ?? label} />
+      ) : (
+        <span className="codex-stream-tool-status" style={s.codexToolStatus} data-status={status}>
+          {label}
+        </span>
+      )}
+      {collapsible &&
+        (expanded ? (
+          <ChevronDown size={11} style={s.codexToolChevron} />
+        ) : (
+          <ChevronRight size={11} style={s.codexToolChevron} />
+        ))}
+    </>
+  );
+
+  // ── 不折叠形态：摘要行照常展示但不可交互（div 头部、无 toggle），children
+  // 直接渲染在下方 ──────────────────────────────────────────────────────────────
+  if (!collapsible) {
+    return (
+      <div style={s.codexToolCard} data-status={status} className="codex-stream-tool-card">
+        <div style={s.codexToolHeader} className="codex-stream-tool-header">
+          {summaryRow}
+        </div>
+        <div style={s.codexToolBody}>{children}</div>
+      </div>
+    );
+  }
 
   return (
     <div style={s.codexToolCard} data-status={status} className="codex-stream-tool-card">
@@ -262,32 +314,7 @@ export const CodexToolCard = memo(function CodexToolCard({
         data-expanded={expanded || undefined}
         onClick={handleToggle}
       >
-        <span style={s.codexToolIcon}>{icon}</span>
-        <span
-          className="codex-stream-tool-category"
-          style={s.codexToolCategory}
-          data-running={running || undefined}
-        >
-          {category}
-        </span>
-        <span style={s.codexToolText}>{text}</span>
-        {meta}
-        {showFailTooltip ? (
-          <FailedDetailPopover detail={failureDetail!} label={statusLabel ?? label} />
-        ) : (
-          <span
-            className="codex-stream-tool-status"
-            style={s.codexToolStatus}
-            data-status={status}
-          >
-            {label}
-          </span>
-        )}
-        {expanded ? (
-          <ChevronDown size={11} style={s.codexToolChevron} />
-        ) : (
-          <ChevronRight size={11} style={s.codexToolChevron} />
-        )}
+        {summaryRow}
       </button>
       {expanded && <div style={s.codexToolBody}>{children}</div>}
     </div>

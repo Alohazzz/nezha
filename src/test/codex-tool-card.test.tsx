@@ -143,7 +143,7 @@ describe("CodexToolCard", () => {
       failureDetail: "npm ERR! code ELIFECYCLE\nnpm ERR! errno 1",
     });
 
-    // 状态词是独立的 tooltip 触发按钮（title 语义），与外层摘要行按钮区分
+    // 状态词是独立的 tooltip 触发（title 语义），与外层摘要行按钮区分
     const trigger = screen.getByTitle("View failure detail");
     expect(trigger).toBeTruthy();
     // 点击状态词打开失败详情
@@ -156,6 +156,37 @@ describe("CodexToolCard", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       "npm ERR! code ELIFECYCLE\nnpm ERR! errno 1",
     );
+  });
+
+  it("does not nest a button in the summary row and never toggles the card from the failure trigger", async () => {
+    // 回归（review P1）：tooltip 触发器之前是 <button> 嵌在摘要行 <button> 里——
+    // 非法嵌套 HTML，且点击会冒泡切换卡片体。
+    renderCard({
+      status: "failed",
+      statusLabel: "exit 1",
+      failureDetail: "boom",
+    });
+
+    // 触发器不再是 button 元素（禁止嵌套 <button>）
+    const trigger = screen.getByTitle("View failure detail");
+    expect(trigger.tagName).not.toBe("BUTTON");
+
+    // 点击触发器：tooltip 打开，同时卡片体不得切换
+    fireEvent.click(trigger);
+    await screen.findByText("boom");
+    expect(childrenVisible()).toBe(false);
+  });
+
+  it("renders the summary row even when collapsible is false (output-less command)", () => {
+    // 回归（review P1）：非折叠形态之前只渲染 children——无输出的命令卡只剩
+    // 空边框盒。现在摘要行照常展示（不可交互的 div 头部）。
+    renderCard({ collapsible: false, status: "ok", statusLabel: "exit 0" });
+    // 命令文本与状态可见
+    expect(screen.getByText("npm install")).toBeTruthy();
+    expect(screen.getByText("exit 0")).toBeTruthy();
+    // 头部不可交互：无 toggle 按钮，children 直接渲染
+    expect(screen.queryByRole("button", { name: /npm install/ })).toBeNull();
+    expect(childrenVisible()).toBe(true);
   });
 
   it("renders children directly when collapsible is false (non-folding usage)", () => {
