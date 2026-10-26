@@ -4,7 +4,7 @@ import {
   DEFAULT_SHIFT_ENTER_NEWLINE,
   type SendShortcut,
 } from "../../shortcuts";
-import { DEFAULT_TERMINAL_SCROLLBACK } from "../../types";
+import { DEFAULT_TERMINAL_SCROLLBACK, type TaskRunMode } from "../../types";
 
 export type NavKey =
   | "general"
@@ -110,6 +110,8 @@ export interface AppSettings {
   /** 是否启用该 Agent：禁用后不出现在「发起/运行任务」的 Agent 选择器中，但仍保留设置页入口 */
   claude_enabled: boolean;
   codex_enabled: boolean;
+  /** Codex 新任务的运行通道（应用级全局设置，任务级选择器已移除；云效直发任务始终 PTY） */
+  codex_run_mode: TaskRunMode;
   dsh_enabled: boolean;
   send_shortcut: SendShortcut;
   terminal_shift_enter_newline: boolean;
@@ -145,6 +147,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   dsh_profile: "cc-tui",
   claude_enabled: true,
   codex_enabled: true,
+  codex_run_mode: "pty",
   dsh_enabled: true,
   send_shortcut: DEFAULT_SEND_SHORTCUT,
   terminal_shift_enter_newline: DEFAULT_SHIFT_ENTER_NEWLINE,

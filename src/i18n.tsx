@@ -63,6 +63,12 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Controls how far back regular tasks appear in the task list. Starred, todo, and attention-needed tasks are always shown.",
     "appSettings.taskDisplayRecentDays": "Recent {days} days",
     "appSettings.taskDisplayAll": "All tasks",
+    "appSettings.codexRunModeHint":
+      "Run channel for new Codex tasks. Terminal shows the classic TUI; Structured uses the codex app-server card view. Applies to newly created tasks only. Yunxiao direct-launch tasks always use the Terminal channel, and Structured does not support resuming an existing session yet.",
+    "appSettings.codexRunModeUnsupportedHint":
+      "Structured mode is unavailable: the Codex CLI was not detected or its version is below 0.156. Falling back to Terminal.",
+    "appSettings.codexRunModeFloorWarning":
+      "Structured mode requires Codex CLI ≥ 0.156 (or a working installation).",
     "appSettings.attentionBadge": "Attention Badge",
     "appSettings.attentionBadgeToggle": "Show pending-confirmation count",
     "appSettings.attentionBadgeHint":
@@ -1300,6 +1306,11 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "控制任务列表中普通任务的展示时间范围。收藏、待办和需要注意的任务始终显示。",
     "appSettings.taskDisplayRecentDays": "最近 {days} 天",
     "appSettings.taskDisplayAll": "所有任务",
+    "appSettings.codexRunModeHint":
+      "Codex 新任务的运行通道。终端为经典 TUI 界面；结构化走 codex app-server 卡片视图。仅对新建任务生效。云效直发任务始终使用终端通道；结构化模式暂不支持恢复已有会话。",
+    "appSettings.codexRunModeUnsupportedHint":
+      "结构化模式不可用：未检测到 Codex CLI 或版本低于 0.156，已回落为终端模式。",
+    "appSettings.codexRunModeFloorWarning": "结构化模式需要 Codex CLI ≥ 0.156（或可用的安装）。",
     "appSettings.attentionBadge": "待确认角标",
     "appSettings.attentionBadgeToggle": "显示待确认任务数量",
     "appSettings.attentionBadgeHint":

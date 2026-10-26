@@ -581,6 +581,7 @@ pub fn run() {
             app_settings::save_light_model_config,
             app_settings::refresh_agent_model_catalog,
             app_settings::save_send_shortcut,
+            app_settings::save_codex_run_mode,
             app_settings::save_shift_enter_newline,
             app_settings::save_claude_force_default_tui,
             app_settings::save_use_sideloaded_conpty,

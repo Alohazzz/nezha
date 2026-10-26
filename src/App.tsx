@@ -85,7 +85,7 @@ import {
   shouldAutoCompleteOnStop,
   type PlanWaitingBadge,
 } from "./utils/planQueue";
-import { EMPTY_YUNXIAO_SETTINGS, type QuestionMode, type YunxiaoSettings } from "./components/app-settings/types";
+import { EMPTY_YUNXIAO_SETTINGS, APP_SETTINGS_CHANGED_EVENT, type QuestionMode, type YunxiaoSettings } from "./components/app-settings/types";
 import { WelcomePage } from "./components/WelcomePage";
 import { ProjectPage } from "./components/ProjectPage";
 import { SKILL_HUB_CHANGED_EVENT } from "./components/app-settings/types";
@@ -397,6 +397,10 @@ function App() {
     setTerminalScrollbackState(clamped);
     invoke("save_terminal_scrollback", { scrollback: clamped }).catch(console.error);
   }, []);
+  // Codex 运行通道的应用级全局设置（缺省 pty）：唯一事实来源在 ~/.nezha/settings.json，
+  // NewTaskView 的任务级选择器已移除。设置面板自包含保存后经 CHANGED 事件同步到
+  // 此 state；云效直发任务在后端强制 PTY，与此值无关。
+  const [codexRunMode, setCodexRunMode] = useState<TaskRunMode>("pty");
   const [uiFontFamily, setUiFontFamily] = useState<FontFamily>(() =>
     getInitialFontFamily("nezha:uiFontFamily", DEFAULT_UI_FONT),
   );
@@ -664,10 +668,22 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke<{ terminal_scrollback?: unknown }>("load_app_settings")
+    invoke<{ terminal_scrollback?: unknown; codex_run_mode?: unknown }>("load_app_settings")
       .then((settings) => {
         if (cancelled) return;
         setTerminalScrollbackState(clampTerminalScrollback(settings.terminal_scrollback));
+        // codex_run_mode：后端已归一化（非法值回落 pty），这里只认合法字面量。
+        if (settings.codex_run_mode === "pty" || settings.codex_run_mode === "structured") {
+          setCodexRunMode(settings.codex_run_mode);
+        }
+        // 一次性迁移：旧版任务级选择器的 localStorage 记忆（缺省通道曾是全局记忆）
+        // 只在全局设置仍为新字段默认值 pty 时采纳一次，采纳后删除该键。
+        const legacy = localStorage.getItem("nezha.codexRunMode");
+        if (legacy === "structured" && settings.codex_run_mode !== "structured") {
+          setCodexRunMode("structured");
+          invoke("save_codex_run_mode", { runMode: "structured" }).catch(console.error);
+        }
+        if (legacy !== null) localStorage.removeItem("nezha.codexRunMode");
       })
       .catch(() => {
         /* 默认 1000 已经在 state 初值,无需 fallback */
@@ -675,6 +691,22 @@ function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // 设置面板（自包含模式）保存后广播 CHANGED：codexRunMode 从后端重读真值，
+  // 避免 App state 与面板内状态漂移（handleSubmitTask 依赖此值赋任务快照）。
+  useEffect(() => {
+    const handler = () => {
+      invoke<{ codex_run_mode?: unknown }>("load_app_settings")
+        .then((settings) => {
+          if (settings.codex_run_mode === "pty" || settings.codex_run_mode === "structured") {
+            setCodexRunMode(settings.codex_run_mode);
+          }
+        })
+        .catch(() => {});
+    };
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, handler);
   }, []);
 
   useEffect(() => {
@@ -1139,12 +1171,15 @@ function App() {
     structuredFallbackReason?: string,
   ) {
     await armTerminalReady(task.id);
-    // 运行通道（2.2）：仅 Codex + 用户显式选择 structured 时生效；
-    // 云效直发任务强制 pty（2.2a 前端防线，后端入口按 yunxiaoWorkitemId 再兜一层）。
+    // 运行通道（2.2）：仅 Codex + 任务快照标记 structured 时生效；
+    // 云效直发任务强制 pty（2.2a 防线：后端入口按 yunxiaoWorkitemId 兜底）。
+    // 豁免：云效讨论任务（yunxiaoPlanDiscussion，只读分析、无回写/沉淀生产
+    // 语义）跟随全局设置走 structured，前端豁免的同时后端防线仍对非讨论
+    // 云效任务生效。
     const runMode =
       task.agent === "codex" &&
       task.runMode === "structured" &&
-      !task.yunxiaoWorkitemId
+      (!task.yunxiaoWorkitemId || task.yunxiaoPlanDiscussion === true)
         ? "structured"
         : "pty";
     // structured：Channel 数据是 JSON 帧，直投 useCodexStream 归并，不经
@@ -1171,6 +1206,8 @@ function App() {
       permissionMode: task.permissionMode,
       runMode,
       yunxiaoWorkitemId: task.yunxiaoWorkitemId,
+      // 云效讨论任务标记：后端 2.2a 防线据此对 structured 通道豁免（只读分析）。
+      yunxiaoPlanDiscussion: task.yunxiaoPlanDiscussion === true,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
       images,
@@ -1234,7 +1271,6 @@ function App() {
       launchMode,
       baseBranch,
       repoPath,
-      runMode,
       contextProjectIds,
     }: {
       prompt: string;
@@ -1250,8 +1286,6 @@ function App() {
       /** 任务关联的 git 根（worktree 创建于此目录的 .nezha/worktrees）。
        *  缺省时回落 project.path，向后兼容老调用方。 */
       repoPath?: string;
-      /** codex 运行通道（3.4）：structured 仅 agent=codex 时有意义。 */
-      runMode?: TaskRunMode;
       /** 跨仓库任务上下文：附加项目 id（不含主项目）。 */
       contextProjectIds?: string[];
     },
@@ -1284,8 +1318,9 @@ function App() {
       permissionMode,
       model,
       reasoningEffort,
-      // 运行通道仅 codex 有意义；structured 与云效互斥（云效直发后端强制 pty）
-      runMode: agent === "codex" && runMode === "structured" ? "structured" : undefined,
+      // 运行通道由应用级全局设置决定（仅 codex 有意义）；structured 与云效互斥
+      // （云效直发任务根本不走 handleSubmitTask，后端入口再兜一层强制 pty）
+      runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
       status: immediate ? "pending" : "todo",
       createdAt: now,
       updatedAt: now,
@@ -2129,6 +2164,7 @@ function App() {
     if (!project) return;
     const now = Date.now();
     // 讨论任务也绑定交付计划（只记归属不进 worktree）；多议题讨论经显式 workitemId 列表命中。
+    // 运行通道跟随应用级全局设置（讨论是只读分析，允许走 structured）。
     const task: Task = bindTaskToDeliveryPlan(
       {
         id: `${now}`,
@@ -2142,6 +2178,7 @@ function App() {
         updatedAt: now,
         planId,
         yunxiaoPlanDiscussion: true,
+        runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
       },
       deliveryPlans,
       plan.issues.map((i) => i.workitemId),
@@ -2450,6 +2487,8 @@ function App() {
       });
 
       // 5) 待办自身转为讨论任务并启动（项目根只读分析，不进 worktree；只记计划归属）。
+      // 运行通道跟随应用级全局设置（讨论是只读分析，允许走 structured；
+      // structured 启动失败仍有自动降级 PTY 的自愈兜底）。
       const updated: Task = bindTaskToDeliveryPlan(
         {
           ...task,
@@ -2461,6 +2500,7 @@ function App() {
           reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
           planId: plan.id,
           yunxiaoPlanDiscussion: true,
+          runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
           status: "pending",
           updatedAt: Date.now(),
           attentionRequestedAt: undefined,

@@ -27,6 +27,18 @@ fn normalize_send_shortcut(value: String) -> String {
     }
 }
 
+fn default_codex_run_mode() -> String {
+    "pty".to_string()
+}
+
+/// 只允许 pty / structured 两个取值，其余（含历史脏数据）一律回落 pty。
+fn normalize_codex_run_mode(value: String) -> String {
+    match value.as_str() {
+        "pty" | "structured" => value,
+        _ => default_codex_run_mode(),
+    }
+}
+
 fn default_shift_enter_newline() -> bool {
     true
 }
@@ -213,6 +225,11 @@ pub struct AppSettings {
     pub claude_enabled: bool,
     #[serde(default = "default_agent_enabled")]
     pub codex_enabled: bool,
+    /// Codex 新任务的运行通道（pty = 终端 TUI；structured = codex app-server
+    /// 结构化接入）：应用级全局设置，任务级选择器已移除，所有经 NewTaskView
+    /// 创建的 Codex 任务一律跟随此值；云效直发任务在后端强制 PTY，不受影响。
+    #[serde(default = "default_codex_run_mode")]
+    pub codex_run_mode: String,
     #[serde(default = "default_agent_enabled")]
     pub dsh_enabled: bool,
     #[serde(default = "default_send_shortcut")]
@@ -270,6 +287,7 @@ impl Default for AppSettings {
             dsh_profile: default_dsh_profile(),
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
+            codex_run_mode: default_codex_run_mode(),
             dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -714,6 +732,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         },
         claude_enabled: settings.claude_enabled,
         codex_enabled: settings.codex_enabled,
+        codex_run_mode: normalize_codex_run_mode(settings.codex_run_mode),
         dsh_enabled: settings.dsh_enabled,
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
@@ -768,6 +787,7 @@ fn load_settings_unlocked() -> AppSettings {
             dsh_profile: default_dsh_profile(),
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
+            codex_run_mode: default_codex_run_mode(),
             dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -1393,6 +1413,25 @@ pub async fn save_send_shortcut(send_shortcut: String) -> Result<AppSettings, St
 }
 
 #[tauri::command]
+pub async fn save_codex_run_mode(run_mode: String) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.codex_run_mode = normalize_codex_run_mode(run_mode);
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn save_shift_enter_newline(enabled: bool) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
         let _guard = settings_lock().lock();
@@ -1698,6 +1737,37 @@ mod structured_floor_tests {
         assert!(parse_semver("0.163.0") >= parse_semver(CODEX_STRUCTURED_FLOOR));
         assert!(parse_semver("0.155.1") < parse_semver(CODEX_STRUCTURED_FLOOR));
         assert!(parse_semver("0.156.0") >= parse_semver(CODEX_STRUCTURED_FLOOR));
+    }
+}
+
+#[cfg(test)]
+mod codex_run_mode_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_codex_run_mode_allows_only_known_values() {
+        assert_eq!(normalize_codex_run_mode("pty".into()), "pty");
+        assert_eq!(normalize_codex_run_mode("structured".into()), "structured");
+        // 历史脏数据 / 未知取值一律回落 pty（undefined 等价 pty 的缺省语义）。
+        assert_eq!(normalize_codex_run_mode("".into()), "pty");
+        assert_eq!(normalize_codex_run_mode("PTY".into()), "pty");
+        assert_eq!(normalize_codex_run_mode("auto".into()), "pty");
+    }
+
+    #[test]
+    fn codex_run_mode_serializes_snake_case_and_defaults_to_pty() {
+        let raw = serde_json::to_string(&AppSettings::default()).unwrap();
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["codex_run_mode"], Value::String("pty".into()));
+
+        // 旧 settings.json 无此字段 → serde default 回落 pty，无需迁移。
+        let absent: AppSettings = serde_json::from_str(r#"{"send_shortcut":"enter"}"#).unwrap();
+        assert_eq!(absent.codex_run_mode, "pty");
+
+        // 归一化兜底：磁盘上的未知值在 load 时被收敛回 pty。
+        let dirty: AppSettings = serde_json::from_str(r#"{"codex_run_mode":"yolo"}"#).unwrap();
+        let normalized = normalize_settings(dirty);
+        assert_eq!(normalized.codex_run_mode, "pty");
     }
 }
 

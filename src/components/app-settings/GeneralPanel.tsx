@@ -11,6 +11,7 @@ import {
   TERMINAL_SCROLLBACK_MAX,
   TERMINAL_SCROLLBACK_STEP,
   type TaskDisplayWindow,
+  type TaskRunMode,
   type TerminalScrollback,
 } from "../../types";
 import { APP_PLATFORM } from "../../platform";
@@ -162,6 +163,63 @@ export function GeneralPanel({
 
   const systemNotificationsOn = systemNotifications === true;
 
+  // Codex 运行通道全局设置：自包含模式（面板内加载/保存，广播 CHANGED 让
+  // App.tsx 的任务创建状态同步）。structured 有版本地板（codex ≥ 0.156）：
+  // null = 探测中，探测失败（含未安装）视为不支持；不支持时自愈回 pty。
+  const [codexRunMode, setCodexRunMode] = useState<TaskRunMode | null>(null);
+  const [codexRunModeBusy, setCodexRunModeBusy] = useState(true);
+  const [structuredSupported, setStructuredSupported] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AppSettings>("load_app_settings")
+      .then((loaded) => {
+        if (cancelled) return;
+        setCodexRunMode(
+          loaded.codex_run_mode === "structured" ? "structured" : "pty",
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setCodexRunMode("pty");
+      })
+      .finally(() => {
+        if (!cancelled) setCodexRunModeBusy(false);
+      });
+    invoke<boolean>("codex_structured_supported")
+      .then((ok) => {
+        if (!cancelled) setStructuredSupported(ok);
+      })
+      .catch(() => {
+        if (!cancelled) setStructuredSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleCodexRunModeChange = async (value: TaskRunMode) => {
+    if (codexRunModeBusy) return;
+    setCodexRunMode(value);
+    setCodexRunModeBusy(true);
+    try {
+      const next = await invoke<AppSettings>("save_codex_run_mode", { runMode: value });
+      setCodexRunMode(next.codex_run_mode === "structured" ? "structured" : "pty");
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+    } catch {
+      setCodexRunMode(value === "structured" ? "pty" : "structured");
+    } finally {
+      setCodexRunModeBusy(false);
+    }
+  };
+
+  // 记忆值是 structured 但版本不支持（或探测失败）时自愈回 pty，避免提交后必走降级路径。
+  useEffect(() => {
+    if (structuredSupported === false && codexRunMode === "structured" && !codexRunModeBusy) {
+      void handleCodexRunModeChange("pty");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structuredSupported, codexRunMode, codexRunModeBusy]);
+
   const conptyOn = sideloadedConpty === true;
   const conptyDisabled = !isConptyEditable || conptyBusy;
   const conptyHint = isConptyEditable
@@ -184,6 +242,18 @@ export function GeneralPanel({
   const selectedTaskDisplayWindowLabel =
     taskDisplayWindowOptions.find((option) => option.value === taskDisplayWindow)?.label ??
     t("appSettings.taskDisplayRecentDays", { days: 3 });
+
+  const codexRunModeOptions: Array<{ value: TaskRunMode; label: string }> = [
+    { value: "pty", label: t("codex.runMode.pty") },
+    { value: "structured", label: t("codex.runMode.structured") },
+  ];
+  const selectedCodexRunModeLabel =
+    codexRunModeOptions.find((option) => option.value === codexRunMode)?.label ??
+    t("codex.runMode.pty");
+  const structuredDisabled = structuredSupported === false;
+  const codexRunModeHint = structuredDisabled
+    ? t("appSettings.codexRunModeUnsupportedHint")
+    : t("appSettings.codexRunModeHint");
 
   const stepScrollback = (direction: 1 | -1) => {
     onTerminalScrollbackChange(
@@ -273,6 +343,58 @@ export function GeneralPanel({
           </Select.Portal>
         </Select.Root>
         <span style={s.settingFieldHint}>{t("appSettings.taskDisplayWindowHint")}</span>
+      </div>
+
+      <div style={s.settingFieldSpaced}>
+        <label style={s.settingFieldLabel}>{t("codex.runMode")}</label>
+        <Select.Root
+          value={codexRunMode ?? "pty"}
+          onValueChange={(value) => void handleCodexRunModeChange(value as TaskRunMode)}
+          disabled={codexRunModeBusy || codexRunMode === null}
+        >
+          <Select.Trigger
+            aria-label={t("codex.runMode")}
+            style={s.settingsSelectTriggerCompact}
+            data-disabled={codexRunModeBusy || codexRunMode === null}
+          >
+            <Select.Value>{selectedCodexRunModeLabel}</Select.Value>
+            <Select.Icon>
+              <ChevronDown size={13} strokeWidth={2.2} color="var(--text-hint)" />
+            </Select.Icon>
+          </Select.Trigger>
+          <Select.Portal>
+            <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
+              <Select.Viewport style={s.settingsSelectViewport}>
+                {codexRunModeOptions.map((option) => {
+                  const optionDisabled = option.value === "structured" && structuredDisabled;
+                  const selected = option.value === codexRunMode;
+
+                  return (
+                    <Select.Item
+                      key={option.value}
+                      value={option.value}
+                      className="radix-select-item"
+                      disabled={optionDisabled}
+                      style={selected ? s.settingsSelectOptionSelected : s.settingsSelectOption}
+                    >
+                      <Select.ItemText>{option.label}</Select.ItemText>
+                      <Select.ItemIndicator style={s.settingsSelectIndicator}>
+                        <Check size={13} style={s.settingsSelectCheck} />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                  );
+                })}
+              </Select.Viewport>
+            </Select.Content>
+          </Select.Portal>
+        </Select.Root>
+        <span style={s.settingFieldHint}>{codexRunModeHint}</span>
+        {structuredDisabled && (
+          <div style={s.settingsFieldWarning} role="alert">
+            <AlertTriangle size={13} strokeWidth={2} style={s.settingsFieldWarningIcon} />
+            <span>{t("appSettings.codexRunModeFloorWarning")}</span>
+          </div>
+        )}
       </div>
 
       <div style={s.settingFieldSpaced}>
