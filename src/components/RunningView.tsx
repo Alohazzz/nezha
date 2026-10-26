@@ -724,6 +724,8 @@ export function RunningView({
             onApprovalResolved={() => {}}
             running={false}
             statusText={t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+            onComposerSubmit={onFollowUp}
+            followUpBusy={followUpBusy}
           />
         ) : (
         <div style={s.interruptedSessionWrap}>
@@ -795,8 +797,9 @@ export function RunningView({
                   ? t("task.cancelled")
                   : undefined
             }
-            onFollowUp={task.status === "done" ? onFollowUp : undefined}
+            onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
+            composerDisabled={codexStream.approval !== null}
           />
         ) : (
         <div style={s.terminalContainer}>
@@ -825,6 +828,18 @@ export function RunningView({
           />
         </div>
         )
+      ) : codexStream ? (
+        // done/failed/cancelled 且有会话文件：structured 任务保持流视图 + composer
+        // （Paseo 式会话框，继续对话不用换视图）；resume 重放会经 Channel 回填流数据。
+        <CodexStreamView
+          entries={codexStream.entries}
+          usage={codexStream.usage}
+          approval={null}
+          onApprovalResolved={() => {}}
+          running={false}
+          onComposerSubmit={onFollowUp}
+          followUpBusy={followUpBusy}
+        />
       ) : (
         <SessionView sessionPath={sessionPath} />
       )}

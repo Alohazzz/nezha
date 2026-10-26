@@ -1065,12 +1065,40 @@ function App() {
     return paths.length > 0 ? paths : undefined;
   }
 
-  // structured 任务的继续对话（done 态输入框）：thread/resume + turn/start。
-  // 会话按 codexSessionId（thread id）从 rollout 恢复，任务状态经 task-status 事件回 running。
+  // structured 任务的 composer 提交（Paseo 式双模分发，阶段 4 增强）：
+  // - running / input_required：`steer_codex_structured`（turn/steer 追加进当前
+  //   turn，不中断流）——input_required 时活会话仍在，审批挂起期间 composer 已
+  //   被禁用，能走到这里说明审批刚解决完但状态事件未落地，steer 是安全动作。
+  // - 其余（done / interrupted / failed / detached）：`resume_codex_structured`
+  //   （thread/resume 恢复 rollout 起新 turn），任务状态经 task-status 回 running。
+  // 两条路径都先本地插入乐观用户气泡（Paseo 的即时回显），resume 前清流重放。
   const [followUpBusyTaskId, setFollowUpBusyTaskId] = useState<string | null>(null);
   const handleFollowUpStructured = useCallback(
     async (task: Task, text: string) => {
       if (followUpBusyTaskId) return;
+      const projectPath =
+        projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "";
+
+      const steerLive =
+        task.status === "running" ||
+        task.status === "pending" ||
+        task.status === "input_required";
+
+      if (steerLive) {
+        // steer：不清流（当前 turn 的条目继续保留），气泡追加在流尾
+        try {
+          await invoke("steer_codex_structured", {
+            taskId: task.id,
+            prompt: text,
+          });
+          codexStream.appendLocalUserMessage(task.id, text);
+          showToast(t("toast.steerQueued"), "success");
+        } catch (err) {
+          showToast(t("toast.followUpFailed", { error: String(err) }), "error");
+        }
+        return;
+      }
+
       if (!task.codexSessionId) {
         showToast(t("toast.followUpNoSession"), "error");
         return;
@@ -1080,10 +1108,11 @@ function App() {
       channel.onmessage = (line) => codexStream.ingestFrameLine(task.id, line);
       // 先清上一轮流数据再喂新一轮（与 invokeRunTask 的分流口径一致）
       codexStream.resetTask(task.id);
+      codexStream.appendLocalUserMessage(task.id, text);
       try {
         await invoke("resume_codex_structured", {
           taskId: task.id,
-          projectPath: projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "",
+          projectPath,
           permissionMode: task.permissionMode,
           threadId: task.codexSessionId,
           prompt: text,

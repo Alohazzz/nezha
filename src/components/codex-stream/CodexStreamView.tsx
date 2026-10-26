@@ -14,7 +14,7 @@ import {
   CodexUserMessageEntry,
 } from "./CodexEntryItems";
 import { CodexApprovalCard } from "./CodexApprovalCard";
-import { CodexFollowUpBox } from "./CodexFollowUpBox";
+import { CodexComposer } from "./CodexComposer";
 
 /** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。 */
 const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | null }) {
@@ -87,7 +87,8 @@ function EntryRenderer({ entry, streamingId }: { entry: CodexStreamEntry; stream
 /**
  * structured 任务实时流视图（issue #116 阶段 3）。
  * 数据由 `useCodexStream`（App 层接线 Channel）喂入；本组件只负责渲染 +
- * 跟随滚动 + 审批卡片置底。
+ * 跟随滚动 + 审批卡片置底。Paseo 式布局：消息流滚动区在上，composer 固定
+ * 底部（运行中 = steer，done = resume），usage 条垫在 composer 下。
  */
 export function CodexStreamView({
   entries,
@@ -97,7 +98,8 @@ export function CodexStreamView({
   running,
   statusText,
   followUpBusy,
-  onFollowUp,
+  composerDisabled,
+  onComposerSubmit,
 }: {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
@@ -105,9 +107,11 @@ export function CodexStreamView({
   onApprovalResolved: () => void;
   running: boolean;
   statusText?: string | null;
-  /** 非空 = 显示继续对话输入框（done 态）；提交回调走 thread/resume 通道。 */
-  onFollowUp?: (text: string) => void;
+  /** composer 提交回调：running 态走 steer、其余走 resume（App 层分发）。 */
+  onComposerSubmit?: (text: string) => void;
   followUpBusy?: boolean;
+  /** 审批挂起等 composer 不该受理输入的场景置真（Paseo 同款：审批卡优先）。 */
+  composerDisabled?: boolean;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -149,10 +153,15 @@ export function CodexStreamView({
         ))}
         {statusText && <div style={s.codexStreamEmpty}>{statusText}</div>}
         {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
-        {!running && onFollowUp && (
-          <CodexFollowUpBox busy={followUpBusy} onSubmit={onFollowUp} />
-        )}
       </div>
+      {onComposerSubmit && (
+        <CodexComposer
+          mode={running ? "steer" : "resume"}
+          busy={followUpBusy}
+          disabled={composerDisabled}
+          onSubmit={onComposerSubmit}
+        />
+      )}
       <UsageBar usage={usage} />
     </div>
   );

@@ -468,6 +468,26 @@ pub async fn resume_codex_structured(
     .await
 }
 
+/// structured 任务运行中的追加指令（Paseo 式 composer：运行中发送 = steer）。
+/// 只读借用活会话走上游 `turn/steer`——当前 turn 不中断，文本并入执行队列；
+/// 会话不存在（未启动/已收尾）时返回 Err，前端回落 resume 通道。
+#[tauri::command]
+pub async fn steer_codex_structured(
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    prompt: String,
+) -> Result<(), String> {
+    if prompt.trim().is_empty() {
+        return Err("prompt is empty".to_string());
+    }
+    let session = take_session_impl(&task_manager, &task_id)
+        .ok_or_else(|| "structured session not active for task".to_string())?;
+    session
+        .steer(&prompt)
+        .await
+        .map_err(|e| format!("turn/steer failed: {e:?}"))
+}
+
 /// structured 任务的取消：中断运行中的 turn 后优雅关闭会话。
 /// 幂等：会话不存在（未启动/已收尾）时直接返回。
 pub async fn cancel_structured_task(task_id: &str, task_manager: &crate::TaskManager) {

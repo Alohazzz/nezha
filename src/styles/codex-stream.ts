@@ -286,33 +286,30 @@ export const codexStream = {
     background: "var(--color-warning)",
   },
 
-  // ── 继续对话输入框（done 态底部）────────────────────────────────────────────
+  // ── 常驻 composer（Paseo 式会话框底部，运行中 steer / done resume 双模）──────
 
-  codexFollowUpWrap: {
+  codexComposerWrap: {
     display: "flex",
     flexDirection: "column",
     gap: 8,
-    marginTop: "auto",
-    paddingTop: 8,
+    padding: "10px 28px 0",
     flexShrink: 0,
   },
 
-  codexFollowUpBox: {
+  codexComposerBox: {
     display: "flex",
-    alignItems: "flex-end",
-    gap: 8,
+    flexDirection: "column",
     border: "1px solid var(--border-strong)",
     borderRadius: 10,
     background: "var(--bg-input)",
-    padding: "8px 10px",
+    padding: "8px 10px 6px",
   },
 
-  codexFollowUpBoxFocused: {
+  codexComposerBoxFocused: {
     borderColor: "var(--accent)",
   },
 
-  codexFollowUpInput: {
-    flex: 1,
+  codexComposerInput: {
     border: "none",
     outline: "none",
     background: "transparent",
@@ -320,25 +317,54 @@ export const codexStream = {
     fontSize: 13,
     lineHeight: 1.5,
     resize: "none",
+    minHeight: 20,
     maxHeight: 160,
     fontFamily: "inherit",
+    overflowY: "auto",
   },
 
-  codexFollowUpSendBtn: {
+  codexComposerFooter: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    paddingTop: 6,
+  },
+
+  codexComposerHint: {
+    flex: 1,
+    fontSize: 11,
+    color: "var(--text-hint)",
+    fontStyle: "italic",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+
+  codexComposerFocusHint: {
+    fontSize: 10.5,
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-hint)",
+    border: "1px solid var(--border-dim)",
+    borderRadius: 4,
+    padding: "1px 5px",
+    flexShrink: 0,
+  },
+
+  codexComposerSendBtn: {
     display: "flex",
     alignItems: "center",
     gap: 6,
-    padding: "6px 14px",
+    padding: "5px 12px",
     borderRadius: 8,
     border: "none",
     background: "var(--accent)",
     color: "var(--bg-root)",
-    fontSize: 12.5,
+    fontSize: 12,
     cursor: "pointer",
     flexShrink: 0,
   },
 
-  codexFollowUpSendBtnDisabled: {
+  codexComposerSendBtnDisabled: {
     opacity: 0.45,
     cursor: "not-allowed",
   },
