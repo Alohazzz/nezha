@@ -335,6 +335,181 @@ export interface PendingMrCreateReceipt {
   reason: string;
 }
 
+/** Codex 任务的运行通道：pty = 现有终端 TUI；structured = codex app-server 结构化接入（issue #116）。 */
+export type TaskRunMode = "pty" | "structured";
+
+/**
+ * structured 任务的 Channel 数据帧（后端 `task_bridge::emit_stream_event`，Stage 2）。
+ * 经 `run_task` 的 `onOutput` Channel 直投（与 PTY 字节流同通路，绕开事件总线广播）；
+ * 前端 `useCodexStream`（阶段 3）按 `type` 分发。payload 形状随 type 不同：
+ * - `item`：上游 `ThreadItem`（`type` 判别联合，camelCase）；
+ * - `agentMessageDelta` / `reasoningDelta` / `commandOutputDelta`：`{ delta: string }`，
+ *   帧 `itemId` 指明归并目标条目；
+ * - `tokenUsage`：`{ total: TokenUsageBreakdown, last: ..., modelContextWindow: number | null }`。
+ */
+export interface CodexStreamFrame {
+  taskId: string;
+  type:
+    | "item"
+    | "agentMessageDelta"
+    | "reasoningDelta"
+    | "commandOutputDelta"
+    | "tokenUsage"
+    /**
+     * turn 生命周期帧（spec #117 可选交付的占位）：后端 forwarder 尚未下发；
+     * 归并层按未知帧宽容语义解析后忽略（不建条目、不渲染分隔 UI）。
+     */
+    | "turnLifecycle";
+  phase: "started" | "completed" | "delta" | "updated";
+  /** 仅 delta 类帧携带：流式增量所属条目的 id（`item/started` 建立的条目）。 */
+  itemId?: string;
+  threadId: string;
+  turnId: string;
+  payload: CodexStreamPayload;
+}
+
+/** 帧载荷的判别形状（上游 codex 0.163 `ThreadItem` / delta / tokenUsage）。 */
+export type CodexStreamPayload =
+  | CodexThreadItem
+  | { delta: string }
+  | CodexTokenUsage;
+
+/** tokenUsage 帧载荷（上游 `ThreadTokenUsage`）。 */
+export interface CodexTokenUsage {
+  total: CodexTokenUsageBreakdown;
+  last: CodexTokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
+export interface CodexTokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+// ── 上游 ThreadItem（codex app-server v2，camelCase 序列化）──────────────────
+// 只强类型化视图会渲染的条目；其余条目落 `CodexItemFallback` 宽松处理并忽略，
+// 上游加新条目类型时前端不炸（events.rs 对未知方法同样容错）。
+
+export interface CodexUserMessageItem {
+  type: "userMessage";
+  id: string;
+  content: { type?: string; text?: string }[];
+}
+
+export interface CodexAgentMessageItem {
+  type: "agentMessage";
+  id: string;
+  text: string;
+  phase?: string | null;
+}
+
+export interface CodexReasoningItem {
+  type: "reasoning";
+  id: string;
+  /** 完成态是分段摘要数组；渲染时 join。 */
+  summary: string[];
+  content?: string[];
+}
+
+export interface CodexCommandExecutionItem {
+  type: "commandExecution";
+  id: string;
+  command: string;
+  cwd: string;
+  status: "inProgress" | "completed" | "failed" | "declined";
+  aggregatedOutput: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+}
+
+export interface CodexFileChangeItem {
+  type: "fileChange";
+  id: string;
+  changes: { path: string; kind: CodexPatchChangeKind; diff: string }[];
+  status: "inProgress" | "completed" | "failed" | "declined";
+}
+
+export type CodexPatchChangeKind =
+  | { type: "add" }
+  | { type: "delete" }
+  | { type: "update"; movePath: string | null };
+
+/** MCP 工具调用结果（上游 v2 `McpToolCallResult` 的宽容透传形态）。 */
+export interface CodexMcpToolCallResult {
+  /** MCP content 块数组（`{ type: "text", text }` / 图片等）。 */
+  content: unknown[];
+  structuredContent?: unknown;
+  _meta?: unknown;
+}
+
+/** MCP 调用错误（上游 `McpToolCallError`）。 */
+export interface CodexMcpToolCallError {
+  message: string;
+}
+
+export interface CodexMcpToolCallItem {
+  type: "mcpToolCall";
+  id: string;
+  server: string;
+  tool: string;
+  status: "inProgress" | "completed" | "failed";
+  durationMs?: number | null;
+  /** 工具调用参数（上游为任意 JSON Value）。 */
+  arguments?: unknown;
+  /** 工具结果（completed 态）；失败时通常缺省。 */
+  result?: CodexMcpToolCallResult | null;
+  /** 工具报错详情（failed 态）。 */
+  error?: CodexMcpToolCallError | null;
+}
+
+export interface CodexPlanItem {
+  type: "plan";
+  id: string;
+  text: string;
+}
+
+/** 上游新增 / 视图暂不渲染的条目：保留 type + id 便于调试，不参与展示。 */
+export interface CodexItemFallback {
+  type: string;
+  id?: string;
+  [key: string]: unknown;
+}
+
+export type CodexThreadItem =
+  | CodexUserMessageItem
+  | CodexAgentMessageItem
+  | CodexReasoningItem
+  | CodexCommandExecutionItem
+  | CodexFileChangeItem
+  | CodexMcpToolCallItem
+  | CodexPlanItem
+  | CodexItemFallback;
+
+export function isCodexThreadItem(payload: CodexStreamPayload): payload is CodexThreadItem {
+  return typeof payload === "object" && payload !== null && "type" in payload;
+}
+
+/** structured 任务命令执行审批事件（`codex-approval-requested`，阶段 3 渲染审批卡片）。 */
+export interface CodexApprovalRequest {
+  /** 后端追加：审批所属任务。 */
+  task_id: string;
+  /** 后端追加：原样带回 `respond_codex_approval` 的请求 id（服务端反向请求 id 空间）。 */
+  request_id: number;
+  /** 原样带回 `respond_codex_approval` 的请求 id（服务端反向请求 id 空间）。 */
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  command: string;
+  cwd: string;
+  /** 服务端建议的合法决策子集；缺省视为全部可用。 */
+  availableDecisions?: string[];
+  [key: string]: unknown;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -342,6 +517,8 @@ export interface Task {
   prompt: string;
   agent: AgentType;
   permissionMode: PermissionMode;
+  /** 运行通道（仅 agent=codex 时生效）；缺省回落 pty。云效直发任务后端强制 pty（2.2a 防线）。 */
+  runMode?: TaskRunMode;
   /** 缺省时沿用 agent 自身默认模型。保存任务快照，避免设置目录变化影响 resume/fork。 */
   model?: string;
   /** 缺省时沿用 agent 自身默认思考深度。 */

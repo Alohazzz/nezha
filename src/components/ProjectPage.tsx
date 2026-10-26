@@ -72,6 +72,7 @@ import { useToast } from "./Toast";
 import { useProjectPanels } from "../hooks/useProjectPanels";
 import { useKnowledgePending } from "../hooks/useKnowledgePending";
 import { resolveProjectGitContext, useGitRoots } from "../hooks/useGitRoots";
+import type { CodexStreamState } from "../hooks/useCodexStream";
 import { useI18n } from "../i18n";
 
 /** 发送目标兜底：存活任务自动判定 → 全死时最近任务（让「恢复会话/新建」入口可达） */
@@ -133,6 +134,10 @@ export function ProjectPage({
   onRegisterTerminal,
   onTerminalReady,
   onSnapshot,
+  getCodexStream,
+  onCodexApprovalResolved,
+  onFollowUpStructured,
+  followUpBusyTaskId,
   onBack,
   onSwitchProject,
   onCommitProjectOrder,
@@ -265,6 +270,12 @@ export function ProjectPage({
   ) => number;
   onTerminalReady: (taskId: string, generation: number) => void;
   onSnapshot: (taskId: string, snapshot: string) => void;
+  /** codex structured 流快照（issue #116 阶段 3）；structured 任务渲染流视图用。 */
+  getCodexStream?: (taskId: string) => CodexStreamState;
+  onCodexApprovalResolved?: (taskId: string) => void;
+  /** structured 任务 done 态继续对话（thread/resume 通道）。 */
+  onFollowUpStructured?: (task: Task, text: string) => void;
+  followUpBusyTaskId?: string | null;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
   onCommitProjectOrder: (draggedId: string, beforeId: string | null, visibleIds: string[]) => void;
@@ -552,6 +563,23 @@ export function ProjectPage({
                 onTerminalReady={(generation) => onTerminalReady(task.id, generation)}
                 onSnapshot={(snapshot) => onSnapshot(task.id, snapshot)}
                 getRestoreState={() => getTaskRestoreState(task.id)}
+                codexStream={
+                  task.runMode === "structured" && getCodexStream
+                    ? getCodexStream(task.id)
+                    : undefined
+                }
+                onCodexApprovalResolved={
+                  onCodexApprovalResolved
+                    ? () => onCodexApprovalResolved(task.id)
+                    : undefined
+                }
+                onFollowUp={
+                  task.runMode === "structured" && onFollowUpStructured
+                    ? (text) => onFollowUpStructured(task, text)
+                    : undefined
+                }
+                followUpBusy={followUpBusyTaskId === task.id}
+                onOpenGitChanges={handleOpenGitChanges}
                 onRename={(name) => onRenameTask(task.id, name)}
                 onGenerateName={() => onGenerateTaskName(task.id)}
                 themeVariant={themeVariant}
@@ -885,6 +913,10 @@ export function ProjectPage({
     setShowShellTerminal(false);
     setShellProjectPath(project.path);
   }, [project.path]);
+
+  // 稳定引用（review fix）：每次渲染新建箭头会击穿 RunningView → CodexStreamView
+  // 的 memo 链，diff 截断跳转入口统一走这个回调。
+  const handleOpenGitChanges = useCallback(() => openRightPanel("git-changes"), [openRightPanel]);
 
   const handleNewTask = useCallback(() => {
     clearFileAndDiff();

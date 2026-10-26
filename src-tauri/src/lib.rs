@@ -11,6 +11,7 @@ mod app_settings;
 mod delivery_plan;
 mod build;
 mod codeup;
+pub mod codex_appserver;
 mod config;
 mod drafts;
 mod dsh;
@@ -72,6 +73,11 @@ pub struct TaskManager {
     pub(crate) terminal_ready: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
     /// Persistent `codex app-server` process reused across `read_usage_snapshot` calls.
     pub(crate) codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
+    /// structured 模式（codex app-server）的存活会话表：task_id → 会话句柄。
+    /// 由 `task_bridge::register_session` 写入，forwarder 退出 / cancel / complete
+    /// 时取走；`respond_codex_approval` 借它寻址会话应答审批。
+    pub(crate) codex_appserver_sessions:
+        Mutex<HashMap<String, codex_appserver::StructuredTaskEntry>>,
 }
 
 impl TaskManager {
@@ -105,6 +111,7 @@ impl TaskManager {
             sediment_expected: Mutex::new(HashSet::new()),
             terminal_ready: Mutex::new(HashMap::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
+            codex_appserver_sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -387,6 +394,7 @@ pub fn run() {
             sediment_expected: Mutex::new(HashSet::new()),
             terminal_ready: Mutex::new(HashMap::new()),
             codex_rpc: Arc::new(Mutex::new(None)),
+            codex_appserver_sessions: Mutex::new(HashMap::new()),
         })
         .on_window_event(|window, event| {
             // macOS: 点关闭按钮(红灯)时隐藏窗口而非退出,与 Cmd+W 行为一致;
@@ -417,6 +425,8 @@ pub fn run() {
             pty::run_task,
             pty::resume_task,
             pty::fork_task,
+            codex_appserver::task_bridge::respond_codex_approval,
+            codex_appserver::task_bridge::resume_codex_structured,
             pty::arm_terminal_ready,
             pty::terminal_ready,
             pty::cancel_task,
@@ -581,6 +591,7 @@ pub fn run() {
             app_settings::save_codeup_settings,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
+            app_settings::codex_structured_supported,
             app_settings::get_system_fonts,
             yunxiao::yunxiao_list_organizations,
             yunxiao::yunxiao_get_current_user,

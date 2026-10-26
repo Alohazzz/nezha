@@ -1252,12 +1252,160 @@ graph_id = \"HIS\"
             Some(OsStr::new("danger-full-access")),
         );
     }
+
+    #[test]
+    fn structured_routing_requires_codex_mode_and_no_yunxiao() {
+        // 2.2/2.2a 分流判据：codex + structured + 非云效才走 app-server 通道
+        assert!(should_run_structured("codex", Some("structured"), None));
+        // 非 codex / 缺 structured 标记 → PTY
+        assert!(!should_run_structured("claude", Some("structured"), None));
+        assert!(!should_run_structured("codex", Some("pty"), None));
+        assert!(!should_run_structured("codex", None, None));
+        // 云效直发任务（工作项 id 非空）一律强制 PTY（2.2a 防线）
+        assert!(!should_run_structured(
+            "codex",
+            Some("structured"),
+            Some("wi-123")
+        ));
+    }
 }
 
 // ── Tauri 命令 ───────────────────────────────────────────────────────────────
 
-/// 保存运行中任务终端里粘贴的剪贴板图片（data URL → `.nezha/attachments/<taskId>/`），
-/// 返回文件绝对路径，供前端把路径注入 CLI 输入框。
+/// 任务提示词组装：项目 prefix → 禁自动提交禁令 → 附件路径 → 沉淀契约。
+/// PTY 与 structured（codex app-server）两条通道共用，保证注入语义一致。
+/// 项目配置一律从**主项目**路径读（`real_project_path`），而不是 agent 的 cwd：
+/// worktree 里没有 `.nezha/config.toml`（`.nezha` 被 gitignore），从 worktree 读会静默
+/// 退回默认值 ⇒ 该任务既拿不到 `prompt_prefix`，也拿不到图谱绑定，因而**不会注入知识沉淀契约**。
+fn compose_final_prompt(
+    real_project_path: &str,
+    prompt: &str,
+    image_paths: &[String],
+    text_paths: &[String],
+    sediment_required: bool,
+) -> String {
+    let config = crate::config::read_project_config(real_project_path.to_string()).unwrap_or_default();
+    let base_prompt = if config.agent.prompt_prefix.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{}\n{}", config.agent.prompt_prefix, prompt)
+    };
+    // 「禁止 agent 自动提交」：项目开启 prevent_auto_commit 后追加内置禁令。
+    // 纯提示词软约束（Codex 无 hook 硬拦截对等能力）；允许 git add / 只读 git /
+    // worktree 分支操作，只拦 commit。与 prompt_prefix 一样仅在 run_task 注入，
+    // resume_task 不重复。
+    let base_prompt = if config.agent.prevent_auto_commit {
+        format!("{}\n{}", PREVENT_AUTO_COMMIT_PROMPT, base_prompt)
+    } else {
+        base_prompt
+    };
+
+    // 将图片路径追加到提示词，供 Claude Code 通过文件工具读取
+    let prompt_with_images = if image_paths.is_empty() {
+        base_prompt
+    } else {
+        format!(
+            "{}\n\n[Attached images]\n{}",
+            base_prompt,
+            image_paths.join("\n")
+        )
+    };
+
+    // 将文本附件路径追加到提示词
+    let with_text_paths = if text_paths.is_empty() {
+        prompt_with_images
+    } else {
+        format!(
+            "{}\n\n[Attached text files — read these for full context]\n{}",
+            prompt_with_images,
+            text_paths.join("\n")
+        )
+    };
+
+    // 知识沉淀产出要求：仅对「绑定图谱的项目 × 本任务要求产出」注入
+    // （未绑定图谱没有可沉淀目标；普通任务 / 方案讨论任务不该被要求，见 gate 注释）。
+    // 空提示词的守卫在 helper 内部。
+    append_sediment_requirement(
+        with_text_paths,
+        should_inject_sediment_contract(&config.knowledge.graph_id, sediment_required),
+    )
+}
+
+/// 判断本次启动是否走 structured 通道（2.2 分流）：
+/// agent=codex 且前端传 `runMode=structured`，**且**非云效直发任务（2.2a 防线）。
+/// 云效直发任务（`yunxiaoWorkitemId` 非空）即使误标 structured 也强制 PTY——
+/// structured 首期只从 NewTaskView 开放，不渗透进云效生产链路；防线放后端
+/// 入口的权威判据上，不依赖前端自律。
+fn should_run_structured(
+    agent: &str,
+    run_mode: Option<&str>,
+    yunxiao_workitem_id: Option<&str>,
+) -> bool {
+    agent == "codex" && run_mode == Some("structured") && yunxiao_workitem_id.is_none()
+}
+
+/// structured 通道的 run_task 实现：spawn app-server 会话 + forwarder。
+/// 与 PTY 路径共享任务登记（cancelled/sediment/unattended/task_names/task_real_paths），
+/// 生命周期事件（task-status/task-session）与 PTY 语义对齐。
+async fn run_structured_task(
+    app: AppHandle,
+    task_manager: &State<'_, TaskManager>,
+    launch: crate::codex_appserver::task_bridge::StructuredLaunch,
+    on_output: Channel<String>,
+) -> Result<(), String> {
+    use crate::codex_appserver::task_bridge as bridge;
+
+    let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
+    let session = bridge::spawn_session(
+        &launch_spec.program,
+        &launch.project_path,
+        &launch.permission_mode,
+    )
+    .await
+    .map_err(|e| format!("codex app-server spawn failed: {e:?}"))?;
+    let session = Arc::new(session);
+
+    // 与 PTY 同序的登记：取消/完成标记已在 run_task 入口清过；
+    // 这里补无人值守标记（forwarder 的 done 通知要按它抑制）。
+    if launch.unattended {
+        task_manager.unattended_tasks.lock().insert(launch.task_id.clone());
+    } else {
+        task_manager.unattended_tasks.lock().remove(&launch.task_id);
+    }
+
+    bridge::register_session(task_manager, &launch.task_id, session.clone());
+    let events = session.subscribe();
+    let errors = session.subscribe_errors();
+    // forwarder 通过 app.state::<TaskManager>() 自取状态（State 不是 'static），
+    // 会话终结时自行清表；guard 供启动失败收口（取消后迟到通知不再 emit）。
+    let forwarder = bridge::spawn_forwarder(
+        app.clone(),
+        launch.task_id.clone(),
+        launch.unattended,
+        on_output,
+        events,
+        errors,
+    );
+
+    let _ = app.emit(
+        "task-status",
+        serde_json::json!({ "task_id": launch.task_id, "status": "running" }),
+    );
+
+    // 首个 turn：thread 已在 spawn_session 里 start，这里发起执行。
+    // 失败时（spawn/握手成功但 turn 起不来，如版本门控/线程启动错误）先取消
+    // forwarder 再收口会话，错误交回前端自动降级 PTY 重跑（4.1 回退降级）。
+    if let Err(e) = session.start_turn(&launch.prompt).await {
+        forwarder.cancel();
+        if let Some(session) = bridge::take_session(task_manager, &launch.task_id) {
+            session.shutdown_shared().await;
+        }
+        return Err(format!("turn/start failed: {e:?}"));
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn save_pasted_image(
     project_path: String,
@@ -1317,6 +1465,11 @@ pub async fn run_task(
     // 跨仓库任务上下文：附加项目目录（前端已按任务 contextProjectIds 解析为 path），
     // 注入为 CLI `--add-dir`（仅 claude/codex；DSH 忽略）。
     context_project_paths: Option<Vec<String>>,
+    // 运行通道（2.2 分流）：pty = 终端 TUI（默认）；structured = codex app-server。
+    // 仅 agent=codex 且非云效直发任务生效（2.2a 防线在 should_run_structured 内）。
+    run_mode: Option<String>,
+    // 云效直发任务的工作项 id（非空即云效生产链路，2.2a 强制 PTY 的权威判据）。
+    yunxiao_workitem_id: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1326,6 +1479,23 @@ pub async fn run_task(
         MAX_REASONING_EFFORT_BYTES,
     )?;
     let sediment_required = require_sediment.unwrap_or(false);
+    let unattended = unattended.unwrap_or(false);
+    // 2.2 分流点：structured 且非云效直发 → codex app-server 通道（PTY 路径零改动）。
+    if should_run_structured(&agent, run_mode.as_deref(), yunxiao_workitem_id.as_deref()) {
+        return run_structured_task(
+            app,
+            &task_manager,
+            crate::codex_appserver::task_bridge::StructuredLaunch {
+                task_id,
+                project_path,
+                prompt,
+                permission_mode,
+                unattended,
+            },
+            on_output,
+        )
+        .await;
+    }
     let context_project_paths = match context_project_paths {
         Some(dirs) if !dirs.is_empty() => {
             let dirs = dirs.clone();
@@ -1353,7 +1523,7 @@ pub async fn run_task(
     }
     // 无人值守标记同样无条件覆写：为真时 event_watcher 跳过「需要你的确认」通知
     // （该通知语义是「等人确认」，而无人值守正是「没人来确认」的场景）。
-    if unattended.unwrap_or(false) {
+    if unattended {
         task_manager
             .unattended_tasks
             .lock()
@@ -1399,55 +1569,14 @@ pub async fn run_task(
             .map_err(|e| e.to_string())??
     };
 
-    // 项目配置一律从**主项目**路径读（`real_project_path`），而不是 agent 的 cwd：
-    // worktree 里没有 `.nezha/config.toml`（`.nezha` 被 gitignore），从 worktree 读会静默
-    // 退回默认值 ⇒ 该任务既拿不到 `prompt_prefix`，也拿不到图谱绑定，因而**不会注入知识沉淀契约**。
-    let config =
-        crate::config::read_project_config(real_project_path.clone()).unwrap_or_default();
-    let base_prompt = if config.agent.prompt_prefix.is_empty() {
-        prompt.clone()
-    } else {
-        format!("{}\n{}", config.agent.prompt_prefix, prompt)
-    };
-    // 「禁止 agent 自动提交」：项目开启 prevent_auto_commit 后追加内置禁令。
-    // 纯提示词软约束（Codex 无 hook 硬拦截对等能力）；允许 git add / 只读 git /
-    // worktree 分支操作，只拦 commit。与 prompt_prefix 一样仅在 run_task 注入，
-    // resume_task 不重复。
-    let base_prompt = if config.agent.prevent_auto_commit {
-        format!("{}\n{}", PREVENT_AUTO_COMMIT_PROMPT, base_prompt)
-    } else {
-        base_prompt
-    };
-
-    // 将图片路径追加到提示词，供 Claude Code 通过文件工具读取
-    let prompt_with_images = if image_paths.is_empty() {
-        base_prompt
-    } else {
-        format!(
-            "{}\n\n[Attached images]\n{}",
-            base_prompt,
-            image_paths.join("\n")
-        )
-    };
-
-    // 将文本附件路径追加到提示词
-    let with_text_paths = if text_paths.is_empty() {
-        prompt_with_images
-    } else {
-        format!(
-            "{}\n\n[Attached text files — read these for full context]\n{}",
-            prompt_with_images,
-            text_paths.join("\n")
-        )
-    };
-
-    // 知识沉淀产出要求：仅对「绑定图谱的项目 × 本任务要求产出」注入
-    // （未绑定图谱没有可沉淀目标；普通任务 / 方案讨论任务不该被要求，见 gate 注释）。
-    // 图谱身份取自项目配置，已在上面读出。空提示词的守卫在 helper 内部。
-    // 「知识沉淀」设置不再参与——它已重定义为发布方式选择器（见 gate 注释）。
-    let final_prompt = append_sediment_requirement(
-        with_text_paths,
-        should_inject_sediment_contract(&config.knowledge.graph_id, sediment_required),
+    // prompt 组装（prefix / 禁自动提交 / 附件路径 / 沉淀契约）与 PTY 分流共用，
+    // structured 路径（codex app-server）在上方分流点调用同一 helper。
+    let final_prompt = compose_final_prompt(
+        &real_project_path,
+        &prompt,
+        &image_paths,
+        &text_paths,
+        sediment_required,
     );
 
     let launch = crate::app_settings::get_agent_launch_spec(&agent);
@@ -1668,6 +1797,13 @@ pub async fn cancel_task(
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
     if let Some(arc) = child_arc {
         let _ = arc.lock().unwrap().kill();
+    } else if task_manager
+        .codex_appserver_sessions
+        .lock()
+        .contains_key(&task_id)
+    {
+        // structured 任务：无 PTY 子进程句柄，走 app-server 会话的中断+关闭。
+        crate::codex_appserver::task_bridge::cancel_structured_task(&task_id, &task_manager).await;
     } else {
         // Orphaned/interrupted tasks have no live child in this app process.
         // Avoid leaving a stale cancellation marker that would affect a later manual resume.
@@ -1716,6 +1852,13 @@ pub async fn complete_task(
         if let Ok(mut child) = arc.lock() {
             let _ = child.kill();
         }
+    } else if task_manager
+        .codex_appserver_sessions
+        .lock()
+        .contains_key(&task_id)
+    {
+        // structured 任务：直接关停会话（手动完成不需要等 turn 自然结束）。
+        crate::codex_appserver::task_bridge::cancel_structured_task(&task_id, &task_manager).await;
     } else {
         // No live child means no exit monitor will consume this marker.
         task_manager
@@ -1763,7 +1906,10 @@ pub async fn complete_task(
 pub async fn get_active_task_ids(
     task_manager: State<'_, TaskManager>,
 ) -> Result<Vec<String>, String> {
-    Ok(task_manager.child_handles.lock().keys().cloned().collect())
+    let mut ids = task_manager.child_handles.lock().keys().cloned().collect::<Vec<_>>();
+    // structured（codex app-server）任务没有 PTY 子进程句柄，单独并入
+    ids.extend(task_manager.codex_appserver_sessions.lock().keys().cloned());
+    Ok(ids)
 }
 
 #[tauri::command]
@@ -1788,6 +1934,9 @@ pub async fn reset_task_process(
     if let Some(arc) = child_arc {
         let _ = arc.lock().unwrap().kill();
     }
+
+    // structured 任务的重置：强杀会话子进程（kill_on_drop 随句柄移除兜底）。
+    task_manager.codex_appserver_sessions.lock().remove(&task_id);
 
     Ok(())
 }

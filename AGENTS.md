@@ -108,6 +108,7 @@ ErrorBoundary  (全局兜底)
 | `notification.rs` | 系统通知发送（任务状态 / attention） |
 | `agent_assist.rs` | 智能体辅助调用：headless 命令生成任务名、commit message 等 |
 | `subprocess.rs` | 子进程通用封装（带超时 / kill_on_drop） |
+| `codex_appserver/` | Codex app-server 结构化接入（issue #116）：`rpc.rs` JSON-RPC 帧、`events.rs` 通知 serde、`approval.rs` 审批决策、`task_bridge.rs` 任务系统集成（`run_task` 分流 / forwarder 事件转发 / `respond_codex_approval` / 启动失败 forwarder 取消收口）。Task.runMode=structured 且非云效直发才走此通道，PTY 仍是默认与回退：structured 启动失败（spawn/握手/turn 起不来）时前端自动降级 PTY 重跑并 toast（任务 runMode 落回 pty 自愈）；版本地板 0.156 由 `app_settings::codex_structured_supported`（UI 预探测）与 initialize 握手（兜底）双层门控 |
 | `usage.rs` | 用量统计（token / 调用次数聚合） |
 | `skills.rs` | Skill 注册表读取（`~/.claude/skills/` 等） |
 | `platform/` | 平台相关辅助（macOS 全屏退出、Windows hook 兼容等） |
@@ -140,6 +141,7 @@ interface Task {
   prompt: string;
   agent: "claude" | "codex";
   permissionMode: "ask" | "auto_edit" | "full_access";
+  runMode?: "pty" | "structured"; // 运行通道（仅 codex 生效）；缺省回落 pty；云效直发任务强制 pty
   status: TaskStatus;
   createdAt: number;
   updatedAt?: number;        // 状态最近变更时间戳；任务列表按此排序，缺省回落 createdAt

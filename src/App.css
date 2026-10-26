@@ -13,6 +13,7 @@
 @import "./styles/html-preview.css";
 @import "./styles/row-actions.css";
 @import "./styles/task-list.css";
+@import "./styles/codex-stream.css";
 
 /* ── Reset ─────────────────────────────────────────────────────── */
 *,

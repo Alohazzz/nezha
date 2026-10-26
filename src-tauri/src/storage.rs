@@ -37,12 +37,16 @@ pub struct Task {
     pub permission_mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(
-        rename = "reasoningEffort",
+    #[serde(rename = "reasoningEffort",
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub reasoning_effort: Option<String>,
+    /// 运行通道（仅 agent=codex 时生效）：pty = 终端 TUI；structured = codex
+    /// app-server 结构化接入（issue #116）。缺省/未知取值回落 pty；
+    /// 云效直发任务在后端强制 pty（2.2a 防线）。
+    #[serde(rename = "runMode", default, skip_serializing_if = "Option::is_none")]
+    pub run_mode: Option<String>,
     pub status: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
@@ -673,6 +677,24 @@ mod tests {
         assert_eq!(task.plan_id, None);
         assert_eq!(task.yunxiao_plan_discussion, None);
         assert_eq!(task.unattended, None);
+        // runMode 是新增可空字段：旧数据缺省回落 pty 语义（None）
+        assert_eq!(task.run_mode, None);
+    }
+
+    #[test]
+    fn task_run_mode_round_trips_and_omits_when_absent() {
+        // structured 标记要能落盘并读回（阶段 2 的通道快照）
+        let mut task: Task = serde_json::from_str(
+            r#"{"id":"t1","projectId":"p1","prompt":"p","agent":"codex","permissionMode":"ask","status":"todo","createdAt":1,"runMode":"structured"}"#,
+        )
+        .unwrap();
+        assert_eq!(task.run_mode.as_deref(), Some("structured"));
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(json.contains("\"runMode\":\"structured\""));
+        // 缺省时序列化省略，保持存量文件简洁
+        task.run_mode = None;
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(!json.contains("runMode"));
     }
 
     #[test]

@@ -9,10 +9,12 @@ import type {
   FontFamily,
   ThemeVariant,
 } from "../types";
+import type { CodexStreamState } from "../hooks/useCodexStream";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
 import { SessionView } from "./SessionView";
+import { CodexStreamView } from "./codex-stream/CodexStreamView";
 import { buildDefaultForkTaskName, SessionActionsMenu } from "./running-view/SessionActionsMenu";
 import { useToast } from "./Toast";
 import { writeClipboardText } from "./file-explorer/clipboard";
@@ -107,6 +109,11 @@ export function RunningView({
   onTerminalReady,
   onSnapshot,
   getRestoreState,
+  codexStream,
+  onCodexApprovalResolved,
+  onFollowUp,
+  followUpBusy,
+  onOpenGitChanges,
   onRename,
   onGenerateName,
   themeVariant,
@@ -136,6 +143,14 @@ export function RunningView({
   onTerminalReady: (generation: number) => void;
   onSnapshot?: (snapshot: string) => void;
   getRestoreState?: () => { initialData?: string; initialSnapshot?: string };
+  /** 非空 = structured 任务：主内容区渲染结构化流视图而非终端（issue #116 阶段 3）。 */
+  codexStream?: CodexStreamState;
+  onCodexApprovalResolved?: () => void;
+  /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。 */
+  onFollowUp?: (text: string) => void;
+  followUpBusy?: boolean;
+  /** 截断 diff → GitChanges 右面板的跳转入口（issue #117 T4）。 */
+  onOpenGitChanges?: () => void;
   onRename: (name: string) => void;
   onGenerateName: () => Promise<void>;
   themeVariant: ThemeVariant;
@@ -159,7 +174,10 @@ export function RunningView({
       : task.agent === "dsh"
         ? task.dshSessionId
         : task.claudeSessionId;
-  const resumeAvailable = task.agent === "dsh" || !!resumeSessionId;
+  // structured 任务首期不支持恢复（阶段 2 决议：interrupted/failed 均按 failed 收口，
+  // resume 走 PTY 会破坏 structured 语义），隐藏恢复入口。
+  const isStructured = task.runMode === "structured";
+  const resumeAvailable = !isStructured && (task.agent === "dsh" || !!resumeSessionId);
   const restoreState = getRestoreState?.() ?? {};
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
@@ -306,6 +324,7 @@ export function RunningView({
 
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     const load = () => {
       invoke<SessionMetrics>("read_session_metrics", { sessionPath: activeSessionPath })
@@ -318,12 +337,20 @@ export function RunningView({
           });
         })
         .catch(() => {
-          if (!cancelled) {
-            setMetricsState({
-              sessionPath: activeSessionPath,
-              status: "failed",
-              metrics: null,
-            });
+          if (cancelled) return;
+          setMetricsState({
+            sessionPath: activeSessionPath,
+            status: "failed",
+            metrics: null,
+          });
+          // 会话文件由 agent 异步落盘：task-session 事件（thread/started）先于
+          // 文件创建到达时，非活跃任务不再有轮询兜底，会永久停在 failed 红点。
+          // 非活跃时延迟补试一次，文件就绪后自愈。
+          if (!isActive && retryTimer === null) {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
+              if (!cancelled) load();
+            }, 5000);
           }
         });
     };
@@ -336,6 +363,10 @@ export function RunningView({
       if (timer !== null) {
         clearInterval(timer);
         timer = null;
+      }
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
       }
     };
   }, [sessionPath, isActive, projectActive]);
@@ -685,8 +716,20 @@ export function RunningView({
         )}
       </div>
 
-      {/* Main content: terminal when active, session view when done/failed. */}
+      {/* Main content: terminal when active, session view when done/failed.
+          structured 任务（codexStream 非空）渲染结构化流视图，不进终端红线链路。 */}
       {isDetached || isInterrupted ? (
+        codexStream ? (
+          <CodexStreamView
+            entries={codexStream.entries}
+            usage={codexStream.usage}
+            approval={null}
+            onApprovalResolved={() => {}}
+            running={false}
+            statusText={t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+            onOpenGitChanges={onOpenGitChanges}
+          />
+        ) : (
         <div style={s.interruptedSessionWrap}>
           <div ref={interruptedBannerRef} style={s.interruptedBanner}>
             <div style={s.interruptedBannerIcon}>
@@ -740,7 +783,27 @@ export function RunningView({
             </div>
           )}
         </div>
+        )
       ) : isActive || !sessionPath ? (
+        codexStream ? (
+          <CodexStreamView
+            entries={codexStream.entries}
+            usage={codexStream.usage}
+            approval={codexStream.approval}
+            onApprovalResolved={() => onCodexApprovalResolved?.()}
+            running={isActive}
+            statusText={
+              task.status === "failed"
+                ? (task.failureReason ?? t("task.failed"))
+                : task.status === "cancelled"
+                  ? t("task.cancelled")
+                  : undefined
+            }
+            onFollowUp={task.status === "done" ? onFollowUp : undefined}
+            followUpBusy={followUpBusy}
+            onOpenGitChanges={onOpenGitChanges}
+          />
+        ) : (
         <div style={s.terminalContainer}>
           <TerminalView
             key={`${task.id}-${runCount}`}
@@ -766,6 +829,7 @@ export function RunningView({
             initialSnapshot={restoreState.initialSnapshot}
           />
         </div>
+        )
       ) : (
         <SessionView sessionPath={sessionPath} />
       )}

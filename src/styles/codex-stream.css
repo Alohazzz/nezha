@@ -1,0 +1,203 @@
+/* codex-stream 伪类 / 状态选择器 / 动画（issue #117 T2 统一工具卡骨架）。
+ * CSS-in-JS 对象表达不了的 :hover / :focus-visible / [data-*] / @keyframes 一律放这里；
+ * 静态布局在 codex-stream.ts。 */
+
+/* ── 工具卡摘要行交互态 ─────────────────────────────────────────────────── */
+
+.codex-stream-tool-header:hover {
+  background: var(--bg-subtle);
+}
+
+.codex-stream-tool-header:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 状态词语义色（summary 行右侧 Running / Done / Failed） */
+.codex-stream-tool-card[data-status="ok"] .codex-stream-tool-status {
+  color: var(--color-success);
+}
+
+.codex-stream-tool-card[data-status="running"] .codex-stream-tool-status {
+  color: var(--accent);
+}
+
+/* 展开态摘要行底边（原 inline 条件合并迁出） */
+.codex-stream-tool-header[data-expanded] {
+  border-bottom: 1px solid var(--border-dim);
+}
+
+/* 失败态状态词颜色（原 codexToolStatusFailed inline 合并迁出）；
+ * 卡片级 data-status 已有语义色，这里对 status="failed" 整体压红 */
+.codex-stream-tool-card[data-status="failed"] .codex-stream-tool-status {
+  color: var(--color-error);
+}
+
+/* 失败详情 popover 内的复制按钮（原 inline copied 条件合并迁出） */
+.codex-stream-fail-copy {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-dim);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.codex-stream-fail-copy:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.codex-stream-fail-copy[data-copied] {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+/* usage 条上下文占用填充条：宽度由 UsageBar 经 ref 写 inline width（动态数值），
+ * 警戒色走 data-warn 选择器 */
+.codex-stream-usage-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.codex-stream-usage-fill[data-warn] {
+  background: var(--color-warning);
+}
+
+/* ── 继续对话输入框（原 inline 条件合并迁出）──────────────────────────────── */
+
+.codex-stream-followup-box[data-focused] {
+  border-color: var(--accent);
+}
+
+.codex-stream-followup-box button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── 审批卡按钮 hover / disabled（原 hovered state + inline 合并迁出）──────── */
+
+.codex-stream-approval-actions button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* 批准按钮 hover 反色（原 codexApprovalApproveBtnHover）*/
+.codex-stream-approval-actions button.approve:hover:not(:disabled) {
+  background: var(--color-success);
+  color: var(--bg-root);
+}
+
+/* 拒绝按钮 hover 底色（原 codexApprovalDeclineBtnHover）*/
+.codex-stream-approval-actions button.decline:hover:not(:disabled) {
+  background: var(--bg-input);
+}
+
+.codex-stream-approval-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 失败态状态词：虚线下划线（user story 12）；可点击触发详情时才显 pointer */
+.codex-stream-tool-status[data-status="failed"] {
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+}
+
+button.codex-stream-tool-status[data-status="failed"] {
+  cursor: pointer;
+}
+
+button.codex-stream-tool-status[data-status="failed"]:hover {
+  color: var(--color-error);
+  opacity: 0.85;
+}
+
+/* ── 命令卡输出复制按钮（原 inline style 迁出）────────────────────────────── */
+
+.codex-stream-copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--text-muted);
+  display: flex;
+}
+
+.codex-stream-copy-btn:hover {
+  color: var(--text-primary);
+}
+
+/* ── 运行态：类别标签文案扫光（user story 16）──────────────────────────────
+ * 纯 background-position 动画（GPU 合成友好），不用旋转图标/spinner。
+ * 大量并发卡片同时扫光也不占渲染主循环。 */
+
+@keyframes codex-tool-shimmer {
+  0% {
+    background-position: -120% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+
+.codex-stream-tool-category[data-running] {
+  background: linear-gradient(
+    100deg,
+    var(--bg-subtle) 0%,
+    var(--bg-subtle) 38%,
+    var(--accent) 50%,
+    var(--bg-subtle) 62%,
+    var(--bg-subtle) 100%
+  );
+  background-size: 220% 100%;
+  color: transparent;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: codex-tool-shimmer 1.6s linear infinite;
+}
+
+/* ── T4 diff 视图（issue #117）────────────────────────────────────────────────
+ * 变更性质徽标按 data-kind 出色；diff 行按 data-type 出 +/- 底色。
+ * 两段式渲染：plain 阶段同底色；shiki 高亮后 token 色由注入的 HTML span 自带。 */
+
+.codex-stream-diff-badge[data-kind="added"] {
+  background: var(--diff-status-added-bg, rgba(80, 200, 120, 0.16));
+  color: var(--diff-status-added-fg, var(--color-success));
+}
+.codex-stream-diff-badge[data-kind="deleted"] {
+  background: var(--diff-status-deleted-bg, rgba(220, 80, 80, 0.16));
+  color: var(--diff-status-deleted-fg, var(--color-error));
+}
+.codex-stream-diff-badge[data-kind="renamed"] {
+  background: var(--diff-status-renamed-bg, rgba(93, 124, 255, 0.16));
+  color: var(--diff-status-renamed-fg, var(--accent));
+}
+.codex-stream-diff-badge[data-kind="modified"] {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+}
+
+.codex-stream-diff-row[data-type="add"] {
+  background: var(--diff-add-bg, rgba(80, 200, 120, 0.1));
+  color: var(--diff-add-fg, var(--color-success));
+}
+.codex-stream-diff-row[data-type="del"] {
+  background: var(--diff-delete-bg, rgba(220, 80, 80, 0.1));
+  color: var(--diff-delete-fg, var(--color-error));
+}
+.codex-stream-diff-row[data-type="meta"] {
+  color: var(--text-hint);
+  user-select: none;
+}
+
+/* shiki 高亮注入的 token span：色彩自带 inline style，这里只管字体继承 */
+.codex-stream-diff-code span {
+  font-family: inherit;
+}

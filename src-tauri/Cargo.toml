@@ -50,6 +50,17 @@ futures-util = "0.3"
 sha2 = "0.10"
 hex = "0.4"
 
+# Codex app-server 结构化接入(阶段 1,issue #116):只引协议类型,不引官方 client 全家桶。
+# pin = rust-v0.163.0(annotated tag 解引用后的 commit)。
+# 注意:上游根 Cargo.toml 的 [patch.crates-io] 不会被外部 crate 继承,必须在此复制;
+# tungstenite/tokio-tungstenite 的 proxy feature 只存在于 openai 的 fork 里。
+codex-app-server-protocol = { git = "https://github.com/openai/codex.git", rev = "83086188ae0614bd882818ff1aa23f3194962012" }
+
+[patch.crates-io]
+crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }
+tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
+tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
+
 # 仅 Windows:关闭到托盘后进程常驻,需单实例守卫防止再次打开图标时启动重复后端
 # (两套 watcher/hook 抢写同一批 ~/.nezha 文件)。
 [target.'cfg(windows)'.dependencies]
@@ -59,3 +70,9 @@ winreg = "0.10"
 
 [profile.dev]
 debug = 0
+
+# codex app-server 的 mock 集成测试:自定义 harness(main 里按环境变量分叉为
+# mock app-server 或测试驱动),保证 mock 进程 stdout 只含 wire 帧。
+[[test]]
+name = "codex_appserver_mock"
+harness = false
