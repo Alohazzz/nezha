@@ -1635,6 +1635,20 @@ pub fn codex_version_gte(min_version: &str) -> bool {
     }
 }
 
+/// structured 运行通道的版本地板（`codex_appserver::initialize` 的 0.156
+/// 握手门控同源，此处是 UI 层的前置探测：低于地板直接隐藏 structured 选项，
+/// 探测失败（codex 不可用）视为不满足）。
+pub const CODEX_STRUCTURED_FLOOR: &str = "0.156";
+
+/// codex 是否支持 structured 运行通道（NewTaskView 的模式选择门控，4.2）。
+/// 探测有 OnceLock 缓存，进程生命周期内只跑一次 `codex --version`。
+#[tauri::command]
+pub async fn codex_structured_supported() -> bool {
+    tokio::task::spawn_blocking(|| codex_version_gte(CODEX_STRUCTURED_FLOOR))
+        .await
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub async fn detect_agent_versions_for_settings(
     settings: AppSettings,
@@ -1670,6 +1684,21 @@ pub async fn get_system_fonts() -> Vec<String> {
     })
     .await
     .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod structured_floor_tests {
+    use super::*;
+
+    #[test]
+    fn codex_structured_floor_is_version_comparable() {
+        // 地板常量本身必须是合法三段可比版本（codex_version_gte 的输入约束）
+        assert_eq!(parse_semver(CODEX_STRUCTURED_FLOOR), (0, 156, 0));
+        // 语义自检：地板之上/之下/相等的比较方向
+        assert!(parse_semver("0.163.0") >= parse_semver(CODEX_STRUCTURED_FLOOR));
+        assert!(parse_semver("0.155.1") < parse_semver(CODEX_STRUCTURED_FLOOR));
+        assert!(parse_semver("0.156.0") >= parse_semver(CODEX_STRUCTURED_FLOOR));
+    }
 }
 
 #[cfg(test)]

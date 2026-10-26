@@ -230,7 +230,8 @@ impl CodexAppServerSession {
             .map_err(|e| SessionError::Protocol(format!("parse initialize: {e}")))?;
 
         // 版本地板 ≥0.156(findings §8.6):userAgent 形如
-        // `codex_cli_rs/0.163.0 (Windows 10.0.26200; x86_64) xterm-256color`
+        // `codex_cli_rs/0.163.0 (Windows 10.0.26200; x86_64) xterm-256color`。
+        // 与 `app_settings::CODEX_STRUCTURED_FLOOR`(UI 层前置探测)同源,改动须同步。
         if let Some(version) = parse_codex_version(&response.user_agent) {
             if version < (0, 156) {
                 return Err(SessionError::Protocol(format!(

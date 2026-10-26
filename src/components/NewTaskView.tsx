@@ -130,6 +130,30 @@ export function NewTaskView({
     const saved = localStorage.getItem(RUN_MODE_STORAGE_KEY);
     return saved === "structured" ? "structured" : "pty";
   });
+  // 4.2 版本门控：codex < 0.156（或探测失败，含未安装）不支持 structured。
+  // null = 探测中（乐观按支持渲染，探测完成后不支持则强制回 pty）。
+  const [structuredSupported, setStructuredSupported] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (agent !== "codex") return;
+    let mounted = true;
+    invoke<boolean>("codex_structured_supported")
+      .then((ok) => {
+        if (mounted) setStructuredSupported(ok);
+      })
+      .catch(() => {
+        if (mounted) setStructuredSupported(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [agent]);
+  // 记忆值是 structured 但版本不支持时自愈回 pty，避免提交后必走降级路径。
+  useEffect(() => {
+    if (agent === "codex" && structuredSupported === false && runMode === "structured") {
+      setRunMode("pty");
+      localStorage.setItem(RUN_MODE_STORAGE_KEY, "pty");
+    }
+  }, [agent, structuredSupported, runMode]);
   const [baseBranch, setBaseBranch] = useState<string>(initialDraft?.baseBranch ?? "");
   // 跨仓库任务上下文：勾选的附加项目 id。DSH 无跨目录机制，切换到 DSH 时清空。
   const [contextProjectIds, setContextProjectIds] = useState<string[]>(
@@ -748,8 +772,9 @@ export function NewTaskView({
           onSetBaseBranch={setBaseBranch}
           onSetRepoPath={onSetRepoPath}
         />
-        {/* codex 运行通道（3.4）：structured = app-server 卡片视图；选择全局记忆 */}
-        {agent === "codex" && (
+        {/* codex 运行通道（3.4）：structured = app-server 卡片视图；选择全局记忆。
+            4.2 版本门控：codex < 0.156 / 探测失败时不渲染（只剩 pty 一个选项）。 */}
+        {agent === "codex" && structuredSupported !== false && (
           <RunModeSelector
             runMode={runMode}
             onSetRunMode={(mode) => {

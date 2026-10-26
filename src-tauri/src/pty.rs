@@ -1377,8 +1377,8 @@ async fn run_structured_task(
     let events = session.subscribe();
     let errors = session.subscribe_errors();
     // forwarder 通过 app.state::<TaskManager>() 自取状态（State 不是 'static），
-    // 会话终结时自行清表。
-    bridge::spawn_forwarder(
+    // 会话终结时自行清表；guard 供启动失败收口（取消后迟到通知不再 emit）。
+    let forwarder = bridge::spawn_forwarder(
         app.clone(),
         launch.task_id.clone(),
         launch.unattended,
@@ -1392,11 +1392,16 @@ async fn run_structured_task(
         serde_json::json!({ "task_id": launch.task_id, "status": "running" }),
     );
 
-    // 首个 turn：thread 已在 spawn_session 里 start，这里发起执行
-    session
-        .start_turn(&launch.prompt)
-        .await
-        .map_err(|e| format!("turn/start failed: {e:?}"))?;
+    // 首个 turn：thread 已在 spawn_session 里 start，这里发起执行。
+    // 失败时（spawn/握手成功但 turn 起不来，如版本门控/线程启动错误）先取消
+    // forwarder 再收口会话，错误交回前端自动降级 PTY 重跑（4.1 回退降级）。
+    if let Err(e) = session.start_turn(&launch.prompt).await {
+        forwarder.cancel();
+        if let Some(session) = bridge::take_session(task_manager, &launch.task_id) {
+            session.shutdown_shared().await;
+        }
+        return Err(format!("turn/start failed: {e:?}"));
+    }
 
     Ok(())
 }

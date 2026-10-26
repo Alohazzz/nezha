@@ -1234,6 +1234,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "toast.saveTasksFailed": "Failed to save tasks for project {projectId}: {error}",
     "toast.followUpNoSession": "No session to continue — this task has no recorded thread.",
     "toast.followUpFailed": "Failed to continue the conversation: {error}",
+    "toast.codexStructuredFallback":
+      "Structured mode failed to start ({error}); restarted in terminal mode.",
     "toast.loadTasksFailed":
       "Failed to load tasks for project {name}: {error}. Saving for this project is disabled until restart to protect on-disk data.",
   },
@@ -2407,6 +2409,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "toast.saveTasksFailed": "保存任务失败（项目 {projectId}）：{error}",
     "toast.followUpNoSession": "没有可继续的会话——该任务没有记录线程。",
     "toast.followUpFailed": "继续对话失败：{error}",
+    "toast.codexStructuredFallback": "结构化模式启动失败（{error}），已自动切换到终端模式重跑。",
     "toast.loadTasksFailed":
       "加载任务失败（项目 {name}）：{error}。为保护磁盘数据，重启前将不再保存该项目的任务。",
   },

@@ -591,6 +591,7 @@ pub fn run() {
             app_settings::save_codeup_settings,
             app_settings::detect_agent_paths,
             app_settings::detect_agent_versions_for_settings,
+            app_settings::codex_structured_supported,
             app_settings::get_system_fonts,
             yunxiao::yunxiao_list_organizations,
             yunxiao::yunxiao_get_current_user,

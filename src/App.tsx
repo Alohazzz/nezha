@@ -1106,6 +1106,8 @@ function App() {
     images: string[],
     texts: string[] = [],
     realProjectPath: string,
+    /** 内部参数：structured 启动失败降级 PTY 重跑时携带失败原因，防止二次失败再降级。 */
+    structuredFallbackReason?: string,
   ) {
     await armTerminalReady(task.id);
     // 运行通道（2.2）：仅 Codex + 用户显式选择 structured 时生效；
@@ -1153,8 +1155,33 @@ function App() {
       // 跨仓库任务上下文：附加项目目录（后端校验后注入 --add-dir）。
       contextProjectPaths: resolveContextProjectPaths(task),
       onOutput,
-    }).catch((err: unknown) => {
+    }).catch(async (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
+      if (runMode === "structured" && !structuredFallbackReason) {
+        // 4.1 回退降级：structured 启动失败（spawn/握手/turn 起不来）→ 自动切回
+        // PTY 重跑。任务快照的 runMode 一并落回 pty，让视图路由/恢复按钮/后续
+        // 续跑全部自愈到终端语义；降级原因写 failureReason 留痕。
+        codexStream.resetTask(task.id);
+        setTasks((prev) => {
+          const demoted = prev.map((t) =>
+            t.id === task.id
+              ? { ...t, runMode: "pty" as const, failureReason: msg, updatedAt: Date.now() }
+              : t,
+          );
+          persistProjectTasks(task.projectId, demoted, showToast, formatSaveTasksError);
+          return demoted;
+        });
+        showToast(t("toast.codexStructuredFallback", { error: msg }), "warning");
+        await invokeRunTask(
+          { ...task, runMode: "pty" },
+          projectPath,
+          images,
+          texts,
+          realProjectPath,
+          msg,
+        );
+        return;
+      }
       if (runMode === "structured") {
         updateTaskStatus(task.id, "failed", undefined, msg);
       } else {

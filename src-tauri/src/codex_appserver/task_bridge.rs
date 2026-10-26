@@ -40,6 +40,32 @@ pub struct StructuredTaskEntry {
     pub session: Arc<CodexAppServerSession>,
 }
 
+/// forwarder 取消句柄（启动失败收口用）。置位后 forwarder 对后续到达的事件/
+/// 错误**不再 emit 任何状态与通知**，只走清表退出——`turn/start` 超时时 turn
+/// 可能实际已在跑，迟到的 approval/turn/completed 若照发，会把前端已经降级
+/// 重跑的 PTY 任务状态打翻（4.1 回退降级的竞态防线）。
+#[derive(Clone)]
+pub struct ForwarderGuard {
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ForwarderGuard {
+    fn new() -> Self {
+        Self {
+            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 /// structured 模式的启动参数：由 `run_task` 分流点从命令参数归集。
 pub struct StructuredLaunch {
     pub task_id: String,
@@ -117,6 +143,9 @@ pub fn take_session(
 /// - `TurnCompleted{completed}` → `task-status: done`；`interrupted` → `interrupted`；`failed` → `failed`；
 /// - `ApprovalRequested` → emit `codex-approval-requested` + `task-status: input_required`；
 /// - `SessionError` → `task-status: failed` + failureReason。
+///
+/// 返回 `ForwarderGuard`：启动序列（spawn → turn/start）失败时先 `cancel()`
+/// 再收口会话，保证降级重跑后迟到的通知不会污染新任务状态。
 pub fn spawn_forwarder(
     app: AppHandle,
     task_id: String,
@@ -124,15 +153,22 @@ pub fn spawn_forwarder(
     on_output: Channel<String>,
     mut events: Receiver<CodexEvent>,
     mut errors: Receiver<SessionError>,
-) {
+) -> ForwarderGuard {
+    let guard = ForwarderGuard::new();
+    let guard_for_loop = guard.clone();
     tokio::spawn(async move {
         // 先挂错误流再进事件循环：进程秒退时 EOF 错误可能先于残留事件到达
         loop {
+            if guard_for_loop.is_cancelled() {
+                break;
+            }
             tokio::select! {
                 event = events.recv() => {
                     match event {
                         Ok(event) => {
-                            if !handle_event(&app, &on_output, &task_id, unattended, event).await {
+                            if guard_for_loop.is_cancelled()
+                                || !handle_event(&app, &on_output, &task_id, unattended, event).await
+                            {
                                 break;
                             }
                         }
@@ -145,6 +181,9 @@ pub fn spawn_forwarder(
                 error = errors.recv() => {
                     match error {
                         Ok(err) => {
+                            if guard_for_loop.is_cancelled() {
+                                break;
+                            }
                             emit_failed(&app, &task_id, &format!("{err:?}"));
                             break;
                         }
@@ -163,6 +202,7 @@ pub fn spawn_forwarder(
         }
         crate::event_watcher::cleanup_task_events(&task_id);
     });
+    guard
 }
 
 /// 处理单个事件。返回 false 表示会话已终结（turn 完成/失败），forwarder 应退出。
@@ -378,17 +418,24 @@ pub async fn resume_structured_task(
     let events = session.subscribe();
     let errors = session.subscribe_errors();
     // 继续对话默认有人值守：unattended=false 让完成通知正常发。
-    spawn_forwarder(app.clone(), task_id.clone(), false, on_output, events, errors);
+    let guard = spawn_forwarder(app.clone(), task_id.clone(), false, on_output, events, errors);
 
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "running" }),
     );
 
-    session
-        .start_turn(&prompt)
-        .await
-        .map_err(|e| format!("turn/start failed: {e:?}"))?;
+    // turn/start 失败：先取消 forwarder（迟到通知不得污染任务状态），
+    // 再收口会话子进程，最后把错误交回前端 toast。
+    if let Err(e) = session.start_turn(&prompt).await {
+        guard.cancel();
+        if let Some(tm) = app.try_state::<crate::TaskManager>() {
+            if let Some(session) = take_session(&tm, &task_id) {
+                session.shutdown_shared().await;
+            }
+        }
+        return Err(format!("turn/start failed: {e:?}"));
+    }
     Ok(())
 }
 
