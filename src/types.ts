@@ -433,6 +433,19 @@ export type CodexPatchChangeKind =
   | { type: "delete" }
   | { type: "update"; movePath: string | null };
 
+/** MCP 工具调用结果（上游 v2 `McpToolCallResult` 的宽容透传形态）。 */
+export interface CodexMcpToolCallResult {
+  /** MCP content 块数组（`{ type: "text", text }` / 图片等）。 */
+  content: unknown[];
+  structuredContent?: unknown;
+  _meta?: unknown;
+}
+
+/** MCP 调用错误（上游 `McpToolCallError`）。 */
+export interface CodexMcpToolCallError {
+  message: string;
+}
+
 export interface CodexMcpToolCallItem {
   type: "mcpToolCall";
   id: string;
@@ -440,6 +453,12 @@ export interface CodexMcpToolCallItem {
   tool: string;
   status: "inProgress" | "completed" | "failed";
   durationMs?: number | null;
+  /** 工具调用参数（上游为任意 JSON Value）。 */
+  arguments?: unknown;
+  /** 工具结果（completed 态）；失败时通常缺省。 */
+  result?: CodexMcpToolCallResult | null;
+  /** 工具报错详情（failed 态）。 */
+  error?: CodexMcpToolCallError | null;
 }
 
 export interface CodexPlanItem {

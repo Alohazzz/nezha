@@ -79,7 +79,7 @@ function FailedDetailPopover({ detail, label }: { detail: string; label: string 
           className="codex-stream-tool-status"
           data-status="failed"
           title={t("codex.tool.failedDetail")}
-          style={{ ...s.codexToolStatus, ...s.codexToolStatusFailed }}
+          style={s.codexToolStatus}
         >
           {label}
         </button>
@@ -98,7 +98,8 @@ function FailedDetailPopover({ detail, label }: { detail: string; label: string 
             aria-label={t("common.copy")}
             title={copied ? t("codex.tool.copied") : t("common.copy")}
             onClick={handleCopy}
-            style={{ ...s.codexToolFailCopy, ...(copied ? s.codexToolFailCopied : {}) }}
+            className="codex-stream-fail-copy"
+            data-copied={copied || undefined}
           >
             {copied ? <Check size={11} /> : <Copy size={11} />}
           </button>
@@ -257,7 +258,8 @@ export const CodexToolCard = memo(function CodexToolCard({
       <button
         type="button"
         className="codex-stream-tool-header"
-        style={{ ...s.codexToolHeader, ...(expanded ? s.codexToolHeaderExpanded : {}) }}
+        style={s.codexToolHeader}
+        data-expanded={expanded || undefined}
         onClick={handleToggle}
       >
         <span style={s.codexToolIcon}>{icon}</span>
@@ -275,7 +277,7 @@ export const CodexToolCard = memo(function CodexToolCard({
         ) : (
           <span
             className="codex-stream-tool-status"
-            style={{ ...s.codexToolStatus, ...(failed ? s.codexToolStatusFailed : {}) }}
+            style={s.codexToolStatus}
             data-status={status}
           >
             {label}
