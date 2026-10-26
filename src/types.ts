@@ -354,7 +354,12 @@ export interface CodexStreamFrame {
     | "agentMessageDelta"
     | "reasoningDelta"
     | "commandOutputDelta"
-    | "tokenUsage";
+    | "tokenUsage"
+    /**
+     * turn 生命周期帧（spec #117 可选交付的占位）：后端 forwarder 尚未下发；
+     * 归并层按未知帧宽容语义解析后忽略（不建条目、不渲染分隔 UI）。
+     */
+    | "turnLifecycle";
   phase: "started" | "completed" | "delta" | "updated";
   /** 仅 delta 类帧携带：流式增量所属条目的 id（`item/started` 建立的条目）。 */
   itemId?: string;

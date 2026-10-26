@@ -560,6 +560,18 @@ export const codexStream = {  codexStreamRoot: {
     position: "relative",
   },
 
+  // 命令卡截断提示条（issue #117 T5）：提示文案 + 复制全文按钮
+  codexCommandTruncationNote: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    padding: "4px 10px",
+    borderBottom: "1px solid var(--border-dim)",
+    fontSize: 11,
+    color: "var(--text-hint)",
+  },
+
   codexToolFailPopover: {
     maxWidth: 460,
     background: "var(--bg-root)",
