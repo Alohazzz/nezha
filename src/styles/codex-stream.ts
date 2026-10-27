@@ -19,7 +19,7 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   codexStreamEmpty: {
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     fontSize: 13,
     padding: "12px 0",
   },
@@ -30,7 +30,7 @@ export const codexStream = {  codexStreamRoot: {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     fontSize: 12.5,
     padding: "2px 0",
     flexShrink: 0,
@@ -80,7 +80,7 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   codexEntryHeaderMeta: {
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     fontSize: 11,
     flexShrink: 0,
   },
@@ -99,7 +99,7 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   codexEntryBodyRunning: {
-    color: "var(--text-hint)",
+    color: "var(--codex-row-label)",
     fontStyle: "italic",
   },
 
@@ -127,7 +127,7 @@ export const codexStream = {  codexStreamRoot: {
     margin: 0,
     padding: "4px 12px",
     fontSize: 12,
-    color: "var(--text-muted)",
+    color: "var(--codex-row-label)",
     fontStyle: "italic",
     lineHeight: 1.55,
     whiteSpace: "pre-wrap",
@@ -142,7 +142,7 @@ export const codexStream = {  codexStreamRoot: {
     border: "none",
     cursor: "pointer",
     padding: "2px 0",
-    color: "var(--text-hint)",
+    color: "var(--codex-row-label)",
     fontSize: 11.5,
     fontStyle: "italic",
   },
@@ -189,13 +189,13 @@ export const codexStream = {  codexStreamRoot: {
     fontWeight: 600,
     letterSpacing: "0.04em",
     textTransform: "uppercase",
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     marginBottom: 4,
   },
 
   codexEntrySectionEmpty: {
     fontSize: 11.5,
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     fontStyle: "italic",
   },
 
@@ -606,7 +606,7 @@ export const codexStream = {  codexStreamRoot: {
   codexToolIcon: {
     display: "flex",
     alignItems: "center",
-    color: "var(--text-hint)",
+    color: "var(--codex-row-icon)",
     flexShrink: 0,
   },
 
@@ -614,7 +614,7 @@ export const codexStream = {  codexStreamRoot: {
   codexToolCategory: {
     display: "inline-flex",
     alignItems: "center",
-    color: "var(--text-muted)",
+    color: "var(--codex-row-label)",
     fontSize: 11,
     fontWeight: 500,
     flexShrink: 0,
@@ -633,14 +633,14 @@ export const codexStream = {  codexStreamRoot: {
   // 摘要行前缀阶段词（聚合组「4 个命令 / 正在执行」）：非等宽、不参与截断，
   // 与后面的等宽命令文本并排（ZCode summary 的 kindLabel + secondaryText 结构）
   codexToolLabel: {
-    color: "var(--text-muted)",
+    color: "var(--codex-row-label)",
     fontSize: 12,
     flexShrink: 0,
     whiteSpace: "nowrap",
   },
 
   codexToolMeta: {
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     fontSize: 11,
     flexShrink: 0,
   },
@@ -654,7 +654,7 @@ export const codexStream = {  codexStreamRoot: {
   codexToolStatus: {
     fontSize: 11,
     flexShrink: 0,
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     display: "inline-flex",
     alignItems: "center",
     background: "none",
@@ -666,7 +666,7 @@ export const codexStream = {  codexStreamRoot: {
 
   codexToolChevron: {
     flexShrink: 0,
-    color: "var(--text-hint)",
+    color: "var(--codex-row-icon)",
   },
 
   // 展开区内容块：浅底 + 圆角 + 左缩进（与摘要行平齐 18px = 图标+类别宽度），
@@ -692,7 +692,7 @@ export const codexStream = {  codexStreamRoot: {
     borderBottom: "1px solid var(--border-dim)",
     fontSize: 11,
     fontFamily: "var(--font-mono)",
-    color: "var(--text-hint)",
+    color: "var(--codex-row-label)",
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
@@ -723,7 +723,7 @@ export const codexStream = {  codexStreamRoot: {
     padding: "4px 12px",
     borderBottom: "1px solid var(--border-dim)",
     fontSize: 11,
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
   },
 
   codexToolFailPopover: {
@@ -771,7 +771,7 @@ export const codexStream = {  codexStreamRoot: {
 
   /** rename 的 old → new 路径提示。 */
   codexDiffRenamePath: {
-    color: "var(--text-hint)",
+    color: "var(--codex-row-meta)",
     fontFamily: "var(--font-mono)",
     overflow: "hidden",
     textOverflow: "ellipsis",

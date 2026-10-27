@@ -23,6 +23,12 @@
   --text-secondary: #414857;
   --text-muted: #69758a;
   --text-hint: #9aa3b2;
+  /* structured 流工具行三档弱化文本（类别词 / 元信息 / 图标）。对齐 ZCode
+     foreground→subtle→subtlest 的层级，但底限抬到 4.5:1 可读线——直接用
+     --text-hint 会掉到 2.5:1，摘要行整条糊在底色里。 */
+  --codex-row-label: #556074;
+  --codex-row-meta: #657085;
+  --codex-row-icon: #6b768a;
   --fg-on-accent: #ffffff;
   --control-active-bg: rgba(15, 23, 42, 0.08);
   --control-active-fg: #171b24;
@@ -177,6 +183,10 @@ html.eyecare {
   --text-secondary: #5a4f37;
   --text-muted: #7a6c4f;
   --text-hint: #a89876;
+  /* 暖调三档，与 light 同为 ≥4.5:1 的字级弱化文本。 */
+  --codex-row-label: #665940;
+  --codex-row-meta: #74674a;
+  --codex-row-icon: #7d6f50;
   --control-active-bg: rgba(101, 84, 51, 0.12);
   --control-active-fg: #3f3724;
   --control-selected-bg: #5a4a30;
@@ -243,6 +253,11 @@ html.dark {
   --text-secondary: #d6dbe8;
   --text-muted: #a4adc2;
   --text-hint: #727b8f;
+  /* structured 流工具行三档弱化文本：暗底上 old --text-hint 只有 3.8:1，
+     摘要行的耗时 / 图标几乎看不见；这里整体提亮到 ≥4.5:1。 */
+  --codex-row-label: #b9c2d4;
+  --codex-row-meta: #9aa5b9;
+  --codex-row-icon: #909bb0;
   --control-active-bg: rgba(255, 255, 255, 0.12);
   --control-active-fg: #f1f4fb;
   --control-selected-bg: rgba(255, 255, 255, 0.16);
