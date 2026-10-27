@@ -542,6 +542,45 @@ impl CodexAppServerSession {
         self.core.status.lock().model_override.clone()
     }
 
+    /// 压缩上下文（`/compact` 内置命令）：上游 `thread/compact/start`。压缩过程
+    /// 作为特殊 turn 跑，`thread/compacted` 通知与 item 事件照常经 forwarder
+    /// 流给前端；完成/失败由 turn 生命周期事件收口。
+    pub async fn compact_thread(&self) -> Result<(), SessionError> {
+        let thread_id = self
+            .core
+            .status
+            .lock()
+            .thread
+            .as_ref()
+            .map(|t| t.id.clone())
+            .ok_or_else(|| SessionError::Protocol("thread not started".to_string()))?;
+        self.request("thread/compact/start", json!({ "threadId": thread_id }))
+            .await
+            .map_err(|e| SessionError::Protocol(format!("thread/compact/start: {e}")))?;
+        Ok(())
+    }
+
+    /// 审当前未提交变更（`/review` 内置命令）：上游 `review/start`，inline 跑在
+    /// 当前 thread 上，结果作为普通 item 流回前端。
+    pub async fn start_review_uncommitted(&self) -> Result<(), SessionError> {
+        let thread_id = self
+            .core
+            .status
+            .lock()
+            .thread
+            .as_ref()
+            .map(|t| t.id.clone())
+            .ok_or_else(|| SessionError::Protocol("thread not started".to_string()))?;
+        let params = json!({
+            "threadId": thread_id,
+            "target": { "type": "uncommittedChanges" },
+        });
+        self.request("review/start", params)
+            .await
+            .map_err(|e| SessionError::Protocol(format!("review/start: {e}")))?;
+        Ok(())
+    }
+
     /// 应答审批反向请求。决策经 `availableDecisions` 校验,不在建议子集内
     /// 返回错误(不静默替换,让上层决定降级策略)。
     pub async fn respond_approval(

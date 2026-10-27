@@ -9,7 +9,7 @@ import {
 // 帧形状对齐后端 task_bridge::emit_stream_event（camelCase、phase、itemId）。
 const BASE = { taskId: "task-1", threadId: "thread-1", turnId: "turn-1" };
 
-type DeltaType = "agentMessageDelta" | "reasoningDelta" | "commandOutputDelta";
+type DeltaType = "agentMessageDelta" | "reasoningDelta" | "commandOutputDelta" | "fileChangeDelta";
 
 function line(type: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ ...BASE, type, ...extra });
@@ -551,5 +551,75 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     const entry = model.byId.get("rea-1");
     expect(tsOf(entry)).toEqual({ startedAtMs: 1000, endedAtMs: null });
     expect(revOf(entry)).toBe(2);
+  });
+
+  // ── 编辑 diff 流式归并（fileChangeDelta，参照 ZCode 编辑中实时出 diff）──────
+
+  it("appends fileChangeDelta to the first change's diff and resets on authoritative completed", () => {
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("started", {
+        type: "fileChange",
+        id: "fc-1",
+        changes: [{ path: "src/a.ts", kind: { type: "update", movePath: null }, diff: "" }],
+        status: "inProgress",
+      }),
+      deltaLine("fileChangeDelta", "fc-1", "--- a/src/a.ts\n"),
+      deltaLine("fileChangeDelta", "fc-1", "+++ b/src/a.ts\n+line"),
+    ]);
+    const streaming = model.byId.get("fc-1");
+    expect((streaming as { kind: string }).kind).toBe("fileChange");
+    expect(itemOf(streaming).status).toBe("inProgress");
+    const changes = itemOf(streaming).changes as { path: string; diff: string }[];
+    expect(changes[0].path).toBe("src/a.ts");
+    expect(changes[0].diff).toBe("--- a/src/a.ts\n+++ b/src/a.ts\n+line");
+    expect(revOf(streaming)).toBe(2);
+
+    // completed 权威快照整体替换流式累积
+    feed(model, [
+      itemLine("completed", {
+        type: "fileChange",
+        id: "fc-1",
+        changes: [{ path: "src/a.ts", kind: { type: "update", movePath: null }, diff: "final diff" }],
+        status: "completed",
+      }),
+    ]);
+    const done = model.byId.get("fc-1");
+    const doneChanges = itemOf(done).changes as { path: string; diff: string }[];
+    expect(doneChanges[0].diff).toBe("final diff");
+    expect(itemOf(done).status).toBe("completed");
+    expect(revOf(done)).toBe(0);
+  });
+
+  it("creates an id-known placeholder entry for out-of-order fileChangeDelta and merges subsequent deltas", () => {
+    // started 帧未到：占位 change 的 path 为空（渲染端按纯文本兜底解析），
+    // 后续 delta 继续追加到同一占位 change 上
+    const model = createStreamModel();
+    feed(model, [deltaLine("fileChangeDelta", "fc-x", "diff-head\n")]);
+    const placeholder = model.byId.get("fc-x");
+    expect((placeholder as { kind: string }).kind).toBe("fileChange");
+    expect(itemOf(placeholder).id).toBe("fc-x");
+    const changes = itemOf(placeholder).changes as { path: string; diff: string }[];
+    expect(changes).toHaveLength(1);
+    expect(changes[0].path).toBe("");
+    expect(changes[0].diff).toBe("diff-head\n");
+
+    feed(model, [deltaLine("fileChangeDelta", "fc-x", "more\n")]);
+    const after = model.byId.get("fc-x");
+    expect(after).not.toBe(placeholder);
+    const afterChanges = itemOf(after).changes as { path: string; diff: string }[];
+    expect(afterChanges[0].diff).toBe("diff-head\nmore\n");
+    expect(revOf(after)).toBe(1);
+  });
+
+  it("drops fileChangeDelta with no merge target only when empty, like other deltas", () => {
+    // 空 delta 一律丢弃；fileChange 无处可挂时同 commandOutputDelta 一样丢弃
+    //（不建占位——只有携带 item 内容的 delta 才有资格建占位条目）
+    const model = createStreamModel();
+    feed(model, [
+      line("fileChangeDelta", { phase: "delta", itemId: "ghost-fc", payload: { delta: "" } }),
+    ]);
+    expect(model.entries).toEqual([]);
+    expect(model.byId.size).toBe(0);
   });
 });

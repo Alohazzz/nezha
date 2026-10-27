@@ -458,11 +458,6 @@ export const codexStream = {  codexStreamRoot: {
     whiteSpace: "nowrap",
   },
 
-  codexComposerModelBadgeEffort: {
-    flexShrink: 0,
-    color: "var(--text-hint)",
-  },
-
   codexComposerSendBtn: {
     display: "flex",
     alignItems: "center",
@@ -480,6 +475,24 @@ export const codexStream = {  codexStreamRoot: {
   codexComposerSendBtnDisabled: {
     opacity: 0.45,
     cursor: "not-allowed",
+  },
+
+  // composer footer 的停止按钮（运行中显示，与发送按钮并存）：中断当前 turn
+  // （/stop / ESC 同一通道）。危险色描边款，hover 实底——主动打断是醒目但
+  // 非破坏性动作，不做成实底红以免与「取消任务」混淆。
+  codexComposerStopBtn: {
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "5px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--danger-border)",
+    background: "transparent",
+    color: "var(--danger-fg)",
+    fontSize: 12,
+    cursor: "pointer",
+    flexShrink: 0,
+    transition: "background 0.15s ease, color 0.15s ease",
   },
 
   // ── composer 附件行（issue #118：粘贴/选择图片，交互对齐 ZCode）────────────

@@ -258,9 +258,15 @@ async fn handle_event(
                     false
                 }
                 codex_app_server_protocol::TurnStatus::Interrupted => {
-                    // 计划 2.4：interrupted 首期不支持恢复，按失败收口（UI 隐藏恢复入口）。
-                    // 会话随 forwarder 退出被 kill_on_drop 回收。
-                    emit_failed(app, task_id, "turn interrupted");
+                    // 用户主动中断（/stop 内置命令 / composer 停止按钮 / ESC →
+                    // `interrupt_codex_structured`）：置 interrupted，与 PTY 模式
+                    // ESC 中断同语义（可经 resume 恢复），不是 failed——失败态带
+                    // 系统通知与失败横幅，主动打断不该报错。会话进程随 forwarder
+                    // 退出被回收，继续对话走 thread/resume（rollout 已逐事件落盘）。
+                    let _ = app.emit(
+                        "task-status",
+                        serde_json::json!({ "task_id": task_id, "status": "interrupted" }),
+                    );
                     false
                 }
                 codex_app_server_protocol::TurnStatus::Failed => {
@@ -325,6 +331,12 @@ async fn handle_event(
         }
         CodexEvent::CommandExecutionOutputDelta { thread_id, turn_id, item_id, delta } => {
             emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "commandOutputDelta", "delta", &serde_json::json!({ "delta": delta }), None);
+            true
+        }
+        CodexEvent::FileChangeOutputDelta { thread_id, turn_id, item_id, delta } => {
+            // 编辑 diff 增量:前端把 delta 追加到对应 fileChange 条目的 diff 上,
+            // 编辑期间实时出内容(参照 ZCode 的编辑流式渲染),不再黑盒等 completed。
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "fileChangeDelta", "delta", &serde_json::json!({ "delta": delta }), None);
             true
         }
         CodexEvent::TokenUsageUpdated { thread_id, usage } => {
@@ -612,6 +624,24 @@ pub async fn cancel_structured_task(task_id: &str, task_manager: &crate::TaskMan
     entry.session.shutdown_shared().await;
 }
 
+/// structured 任务的中断当前 turn（/stop 内置命令 / composer 停止按钮 / ESC）：
+/// 上游 `turn/interrupt`，与 `cancel_structured_task` 的区别是**不关会话**——
+/// `turn/completed{interrupted}` 照常经 forwarder 到达并置任务 interrupted
+/// （PTY 模式 ESC 同语义，可 resume 恢复），会话进程由 forwarder 退出统一回收。
+/// 无运行中 turn 时 `interrupt` 幂等成功，无副作用。
+#[tauri::command]
+pub async fn interrupt_codex_structured(
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+) -> Result<(), String> {
+    let session = take_session_impl(&task_manager, &task_id)
+        .ok_or_else(|| "structured session not active for task".to_string())?;
+    session
+        .interrupt()
+        .await
+        .map_err(|e| format!("{e:?}"))
+}
+
 /// 应答审批（命令 `respond_codex_approval` 的实现体）。
 /// 决策合法性（availableDecisions）校验在 `respond_approval` 内。
 pub async fn respond_approval(
@@ -680,7 +710,8 @@ pub fn session_phase(task_manager: &crate::TaskManager, task_id: &str) -> Option
 /// - `model` 传 `"default"`（或空串）表示清除 override 回到 thread 默认；
 /// - 运行中有活 turn 时先经 `turn/settings/update` 热更当前 turn（失败不回滚——
 ///   turn 恰好刚结束时上游会拒绝，会话级 override 已写入，下一 turn 生效）。
-/// 未启动会话返回 Err（前端 toast「无活动会话」）。
+/// 无活会话（done 态会话已收尾）**不算错误**：任务快照的 model/reasoningEffort
+/// 由前端持久化，resume 拉起新会话时经 turn/start override 生效。
 #[tauri::command]
 pub async fn set_codex_structured_model(
     task_manager: State<'_, crate::TaskManager>,
@@ -701,8 +732,10 @@ pub async fn set_codex_structured_model(
     };
     let model = normalized(model);
     let effort = normalized(effort);
-    let session = take_session_impl(&task_manager, &task_id)
-        .ok_or_else(|| "structured session not active for task".to_string())?;
+    // done 态（无活会话）直接成功——切换结果落任务快照，下次 resume 生效。
+    let Some(session) = take_session_impl(&task_manager, &task_id) else {
+        return Ok(());
+    };
     // 会话级 override 是权威落点：无论当前是否有 turn，后续 turn/start 都带上。
     session.set_model_override(
         model.as_deref().map(Some),
@@ -713,6 +746,38 @@ pub async fn set_codex_structured_model(
         let _ = session.update_turn_settings(model.as_deref(), effort.as_deref()).await;
     }
     Ok(())
+}
+
+/// structured 任务的上下文压缩（composer `/compact` 内置命令，对齐 Codex CLI
+/// TUI 同名能力）：上游 `thread/compact/start`。压缩作为特殊 turn 跑，进度与
+/// 结果经既有 forwarder 事件流回前端；任务结束态由 turn/completed 收口。
+/// done 态（无活会话）返回 Err——压缩需要活线程，前端 toast 提示。
+#[tauri::command]
+pub async fn compact_codex_structured(
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+) -> Result<(), String> {
+    let session = take_session_impl(&task_manager, &task_id)
+        .ok_or_else(|| "structured session not active for task".to_string())?;
+    session
+        .compact_thread()
+        .await
+        .map_err(|e| format!("{e:?}"))
+}
+
+/// structured 任务审查当前未提交变更（composer `/review` 内置命令）：上游
+/// `review/start`，inline 跑在当前 thread，结果作为普通 item 流回前端。
+#[tauri::command]
+pub async fn review_codex_structured(
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+) -> Result<(), String> {
+    let session = take_session_impl(&task_manager, &task_id)
+        .ok_or_else(|| "structured session not active for task".to_string())?;
+    session
+        .start_review_uncommitted()
+        .await
+        .map_err(|e| format!("{e:?}"))
 }
 
 #[cfg(test)]

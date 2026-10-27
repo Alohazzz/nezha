@@ -100,10 +100,19 @@ export type MentionItem =
   | { kind: "builtin"; name: string; description: string }
   | { kind: "file"; path: string };
 
-/** structured composer 的内置斜杠命令（对齐 Codex CLI TUI 同名能力）：
- * `/model` 模型切换、`/effort` 推理深度切换——选中展开为选择器而非插入文本。
- * description 由宿主注入 i18n 文案，这里只定命令名。 */
-export const BUILTIN_COMMAND_NAMES = ["model", "effort"] as const;
+/** structured composer 内置斜杠命令的动作语义（对齐 Codex CLI TUI 同名能力）：
+ * - picker：打开选择器浮层（/model /effort）；
+ * - rpc：直接调后端命令（/compact /review）；
+ * - stop：中断当前 turn（/stop，复用任务取消的中断语义但不收尾任务）。
+ * description 由宿主注入 i18n 文案，这里只定命令名与动作类型。 */
+export type BuiltinCommandAction = "picker:model" | "picker:effort" | "rpc:compact" | "rpc:review" | "stop";
+export const BUILTIN_COMMANDS: readonly { name: string; action: BuiltinCommandAction }[] = [
+  { name: "model", action: "picker:model" },
+  { name: "effort", action: "picker:effort" },
+  { name: "compact", action: "rpc:compact" },
+  { name: "review", action: "rpc:review" },
+  { name: "stop", action: "stop" },
+];
 
 function subsequenceMatch(haystack: string, needle: string): boolean {
   if (!needle) return true;

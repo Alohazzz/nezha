@@ -201,3 +201,13 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 .codex-stream-diff-code span {
   font-family: inherit;
 }
+
+/* composer 停止按钮（运行中显示，中断当前 turn）：hover 实底危险色 */
+.codex-stream-stop-btn {
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.codex-stream-stop-btn:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}

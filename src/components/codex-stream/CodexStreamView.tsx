@@ -92,6 +92,7 @@ export function CodexStreamView({
   reasoningEffort,
   showModelBadge,
   onSetStructuredModel,
+  onBuiltinAction,
 }: {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
@@ -118,6 +119,8 @@ export function CodexStreamView({
   reasoningEffort?: string;
   showModelBadge?: boolean;
   onSetStructuredModel?: (model: string | undefined, effort: string | undefined) => void;
+  /** 非选择器类内置命令动作（/compact /review /stop；App 层落 RPC / 中断）。 */
+  onBuiltinAction?: (action: "compact" | "review" | "stop") => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -178,6 +181,7 @@ export function CodexStreamView({
             onSetEffort={
               onSetStructuredModel ? (next) => onSetStructuredModel(model, next) : undefined
             }
+            onBuiltinAction={onBuiltinAction}
             onToast={onImageToast}
           />
         )}

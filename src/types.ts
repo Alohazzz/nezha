@@ -343,7 +343,7 @@ export type TaskRunMode = "pty" | "structured";
  * 经 `run_task` 的 `onOutput` Channel 直投（与 PTY 字节流同通路，绕开事件总线广播）；
  * 前端 `useCodexStream`（阶段 3）按 `type` 分发。payload 形状随 type 不同：
  * - `item`：上游 `ThreadItem`（`type` 判别联合，camelCase）；
- * - `agentMessageDelta` / `reasoningDelta` / `commandOutputDelta`：`{ delta: string }`，
+ * - `agentMessageDelta` / `reasoningDelta` / `commandOutputDelta` / `fileChangeDelta`：`{ delta: string }`，
  *   帧 `itemId` 指明归并目标条目；
  * - `tokenUsage`：`{ total: TokenUsageBreakdown, last: ..., modelContextWindow: number | null }`。
  */
@@ -354,6 +354,7 @@ export interface CodexStreamFrame {
     | "agentMessageDelta"
     | "reasoningDelta"
     | "commandOutputDelta"
+    | "fileChangeDelta"
     | "tokenUsage"
     /**
      * turn 生命周期帧（spec #117 可选交付的占位）：后端 forwarder 尚未下发；

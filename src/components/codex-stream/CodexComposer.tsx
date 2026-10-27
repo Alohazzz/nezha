@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CornerDownLeft, ImagePlus, Zap } from "lucide-react";
+import { CornerDownLeft, ImagePlus, Square, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import {
-  BUILTIN_COMMAND_NAMES,
+  BUILTIN_COMMANDS,
   ComposerMentionPopover,
   useComposerMention,
   type MentionItem,
@@ -44,6 +44,7 @@ export function CodexComposer({
   onSubmit,
   onSetModel,
   onSetEffort,
+  onBuiltinAction,
   onToast,
 }: {
   /** running = steer 语义（追加进当前 turn）；其余 = resume 语义（新 turn）。 */
@@ -63,6 +64,9 @@ export function CodexComposer({
   /** 内置命令写入上抛；缺省 = 不注入 /model /effort（PTY 等旧调用方）。 */
   onSetModel?: (model: string | undefined) => void;
   onSetEffort?: (effort: string | undefined) => void;
+  /** 非选择器类内置命令动作上抛（/compact /review /stop；App 层落 RPC）。
+   *  缺省时这三项命令仍列出但选中无效果（保守：不注入会误导）。 */
+  onBuiltinAction?: (action: "compact" | "review" | "stop") => void;
   /** 图片被拒收（超限等）时的提示通道；缺省静默跳过。 */
   onToast?: (message: string, kind: "warning" | "error") => void;
 }) {
@@ -80,12 +84,25 @@ export function CodexComposer({
 
   const canSend = composerCanSend({ disabled, busy, text, imageCount: images.length });
   const inputsLocked = disabled || busy;
+  // 运行中（steer 模式）且输入未被锁（审批挂起时不受理中断，审批卡优先）
+  const canStop = mode === "steer" && !inputsLocked;
 
-  // 内置命令只在宿主提供了写入通道时注入（旧调用方维持原行为）
+  // 内置命令只在宿主提供了写入通道时注入（旧调用方维持原行为）。
+  // /compact /review /stop 仅运行中有意义；done 态注入但选中时提示不可用。
   const builtin = onSetModel
-    ? BUILTIN_COMMAND_NAMES.map((name) => ({
+    ? BUILTIN_COMMANDS.map(({ name, action }) => ({
         name,
-        description: t(name === "model" ? "composer.builtin.model" : "composer.builtin.effort"),
+        description: t(
+          action === "picker:model"
+            ? "composer.builtin.model"
+            : action === "picker:effort"
+              ? "composer.builtin.effort"
+              : action === "rpc:compact"
+                ? "composer.builtin.compact"
+                : action === "rpc:review"
+                  ? "composer.builtin.review"
+                  : "composer.builtin.stop",
+        ),
       }))
     : undefined;
 
@@ -99,18 +116,29 @@ export function CodexComposer({
     builtin,
   );
 
-  /** 选中候选项：builtin 走选择器浮层，其余展开文本。 */
+  /** 选中候选项：builtin 走对应动作（选择器/RPC/中断），其余展开文本。 */
   const handleSelectItem = useCallback(
     (item: MentionItem) => {
       if (item.kind === "builtin" && onSetModel) {
         mention.close();
         setText("");
-        setSlashPicker(item.name === "model" ? "models" : "efforts");
+        const action = BUILTIN_COMMANDS.find((cmd) => cmd.name === item.name)?.action;
+        if (action === "picker:effort") {
+          setSlashPicker("efforts");
+        } else if (action === "rpc:compact") {
+          onBuiltinAction?.("compact");
+        } else if (action === "rpc:review") {
+          onBuiltinAction?.("review");
+        } else if (action === "stop") {
+          onBuiltinAction?.("stop");
+        } else {
+          setSlashPicker("models");
+        }
         return;
       }
       mention.applyItem(item);
     },
-    [mention, onSetModel],
+    [mention, onSetModel, onBuiltinAction],
   );
 
   // 自适应高度：输入增长时撑到上限后内部滚动（Paseo composer 同款行为）
@@ -177,6 +205,12 @@ export function CodexComposer({
     autoResize();
   };
 
+  /** 中断当前 turn（/stop 同一通道）：App 层落 `interrupt_codex_structured`。 */
+  const stopTurn = useCallback(() => {
+    if (!canStop) return;
+    onBuiltinAction?.("stop");
+  }, [canStop, onBuiltinAction]);
+
   const placeholder =
     mode === "steer"
       ? busy
@@ -230,6 +264,13 @@ export function CodexComposer({
           onKeyDown={(e) => {
             // 快捷召唤弹层的键盘导航优先于提交
             if (mention.handleKeyDown(e)) return;
+            // ESC 中断当前 turn（PTY 终端按 ESC 打断的同款直觉）：仅运行中且
+            // 无弹层受理时生效；斜杠/提及弹层开着时 ESC 归弹层关闭。
+            if (e.key === "Escape" && canStop && !mention.active) {
+              e.preventDefault();
+              stopTurn();
+              return;
+            }
             // Enter 发送 / Shift+Enter 换行（与全局 sendShortcut 默认一致）
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -250,20 +291,29 @@ export function CodexComposer({
             {mode === "steer" ? t("codex.composer.hintSteer") : t("codex.composer.hintResume")}
           </span>
           {showModelBadge && onSetModel && (
-            <button
-              type="button"
-              style={s.codexComposerModelBadge}
-              title={t("newTask.model")}
-              onClick={() => setSlashPicker("models")}
-            >
-              <Zap size={11} strokeWidth={2.2} fill="currentColor" style={s.taskModelCompactIcon} />
-              <span style={s.codexComposerModelBadgeName}>
-                {model ?? t("newTask.modelDefault")}
-              </span>
-              {reasoningEffort && (
-                <span style={s.codexComposerModelBadgeEffort}>{reasoningEffort}</span>
-              )}
-            </button>
+            <>
+              <button
+                type="button"
+                style={s.codexComposerModelBadge}
+                title={t("newTask.model")}
+                onClick={() => setSlashPicker("models")}
+              >
+                <Zap size={11} strokeWidth={2.2} fill="currentColor" style={s.taskModelCompactIcon} />
+                <span style={s.codexComposerModelBadgeName}>
+                  {model ?? t("newTask.modelDefault")}
+                </span>
+              </button>
+              <button
+                type="button"
+                style={s.codexComposerModelBadge}
+                title={t("newTask.reasoningEffort")}
+                onClick={() => setSlashPicker("efforts")}
+              >
+                <span style={s.codexComposerModelBadgeName}>
+                  {reasoningEffort ?? t("newTask.reasoningEffortAuto")}
+                </span>
+              </button>
+            </>
           )}
           <button
             type="button"
@@ -288,7 +338,21 @@ export function CodexComposer({
               e.target.value = "";
             }}
           />
-          <span style={s.codexComposerFocusHint}>Ctrl+L</span>
+          <span style={s.codexComposerFocusHint}>
+            {canStop ? t("codex.composer.stopHint") : "Ctrl+L"}
+          </span>
+          {canStop && (
+            <button
+              type="button"
+              className="codex-stream-stop-btn"
+              style={s.codexComposerStopBtn}
+              onClick={stopTurn}
+              title={t("codex.composer.stop")}
+            >
+              <Square size={11} strokeWidth={2.6} fill="currentColor" />
+              <span>{t("codex.composer.stop")}</span>
+            </button>
+          )}
           <button
             type="button"
             disabled={!canSend}

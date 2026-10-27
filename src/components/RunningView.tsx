@@ -114,6 +114,7 @@ export function RunningView({
   onCodexApprovalResolved,
   onFollowUp,
   onSetStructuredModel,
+  onCodexBuiltinAction,
   codexModelCatalog,
   followUpBusy,
   onOpenGitChanges,
@@ -156,6 +157,8 @@ export function RunningView({
   /** structured 任务的模型 / 推理深度切换（`/model` `/effort` 内置命令的写入通道）。
    *  缺省 = composer 不注入内置命令（PTY 等非 structured 场景）。 */
   onSetStructuredModel?: (model: string | undefined, effort: string | undefined) => void;
+  /** structured 任务的非选择器内置命令（`/compact` `/review` `/stop`）。 */
+  onCodexBuiltinAction?: (action: "compact" | "review" | "stop") => void;
   /** Codex 模型目录（选择器数据源；仅 structured codex 任务由 ProjectPage 传入）。 */
   codexModelCatalog?: AgentModelCatalog;
   /** 截断 diff → GitChanges 右面板的跳转入口（issue #117 T4）。 */
@@ -739,7 +742,15 @@ export function RunningView({
             approval={null}
             onApprovalResolved={() => {}}
             running={false}
-            statusText={t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
+            statusText={t(
+              isDetached
+                ? "running.detachedTitle"
+                : // structured 任务的 interrupted 常态来源是用户主动停止
+                  //（/stop / ESC → turn/interrupt），不是进程异常退出。
+                  codexStream
+                  ? "running.interruptedStructuredTitle"
+                  : "running.interruptedTitle",
+            )}
             onOpenGitChanges={onOpenGitChanges}
             onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
@@ -750,6 +761,7 @@ export function RunningView({
             reasoningEffort={task.reasoningEffort}
             showModelBadge={!!onSetStructuredModel}
             onSetStructuredModel={onSetStructuredModel}
+            onBuiltinAction={onCodexBuiltinAction}
           />
         ) : (
         <div style={s.interruptedSessionWrap}>
@@ -832,6 +844,7 @@ export function RunningView({
             reasoningEffort={task.reasoningEffort}
             showModelBadge={!!onSetStructuredModel}
             onSetStructuredModel={onSetStructuredModel}
+            onBuiltinAction={onCodexBuiltinAction}
           />
         ) : (
         <div style={s.terminalContainer}>
@@ -880,6 +893,7 @@ export function RunningView({
           reasoningEffort={task.reasoningEffort}
           showModelBadge={!!onSetStructuredModel}
           onSetStructuredModel={onSetStructuredModel}
+          onBuiltinAction={onCodexBuiltinAction}
         />
       ) : (
         <SessionView sessionPath={sessionPath} />

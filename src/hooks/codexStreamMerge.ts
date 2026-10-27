@@ -163,12 +163,32 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
         item: { type: "reasoning", id: frame.itemId ?? "", summary: [delta] },
       };
     }
-    if (!streaming) return;
-    // 占位条目以本地时钟记起点（#119）：乱序场景下 started 帧迟到会经权威
-    // 替换沿用此值；动态计时组件据此起跳。
-    const created: CodexStreamEntry = { ...streaming, revision: 0, startedAtMs: Date.now(), endedAtMs: null };
-    model.entries.push(created);
-    model.byId.set(key, created);
+    if (streaming) {
+      // 占位条目以本地时钟记起点（#119）：乱序场景下 started 帧迟到会经权威
+      // 替换沿用此值；动态计时组件据此起跳。
+      const created: CodexStreamEntry = { ...streaming, revision: 0, startedAtMs: Date.now(), endedAtMs: null };
+      model.entries.push(created);
+      model.byId.set(key, created);
+      return;
+    }
+    // fileChangeDelta 乱序占位：path 未知的占位 change 承载累积 diff（渲染端
+    // 走纯文本兜底）；同款本地时钟起点，completed 权威快照整体替换。
+    if (frame.type === "fileChangeDelta") {
+      const created: CodexStreamEntry = {
+        kind: "fileChange",
+        item: {
+          type: "fileChange",
+          id: frame.itemId ?? "",
+          changes: [{ path: "", kind: { type: "update", movePath: null }, diff: delta }],
+          status: "inProgress",
+        },
+        revision: 0,
+        startedAtMs: Date.now(),
+        endedAtMs: null,
+      };
+      model.entries.push(created);
+      model.byId.set(key, created);
+    }
     return;
   }
 
@@ -194,6 +214,22 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
     const next: CodexStreamEntry = {
       ...entry,
       item: { ...entry.item, aggregatedOutput: (entry.item.aggregatedOutput ?? "") + delta },
+      revision: entry.revision + 1,
+    };
+    replaceEntry(model, next);
+  } else if (frame.type === "fileChangeDelta" && entry.kind === "fileChange") {
+    // 编辑 diff 增量：delta 是该条目 diff 文本的顺序片段，追加到首个 change 的
+    // diff 上（changes 为空时建 path 未知的占位 change——渲染端按纯文本兜底解析
+    // 拼接形态）。completed 的权威 changes 快照会整体替换流式累积。
+    const changes = entry.item.changes.slice();
+    if (changes.length === 0) {
+      changes.push({ path: "", kind: { type: "update", movePath: null }, diff: delta });
+    } else {
+      changes[0] = { ...changes[0], diff: (changes[0]?.diff ?? "") + delta };
+    }
+    const next: CodexStreamEntry = {
+      ...entry,
+      item: { ...entry.item, changes },
       revision: entry.revision + 1,
     };
     replaceEntry(model, next);

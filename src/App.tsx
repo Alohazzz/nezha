@@ -1213,6 +1213,32 @@ function App() {
     [],
   );
 
+  // structured 任务的非选择器内置命令（composer `/compact` `/review` `/stop`）：
+  // - compact / review：调对应后端命令（thread/compact/start、review/start），
+  //   进度与结果经既有 forwarder 事件流回；无活会话（done 态）时后端返回
+  //   Err，toast 提示。
+  // - stop：中断当前 turn——复用 `turn/interrupt`（cancel_task 的中断语义），
+  //   但不取消任务本身；interrupted 事件照常走 task-status 收口。
+  const handleCodexBuiltinAction = useCallback(
+    async (task: Task, action: "compact" | "review" | "stop") => {
+      try {
+        if (action === "stop") {
+          await invoke("interrupt_codex_structured", { taskId: task.id });
+        } else {
+          await invoke(
+            action === "compact" ? "compact_codex_structured" : "review_codex_structured",
+            { taskId: task.id },
+          );
+        }
+        showToast(t(action === "compact" ? "toast.codexCompactStarted" : action === "review" ? "toast.codexReviewStarted" : "toast.codexStopStarted"), "success");
+      } catch (err) {
+        showToast(t("toast.codexBuiltinFailed", { error: String(err) }), "error");
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   async function invokeRunTask(
     task: Task,
     projectPath: string,
@@ -3909,6 +3935,7 @@ function App() {
               onCodexApprovalResolved={codexStream.setApprovalResolved}
               onFollowUpStructured={handleFollowUpStructured}
               onSetStructuredModel={handleSetStructuredModel}
+              onCodexBuiltinAction={handleCodexBuiltinAction}
               followUpBusyTaskId={followUpBusyTaskId}
               onBack={handleBack}
               onSwitchProject={handleProjectClick}

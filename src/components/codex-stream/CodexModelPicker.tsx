@@ -93,11 +93,22 @@ export function CodexModelPicker({
 
   return (
     <Popover.Root open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
-      <Popover.Anchor />
+      {/* 锚满 composer 容器（宿主 wrap 是 position:relative）：浮层 side="top"
+          align="end" 时贴容器右上沿弹出，与 composer 可视框对齐——Anchor 是
+          0x0 空元素，不撑满就落在容器左上角。 */}
+      <Popover.Anchor
+        style={
+          {
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+          } as React.CSSProperties
+        }
+      />
       <Popover.Portal>
         <Popover.Content
           side="top"
-          align="start"
+          align="end"
           sideOffset={6}
           style={s.taskModelPopoverContent}
           onOpenAutoFocus={(e) => e.preventDefault()}

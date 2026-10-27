@@ -142,6 +142,7 @@ export function ProjectPage({
   onCodexApprovalResolved,
   onFollowUpStructured,
   onSetStructuredModel,
+  onCodexBuiltinAction,
   followUpBusyTaskId,
   onBack,
   onSwitchProject,
@@ -286,6 +287,8 @@ export function ProjectPage({
     model: string | undefined,
     effort: string | undefined,
   ) => void;
+  /** structured 任务非选择器内置命令（`/compact` `/review` `/stop`）。 */
+  onCodexBuiltinAction?: (task: Task, action: "compact" | "review" | "stop") => void;
   followUpBusyTaskId?: string | null;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
@@ -599,6 +602,11 @@ export function ProjectPage({
                 onSetStructuredModel={
                   task.runMode === "structured" && onSetStructuredModel
                     ? (model, effort) => onSetStructuredModel(task, model, effort)
+                    : undefined
+                }
+                onCodexBuiltinAction={
+                  task.runMode === "structured" && onCodexBuiltinAction
+                    ? (action) => onCodexBuiltinAction(task, action)
                     : undefined
                 }
                 codexModelCatalog={task.agent === "codex" ? codexModelCatalog : undefined}

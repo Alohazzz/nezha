@@ -73,6 +73,7 @@ function FileDiffBody({
 
 export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({
   item,
+  revision,
   onOpenGitChanges,
 }: {
   item: CodexFileChangeItem;
@@ -86,9 +87,11 @@ export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({
   const status: "running" | "ok" | "failed" = running ? "running" : failed ? "failed" : "ok";
 
   // 结构化形态（上游权威）：path + kind 直接来自条目；diff 文本解析 hunk。
-  // 整条目纯文本兜底：上游某天改成单帧 raw diff 时仍然可用。
+  // 整条目纯文本兜底：上游某天改成单帧 raw diff 时仍然可用；流式累积期
+  // （fileChangeDelta 占位 change 的 path 未知为空）也走纯文本解析拼接形态。
   const structured =
-    item.changes.length > 0 && item.changes.every((c) => typeof c?.diff === "string");
+    item.changes.length > 0 &&
+    item.changes.every((c) => typeof c?.diff === "string" && c.path !== "");
   const files: CodexDiffFile[] = structured
     ? item.changes.map((change) => parseCodexFileDiff(change))
     : parseCodexDiffText(item.changes.map((c) => c?.diff ?? "").join("\n"));
@@ -106,6 +109,9 @@ export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({
         status={status}
         autoExpandWhileRunning
         autoCollapseOnDone
+        // 编辑期间 diff 流式增长（fileChangeDelta 递增 revision）→ 自动展开，
+        // 编辑中实时可见（参照 ZCode）；完成边沿由 autoCollapseOnDone 收起。
+        streamingRevision={revision}
         meta={<DiffStats additions={totals.additions} deletions={totals.deletions} />}
       >
         <FileDiffBody file={single} onOpenGitChanges={onOpenGitChanges} />
@@ -124,6 +130,8 @@ export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({
       status={status}
       autoExpandWhileRunning
       autoCollapseOnDone
+      // 流式累积期（fileChangeDelta）父卡自动展开：文件段随 diff 文本增长逐个出现
+      streamingRevision={revision}
       meta={<DiffStats additions={totals.additions} deletions={totals.deletions} />}
     >
       {files.map((file, i) => (

@@ -52,6 +52,9 @@ pub enum CodexEvent {
     AgentMessageDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
     ReasoningSummaryDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
     CommandExecutionOutputDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
+    /// 文件编辑 diff 增量(`item/fileChange/outputDelta`):编辑期间流式下发,
+    /// 没有它编辑卡只能等 item/completed 一次性出内容(编辑中黑盒)。
+    FileChangeOutputDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
     TokenUsageUpdated { thread_id: String, usage: proto::ThreadTokenUsage },
     /// 命令执行审批反向请求(`item/commandExecution/requestApproval`)。
     /// `request_id` 必须原样带回 `respond_approval`;决策合法性校验在 approval.rs。
@@ -253,7 +256,18 @@ fn parse_notification(method: &str, params: Option<Value>) -> Result<CodexEvent,
         "turn/diff/updated" => CodexEvent::Ignored { method: "turn/diff/updated" },
         "turn/plan/updated" => CodexEvent::Ignored { method: "turn/plan/updated" },
         "thread/compacted" => CodexEvent::Ignored { method: "thread/compacted" },
-        "item/fileChange/outputDelta" => CodexEvent::Ignored { method: "item/fileChange/outputDelta" },
+        "item/fileChange/outputDelta" => {
+            // 编辑 diff 增量:形状与命令输出增量同构,流式透传给前端归并进
+            // 对应 fileChange 条目(编辑中实时渲染 diff,不再黑盒等 completed)。
+            let wire: proto::FileChangeOutputDeltaNotification = serde_json::from_value(params)
+                .map_err(|e| format!("item/fileChange/outputDelta: {e}"))?;
+            CodexEvent::FileChangeOutputDelta {
+                thread_id: wire.thread_id,
+                turn_id: wire.turn_id,
+                item_id: wire.item_id,
+                delta: wire.delta,
+            }
+        }
         "item/commandExecution/terminalInteraction" => {
             CodexEvent::Ignored { method: "item/commandExecution/terminalInteraction" }
         }
@@ -379,6 +393,21 @@ mod tests {
         match parse_from_line(line).unwrap() {
             CodexEvent::Unknown { method } => assert_eq!(method, "some/future/method"),
             other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_change_output_delta_parses_as_streaming_event() {
+        // 编辑 diff 增量:不再 Ignored,流式透传给前端(编辑中实时渲染 diff)
+        let line = r#"{"method":"item/fileChange/outputDelta","params":{"threadId":"t1","turnId":"turn1","itemId":"fc_1","delta":"--- a/src/a.ts\n+++ b/src/a.ts\n"}}"#;
+        match parse_from_line(line).unwrap() {
+            CodexEvent::FileChangeOutputDelta { thread_id, turn_id, item_id, delta } => {
+                assert_eq!(thread_id, "t1");
+                assert_eq!(turn_id, "turn1");
+                assert_eq!(item_id, "fc_1");
+                assert_eq!(delta, "--- a/src/a.ts\n+++ b/src/a.ts\n");
+            }
+            other => panic!("expected FileChangeOutputDelta, got {other:?}"),
         }
     }
 
