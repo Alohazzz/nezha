@@ -97,7 +97,15 @@ export function parseTriggerQuery(
 export type MentionItem =
   | { kind: "skill"; skill: Skill }
   | { kind: "command"; command: AgentCommand }
+  | { kind: "builtin"; name: string; description: string }
   | { kind: "file"; path: string };
+
+/** structured composer 的内置斜杠命令（对齐 Codex CLI TUI 同名能力）。
+ * `/model` 模型切换、`/effort` 推理深度切换——展开为选择器而非插入文本。 */
+export const BUILTIN_COMMANDS: readonly { name: string; description: string }[] = [
+  { name: "model", description: "切换模型（会话级，后续 turn 生效）" },
+  { name: "effort", description: "切换推理深度（低/中/高）" },
+];
 
 function subsequenceMatch(haystack: string, needle: string): boolean {
   if (!needle) return true;
@@ -132,6 +140,9 @@ export function filterMentionItems(
       } else if (item.kind === "skill") {
         label = item.skill.displayName || item.skill.name;
         detail = item.skill.description ?? "";
+      } else if (item.kind === "builtin") {
+        label = item.name;
+        detail = item.description;
       } else {
         label = item.command.name;
         detail = item.command.description;
@@ -156,7 +167,7 @@ export function filterMentionItems(
   return scored.slice(0, 12).map((s) => s.item);
 }
 
-/** 选中候选项后展开/插入的文本。 */
+/** 选中候选项后展开/插入的文本。builtin 命令不走文本展开（宿主拦截开选择器）。 */
 export function expandMentionItem(item: MentionItem): string {
   if (item.kind === "skill") {
     const skill = item.skill;
@@ -167,6 +178,9 @@ export function expandMentionItem(item: MentionItem): string {
       `请执行 ${item.command.name} 命令：读取 ${item.command.path} 的内容，` +
       "并严格按照其中定义的流程与规则执行。"
     );
+  }
+  if (item.kind === "builtin") {
+    return `/${item.name}`; // 兜底：宿主应拦截；未拦截时原样保留命令文本
   }
   return `@${item.path}`;
 }
@@ -243,13 +257,17 @@ export function ComposerMentionPopover({
               ? fileBaseName(item.path)
               : item.kind === "skill"
                 ? (item.skill.displayName || item.skill.name)
-                : item.command.name;
+                : item.kind === "builtin"
+                  ? `/${item.name}`
+                  : item.command.name;
           const detail =
             item.kind === "file"
               ? item.path
               : item.kind === "skill"
                 ? (item.skill.description || item.skill.path)
-                : item.command.description;
+                : item.kind === "builtin"
+                  ? item.description
+                  : item.command.description;
           return (
             <div
               key={
@@ -257,7 +275,9 @@ export function ComposerMentionPopover({
                   ? `file:${item.path}`
                   : item.kind === "skill"
                     ? `skill:${item.skill.name}`
-                    : `cmd:${item.command.name}`
+                    : item.kind === "builtin"
+                      ? `builtin:${item.name}`
+                      : `cmd:${item.command.name}`
               }
               style={{
                 ...s.mentionOption,
@@ -295,6 +315,9 @@ export function useComposerMention(
   valueRef: React.RefObject<string>,
   onChange: (next: string) => void,
   projectPath: string | null,
+  /** `/` 弹层前置注入的内置命令（structured composer 的 /model /effort）。
+   *  旧调用方不传即维持原行为；选中 builtin 由宿主在 onSelect 里拦截。 */
+  builtinCommands?: readonly { name: string; description: string }[],
 ) {
   const [state, setState] = useState<{
     trigger: MentionTrigger;
@@ -348,16 +371,23 @@ export function useComposerMention(
         skills.map((skill) => ({ kind: "skill" as const, skill })),
         state.query,
       );
-    if (state.trigger === "command")
-      return filterMentionItems(
-        commands.map((command) => ({ kind: "command" as const, command })),
-        state.query,
-      );
+    if (state.trigger === "command") {
+      const custom = commands.map((command) => ({ kind: "command" as const, command }));
+      const builtin = (builtinCommands ?? []).map((cmd) => ({
+        kind: "builtin" as const,
+        name: cmd.name,
+        description: cmd.description,
+      }));
+      // 内置命令排前（固定入口好找），同名时自定义命令优先
+      const names = new Set(commands.map((c) => c.name));
+      const merged = [...builtin.filter((b) => !names.has(b.name)), ...custom];
+      return filterMentionItems(merged, state.query);
+    }
     return filterMentionItems(
       files.map((path) => ({ kind: "file" as const, path })),
       state.query,
     );
-  }, [commands, files, skills, state]);
+  }, [builtinCommands, commands, files, skills, state]);
 
   const itemsRef = useRef(items);
   itemsRef.current = items;

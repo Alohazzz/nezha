@@ -83,6 +83,10 @@ pub struct StructuredLaunch {
     pub images: Vec<String>,
     pub permission_mode: String,
     pub unattended: bool,
+    /// 任务快照携带的模型 / 推理深度（新建任务表单选择）：经 turn/start 的
+    /// model/effort override 下发（与 PTY 的 `--model` 语义对齐）。
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
 }
 
 /// 判定任务是否应走 structured 通道（2.2 分流判据，run_task 与前端共用语义）。
@@ -652,6 +656,46 @@ pub fn session_phase(task_manager: &crate::TaskManager, task_id: &str) -> Option
         .lock()
         .get(task_id)
         .map(|e| e.session.status().phase)
+}
+
+/// structured 任务的模型切换（composer `/model` `/effort` 内置命令，对齐 Codex
+/// CLI TUI 的同名能力）。`model` / `effort` 任一可空：
+/// - `model` 传 `"default"`（或空串）表示清除 override 回到 thread 默认；
+/// - 运行中有活 turn 时先经 `turn/settings/update` 热更当前 turn（失败不回滚——
+///   turn 恰好刚结束时上游会拒绝，会话级 override 已写入，下一 turn 生效）。
+/// 未启动会话返回 Err（前端 toast「无活动会话」）。
+#[tauri::command]
+pub async fn set_codex_structured_model(
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<(), String> {
+    let normalized = |value: Option<String>| match value {
+        Some(v) => {
+            let trimmed = v.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => None,
+    };
+    let model = normalized(model);
+    let effort = normalized(effort);
+    let session = take_session_impl(&task_manager, &task_id)
+        .ok_or_else(|| "structured session not active for task".to_string())?;
+    // 会话级 override 是权威落点：无论当前是否有 turn，后续 turn/start 都带上。
+    session.set_model_override(
+        model.as_deref().map(Some),
+        effort.as_deref().map(Some),
+    );
+    // 运行中的 turn 尝试热更；无 turn / turn 恰好结束都属良性（下一 turn 生效）。
+    if session.status().phase == SessionPhase::TurnRunning {
+        let _ = session.update_turn_settings(model.as_deref(), effort.as_deref()).await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

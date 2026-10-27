@@ -83,6 +83,14 @@ pub struct PendingApproval {
     pub params: proto::CommandExecutionRequestApprovalParams,
 }
 
+/// `/model` `/effort` 内置命令的会话级模型 override:写入后每个新 turn/start
+/// 都带上;运行中的 turn 由 `update_turn_settings`（turn/settings/update）即时生效。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelOverride {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
 /// 共享内核:reader task 与对外句柄共同持有。
 struct SessionCore {
     pending: PendingTable,
@@ -106,6 +114,8 @@ struct SessionStatusInternal {
     phase: SessionPhase,
     thread: Option<ThreadInfo>,
     current_turn_id: Option<String>,
+    /// 会话级模型 override（`/model` `/effort` 内置命令写入）；新 turn/start 带。
+    model_override: ModelOverride,
 }
 
 impl Default for SessionStatusInternal {
@@ -114,6 +124,7 @@ impl Default for SessionStatusInternal {
             phase: SessionPhase::Starting,
             thread: None,
             current_turn_id: None,
+            model_override: ModelOverride::default(),
         }
     }
 }
@@ -392,10 +403,29 @@ impl CodexAppServerSession {
             .map(|t| t.id.clone())
             .ok_or_else(|| SessionError::Protocol("thread not started".to_string()))?;
         let wire_input: Vec<serde_json::Value> = input.iter().map(|i| i.to_wire()).collect();
-        let params = json!({
+        // 会话级模型 override（/model /effort 内置命令）随每个新 turn/start 下发：
+        // 上游语义是「override 本 turn 及后续 turn」，故只需在设置后的第一个
+        // turn 携带，之后 thread 已记住；重复携带无害但省掉更干净。
+        let (model, effort) = {
+            let status = self.core.status.lock();
+            (
+                status.model_override.model.clone(),
+                status.model_override.effort.clone(),
+            )
+        };
+        let mut params = json!({
             "threadId": thread_id,
             "input": wire_input,
         });
+        {
+            let obj = params.as_object_mut().expect("params is object");
+            if let Some(model) = model.as_deref() {
+                obj.insert("model".to_string(), json!(model));
+            }
+            if let Some(effort) = effort.as_deref() {
+                obj.insert("effort".to_string(), json!(effort));
+            }
+        }
         let result = self
             .request("turn/start", params)
             .await
@@ -468,6 +498,66 @@ impl CodexAppServerSession {
             .await
             .map_err(|e| SessionError::Protocol(format!("turn/steer: {e}")))?;
         Ok(())
+    }
+
+    /// 运行中热更新模型 / 推理深度(上游 `turn/settings/update`,experimental)。
+    /// 只影响当前运行中的 turn(以及按上游语义其后续捕获的步骤);无运行中
+    /// turn 时返回 targetUnavailable 语义的 Err,调用方回落下一轮 override。
+    /// `model` / `effort` 均可独立省略(见 SetModelRequest)。
+    pub async fn update_turn_settings(
+        &self,
+        model: Option<&str>,
+        effort: Option<&str>,
+    ) -> Result<(), SessionError> {
+        let (thread_id, turn_id) = {
+            let status = self.core.status.lock();
+            let thread = status.thread.as_ref().map(|t| t.id.clone());
+            let turn = status.current_turn_id.clone();
+            (thread, turn)
+        };
+        let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) else {
+            return Err(SessionError::Protocol("no running turn to update".to_string()));
+        };
+        let mut params = json!({
+            "threadId": thread_id,
+            "turnId": turn_id,
+        });
+        let obj = params.as_object_mut().expect("params is object");
+        if let Some(model) = model {
+            obj.insert("model".to_string(), json!(model));
+        }
+        if let Some(effort) = effort {
+            obj.insert("effort".to_string(), json!(effort));
+        }
+        let result = self
+            .request("turn/settings/update", params)
+            .await
+            .map_err(|e| SessionError::Protocol(format!("turn/settings/update: {e}")))?;
+        // status == "targetUnavailable" 表示没有存活的发布目标(turn 恰好结束),
+        // 按可重试错误交上层回落
+        if result.get("status").and_then(serde_json::Value::as_str) == Some("targetUnavailable") {
+            return Err(SessionError::Protocol("turn settings target unavailable".to_string()));
+        }
+        Ok(())
+    }
+
+    /// 设置会话级模型 override（`/model` `/effort` 内置命令的落点）：
+    /// `None` 字段保持不变；显式清空用 `Some(None)`（内部存 `Some(String)` 才下发）。
+    /// 这里只写状态不发包——生效路径有两个：运行中的 turn 由调用方再调
+    /// `update_turn_settings` 热更；后续 turn 由 `start_turn_with_input` 携带。
+    pub fn set_model_override(&self, model: Option<Option<&str>>, effort: Option<Option<&str>>) {
+        let mut status = self.core.status.lock();
+        if let Some(model) = model {
+            status.model_override.model = model.map(str::to_string);
+        }
+        if let Some(effort) = effort {
+            status.model_override.effort = effort.map(str::to_string);
+        }
+    }
+
+    /// 当前会话级模型 override 快照（前端回显当前选择用）。
+    pub fn model_override(&self) -> ModelOverride {
+        self.core.status.lock().model_override.clone()
     }
 
     /// 应答审批反向请求。决策经 `availableDecisions` 校验,不在建议子集内
