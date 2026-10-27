@@ -1191,12 +1191,14 @@ function App() {
     // 运行通道（2.2）：仅 Codex + 任务快照标记 structured 时生效；
     // 云效直发任务强制 pty（2.2a 防线：后端入口按 yunxiaoWorkitemId 兜底）。
     // 豁免：云效讨论任务（yunxiaoPlanDiscussion，只读分析、无回写/沉淀生产
-    // 语义）跟随全局设置走 structured，前端豁免的同时后端防线仍对非讨论
-    // 云效任务生效。
+    // 语义）与方案执行待办（planId 非空，回写走 task_bridge 的生产链路）
+    // 跟随全局设置走 structured，前端豁免的同时后端防线仍对直发任务生效。
     const runMode =
       task.agent === "codex" &&
       task.runMode === "structured" &&
-      (!task.yunxiaoWorkitemId || task.yunxiaoPlanDiscussion === true)
+      (!task.yunxiaoWorkitemId ||
+        task.yunxiaoPlanDiscussion === true ||
+        task.planId != null)
         ? "structured"
         : "pty";
     // structured：Channel 数据是 JSON 帧，直投 useCodexStream 归并，不经
@@ -1225,6 +1227,8 @@ function App() {
       yunxiaoWorkitemId: task.yunxiaoWorkitemId,
       // 云效讨论任务标记：后端 2.2a 防线据此对 structured 通道豁免（只读分析）。
       yunxiaoPlanDiscussion: task.yunxiaoPlanDiscussion === true,
+      // 方案执行待办标记：后端 2.2a 防线据此对 structured 通道豁免（跟随全局设置）。
+      planId: task.planId,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
       images,
@@ -2945,6 +2949,10 @@ function App() {
         prompt,
         agent: input.agent,
         permissionMode,
+        // 运行通道跟随应用级设置：与普通新任务/讨论任务一致，structured 时后端
+        // 走 app-server 通道；云效直发任务的 pty 强制由 invokeRunTask 兜底。
+        runMode:
+          input.agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
         status: initialStatus,
         createdAt: stamp,
         updatedAt: stamp,

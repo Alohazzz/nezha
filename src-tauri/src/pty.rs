@@ -1214,30 +1214,55 @@ graph_id = \"HIS\"
     #[test]
     fn structured_routing_requires_codex_mode_and_no_yunxiao() {
         // 2.2/2.2a 分流判据：codex + structured + 非云效生产链路才走 app-server 通道
-        assert!(should_run_structured("codex", Some("structured"), None, false));
+        assert!(should_run_structured("codex", Some("structured"), None, false, None));
         // 非 codex / 缺 structured 标记 → PTY
-        assert!(!should_run_structured("claude", Some("structured"), None, false));
-        assert!(!should_run_structured("codex", Some("pty"), None, false));
-        assert!(!should_run_structured("codex", None, None, false));
-        // 云效生产链路任务（工作项 id 非空、非讨论）一律强制 PTY（2.2a 防线）
+        assert!(!should_run_structured(
+            "claude",
+            Some("structured"),
+            None,
+            false,
+            None
+        ));
+        assert!(!should_run_structured("codex", Some("pty"), None, false, None));
+        assert!(!should_run_structured("codex", None, None, false, None));
+        // 云效生产链路任务（工作项 id 非空、非讨论、非方案待办）一律强制 PTY（2.2a 防线）
         assert!(!should_run_structured(
             "codex",
             Some("structured"),
             Some("wi-123"),
-            false
+            false,
+            None
         ));
         assert!(!should_run_structured(
             "codex",
             None,
             Some("wi-123"),
-            true
+            true,
+            None
         ));
-        // 豁免：云效讨论任务（只读分析）跟随全局设置走 structured
+        // 豁免一：云效讨论任务（只读分析）跟随全局设置走 structured
         assert!(should_run_structured(
             "codex",
             Some("structured"),
             Some("wi-123"),
-            true
+            true,
+            None
+        ));
+        // 豁免二：方案执行待办（planId 非空）跟随全局设置走 structured
+        assert!(should_run_structured(
+            "codex",
+            Some("structured"),
+            Some("wi-123"),
+            false,
+            Some("plan-1")
+        ));
+        // 方案待办缺 structured 标记仍走 PTY（undefined 恒等价 pty 语义不变）
+        assert!(!should_run_structured(
+            "codex",
+            None,
+            Some("wi-123"),
+            false,
+            Some("plan-1")
         ));
     }
 }
@@ -1305,20 +1330,25 @@ fn compose_final_prompt(
 
 /// 判断本次启动是否走 structured 通道（2.2 分流）：
 /// agent=codex 且前端传 `runMode=structured`，**且**非云效生产链路任务（2.2a 防线）。
-/// 云效生产链路（`yunxiaoWorkitemId` 非空的执行类任务：直发 / 待办执行 / 方案待办）
-/// 即使误标 structured 也强制 PTY——不渗透进云效生产链路；防线放后端入口的权威
-/// 判据上，不依赖前端自律。
-/// 豁免：云效**讨论**任务（`yunxiao_plan_discussion` 为真）是只读分析、无回写 /
+/// 云效生产链路（`yunxiaoWorkitemId` 非空的执行类任务：直发 / 待办执行）即使误标
+/// structured 也强制 PTY——不渗透进云效生产链路；防线放后端入口的权威判据上，
+/// 不依赖前端自律。
+/// 豁免一：云效**讨论**任务（`yunxiao_plan_discussion` 为真）是只读分析、无回写 /
 /// 沉淀生产语义，允许跟随应用级全局设置走 structured（与 NewTaskView 任务同待遇）。
+/// 豁免二：方案执行待办（`plan_id` 非空，一议题一任务、由方案看板调度）跟随全局
+/// 设置走 structured；其议题回写由前端驱动，不依赖 PTY 通道语义。
 fn should_run_structured(
     agent: &str,
     run_mode: Option<&str>,
     yunxiao_workitem_id: Option<&str>,
     yunxiao_plan_discussion: bool,
+    plan_id: Option<&str>,
 ) -> bool {
     agent == "codex"
         && run_mode == Some("structured")
-        && (yunxiao_workitem_id.is_none() || yunxiao_plan_discussion)
+        && (yunxiao_workitem_id.is_none()
+            || yunxiao_plan_discussion
+            || plan_id.is_some())
 }
 
 /// structured 通道的 run_task 实现：spawn app-server 会话 + forwarder。
@@ -1345,6 +1375,14 @@ async fn run_structured_task(
     .await
     .map_err(|e| format!("codex app-server spawn failed: {e:?}"))?;
     let session = Arc::new(session);
+    // 任务快照携带的模型 / 推理深度（新建任务表单选择）设为会话级 override：
+    // 首个 turn/start 携带（与 PTY `--model` 语义对齐），后续 turn 沿用 thread 记忆。
+    if launch.model.is_some() || launch.reasoning_effort.is_some() {
+        session.set_model_override(
+            launch.model.as_deref().map(Some),
+            launch.reasoning_effort.as_deref().map(Some),
+        );
+    }
 
     // 与 PTY 同序的登记：取消/完成标记已在 run_task 入口清过；
     // 这里补无人值守标记（forwarder 的 done 通知要按它抑制）。
@@ -1457,12 +1495,14 @@ pub async fn run_task(
     context_project_paths: Option<Vec<String>>,
     // 运行通道（2.2 分流）：pty = 终端 TUI（默认）；structured = codex app-server。
     // 仅 agent=codex 且非云效生产链路任务生效（2.2a 防线在 should_run_structured 内；
-    // 云效讨论任务凭 yunxiao_plan_discussion 豁免，允许跟随全局设置走 structured）。
+    // 云效讨论任务与方案执行待办豁免，允许跟随全局设置走 structured）。
     run_mode: Option<String>,
     // 云效直发任务的工作项 id（非空即云效生产链路，2.2a 强制 PTY 的权威判据）。
     yunxiao_workitem_id: Option<String>,
     // 云效讨论任务标记（yunxiaoPlanDiscussion）：只读分析，对 structured 通道豁免 2.2a。
     yunxiao_plan_discussion: Option<bool>,
+    // 方案执行待办所属方案 id（yunxiaoPlanTask 的 planId）：对 structured 通道豁免 2.2a。
+    plan_id: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1473,12 +1513,13 @@ pub async fn run_task(
     )?;
     let sediment_required = require_sediment.unwrap_or(false);
     let unattended = unattended.unwrap_or(false);
-    // 2.2 分流点：structured 且非云效生产链路（讨论任务豁免）→ codex app-server 通道。
+    // 2.2 分流点：structured 且非云效生产链路（讨论任务 / 方案待办豁免）→ codex app-server 通道。
     if should_run_structured(
         &agent,
         run_mode.as_deref(),
         yunxiao_workitem_id.as_deref(),
         yunxiao_plan_discussion.unwrap_or(false),
+        plan_id.as_deref(),
     ) {
         return run_structured_task(
             app,
@@ -1490,6 +1531,8 @@ pub async fn run_task(
                 images: images.unwrap_or_default(),
                 permission_mode,
                 unattended,
+                model: model.clone(),
+                reasoning_effort: reasoning_effort.clone(),
             },
             on_output,
         )
