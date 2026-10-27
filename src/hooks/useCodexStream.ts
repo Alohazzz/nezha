@@ -151,6 +151,23 @@ export function useCodexStream() {
     });
   }, []);
 
+  // done 后继续对话（resume 通道）的开轮动作：清上一轮 usage/审批残留，但**保留
+  // entries**——thread/resume 不会把历史 item 重放回 Channel（forwarder 又是
+  // resume 之后才 subscribe），前端内存流是历史的唯一载体，reset 会让整个会话
+  // 视图清空只剩新一轮内容。新一轮 item id 由上游新生成，追加归并不冲突。
+  const beginFollowUpRound = useCallback((taskId: string) => {
+    const model = modelsRef.current.get(taskId);
+    if (model) {
+      model.usage = null;
+      dirtyRef.current.add(taskId);
+      scheduleFlush();
+    }
+    setSnapshot((prev) => {
+      if (!prev[taskId]) return prev;
+      return { ...prev, [taskId]: { ...prev[taskId], approval: null } };
+    });
+  }, [scheduleFlush]);
+
   // 乐观用户气泡（Paseo 式 composer 的本地回显）：composer 提交后立即插入，
   // 不等上游 item/userMessage 帧——resume 通道重放时上游帧会带来权威条目，
   // 与本条共存可接受（id 不同），steer 通道上游不回显用户文本，本条是唯一显示。
@@ -194,5 +211,5 @@ export function useCodexStream() {
     };
   }, []);
 
-  return { ingestFrameLine: ingest, getStream, setApprovalResolved, resetTask, appendLocalUserMessage };
+  return { ingestFrameLine: ingest, getStream, setApprovalResolved, resetTask, beginFollowUpRound, appendLocalUserMessage };
 }

@@ -862,7 +862,8 @@ export function RunningView({
         )
       ) : codexStream ? (
         // done/failed/cancelled 且有会话文件：structured 任务保持流视图 + composer
-        // （Paseo 式会话框，继续对话不用换视图）；resume 重放会经 Channel 回填流数据。
+        // （Paseo 式会话框，继续对话不用换视图）；历史条目留在内存流里，
+        // resume 通道只追加新一轮内容（thread/resume 不回放历史）。
         <CodexStreamView
           entries={codexStream.entries}
           usage={codexStream.usage}

@@ -1117,7 +1117,8 @@ function App() {
   //   被禁用，能走到这里说明审批刚解决完但状态事件未落地，steer 是安全动作。
   // - 其余（done / interrupted / failed / detached）：`resume_codex_structured`
   //   （thread/resume 恢复 rollout 起新 turn），任务状态经 task-status 回 running。
-  // 两条路径都先本地插入乐观用户气泡（Paseo 的即时回显），resume 前清流重放。
+  // 两条路径都先本地插入乐观用户气泡（Paseo 的即时回显），resume 前只清
+  // usage/审批残留、保留历史条目（thread/resume 不回放历史，内存流是唯一载体）。
   const [followUpBusyTaskId, setFollowUpBusyTaskId] = useState<string | null>(null);
   const handleFollowUpStructured = useCallback(
     async (task: Task, text: string, images: string[] = []) => {
@@ -1154,8 +1155,10 @@ function App() {
       setFollowUpBusyTaskId(task.id);
       const channel = new Channel<string>();
       channel.onmessage = (line) => codexStream.ingestFrameLine(task.id, line);
-      // 先清上一轮流数据再喂新一轮（与 invokeRunTask 的分流口径一致）
-      codexStream.resetTask(task.id);
+      // 开新一轮但保留历史条目：thread/resume 不回放历史（forwarder 在 resume
+      // 之后才订阅上游事件），内存流是会话历史的唯一载体——清了页面就只剩新一轮。
+      // 只清 usage/审批残留；重跑（invokeRunTask）语义才是 resetTask。
+      codexStream.beginFollowUpRound(task.id);
       codexStream.appendLocalUserMessage(task.id, text, images);
       try {
         await invoke("resume_codex_structured", {
@@ -1171,7 +1174,6 @@ function App() {
         });
       } catch (err) {
         showToast(t("toast.followUpFailed", { error: String(err) }), "error");
-        codexStream.resetTask(task.id);
       } finally {
         setFollowUpBusyTaskId(null);
       }
