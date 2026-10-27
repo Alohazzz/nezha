@@ -14,9 +14,41 @@ const ACTIVE_POLL_INTERVAL_MS = 45_000;
 /** thread_name 只会被 Codex 覆盖更新；拿到一次后任务活跃期内不必反复拉同一值。 */
 const NAME_STABLE_SKIP_MS = 20_000;
 
+/** prompt 清洗回退名的截断上限（对齐 Codex TUI 首版 thread_name 的短标题观感）。 */
+const PROMPT_NAME_MAX_CHARS = 60;
+
 /** 无 prompt 的任务创建时兜底名为 `task-<id>`，视为「未命名」，允许自动命名覆盖。 */
 function isFallbackTaskName(name: string | undefined, taskId: string): boolean {
   return name === undefined || name === `task-${taskId}`;
+}
+
+/**
+ * 从任务 prompt 清洗出首版任务名（structured 通道的回退数据源）。
+ *
+ * Codex app-server（structured）会话不写 `session_index.jsonl`，也没有 TUI 的
+ * 自动命名——TUI 首版 thread_name 本就是「prompt 清洗截断」，这里做同款推导：
+ * 取首行非空文本，剥掉 Markdown 标记与斜杠命令前缀，压成单行后截断。
+ */
+export function deriveTaskNameFromPrompt(prompt: string | undefined): string | null {
+  const firstLine = (prompt ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("<"));
+  if (!firstLine) return null;
+  const cleaned = firstLine
+    // 斜杠命令（如 /model）不是任务主题
+    .replace(/^\/\S+\s*/, "")
+    // 常见 Markdown 装饰与引用符号
+    .replace(/^[>*\-*\d.)\s`]+/, "")
+    .replace(/[`*_~]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+  const chars = Array.from(cleaned);
+  const truncated = chars.length > PROMPT_NAME_MAX_CHARS
+    ? chars.slice(0, PROMPT_NAME_MAX_CHARS).join("") + "…"
+    : cleaned;
+  return truncated;
 }
 
 /**
@@ -56,7 +88,10 @@ export function useCodexAutoName({ tasks, setTasks, persistTasks, enabled = true
       lastCheckedAtRef.current.set(task.id, Date.now());
       invoke<string | null>("get_codex_thread_name", { sessionId })
         .then((name) => {
-          const trimmed = (name ?? "").trim();
+          // structured（app-server）会话不写 session_index.jsonl，索引查不到时
+          // 回退 prompt 清洗——与 TUI 首版 thread_name 同源，保证任务不再停在
+          // `task-<id>` 兜底名。PTY 会话索引命中则用 Codex 自己的名字。
+          const trimmed = (name ?? "").trim() || deriveTaskNameFromPrompt(task.prompt) || "";
           if (!trimmed) return;
           setTasks((prev) => {
             const current = prev.find((t) => t.id === task.id);
