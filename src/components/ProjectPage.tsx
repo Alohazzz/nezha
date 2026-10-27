@@ -274,7 +274,7 @@ export function ProjectPage({
   getCodexStream?: (taskId: string) => CodexStreamState;
   onCodexApprovalResolved?: (taskId: string) => void;
   /** structured 任务 done 态继续对话（thread/resume 通道）。 */
-  onFollowUpStructured?: (task: Task, text: string) => void;
+  onFollowUpStructured?: (task: Task, text: string, images: string[]) => void;
   followUpBusyTaskId?: string | null;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
@@ -575,7 +575,7 @@ export function ProjectPage({
                 }
                 onFollowUp={
                   task.runMode === "structured" && onFollowUpStructured
-                    ? (text) => onFollowUpStructured(task, text)
+                    ? (text, images) => onFollowUpStructured(task, text, images)
                     : undefined
                 }
                 followUpBusy={followUpBusyTaskId === task.id}

@@ -1106,7 +1106,7 @@ function App() {
   // 两条路径都先本地插入乐观用户气泡（Paseo 的即时回显），resume 前清流重放。
   const [followUpBusyTaskId, setFollowUpBusyTaskId] = useState<string | null>(null);
   const handleFollowUpStructured = useCallback(
-    async (task: Task, text: string) => {
+    async (task: Task, text: string, images: string[] = []) => {
       if (followUpBusyTaskId) return;
       const projectPath =
         projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "";
@@ -1121,9 +1121,11 @@ function App() {
         try {
           await invoke("steer_codex_structured", {
             taskId: task.id,
+            projectPath,
             prompt: text,
+            images,
           });
-          codexStream.appendLocalUserMessage(task.id, text);
+          codexStream.appendLocalUserMessage(task.id, text, images);
           showToast(t("toast.steerQueued"), "success");
         } catch (err) {
           showToast(t("toast.followUpFailed", { error: String(err) }), "error");
@@ -1140,7 +1142,7 @@ function App() {
       channel.onmessage = (line) => codexStream.ingestFrameLine(task.id, line);
       // 先清上一轮流数据再喂新一轮（与 invokeRunTask 的分流口径一致）
       codexStream.resetTask(task.id);
-      codexStream.appendLocalUserMessage(task.id, text);
+      codexStream.appendLocalUserMessage(task.id, text, images);
       try {
         await invoke("resume_codex_structured", {
           taskId: task.id,
@@ -1148,6 +1150,7 @@ function App() {
           permissionMode: task.permissionMode,
           threadId: task.codexSessionId,
           prompt: text,
+          images,
           onOutput: channel,
         });
       } catch (err) {

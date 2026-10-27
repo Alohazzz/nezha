@@ -1,8 +1,15 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { CodexUserMessageItem } from "../../types";
+import { useCodexStreamProjectPath } from "./codexStreamContext";
 import s from "../../styles";
 
-// 用户消息气泡（issue #117 T3 自 CodexEntryItems 迁出）：右对齐纯文本。
+// 用户消息气泡（issue #117 T3 自 CodexEntryItems 迁出）：右对齐，文本 + 可选
+// 图片缩略图（issue #118）。图片项两种来源：
+// - 乐观气泡（steer/resume 提交的本地回显）：dataUrl，<img> 直渲；
+// - 上游回放帧（resume 重放的权威条目）：附件本地路径，CSP 只放行 self/data:
+//   blob:，不能直接当 src，经 read_image_preview 转 dataUrl（FileViewer 预览
+//   同一命令）。加载失败不渲染该图（文本仍在，图片缺失不阻塞消息流）。
 // 不折叠、不包骨架。
 
 export const CodexUserMessageEntry = memo(function CodexUserMessageEntry({
@@ -10,14 +17,52 @@ export const CodexUserMessageEntry = memo(function CodexUserMessageEntry({
 }: {
   item: CodexUserMessageItem;
 }) {
+  const projectPath = useCodexStreamProjectPath();
   const text = item.content
     .map((c) => (typeof c?.text === "string" ? c.text : ""))
     .filter(Boolean)
     .join("\n");
-  if (!text.trim()) return null;
+  const images = item.content
+    .map((c) => (c?.type === "localImage" ? (c.url ?? c.path ?? "") : ""))
+    .filter(Boolean);
+  if (!text.trim() && images.length === 0) return null;
   return (
     <div style={s.codexUserBubbleWrap}>
-      <div style={s.codexUserBubble}>{text}</div>
+      <div style={s.codexUserBubble}>
+        {text}
+        {images.length > 0 && (
+          <div style={s.codexUserBubbleImages}>
+            {images.map((src, i) => (
+              <BubbleImage key={i} src={src} projectPath={projectPath} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 });
+
+/** dataUrl 直接渲染；本地绝对路径懒加载转 dataUrl（无 projectPath 时放弃）。 */
+function BubbleImage({ src, projectPath }: { src: string; projectPath: string | null }) {
+  const isDataUrl = src.startsWith("data:");
+  const [loaded, setLoaded] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isDataUrl || !projectPath) return;
+    let cancelled = false;
+    invoke<{ dataUrl: string }>("read_image_preview", { path: src, projectPath })
+      .then((res) => {
+        if (!cancelled) setLoaded(res.dataUrl);
+      })
+      .catch(() => {
+        /* 附件已被清理 / 格式不支持：缺图不阻塞消息流 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDataUrl, projectPath, src]);
+
+  const resolved = isDataUrl ? src : loaded;
+  if (!resolved) return null;
+  return <img src={resolved} style={s.codexUserBubbleImage} alt="" />;
+}

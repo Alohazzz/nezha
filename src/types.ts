@@ -397,7 +397,9 @@ export interface CodexTokenUsageBreakdown {
 export interface CodexUserMessageItem {
   type: "userMessage";
   id: string;
-  content: { type?: string; text?: string }[];
+  /** 文本与图片混合内容：text 条目直渲；localImage 条目按路径/URL 渲染缩略图
+   *  （issue #118：乐观气泡塞 dataUrl，上游回放帧可能是本地路径）。 */
+  content: { type?: string; text?: string; path?: string; url?: string }[];
 }
 
 export interface CodexAgentMessageItem {

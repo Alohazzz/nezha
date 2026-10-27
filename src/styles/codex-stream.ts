@@ -439,6 +439,54 @@ export const codexStream = {  codexStreamRoot: {
     cursor: "not-allowed",
   },
 
+  // ── composer 附件行（issue #118：粘贴/选择图片，交互对齐 ZCode）────────────
+  // 缩略图本体复用 panels 的 imageAttachment* 样式（与 NewTaskView 同视觉）。
+
+  codexComposerAttachments: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingTop: 6,
+  },
+
+  codexComposerAddImageBtn: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    border: "none",
+    background: "transparent",
+    color: "var(--text-hint)",
+    cursor: "pointer",
+    flexShrink: 0,
+    padding: 0,
+  },
+
+  codexComposerAddImageBtnDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
+  },
+
+  // ── 用户消息气泡内的图片缩略图（乐观回显与上游回放共用）─────────────────────
+
+  codexUserBubbleImages: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+
+  codexUserBubbleImage: {
+    maxWidth: 180,
+    maxHeight: 140,
+    objectFit: "cover",
+    borderRadius: 8,
+    display: "block",
+    border: "1px solid var(--border)",
+  },
+
   // ── 用户消息气泡 ──────────────────────────────────────────────────────────
 
   codexUserBubbleWrap: {

@@ -18,8 +18,11 @@ use nezha_lib::codex_appserver::{
     SpawnRequest,
 };
 
-/// mock 模式环境变量:值是场景名(happy / approval / crash)。
+/// mock 模式环境变量:值是场景名(happy / approval / crash / image)。
 const MOCK_ENV: &str = "NEZHA_MOCK_APPSERVER_SCRIPT";
+/// image 场景:mock 把收到的 turn/start / turn/steer params 追加写入此文件,
+/// 父进程断言 input 数组形状(localImage 条目 + 路径存在性)。
+const IMAGE_CAPTURE_ENV: &str = "NEZHA_MOCK_APPSERVER_IMAGE_CAPTURE";
 
 fn main() -> ExitCode {
     if let Ok(script) = std::env::var(MOCK_ENV) {
@@ -31,6 +34,7 @@ fn main() -> ExitCode {
         ("approval_flow", run_approval_flow()),
         ("interrupt_flow", run_interrupt_flow()),
         ("crash_exit_code", run_crash()),
+        ("image_input", run_image_input()),
     ];
     println!();
     let mut all_ok = true;
@@ -70,7 +74,8 @@ fn mock_server_main(script: &str) {
         };
         let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("").to_string();
         let id = v.get("id").cloned();
-        handle_mock_request(script, &method, id, &mut reader, &mut out);
+        let params = v.get("params").cloned().unwrap_or(serde_json::Value::Null);
+        handle_mock_request(script, &method, id, params, &mut reader, &mut out);
     }
 }
 
@@ -78,9 +83,27 @@ fn handle_mock_request(
     script: &str,
     method: &str,
     id: Option<serde_json::Value>,
+    params: serde_json::Value,
     reader: &mut std::io::StdinLock<'static>,
     out: &mut BufWriter<std::io::StdoutLock<'static>>,
 ) {
+    // image 场景:捕获 turn/start / turn/steer 的完整 params,供父进程断言
+    // input 数组形状(mock 与父进程同机,临时文件是最低成本的回传通道)。
+    if script == "image" && (method == "turn/start" || method == "turn/steer") {
+        if let Ok(path) = std::env::var(IMAGE_CAPTURE_ENV) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(
+                    f,
+                    "{}",
+                    serde_json::json!({ "method": method, "params": params })
+                );
+            }
+        }
+    }
     match (script, method) {
         // initialize / initialized 三个场景一致(实测应答形状)
         (_, "initialize") => respond(
@@ -255,6 +278,40 @@ fn handle_mock_request(
                     .to_string(),
                 );
             }
+        }
+        // image 场景:与 happy 相同的通知流形状(thread id 复用 thread-happy),
+        // params 已在上方捕获——本分支只负责让会话状态机正常推进。
+        // turn/start 保持 inProgress(steer 的乐观锁需要活跃 turn),completed
+        // 由 turn/steer 分支推——与 happy 场景同款节奏,避免竞态。
+        ("image", "turn/start") => {
+            respond(
+                out,
+                id,
+                &serde_json::json!({
+                    "turn": { "id": "turn-1", "status": "inProgress", "items": [], "itemsView": "notLoaded" },
+                }),
+            );
+            let tid = "thread-happy";
+            emit(
+                out,
+                &serde_json::json!({
+                    "method": "turn/started",
+                    "params": { "threadId": tid, "turn": { "id": "turn-1", "status": "inProgress", "items": [] } },
+                })
+                .to_string(),
+            );
+        }
+        ("image", "turn/steer") => {
+            respond(out, id, &serde_json::json!({}));
+            let tid = "thread-happy";
+            emit(
+                out,
+                &serde_json::json!({
+                    "method": "turn/completed",
+                    "params": { "threadId": tid, "turn": { "id": "turn-1", "status": "completed", "items": [], "itemsView": "summary", "durationMs": 1.0 } },
+                })
+                .to_string(),
+            );
         }
         ("happy", "turn/interrupt") => {
             respond(out, id, &serde_json::json!({}));
@@ -518,6 +575,97 @@ fn run_interrupt_flow() -> bool {
         assert_eq!(status.current_turn_id, None);
 
         session.shutdown().await;
+        true
+    })
+}
+
+/// image 场景:session 层 start_turn_with_input / steer_with_input 组装的
+/// wire input 必须是 text + localImage 混合数组(mock 捕获 params 断言)。
+fn run_image_input() -> bool {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async {
+        // 真实落一张临时图片:断言要求 wire 里的路径真实存在
+        let img_path = std::env::temp_dir().join(format!(
+            "nezha-mock-img-{}.png",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&img_path, [0x89u8, b'P', b'N', b'G']).expect("write temp image");
+        let capture_path = std::env::temp_dir().join(format!(
+            "nezha-mock-capture-{}.jsonl",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_file(&capture_path);
+
+        // 通过 SpawnRequest 传捕获文件路径:spawn_mock 不支持额外 env,这里手搓
+        let exe = std::env::current_exe().expect("current_exe");
+        let request = SpawnRequest {
+            program: exe.to_string_lossy().to_string(),
+            args: Vec::new(),
+            cwd: std::env::temp_dir().to_string_lossy().to_string(),
+            extra_envs: vec![
+                (MOCK_ENV.to_string(), "image".to_string()),
+                (
+                    IMAGE_CAPTURE_ENV.to_string(),
+                    capture_path.to_string_lossy().to_string(),
+                ),
+            ],
+            approval_policy: "untrusted".to_string(),
+            sandbox: "read-only".to_string(),
+        };
+        let session = CodexAppServerSession::spawn(request).await.expect("mock spawn");
+
+        session.start_thread().await.expect("thread/start");
+
+        // start_turn 带图:文本在前、图片在后(spec 的 input 顺序约定)
+        session
+            .start_turn_with_input(&[
+                nezha_lib::codex_appserver::TurnInputItem::Text("看这张图".to_string()),
+                nezha_lib::codex_appserver::TurnInputItem::LocalImage {
+                    path: img_path.to_string_lossy().into_owned(),
+                },
+            ])
+            .await
+            .expect("turn/start with image");
+        // steer 带图:纯图片(空文本)也要能发出
+        session
+            .steer_with_input(&[nezha_lib::codex_appserver::TurnInputItem::LocalImage {
+                path: img_path.to_string_lossy().into_owned(),
+            }])
+            .await
+            .expect("steer with image");
+
+        session.shutdown().await;
+
+        // 断言捕获到的两条 wire 请求
+        let raw = std::fs::read_to_string(&capture_path).expect("capture file written");
+        let frames: Vec<serde_json::Value> = raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("capture line json"))
+            .collect();
+        assert_eq!(frames.len(), 2, "capture = {raw}");
+
+        let start_input = frames[0]["params"]["input"].as_array().expect("turn/start input");
+        assert_eq!(start_input.len(), 2);
+        assert_eq!(start_input[0]["type"], "text");
+        assert_eq!(start_input[0]["text"], "看这张图");
+        assert_eq!(start_input[1]["type"], "localImage");
+        let wire_path = start_input[1]["path"].as_str().expect("localImage path");
+        assert!(std::path::Path::new(wire_path).exists(), "wire path must exist: {wire_path}");
+
+        let steer_input = frames[1]["params"]["input"].as_array().expect("turn/steer input");
+        assert_eq!(steer_input.len(), 1);
+        assert_eq!(steer_input[0]["type"], "localImage");
+        assert!(steer_input[0]["path"].as_str().is_some());
+
+        let _ = std::fs::remove_file(&img_path);
+        let _ = std::fs::remove_file(&capture_path);
         true
     })
 }

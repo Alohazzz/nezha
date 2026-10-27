@@ -25,6 +25,7 @@ mod knowledge;
 mod knowledge_gate;
 mod notification;
 mod pending_mr;
+mod attachments;
 mod platform;
 mod pty;
 mod session;

@@ -6,16 +6,19 @@ import type { CodexTokenUsage } from "../../types";
 import { codexEntryRenderers } from "./codexRenderers";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexComposer } from "./CodexComposer";
+import { CodexStreamProjectContext } from "./codexStreamContext";
 
 /** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。
- * 填充条宽度为动态百分比，经 ref 写 CSS 变量（规范禁 inline style 对象）。 */
+ * 填充条宽度为动态百分比，经 ref 写 CSS 变量（规范禁 inline style 对象）。
+ * 上下文占用取 `last.totalTokens`（最近一次 API 调用的活跃上下文）；
+ * `total` 是整场累计（每轮重发历史会被重复计入），只用于展示累计值。 */
 const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | null }) {
   const { t } = useI18n();
   const fillRef = useRef<HTMLDivElement | null>(null);
   if (!usage) return null;
   const total = usage.total;
   const ctxWindow = usage.modelContextWindow;
-  const ctxUsed = total.inputTokens + total.outputTokens;
+  const ctxUsed = usage.last.totalTokens;
 
   const fmt = (n: number) => {
     if (n < 1000) return String(n);
@@ -79,7 +82,9 @@ export function CodexStreamView({
   statusText,
   followUpBusy,
   composerDisabled,
+  projectPath,
   onComposerSubmit,
+  onImageToast,
   onOpenGitChanges,
 }: {
   entries: CodexStreamEntry[];
@@ -88,17 +93,28 @@ export function CodexStreamView({
   onApprovalResolved: () => void;
   running: boolean;
   statusText?: string | null;
-  /** composer 提交回调：running 态走 steer、其余走 resume（App 层分发）。 */
-  onComposerSubmit?: (text: string) => void;
+  /** composer 提交回调：running 态走 steer、其余走 resume（App 层分发）。
+   *  images 为 dataUrl 数组（issue #118：粘贴/选择图片随消息发送）。 */
+  onComposerSubmit?: (text: string, images: string[]) => void;
   followUpBusy?: boolean;
   /** 审批挂起等 composer 不该受理输入的场景置真（Paseo 同款：审批卡优先）。 */
   composerDisabled?: boolean;
+  /** 项目根路径：透传给 composer 的 `$`/`/`/`@` 快捷召唤；同时经 context 下发
+   *  给条目渲染层（userMessage 气泡 localImage 缩略图的 read_image_preview）。 */
+  projectPath?: string;
+  /** composer 图片拒收（超限等）的提示通道（RunningView 接 showToast）。 */
+  onImageToast?: (message: string, kind: "warning" | "error") => void;
   /** 截断 diff → GitChanges 右面板的跳转入口（openRightPanel("git-changes")）。 */
   onOpenGitChanges?: () => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+
+  // 失败/中断类状态是必须第一眼看到的收口信息：置顶为横幅而非追加在流尾
+  //（几百个条目之后），否则进程崩溃 / turn 失败时流视图看起来像"假死"。
+  const bannerText = statusText ?? null;
+  const showEmptyHint = entries.length === 0 && !bannerText;
 
   // 用户主动上滚即停止跟随；滚回底部恢复跟随（终端自动滚动同款交互）
   const handleScroll = () => {
@@ -114,33 +130,37 @@ export function CodexStreamView({
   }, [entries]);
 
   return (
-    <div style={s.codexStreamViewRoot}>
-      <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
-        {entries.length === 0 && !statusText && (
-          <div style={s.codexStreamEmpty}>
-            {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
-          </div>
-        )}
-        {entries.map((entry, i) => (
-          <EntryRenderer
-            key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
-            entry={entry}
-            entryIndex={i}
-            onOpenGitChanges={onOpenGitChanges}
+    <CodexStreamProjectContext.Provider value={projectPath ?? null}>
+      <div style={s.codexStreamViewRoot}>
+        <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
+          {showEmptyHint && (
+            <div style={s.codexStreamEmpty}>
+              {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
+            </div>
+          )}
+          {bannerText && <div style={s.codexStreamEmpty}>{bannerText}</div>}
+          {entries.map((entry, i) => (
+            <EntryRenderer
+              key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
+              entry={entry}
+              entryIndex={i}
+              onOpenGitChanges={onOpenGitChanges}
+            />
+          ))}
+          {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+        </div>
+        {onComposerSubmit && (
+          <CodexComposer
+            mode={running ? "steer" : "resume"}
+            busy={followUpBusy}
+            disabled={composerDisabled}
+            projectPath={projectPath}
+            onSubmit={onComposerSubmit}
+            onToast={onImageToast}
           />
-        ))}
-        {statusText && <div style={s.codexStreamEmpty}>{statusText}</div>}
-        {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+        )}
+        <UsageBar usage={usage} />
       </div>
-      {onComposerSubmit && (
-        <CodexComposer
-          mode={running ? "steer" : "resume"}
-          busy={followUpBusy}
-          disabled={composerDisabled}
-          onSubmit={onComposerSubmit}
-        />
-      )}
-      <UsageBar usage={usage} />
-    </div>
+    </CodexStreamProjectContext.Provider>
   );
 }

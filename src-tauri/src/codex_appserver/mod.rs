@@ -152,6 +152,25 @@ pub struct CodexAppServerSession {
     core: Arc<SessionCore>,
 }
 
+/// turn 输入项:turn/start 与 turn/steer 的 input 数组元素（issue #118）。
+/// wire 形状 = codex-app-server-protocol `UserInput`（tagged camelCase）：
+/// `{"type":"text","text":..}` / `{"type":"localImage","path":..}`——传本地
+/// 路径由 Codex 自行读图，不内联数据。顺序约定：文本在前、图片在后。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnInputItem {
+    Text(String),
+    LocalImage { path: String },
+}
+
+impl TurnInputItem {
+    fn to_wire(&self) -> serde_json::Value {
+        match self {
+            TurnInputItem::Text(text) => json!({ "type": "text", "text": text }),
+            TurnInputItem::LocalImage { path } => json!({ "type": "localImage", "path": path }),
+        }
+    }
+}
+
 impl CodexAppServerSession {
     /// spawn `codex app-server` 并完成 initialize 握手。
     pub async fn spawn(request: SpawnRequest) -> Result<Self, SessionError> {
@@ -355,6 +374,15 @@ impl CodexAppServerSession {
         Ok(info)
     }
     pub async fn start_turn(&self, prompt: &str) -> Result<String, SessionError> {
+        self.start_turn_with_input(&[TurnInputItem::Text(prompt.to_string())])
+            .await
+    }
+    /// turn/start 带混合输入（issue #118）：input 数组按调用方给的顺序组装
+    /// （文本在前、图片在后），wire 元素形状见 `TurnInputItem::to_wire`。
+    pub async fn start_turn_with_input(
+        &self,
+        input: &[TurnInputItem],
+    ) -> Result<String, SessionError> {
         let thread_id = self
             .core
             .status
@@ -363,9 +391,10 @@ impl CodexAppServerSession {
             .as_ref()
             .map(|t| t.id.clone())
             .ok_or_else(|| SessionError::Protocol("thread not started".to_string()))?;
+        let wire_input: Vec<serde_json::Value> = input.iter().map(|i| i.to_wire()).collect();
         let params = json!({
             "threadId": thread_id,
-            "input": [{ "type": "text", "text": prompt }],
+            "input": wire_input,
         });
         let result = self
             .request("turn/start", params)
@@ -415,6 +444,11 @@ impl CodexAppServerSession {
     /// 走这里。`expectedTurnId` 是上游的乐观锁前置条件:必须等于当前活跃 turn,
     /// 不匹配(如 turn 恰好刚结束)服务端直接拒绝。
     pub async fn steer(&self, text: &str) -> Result<(), SessionError> {
+        self.steer_with_input(&[TurnInputItem::Text(text.to_string())])
+            .await
+    }
+    /// turn/steer 带混合输入（issue #118）：input 组装同 `start_turn_with_input`。
+    pub async fn steer_with_input(&self, input: &[TurnInputItem]) -> Result<(), SessionError> {
         let (thread_id, turn_id) = {
             let status = self.core.status.lock();
             let thread = status.thread.as_ref().map(|t| t.id.clone());
@@ -424,10 +458,11 @@ impl CodexAppServerSession {
         let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) else {
             return Err(SessionError::Protocol("no running turn to steer".to_string()));
         };
+        let wire_input: Vec<serde_json::Value> = input.iter().map(|i| i.to_wire()).collect();
         let params = json!({
             "threadId": thread_id,
             "expectedTurnId": turn_id,
-            "input": [{ "type": "text", "text": text }],
+            "input": wire_input,
         });
         self.request("turn/steer", params)
             .await
@@ -566,7 +601,10 @@ impl CodexAppServerSession {
 
 impl Drop for CodexAppServerSession {
     fn drop(&mut self) {
-        // kill_on_drop 已兜底进程回收;广播失败态给还挂着的订阅者
+        // 进程回收不能指望 kill_on_drop：child 句柄在 SessionCore 里，reader
+        // task 持有 Arc<SessionCore> 直到进程退出，本 drop 时引用计数通常未
+        // 归零，Child 不会随之 drop。上层收尾路径必须显式 shutdown_shared()。
+        // 这里只广播失败态给还挂着的订阅者。
         let _ = self.core.errors_tx.send(SessionError::ProcessExited { code: None });
     }
 }

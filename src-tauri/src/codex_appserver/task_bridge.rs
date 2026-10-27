@@ -15,7 +15,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast::Receiver;
 
 use super::approval::ApprovalAction;
-use super::{CodexAppServerSession, CodexEvent, SessionError, SessionPhase, SpawnRequest, ThreadInfo};
+use super::{
+    CodexAppServerSession, CodexEvent, SessionError, SessionPhase, SpawnRequest, ThreadInfo,
+    TurnInputItem,
+};
 use crate::storage::Task;
 
 /// Nezha 权限模式 → (approvalPolicy, sandbox)。
@@ -36,8 +39,12 @@ pub fn permission_mode_to_policy(mode: &str) -> (&'static str, &'static str) {
 
 /// structured 会话表的条目：会话句柄 + 事件转发是否已被取消。
 /// 会话由 forwarder 任务独占推进；命令层（cancel/complete/respond）只读写表。
+/// guard 与 forwarder 成对登记：turn 进行中用户取消 / 重置任务时先 cancel，
+/// 再关会话——否则 turn/interrupt 触发的 `turn/completed{interrupted}` 等
+/// 迟到事件会照常 emit，把已收口任务的状态打翻（与启动失败收口同防线）。
 pub struct StructuredTaskEntry {
     pub session: Arc<CodexAppServerSession>,
+    pub guard: ForwarderGuard,
 }
 
 /// forwarder 取消句柄（启动失败收口用）。置位后 forwarder 对后续到达的事件/
@@ -71,6 +78,9 @@ pub struct StructuredLaunch {
     pub task_id: String,
     pub project_path: String,
     pub prompt: String,
+    /// 首轮图片附件（dataUrl，可为空）：落盘后以 localImage 输入项进首个 turn
+    /// （issue #118）。落盘发生在 `run_structured_task`（会话拉起前）。
+    pub images: Vec<String>,
     pub permission_mode: String,
     pub unattended: bool,
 }
@@ -112,14 +122,16 @@ pub async fn spawn_session_resume(
 }
 
 /// 注册会话到 TaskManager（cancel/complete/respond 命令可寻址）。
+/// guard 与会话同表登记，取消/重置路径据此收口 forwarder 的迟到通知。
 pub fn register_session(
     task_manager: &crate::TaskManager,
     task_id: &str,
     session: Arc<CodexAppServerSession>,
+    guard: ForwarderGuard,
 ) {
     task_manager.codex_appserver_sessions.lock().insert(
         task_id.to_string(),
-        StructuredTaskEntry { session },
+        StructuredTaskEntry { session, guard },
     );
 }
 
@@ -195,12 +207,29 @@ pub fn spawn_forwarder(
                 }
             }
         }
-        // forwarder 退出即会话终结：清表并清理事件目录（与 PTY 的 cancel 收尾对齐）。
-        // forwarder 是唯一消费方，状态经 app.state 自取（State 不是 'static，无法捕获）。
+        // forwarder 退出即会话终结：清表 + 显式关闭子进程（与 PTY 的 cancel 收尾对齐）。
+        // 不能指望 kill_on_drop 兜底：child 句柄活在 SessionCore 里，reader task
+        // 持有 Arc<SessionCore> 直到进程退出——不显式 shutdown 的话引用计数永不
+        // 归零，app-server 进程泄漏后占住 thread 写锁，resume 会撞
+        // "already has an active writer"。forwarder 是唯一消费方，状态经
+        // app.state 自取（State 不是 'static，无法捕获）。
         if let Some(tm) = app.try_state::<crate::TaskManager>() {
-            take_session(&tm, &task_id);
+            if let Some(session) = take_session(&tm, &task_id) {
+                session.shutdown_shared().await;
+            }
         }
         crate::event_watcher::cleanup_task_events(&task_id);
+        // 任务附件（steer/resume 带图的落盘产物）随任务收尾清理（issue #118）。
+        // project root 从 task_real_paths 取；缺省（极端时序）则目录残留无害——
+        // cancel_task / complete_task 路径仍会按前端传入的 project_path 清一次。
+        if let Some(tm) = app.try_state::<crate::TaskManager>() {
+            let project_path = tm.task_real_paths.lock().get(&task_id).cloned();
+            if let Some(project_path) = project_path {
+                let dir =
+                    crate::attachments::task_attachments_dir(&project_path, &task_id);
+                let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
+            }
+        }
     });
     guard
 }
@@ -395,8 +424,11 @@ pub async fn resume_structured_task(
     permission_mode: String,
     thread_id: String,
     prompt: String,
+    images: Vec<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
+    // 图片落盘先于会话拉起：落盘失败直接 Err，不留下半启动的会话。
+    let image_paths = save_structured_images(&project_path, &task_id, images).await?;
     let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
     let session = spawn_session_resume(
         &launch_spec.program,
@@ -414,11 +446,12 @@ pub async fn resume_structured_task(
     task_manager.unattended_tasks.lock().remove(&task_id);
     task_manager.task_names.lock().remove(&task_id);
 
-    register_session(task_manager, &task_id, session.clone());
+    // 先起 forwarder 拿 guard，与会话成对登记：取消/重置路径据此收口迟到通知。
     let events = session.subscribe();
     let errors = session.subscribe_errors();
     // 继续对话默认有人值守：unattended=false 让完成通知正常发。
     let guard = spawn_forwarder(app.clone(), task_id.clone(), false, on_output, events, errors);
+    register_session(task_manager, &task_id, session.clone(), guard.clone());
 
     let _ = app.emit(
         "task-status",
@@ -427,7 +460,7 @@ pub async fn resume_structured_task(
 
     // turn/start 失败：先取消 forwarder（迟到通知不得污染任务状态），
     // 再收口会话子进程，最后把错误交回前端 toast。
-    if let Err(e) = session.start_turn(&prompt).await {
+    if let Err(e) = session.start_turn_with_input(&build_turn_input(prompt, image_paths)).await {
         guard.cancel();
         if let Some(tm) = app.try_state::<crate::TaskManager>() {
             if let Some(session) = take_session(&tm, &task_id) {
@@ -450,10 +483,12 @@ pub async fn resume_codex_structured(
     permission_mode: String,
     thread_id: String,
     prompt: String,
+    images: Option<Vec<String>>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
-    if prompt.trim().is_empty() {
-        return Err("prompt is empty".to_string());
+    let images = images.unwrap_or_default();
+    if prompt.trim().is_empty() && images.is_empty() {
+        return Err("prompt and images are both empty".to_string());
     }
     resume_structured_task(
         app,
@@ -463,6 +498,7 @@ pub async fn resume_codex_structured(
         permission_mode,
         thread_id,
         prompt,
+        images,
         on_output,
     )
     .await
@@ -471,33 +507,80 @@ pub async fn resume_codex_structured(
 /// structured 任务运行中的追加指令（Paseo 式 composer：运行中发送 = steer）。
 /// 只读借用活会话走上游 `turn/steer`——当前 turn 不中断，文本并入执行队列；
 /// 会话不存在（未启动/已收尾）时返回 Err，前端回落 resume 通道。
+/// `images` 为 dataUrl 数组：落盘后以 `localImage` 输入项随文本进 input
+/// （issue #118）；纯图片发送时 prompt 可为空。
 #[tauri::command]
 pub async fn steer_codex_structured(
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
+    project_path: String,
     prompt: String,
+    images: Option<Vec<String>>,
 ) -> Result<(), String> {
-    if prompt.trim().is_empty() {
-        return Err("prompt is empty".to_string());
+    let images = images.unwrap_or_default();
+    if prompt.trim().is_empty() && images.is_empty() {
+        return Err("prompt and images are both empty".to_string());
     }
+    let image_paths = save_structured_images(&project_path, &task_id, images).await?;
+    let input = build_turn_input(prompt, image_paths);
     let session = take_session_impl(&task_manager, &task_id)
         .ok_or_else(|| "structured session not active for task".to_string())?;
     session
-        .steer(&prompt)
+        .steer_with_input(&input)
         .await
         .map_err(|e| format!("turn/steer failed: {e:?}"))
+}
+
+/// input 数组组装：非空文本在前、图片在后（TurnInputItem 顺序约定，issue #118）。
+pub(crate) fn build_turn_input(prompt: String, image_paths: Vec<String>) -> Vec<TurnInputItem> {
+    let mut input = Vec::with_capacity(image_paths.len() + 1);
+    if !prompt.trim().is_empty() {
+        input.push(TurnInputItem::Text(prompt));
+    }
+    input.extend(image_paths.into_iter().map(|path| TurnInputItem::LocalImage { path }));
+    input
+}
+
+/// structured 链路的图片落盘：dataUrl → `.nezha/attachments/<taskId>/`，
+/// 与 PTY 链路同一目录同一清理时点。路径校验与 PTY 命令同等级
+/// （AGENTS.md 安全规范）；同步 I/O 走 spawn_blocking。
+pub(crate) async fn save_structured_images(
+    project_path: &str,
+    task_id: &str,
+    images: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if images.is_empty() {
+        return Ok(vec![]);
+    }
+    crate::pty::validate_task_project_path(project_path)?;
+    // task_id 会拼进附件目录名：拒绝路径分隔符，防目录穿越。
+    if task_id.is_empty() || task_id.contains('/') || task_id.contains('\\') || task_id.contains("..") {
+        return Err("Invalid task id".to_string());
+    }
+    let project_path = project_path.to_string();
+    let task_id = task_id.to_string();
+    tokio::task::spawn_blocking(move || crate::attachments::save_task_images(&project_path, &task_id, &images))
+        .await
+        .map_err(|e| format!("image save task failed: {e}"))?
 }
 
 /// structured 任务的取消：中断运行中的 turn 后优雅关闭会话。
 /// 幂等：会话不存在（未启动/已收尾）时直接返回。
 pub async fn cancel_structured_task(task_id: &str, task_manager: &crate::TaskManager) {
-    let Some(session) = take_session(task_manager, task_id) else {
+    let Some(entry) = task_manager
+        .codex_appserver_sessions
+        .lock()
+        .remove(task_id)
+    else {
         return;
     };
+    // 先收口 forwarder：turn/interrupt 会回 `turn/completed{interrupted}`，
+    // 不 cancel 的话这个迟到事件会把取消误报成 failed（还带系统通知）。
+    entry.guard.cancel();
     // turn 运行中先 interrupt（实测干净返回 turn/completed{interrupted}）；
     // 失败也无妨——shutdown 的 kill 路径兜底。
-    let _ = session.interrupt().await;
-    session.shutdown_shared().await;
+    let _ = entry.session.interrupt().await;
+    entry.session.shutdown_shared().await;
 }
 
 /// 应答审批（命令 `respond_codex_approval` 的实现体）。

@@ -146,8 +146,9 @@ export function RunningView({
   /** 非空 = structured 任务：主内容区渲染结构化流视图而非终端（issue #116 阶段 3）。 */
   codexStream?: CodexStreamState;
   onCodexApprovalResolved?: () => void;
-  /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。 */
-  onFollowUp?: (text: string) => void;
+  /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。
+   *  images 为 dataUrl 数组（issue #118：composer 粘贴/选择的图片随消息发送）。 */
+  onFollowUp?: (text: string, images: string[]) => void;
   followUpBusy?: boolean;
   /** 截断 diff → GitChanges 右面板的跳转入口（issue #117 T4）。 */
   onOpenGitChanges?: () => void;
@@ -730,6 +731,8 @@ export function RunningView({
             onOpenGitChanges={onOpenGitChanges}
             onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
+            projectPath={projectPath}
+            onImageToast={showToast}
           />
         ) : (
         <div style={s.interruptedSessionWrap}>
@@ -803,6 +806,8 @@ export function RunningView({
             }
             onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
+            projectPath={projectPath}
+            onImageToast={showToast}
             onOpenGitChanges={onOpenGitChanges}
             composerDisabled={codexStream.approval !== null}
           />
@@ -844,6 +849,8 @@ export function RunningView({
           running={false}
           onComposerSubmit={onFollowUp}
           followUpBusy={followUpBusy}
+          projectPath={projectPath}
+          onImageToast={showToast}
           onOpenGitChanges={onOpenGitChanges}
         />
       ) : (

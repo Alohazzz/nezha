@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::attachments::save_task_images;
 use crate::session::{spawn_resume_session_watcher, spawn_status_session_watcher};
 use crate::TaskManager;
 
@@ -99,14 +100,13 @@ fn release_terminal_ready(task_manager: &TaskManager, task_id: &str) {
     }
 }
 
+/// 任务附件目录（图片/文本附件共用）。实现在共享模块 `attachments`，
+/// PTY 与 codex structured 两条链路同目录同清理时点。
 fn task_attachments_dir(project_path: &str, task_id: &str) -> std::path::PathBuf {
-    Path::new(project_path)
-        .join(".nezha")
-        .join("attachments")
-        .join(task_id)
+    crate::attachments::task_attachments_dir(project_path, task_id)
 }
 
-fn validate_task_project_path(project_path: &str) -> Result<(), String> {
+pub(crate) fn validate_task_project_path(project_path: &str) -> Result<(), String> {
     let path = Path::new(project_path);
     if !path.is_absolute() {
         return Err("Project path must be absolute".to_string());
@@ -320,48 +320,6 @@ fn finalize_task_exit(
 
     let _ = fs::remove_dir_all(task_attachments_dir(project_path, task_id));
     crate::event_watcher::cleanup_task_events(task_id);
-}
-
-fn save_task_images(
-    project_path: &str,
-    task_id: &str,
-    images: &[String],
-) -> Result<Vec<String>, String> {
-    if images.is_empty() {
-        return Ok(vec![]);
-    }
-    let attachments_dir = task_attachments_dir(project_path, task_id);
-    fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
-    let mut paths = Vec::new();
-    for (i, data_url) in images.iter().enumerate() {
-        let (data, ext) = decode_image_data_url(data_url)?;
-        let filename = format!("{}.{}", i, ext);
-        let file_path = attachments_dir.join(&filename);
-        fs::write(&file_path, &data).map_err(|e| e.to_string())?;
-        paths.push(file_path.to_string_lossy().into_owned());
-    }
-    Ok(paths)
-}
-
-/// 解析 "data:image/png;base64,<data>" 格式，返回解码后的字节与扩展名。
-fn decode_image_data_url(data_url: &str) -> Result<(Vec<u8>, &'static str), String> {
-    let comma = data_url.find(',').ok_or("invalid image data URL")?;
-    let header = &data_url[..comma];
-    let b64 = &data_url[comma + 1..];
-    let ext = if header.contains("jpeg") || header.contains("jpg") {
-        "jpg"
-    } else if header.contains("gif") {
-        "gif"
-    } else if header.contains("webp") {
-        "webp"
-    } else {
-        "png"
-    };
-    use base64::Engine;
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| e.to_string())?;
-    Ok((data, ext))
 }
 
 fn save_task_texts(
@@ -1375,6 +1333,10 @@ async fn run_structured_task(
     use crate::codex_appserver::task_bridge as bridge;
 
     let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
+    // 首轮图片落盘先于会话拉起：失败直接 Err（前端降级 PTY 重跑时同图重落）。
+    let image_paths =
+        bridge::save_structured_images(&launch.project_path, &launch.task_id, launch.images)
+            .await?;
     let session = bridge::spawn_session(
         &launch_spec.program,
         &launch.project_path,
@@ -1391,12 +1353,18 @@ async fn run_structured_task(
     } else {
         task_manager.unattended_tasks.lock().remove(&launch.task_id);
     }
+    // 真实项目根登记：任务收尾（forwarder 退出清理附件等）按它定位项目目录，
+    // 与 PTY 路径的 task_real_paths 写入同语义。
+    task_manager
+        .task_real_paths
+        .lock()
+        .insert(launch.task_id.clone(), launch.project_path.clone());
 
-    bridge::register_session(task_manager, &launch.task_id, session.clone());
     let events = session.subscribe();
     let errors = session.subscribe_errors();
     // forwarder 通过 app.state::<TaskManager>() 自取状态（State 不是 'static），
-    // 会话终结时自行清表；guard 供启动失败收口（取消后迟到通知不再 emit）。
+    // 会话终结时自行清表；guard 随会话同表登记（取消/重置路径收口迟到通知），
+    // 启动失败时先行 cancel 再收口会话。
     let forwarder = bridge::spawn_forwarder(
         app.clone(),
         launch.task_id.clone(),
@@ -1405,6 +1373,7 @@ async fn run_structured_task(
         events,
         errors,
     );
+    bridge::register_session(task_manager, &launch.task_id, session.clone(), forwarder.clone());
 
     let _ = app.emit(
         "task-status",
@@ -1412,9 +1381,11 @@ async fn run_structured_task(
     );
 
     // 首个 turn：thread 已在 spawn_session 里 start，这里发起执行。
+    // 图片路径以 localImage 输入项随文本进 input（issue #118）。
     // 失败时（spawn/握手成功但 turn 起不来，如版本门控/线程启动错误）先取消
     // forwarder 再收口会话，错误交回前端自动降级 PTY 重跑（4.1 回退降级）。
-    if let Err(e) = session.start_turn(&launch.prompt).await {
+    let turn_input = bridge::build_turn_input(launch.prompt, image_paths);
+    if let Err(e) = session.start_turn_with_input(&turn_input).await {
         forwarder.cancel();
         if let Some(session) = bridge::take_session(task_manager, &launch.task_id) {
             session.shutdown_shared().await;
@@ -1443,7 +1414,7 @@ pub async fn save_pasted_image(
     let project_path = project_path.clone();
     let task_id = task_id.clone();
     tokio::task::spawn_blocking(move || {
-        let (data, ext) = decode_image_data_url(&data_url)?;
+        let (data, ext) = crate::attachments::decode_image_data_url(&data_url)?;
         let attachments_dir = task_attachments_dir(&project_path, &task_id);
         fs::create_dir_all(&attachments_dir).map_err(|e| e.to_string())?;
         let millis = std::time::SystemTime::now()
@@ -1516,6 +1487,7 @@ pub async fn run_task(
                 task_id,
                 project_path,
                 prompt,
+                images: images.unwrap_or_default(),
                 permission_mode,
                 unattended,
             },
@@ -1962,8 +1934,12 @@ pub async fn reset_task_process(
         let _ = arc.lock().unwrap().kill();
     }
 
-    // structured 任务的重置：强杀会话子进程（kill_on_drop 随句柄移除兜底）。
-    task_manager.codex_appserver_sessions.lock().remove(&task_id);
+    // structured 任务的重置：先收口 forwarder（进程被 kill 后的 EOF 错误广播
+    // 不得再 emit failed 打翻状态），再移除会话（kill_on_drop 随句柄移除兜底）。
+    if let Some(entry) = task_manager.codex_appserver_sessions.lock().remove(&task_id) {
+        entry.guard.cancel();
+        entry.session.shutdown_shared().await;
+    }
 
     Ok(())
 }
