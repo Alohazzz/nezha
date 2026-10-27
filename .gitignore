@@ -41,6 +41,10 @@ vite.config.d.ts
 .planning/
 .scratch/
 .zcode/
+# 智能体会话本地产物（调研文档 / fork 副本 / 临时文件），不进仓库
+.agents/
+# src-tauri/.cargo/config.toml 的本地备份
+src-tauri/.cargo/*.dsh-bak
 pnpm-workspace.yaml
 
 # PPT 本地渲染校验产物（headless 截图 / 量版副本）
