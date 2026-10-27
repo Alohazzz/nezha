@@ -3,6 +3,22 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // 强制 CodeMirror 系列在测试图中单实例：vitest 全量并发下这些包
+    // 偶发被解析出双实例副本，vue parser 的 parseMixed 跨实例失配会
+    // 静默退化为裸 html 行为（file-viewer-language 间歇失败的根因）。
+    dedupe: [
+      "@codemirror/state",
+      "@codemirror/language",
+      "@codemirror/view",
+      "@codemirror/lang-html",
+      "@codemirror/lang-javascript",
+      "@codemirror/lang-vue",
+      "@lezer/common",
+      "@lezer/lr",
+      "@lezer/highlight",
+    ],
+  },
   test: {
     // jsdom 模拟浏览器环境，支持 DOM API 和 localStorage
     environment: "jsdom",

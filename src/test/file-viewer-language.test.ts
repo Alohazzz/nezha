@@ -22,16 +22,17 @@ describe("file viewer language extensions", () => {
     const vueTree = parseTree(extension);
     const htmlTree = parseTree(html());
 
-    // 诊断输出：vue() 生效时模板段为 vue parser 的 Content(Interpolation(...))
-    // 结构，与裸 html() 不同。CI 全新安装环境下曾观察到 vue 扩展退化为
-    // 裸 html 行为（file-viewer-language 间歇失败的又一次复现），保留
-    // 两棵树的完整输出便于在 CI 日志中直接比对定位。
-    // 用 console.warn 规避 no-console lint 规则（只放行 warn/error）。
-    console.warn("[file-viewer-language] node:", process.version);
+    // 保留两棵树的诊断输出：该用例历史上随 parseMixed 跨实例失配间歇
+    // 失败（见 languageExtensions.ts 中 vue 静态 import 的注释），CI 全新
+    // 安装环境下再次复现过（vue() 退化为裸 html 行为）。完整树输出便于
+    // 在 CI 日志中直接比对定位。用 console.warn 规避 no-console 规则。
     console.warn("[file-viewer-language] vue tree:", vueTree);
     console.warn("[file-viewer-language] html tree:", htmlTree);
-    console.warn("[file-viewer-language] trees differ:", vueTree !== htmlTree);
 
+    // vue() 必须改变裸 html() 的解析结果（模板段出现 vue parser 特有的
+    // Content/Interpolation 包装）；StyleSheet 两棵树都有，仅验证三段式
+    // 文档的基本嵌套解析未被破坏。
+    expect(vueTree).not.toBe(htmlTree);
     expect(vueTree).toContain("StyleSheet");
   });
 });
