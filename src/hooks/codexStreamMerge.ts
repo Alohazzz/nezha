@@ -80,6 +80,28 @@ function replaceEntry(model: StreamModel, entry: CodexStreamEntry): void {
   if (id) model.byId.set(id, entry);
 }
 
+/**
+ * 上游 userMessage 条目落地前，剔除尾部内容相同的本地乐观气泡（`__local_` 前缀）。
+ * resume 通道会重放刚写入 thread 的 UserMessage 帧，与 App 层的乐观回显撞成
+ * 两条一模一样的气泡；按内容匹配去重，保留上游权威条目。
+ */
+function dropTailingLocalEcho(model: StreamModel, text: string): void {
+  for (let i = model.entries.length - 1; i >= 0; i -= 1) {
+    const entry = model.entries[i];
+    if (entry.kind !== "userMessage") break;
+    const id = entry.item.id ?? "";
+    if (!id.startsWith("__local_")) break;
+    const localText = entry.item.content
+      .map((c) => ("text" in c ? c.text : ""))
+      .join("");
+    if (localText === text) {
+      model.entries.splice(i, 1);
+      model.byId.delete(id);
+    }
+    break;
+  }
+}
+
 function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
   if (frame.type === "tokenUsage") {
     const usage = frame.payload as CodexTokenUsage;
@@ -91,6 +113,14 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
 
   if (frame.type === "item") {
     const item = frame.payload as CodexThreadItem;
+    if (item.type === "userMessage") {
+      dropTailingLocalEcho(
+        model,
+        (item as CodexUserMessageItem).content
+          .map((c) => ("text" in c ? c.text : ""))
+          .join(""),
+      );
+    }
     replaceEntry(model, classifyItem(item));
     return;
   }

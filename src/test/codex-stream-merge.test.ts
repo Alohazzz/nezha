@@ -354,4 +354,66 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     assertConsistent();
     expect(itemOf(model.byId.get("msg-1")).text).toBe("final??");
   });
+
+  it("dedupes the local optimistic user bubble when the authoritative upstream echo lands", () => {
+    // resume 通道：App 层先插乐观气泡（__local_ 前缀 id，useCodexStream
+    // appendLocalUserMessage 直接 push 进 model，不走 ingestFrameLine），
+    // thread/resume 重放上游 UserMessage 帧后应只保留权威条目——不能像
+    // 恢复截图那样两条一模一样的「请从上次中断的地方继续完成任务。」并存。
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("started", { type: "reasoning", id: "rs-1", summary: ["thinking"] }),
+    ]);
+    const localEntry = {
+      kind: "userMessage" as const,
+      revision: 0,
+      item: {
+        type: "userMessage" as const,
+        id: "__local_1730000000000",
+        content: [{ type: "text" as const, text: "请从上次中断的地方继续完成任务。" }],
+      },
+    };
+    model.entries.push(localEntry);
+    model.byId.set("__local_1730000000000", localEntry);
+    expect(kinds(model)).toEqual(["reasoning", "userMessage"]);
+    expect(model.entries.length).toBe(2);
+
+    // 上游权威条目（不同 id、相同内容）落地 → 乐观气泡被剔除
+    feed(model, [
+      itemLine("completed", {
+        type: "userMessage",
+        id: "um-1",
+        content: [{ type: "text", text: "请从上次中断的地方继续完成任务。" }],
+      }),
+    ]);
+    expect(kinds(model)).toEqual(["reasoning", "userMessage"]);
+    expect(model.entries.length).toBe(2);
+    expect(itemOf(model.byId.get("um-1")).type).toBe("userMessage");
+    expect(model.byId.has("__local_1730000000000")).toBe(false);
+  });
+
+  it("keeps the local bubble when the upstream user message has different content", () => {
+    // 内容不同（用户改过措辞 / 上一轮残留）不得误删乐观气泡
+    const model = createStreamModel();
+    const localEntry = {
+      kind: "userMessage" as const,
+      revision: 0,
+      item: {
+        type: "userMessage" as const,
+        id: "__local_1",
+        content: [{ type: "text" as const, text: "hello" }],
+      },
+    };
+    model.entries.push(localEntry);
+    model.byId.set("__local_1", localEntry);
+    feed(model, [
+      itemLine("completed", {
+        type: "userMessage",
+        id: "um-2",
+        content: [{ type: "text", text: "different" }],
+      }),
+    ]);
+    expect(kinds(model)).toEqual(["userMessage", "userMessage"]);
+    expect(model.byId.has("__local_1")).toBe(true);
+  });
 });
