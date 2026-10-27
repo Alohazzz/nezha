@@ -15,6 +15,18 @@
 @import "./styles/task-list.css";
 @import "./styles/codex-stream.css";
 
+/* ── Image lightbox thumbnails (click-to-preview) ───────────────── */
+/* 缩略图可点击放大：zoom-in 手势 + hover 提示，样式本体在 styles/common.ts */
+.image-attachment-thumb,
+.codex-bubble-image {
+  cursor: zoom-in;
+  transition: filter 0.12s ease;
+}
+.image-attachment-thumb:hover,
+.codex-bubble-image:hover {
+  filter: brightness(1.08);
+}
+
 /* ── Reset ─────────────────────────────────────────────────────── */
 *,
 *::before,

@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CodexUserMessageItem } from "../../types";
 import { useCodexStreamProjectPath } from "./codexStreamContext";
+import { ImageLightbox } from "../common/ImageLightbox";
 import s from "../../styles";
 
 // 用户消息气泡（issue #117 T3 自 CodexEntryItems 迁出）：右对齐，文本 + 可选
@@ -46,6 +47,7 @@ export const CodexUserMessageEntry = memo(function CodexUserMessageEntry({
 function BubbleImage({ src, projectPath }: { src: string; projectPath: string | null }) {
   const isDataUrl = src.startsWith("data:");
   const [loaded, setLoaded] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     if (isDataUrl || !projectPath) return;
@@ -64,5 +66,18 @@ function BubbleImage({ src, projectPath }: { src: string; projectPath: string | 
 
   const resolved = isDataUrl ? src : loaded;
   if (!resolved) return null;
-  return <img src={resolved} style={s.codexUserBubbleImage} alt="" />;
+  return (
+    <>
+      <img
+        src={resolved}
+        style={s.codexUserBubbleImage}
+        className="codex-bubble-image"
+        alt=""
+        onClick={() => setPreviewing(true)}
+      />
+      {previewing && (
+        <ImageLightbox src={resolved} onClose={() => setPreviewing(false)} />
+      )}
+    </>
+  );
 }
