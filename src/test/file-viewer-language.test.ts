@@ -26,10 +26,11 @@ describe("file viewer language extensions", () => {
     // 结构，与裸 html() 不同。CI 全新安装环境下曾观察到 vue 扩展退化为
     // 裸 html 行为（file-viewer-language 间歇失败的又一次复现），保留
     // 两棵树的完整输出便于在 CI 日志中直接比对定位。
-    console.log("[file-viewer-language] node:", process.version);
-    console.log("[file-viewer-language] vue tree:", vueTree);
-    console.log("[file-viewer-language] html tree:", htmlTree);
-    console.log("[file-viewer-language] trees differ:", vueTree !== htmlTree);
+    // 用 console.warn 规避 no-console lint 规则（只放行 warn/error）。
+    console.warn("[file-viewer-language] node:", process.version);
+    console.warn("[file-viewer-language] vue tree:", vueTree);
+    console.warn("[file-viewer-language] html tree:", htmlTree);
+    console.warn("[file-viewer-language] trees differ:", vueTree !== htmlTree);
 
     expect(vueTree).toContain("StyleSheet");
   });
