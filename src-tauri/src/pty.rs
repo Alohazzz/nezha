@@ -1212,58 +1212,15 @@ graph_id = \"HIS\"
     }
 
     #[test]
-    fn structured_routing_requires_codex_mode_and_no_yunxiao() {
-        // 2.2/2.2a 分流判据：codex + structured + 非云效生产链路才走 app-server 通道
-        assert!(should_run_structured("codex", Some("structured"), None, false, None));
+    fn structured_routing_requires_codex_and_mode() {
+        // 2.2 分流判据：codex + structured 快照才走 app-server 通道。
+        // 云效任务不再特殊——运行通道由应用级设置写入的任务快照决定。
+        assert!(should_run_structured("codex", Some("structured")));
         // 非 codex / 缺 structured 标记 → PTY
-        assert!(!should_run_structured(
-            "claude",
-            Some("structured"),
-            None,
-            false,
-            None
-        ));
-        assert!(!should_run_structured("codex", Some("pty"), None, false, None));
-        assert!(!should_run_structured("codex", None, None, false, None));
-        // 云效生产链路任务（工作项 id 非空、非讨论、非方案待办）一律强制 PTY（2.2a 防线）
-        assert!(!should_run_structured(
-            "codex",
-            Some("structured"),
-            Some("wi-123"),
-            false,
-            None
-        ));
-        assert!(!should_run_structured(
-            "codex",
-            None,
-            Some("wi-123"),
-            true,
-            None
-        ));
-        // 豁免一：云效讨论任务（只读分析）跟随全局设置走 structured
-        assert!(should_run_structured(
-            "codex",
-            Some("structured"),
-            Some("wi-123"),
-            true,
-            None
-        ));
-        // 豁免二：方案执行待办（planId 非空）跟随全局设置走 structured
-        assert!(should_run_structured(
-            "codex",
-            Some("structured"),
-            Some("wi-123"),
-            false,
-            Some("plan-1")
-        ));
-        // 方案待办缺 structured 标记仍走 PTY（undefined 恒等价 pty 语义不变）
-        assert!(!should_run_structured(
-            "codex",
-            None,
-            Some("wi-123"),
-            false,
-            Some("plan-1")
-        ));
+        assert!(!should_run_structured("claude", Some("structured")));
+        assert!(!should_run_structured("codex", Some("pty")));
+        assert!(!should_run_structured("codex", None));
+        assert!(!should_run_structured("dsh", Some("structured")));
     }
 }
 
@@ -1329,31 +1286,18 @@ fn compose_final_prompt(
 }
 
 /// 判断本次启动是否走 structured 通道（2.2 分流）：
-/// agent=codex 且前端传 `runMode=structured`，**且**非云效生产链路任务（2.2a 防线）。
-/// 云效生产链路（`yunxiaoWorkitemId` 非空的执行类任务：直发 / 待办执行）即使误标
-/// structured 也强制 PTY——不渗透进云效生产链路；防线放后端入口的权威判据上，
-/// 不依赖前端自律。
-/// 豁免一：云效**讨论**任务（`yunxiao_plan_discussion` 为真）是只读分析、无回写 /
-/// 沉淀生产语义，允许跟随应用级全局设置走 structured（与 NewTaskView 任务同待遇）。
-/// 豁免二：方案执行待办（`plan_id` 非空，一议题一任务、由方案看板调度）跟随全局
-/// 设置走 structured；其议题回写由前端驱动，不依赖 PTY 通道语义。
-fn should_run_structured(
-    agent: &str,
-    run_mode: Option<&str>,
-    yunxiao_workitem_id: Option<&str>,
-    yunxiao_plan_discussion: bool,
-    plan_id: Option<&str>,
-) -> bool {
-    agent == "codex"
-        && run_mode == Some("structured")
-        && (yunxiao_workitem_id.is_none()
-            || yunxiao_plan_discussion
-            || plan_id.is_some())
+/// agent=codex 且前端快照带 `runMode=structured`。**不再按任务来源（云效直发 /
+/// 讨论 / 方案待办）分流**——运行通道是应用级设置，所有入口一视同仁；云效执行类
+/// 任务依赖的 prompt 组装、env 注入、草稿收拢与知识沉淀已在 `run_structured_task`
+/// 和 forwarder 收尾里与 PTY 对齐。
+fn should_run_structured(agent: &str, run_mode: Option<&str>) -> bool {
+    agent == "codex" && run_mode == Some("structured")
 }
 
 /// structured 通道的 run_task 实现：spawn app-server 会话 + forwarder。
-/// 与 PTY 路径共享任务登记（cancelled/sediment/unattended/task_names/task_real_paths），
-/// 生命周期事件（task-status/task-session）与 PTY 语义对齐。
+/// 与 PTY 路径共享任务登记（cancelled/sediment/unattended/task_names/task_real_paths）
+/// 与提示词组装（`compose_final_prompt`），生命周期事件（task-status/task-session）
+/// 与 PTY 语义对齐。
 async fn run_structured_task(
     app: AppHandle,
     task_manager: &State<'_, TaskManager>,
@@ -1363,14 +1307,42 @@ async fn run_structured_task(
     use crate::codex_appserver::task_bridge as bridge;
 
     let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
+    // 真实项目根必须是合法绝对目录（与 PTY 路径同等级校验）：草稿收拢、图谱环境
+    // 变量、项目配置都按它定位，非法路径会让后续全部静默降级。
+    let real_for_validation = launch.real_project_path.clone();
+    tokio::task::spawn_blocking(move || validate_task_project_path(&real_for_validation))
+        .await
+        .map_err(|e| format!("real_project_path 校验线程错误: {e}"))??;
     // 首轮图片落盘先于会话拉起：失败直接 Err（前端降级 PTY 重跑时同图重落）。
     let image_paths =
         bridge::save_structured_images(&launch.project_path, &launch.task_id, launch.images)
             .await?;
+    // 文本附件与图片同目录落盘（与 PTY 路径同一位置、同一清理时点）。
+    let text_paths = {
+        let project_path = launch.project_path.clone();
+        let task_id = launch.task_id.clone();
+        let texts = launch.texts.clone();
+        tokio::task::spawn_blocking(move || save_task_texts(&project_path, &task_id, &texts))
+            .await
+            .map_err(|e| e.to_string())??
+    };
+    // 提示词组装与 PTY 共用同一 helper：prompt_prefix / 禁自动提交 / 附件路径 /
+    // 沉淀契约一个都不能少——云效执行类任务靠它拿项目约束与产出要求。
+    let final_prompt = compose_final_prompt(
+        &launch.real_project_path,
+        &launch.prompt,
+        &image_paths,
+        &text_paths,
+        launch.sediment_required,
+    );
+    // app-server 子进程同样需要 NEZHA_* 与图谱环境变量：草稿目录按
+    // `$NEZHA_TASK_ID` 定位，沉淀契约按图谱 env 解析，缺了 agent 只能自造目录。
+    let extra_envs = structured_session_envs(&launch.task_id, &launch.real_project_path);
     let session = bridge::spawn_session(
         &launch_spec.program,
         &launch.project_path,
         &launch.permission_mode,
+        extra_envs,
     )
     .await
     .map_err(|e| format!("codex app-server spawn failed: {e:?}"))?;
@@ -1391,12 +1363,26 @@ async fn run_structured_task(
     } else {
         task_manager.unattended_tasks.lock().remove(&launch.task_id);
     }
-    // 真实项目根登记：任务收尾（forwarder 退出清理附件等）按它定位项目目录，
-    // 与 PTY 路径的 task_real_paths 写入同语义。
+    // 任务名登记：系统通知文案按它取（与 PTY 路径同语义）。
+    task_manager
+        .task_names
+        .lock()
+        .insert(launch.task_id.clone(), launch.task_name.clone());
+    // 沉淀预期标记：任务收尾（forwarder 的 done 分支）据此决定是否跑沉淀。
+    if launch.sediment_required {
+        task_manager
+            .sediment_expected
+            .lock()
+            .insert(launch.task_id.clone());
+    } else {
+        task_manager.sediment_expected.lock().remove(&launch.task_id);
+    }
+    // 真实项目根登记：任务收尾（forwarder 退出清理附件、收拢草稿、跑沉淀等）
+    // 按它定位项目目录，与 PTY 路径的 task_real_paths 写入同语义。
     task_manager
         .task_real_paths
         .lock()
-        .insert(launch.task_id.clone(), launch.project_path.clone());
+        .insert(launch.task_id.clone(), launch.real_project_path.clone());
 
     let events = session.subscribe();
     let errors = session.subscribe_errors();
@@ -1406,6 +1392,7 @@ async fn run_structured_task(
     let forwarder = bridge::spawn_forwarder(
         app.clone(),
         launch.task_id.clone(),
+        launch.project_path.clone(),
         launch.unattended,
         on_output,
         events,
@@ -1422,7 +1409,7 @@ async fn run_structured_task(
     // 图片路径以 localImage 输入项随文本进 input（issue #118）。
     // 失败时（spawn/握手成功但 turn 起不来，如版本门控/线程启动错误）先取消
     // forwarder 再收口会话，错误交回前端自动降级 PTY 重跑（4.1 回退降级）。
-    let turn_input = bridge::build_turn_input(launch.prompt, image_paths);
+    let turn_input = bridge::build_turn_input(final_prompt, image_paths);
     if let Err(e) = session.start_turn_with_input(&turn_input).await {
         forwarder.cancel();
         if let Some(session) = bridge::take_session(task_manager, &launch.task_id) {
@@ -1432,6 +1419,29 @@ async fn run_structured_task(
     }
 
     Ok(())
+}
+
+/// structured 会话子进程的环境变量：与 `setup_nezha_env` 同语义（NEZHA_TASK_ID /
+/// NEZHA_AGENT / NEZHA_EVENT_DIR / 图谱变量）。hook 是否可信的判断与 PTY 一致——
+/// 只有可信时才注入 EVENT_DIR，避免旧版 hook 与会话发现重复上报。
+pub(crate) fn structured_session_envs(
+    task_id: &str,
+    real_project_path: &str,
+) -> Vec<(String, String)> {
+    let mut envs = vec![
+        ("NEZHA_TASK_ID".to_string(), task_id.to_string()),
+        ("NEZHA_AGENT".to_string(), "codex".to_string()),
+    ];
+    if crate::hooks::usable_for("codex") {
+        if let Ok(dir) = crate::hooks::events_dir_for(task_id) {
+            envs.push((
+                "NEZHA_EVENT_DIR".to_string(),
+                dir.to_string_lossy().into_owned(),
+            ));
+        }
+    }
+    envs.extend(crate::knowledge::knowledge_env_for_project(real_project_path));
+    envs
 }
 
 #[tauri::command]
@@ -1494,15 +1504,14 @@ pub async fn run_task(
     // 注入为 CLI `--add-dir`（仅 claude/codex；DSH 忽略）。
     context_project_paths: Option<Vec<String>>,
     // 运行通道（2.2 分流）：pty = 终端 TUI（默认）；structured = codex app-server。
-    // 仅 agent=codex 且非云效生产链路任务生效（2.2a 防线在 should_run_structured 内；
-    // 云效讨论任务与方案执行待办豁免，允许跟随全局设置走 structured）。
+    // 仅 agent=codex 且任务快照标记 structured 时生效——云效任务与普通任务同判据。
     run_mode: Option<String>,
-    // 云效直发任务的工作项 id（非空即云效生产链路，2.2a 强制 PTY 的权威判据）。
-    yunxiao_workitem_id: Option<String>,
-    // 云效讨论任务标记（yunxiaoPlanDiscussion）：只读分析，对 structured 通道豁免 2.2a。
-    yunxiao_plan_discussion: Option<bool>,
-    // 方案执行待办所属方案 id（yunxiaoPlanTask 的 planId）：对 structured 通道豁免 2.2a。
-    plan_id: Option<String>,
+    // 云效议题关联字段：仅用于任务归属与前端事件回传，不参与运行通道判定。
+    // 下划线前缀只是消除未使用告警，Tauri 仍按 `yunxiaoWorkitemId` 等名字反序列化
+    // （与 `resume_task` 的 `_prompt` 同一先例）。
+    _yunxiao_workitem_id: Option<String>,
+    _yunxiao_plan_discussion: Option<bool>,
+    _plan_id: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let model = normalize_agent_cli_option(model, "Model identifier", MAX_MODEL_ID_BYTES)?;
@@ -1513,22 +1522,28 @@ pub async fn run_task(
     )?;
     let sediment_required = require_sediment.unwrap_or(false);
     let unattended = unattended.unwrap_or(false);
-    // 2.2 分流点：structured 且非云效生产链路（讨论任务 / 方案待办豁免）→ codex app-server 通道。
-    if should_run_structured(
-        &agent,
-        run_mode.as_deref(),
-        yunxiao_workitem_id.as_deref(),
-        yunxiao_plan_discussion.unwrap_or(false),
-        plan_id.as_deref(),
-    ) {
+    // 两条通道共用的启动前清理：本次启动是全新一轮，上次取消 / 手动完成的标记
+    // 必须清掉，否则 structured 分支会把任务误判为已取消。
+    task_manager.cancelled_tasks.lock().remove(&task_id);
+    task_manager
+        .manually_completed_tasks
+        .lock()
+        .remove(&task_id);
+    // 2.2 分流点：codex + 任务快照标记 structured → codex app-server 通道。
+    // 云效任务与普通任务同判据（运行通道是应用级设置）。
+    if should_run_structured(&agent, run_mode.as_deref()) {
         return run_structured_task(
             app,
             &task_manager,
             crate::codex_appserver::task_bridge::StructuredLaunch {
                 task_id,
+                task_name,
                 project_path,
+                real_project_path,
                 prompt,
+                texts: texts.unwrap_or_default(),
                 images: images.unwrap_or_default(),
+                sediment_required,
                 permission_mode,
                 unattended,
                 model: model.clone(),
@@ -1549,6 +1564,11 @@ pub async fn run_task(
         }
         _ => None,
     };
+    task_manager.cancelled_tasks.lock().remove(&task_id);
+    task_manager
+        .manually_completed_tasks
+        .lock()
+        .remove(&task_id);
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks

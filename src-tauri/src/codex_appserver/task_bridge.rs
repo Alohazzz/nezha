@@ -76,11 +76,20 @@ impl ForwarderGuard {
 /// structured 模式的启动参数：由 `run_task` 分流点从命令参数归集。
 pub struct StructuredLaunch {
     pub task_id: String,
+    /// 任务名（系统通知文案用；与 PTY 路径的 `task_names` 登记同语义）。
+    pub task_name: String,
+    /// agent 的 cwd（可能是 worktree）。
     pub project_path: String,
+    /// 真实项目根（主检出）：项目配置、图谱绑定、草稿收拢都按它定位。
+    pub real_project_path: String,
     pub prompt: String,
     /// 首轮图片附件（dataUrl，可为空）：落盘后以 localImage 输入项进首个 turn
     /// （issue #118）。落盘发生在 `run_structured_task`（会话拉起前）。
     pub images: Vec<String>,
+    /// 首轮文本附件正文：落盘到附件目录后以路径追加进提示词（与 PTY 同语义）。
+    pub texts: Vec<String>,
+    /// 本任务要求产出知识沉淀产物：决定是否注入产出契约、收尾是否跑沉淀。
+    pub sediment_required: bool,
     pub permission_mode: String,
     pub unattended: bool,
     /// 任务快照携带的模型 / 推理深度（新建任务表单选择）：经 turn/start 的
@@ -89,8 +98,8 @@ pub struct StructuredLaunch {
     pub reasoning_effort: Option<String>,
 }
 
-/// 判定任务是否应走 structured 通道（2.2 分流判据，run_task 与前端共用语义）。
-/// 云效直发任务在 `run_task` 侧强制 PTY（2.2a 防线），不依赖这里。
+/// 判定任务是否应走 structured 通道（2.2 分流判据）。云效生产链路不再特殊：
+/// 运行通道由任务快照（应用级设置写入）决定，`run_task` 侧与这里同判据。
 pub fn is_structured(task: &Task) -> bool {
     task.agent == "codex" && task.run_mode.as_deref() == Some("structured")
 }
@@ -101,9 +110,11 @@ pub async fn spawn_session(
     agent_bin: &str,
     cwd: &str,
     permission_mode: &str,
+    extra_envs: Vec<(String, String)>,
 ) -> Result<CodexAppServerSession, SessionError> {
     let (approval_policy, sandbox) = permission_mode_to_policy(permission_mode);
-    let request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
+    let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
+    request.extra_envs = extra_envs;
     let session = CodexAppServerSession::spawn(request).await?;
     session.start_thread().await?;
     Ok(session)
@@ -117,9 +128,11 @@ pub async fn spawn_session_resume(
     cwd: &str,
     permission_mode: &str,
     thread_id: &str,
+    extra_envs: Vec<(String, String)>,
 ) -> Result<CodexAppServerSession, SessionError> {
     let (approval_policy, sandbox) = permission_mode_to_policy(permission_mode);
-    let request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
+    let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
+    request.extra_envs = extra_envs;
     let session = CodexAppServerSession::spawn(request).await?;
     session.resume_thread(thread_id).await?;
     Ok(session)
@@ -165,6 +178,8 @@ pub fn take_session(
 pub fn spawn_forwarder(
     app: AppHandle,
     task_id: String,
+    // agent 的 cwd（可能是 worktree）；收尾时据此收拢草稿到真实项目根。
+    effective_path: String,
     unattended: bool,
     on_output: Channel<String>,
     mut events: Receiver<CodexEvent>,
@@ -183,7 +198,7 @@ pub fn spawn_forwarder(
                     match event {
                         Ok(event) => {
                             if guard_for_loop.is_cancelled()
-                                || !handle_event(&app, &on_output, &task_id, unattended, event).await
+                                || !handle_event(&app, &on_output, &task_id, &effective_path, unattended, event).await
                             {
                                 break;
                             }
@@ -223,16 +238,13 @@ pub fn spawn_forwarder(
             }
         }
         crate::event_watcher::cleanup_task_events(&task_id);
-        // 任务附件（steer/resume 带图的落盘产物）随任务收尾清理（issue #118）。
-        // project root 从 task_real_paths 取；缺省（极端时序）则目录残留无害——
-        // cancel_task / complete_task 路径仍会按前端传入的 project_path 清一次。
-        if let Some(tm) = app.try_state::<crate::TaskManager>() {
-            let project_path = tm.task_real_paths.lock().get(&task_id).cloned();
-            if let Some(project_path) = project_path {
-                let dir =
-                    crate::attachments::task_attachments_dir(&project_path, &task_id);
-                let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
-            }
+        // 任务附件（首轮 / steer / resume 带图的落盘产物）随任务收尾清理：
+        // 落盘用的是 agent cwd（可能是 worktree），清理也必须按同一个路径，
+        // 不能用 task_real_paths（主检出）。cancel_task / complete_task 仍会
+        // 按前端传入的 project_path 再清一次。
+        {
+            let dir = crate::attachments::task_attachments_dir(&effective_path, &task_id);
+            let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
         }
     });
     guard
@@ -243,6 +255,7 @@ async fn handle_event(
     app: &AppHandle,
     on_output: &Channel<String>,
     task_id: &str,
+    effective_path: &str,
     unattended: bool,
     event: CodexEvent,
 ) -> bool {
@@ -254,7 +267,7 @@ async fn handle_event(
         CodexEvent::TurnCompleted { turn, .. } => {
             match turn.status {
                 codex_app_server_protocol::TurnStatus::Completed => {
-                    emit_done(app, task_id, unattended);
+                    finish_done(app, task_id, effective_path, unattended).await;
                     false
                 }
                 codex_app_server_protocol::TurnStatus::Interrupted => {
@@ -409,6 +422,59 @@ fn emit_task_session(app: &AppHandle, task_id: &str, thread: &ThreadInfo) {
 
 /// turn 完成 → done。无人值守任务的前端自动收尾走 hook 事件（PTY 路径），
 /// structured 路径这里直接置终态；通知语义与 PTY 的 exit monitor 对齐。
+///
+/// **收尾前先把草稿与沉淀补齐**（与 PTY `finalize_task_exit` 同序）：Agent 可能
+/// 把 `knowledge.json` / 回写产物写在 worktree 里，不先收拢到项目根，沉淀与云效
+/// 回写都会读不到。structured 是「一个 turn 一个终态」，所以这里是它唯一的收尾点。
+async fn finish_done(
+    app: &AppHandle,
+    task_id: &str,
+    effective_path: &str,
+    unattended: bool,
+) {
+    settle_task_artifacts(app, task_id, effective_path).await;
+    emit_done(app, task_id, unattended);
+}
+
+/// 收拢草稿并触发知识沉淀（仅当本次启动标记了 require_sediment）。
+/// 与 PTY 路径共用同一套集合（`task_real_paths` / `sediment_expected`），
+/// 标记「取走即消费」，重复收尾不会双跑。
+///
+/// **必须先 await 草稿收拢再做沉淀**（与 PTY `finalize_task_exit` 同序）：worktree
+/// 里的 `knowledge.json` 收拢到项目根之前，沉淀侧读不到产物，会被判成漏产出。
+async fn settle_task_artifacts(app: &AppHandle, task_id: &str, effective_path: &str) {
+    let Some(tm) = app.try_state::<crate::TaskManager>() else {
+        return;
+    };
+    let sediment_expected = tm.take_sediment_marker(task_id);
+    let Some(real_path) = tm.task_real_paths.lock().get(task_id).cloned() else {
+        return;
+    };
+    let effective_path = effective_path.to_string();
+    let task_id_for_gather = task_id.to_string();
+    let real_for_gather = real_path.clone();
+    let gathered = tokio::task::spawn_blocking(move || {
+        crate::drafts::gather_task_drafts(
+            &effective_path,
+            &real_for_gather,
+            &task_id_for_gather,
+        )
+    })
+    .await;
+    if let Err(e) = gathered {
+        eprintln!("[codex_appserver] draft gather task failed: {e}");
+    }
+    if sediment_expected {
+        crate::knowledge::spawn_auto_sedimentation(
+            app.clone(),
+            task_id.to_string(),
+            real_path,
+            "codex".to_string(),
+        );
+    }
+}
+
+/// 置任务终态并发送系统通知（纯事件发射，收尾动作见 `finish_done`）。
 fn emit_done(app: &AppHandle, task_id: &str, unattended: bool) {
     let _ = app.emit(
         "task-status",
@@ -459,11 +525,14 @@ pub async fn resume_structured_task(
     // 图片落盘先于会话拉起：落盘失败直接 Err，不留下半启动的会话。
     let image_paths = save_structured_images(&project_path, &task_id, images).await?;
     let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
+    // 与 run_structured_task 同一套环境变量：续跑同样要能定位草稿目录 / 图谱。
+    let extra_envs = crate::pty::structured_session_envs(&task_id, &project_path);
     let session = spawn_session_resume(
         &launch_spec.program,
         &project_path,
         &permission_mode,
         &thread_id,
+        extra_envs,
     )
     .await
     .map_err(|e| format!("codex app-server resume failed: {e:?}"))?;
@@ -485,7 +554,15 @@ pub async fn resume_structured_task(
     let events = session.subscribe();
     let errors = session.subscribe_errors();
     // 继续对话默认有人值守：unattended=false 让完成通知正常发。
-    let guard = spawn_forwarder(app.clone(), task_id.clone(), false, on_output, events, errors);
+    let guard = spawn_forwarder(
+        app.clone(),
+        task_id.clone(),
+        project_path.clone(),
+        false,
+        on_output,
+        events,
+        errors,
+    );
     register_session(task_manager, &task_id, session.clone(), guard.clone());
 
     let _ = app.emit(

@@ -526,7 +526,7 @@ export interface Task {
   prompt: string;
   agent: AgentType;
   permissionMode: PermissionMode;
-  /** 运行通道（仅 agent=codex 时生效）；缺省回落 pty。云效直发任务后端强制 pty（2.2a 防线）。 */
+  /** 运行通道（仅 agent=codex 时生效）；缺省回落 pty。由应用级设置在建任务时写入快照。 */
   runMode?: TaskRunMode;
   /** 缺省时沿用 agent 自身默认模型。保存任务快照，避免设置目录变化影响 resume/fork。 */
   model?: string;

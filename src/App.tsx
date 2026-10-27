@@ -413,7 +413,7 @@ function App() {
   }, []);
   // Codex 运行通道的应用级全局设置（缺省 pty）：唯一事实来源在 ~/.nezha/settings.json，
   // NewTaskView 的任务级选择器已移除。设置面板自包含保存后经 CHANGED 事件同步到
-  // 此 state；云效直发任务在后端强制 PTY，与此值无关。
+  // 此 state；所有入口（含云效直接开始 / 讨论）建任务时据此写入 runMode 快照。
   const [codexRunMode, setCodexRunMode] = useState<TaskRunMode>("pty");
   // Codex structured 通道的全局模型 / 思考深度 override（composer `/model`
   // `/effort` 的读写源，唯一事实来源同在 ~/.nezha/settings.json）：改一次，
@@ -1268,19 +1268,11 @@ function App() {
     structuredFallbackReason?: string,
   ) {
     await armTerminalReady(task.id);
-    // 运行通道（2.2）：仅 Codex + 任务快照标记 structured 时生效；
-    // 云效直发任务强制 pty（2.2a 防线：后端入口按 yunxiaoWorkitemId 兜底）。
-    // 豁免：云效讨论任务（yunxiaoPlanDiscussion，只读分析、无回写/沉淀生产
-    // 语义）与方案执行待办（planId 非空，回写走 task_bridge 的生产链路）
-    // 跟随全局设置走 structured，前端豁免的同时后端防线仍对直发任务生效。
+    // 运行通道（2.2）：仅 Codex + 任务快照标记 structured 时生效。
+    // 云效任务与普通任务同判据——运行通道是应用级设置，所有入口（直接开始 /
+    // 发起讨论 / 合并讨论 / 方案执行）一视同仁。
     const runMode =
-      task.agent === "codex" &&
-      task.runMode === "structured" &&
-      (!task.yunxiaoWorkitemId ||
-        task.yunxiaoPlanDiscussion === true ||
-        task.planId != null)
-        ? "structured"
-        : "pty";
+      task.agent === "codex" && task.runMode === "structured" ? "structured" : "pty";
     // structured：Channel 数据是 JSON 帧，直投 useCodexStream 归并，不经
     // useTerminalManager 的 PTY 字节管道/终端 buffer（阶段 3 分流，见 hook 注释）。
     // 重跑/续跑前清掉上一轮的流数据与残留审批卡片。
@@ -1305,9 +1297,8 @@ function App() {
       permissionMode: task.permissionMode,
       runMode,
       yunxiaoWorkitemId: task.yunxiaoWorkitemId,
-      // 云效讨论任务标记：后端 2.2a 防线据此对 structured 通道豁免（只读分析）。
+      // 云效任务标记：仅用于任务归属与事件回传，不参与运行通道判定。
       yunxiaoPlanDiscussion: task.yunxiaoPlanDiscussion === true,
-      // 方案执行待办标记：后端 2.2a 防线据此对 structured 通道豁免（跟随全局设置）。
       planId: task.planId,
       // 模型 / 思考深度：structured 走应用级全局 override（/model /effort 全局
       // 生效，不再逐任务改）；PTY 仍用任务快照（NewTaskView 选择器语义）。
@@ -1421,8 +1412,7 @@ function App() {
       permissionMode,
       model,
       reasoningEffort,
-      // 运行通道由应用级全局设置决定（仅 codex 有意义）；structured 与云效互斥
-      // （云效直发任务根本不走 handleSubmitTask，后端入口再兜一层强制 pty）
+      // 运行通道由应用级全局设置决定（仅 codex 有意义），云效与普通任务同判据。
       runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
       status: immediate ? "pending" : "todo",
       createdAt: now,
@@ -2692,6 +2682,8 @@ function App() {
           updatedAt: now,
           yunxiaoWorkitemId: issue.id,
           yunxiaoSerialNumber: issue.serialNumber,
+          // 运行通道跟随应用级设置：直接开始与讨论 / 方案执行同一套语义。
+          runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
         },
         deliveryPlans,
       );
@@ -2855,6 +2847,8 @@ function App() {
           model: agent === task.agent ? task.model : undefined,
           reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
           yunxiaoSerialNumber: detail.serialNumber,
+          // 运行通道跟随应用级设置：与直接开始 / 讨论同一套语义。
+          runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
           status: "pending",
           updatedAt: Date.now(),
           attentionRequestedAt: undefined,
@@ -3031,8 +3025,8 @@ function App() {
         prompt,
         agent: input.agent,
         permissionMode,
-        // 运行通道跟随应用级设置：与普通新任务/讨论任务一致，structured 时后端
-        // 走 app-server 通道；云效直发任务的 pty 强制由 invokeRunTask 兜底。
+        // 运行通道跟随应用级设置：与其它所有入口一致，structured 时后端走
+        // app-server 通道。
         runMode:
           input.agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
         status: initialStatus,
