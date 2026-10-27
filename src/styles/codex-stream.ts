@@ -24,6 +24,25 @@ export const codexStream = {  codexStreamRoot: {
     padding: "12px 0",
   },
 
+  // 流视图级「工作中 N 秒」活性指示器（delta 静默期防"假死"观感）；布局壳，
+  // spinner 旋转 / 呼吸动效在 codex-stream.css 的 .codex-stream-working*
+  codexStreamWorking: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "var(--text-hint)",
+    fontSize: 12.5,
+    padding: "2px 0",
+    flexShrink: 0,
+  },
+
+  codexStreamWorkingSpinner: {
+    width: 12,
+    height: 12,
+    borderRadius: "50%",
+    flexShrink: 0,
+  },
+
   // ── 通用条目卡片 ──────────────────────────────────────────────────────────
 
   codexEntryCard: {

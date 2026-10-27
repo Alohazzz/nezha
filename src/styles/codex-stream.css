@@ -211,3 +211,19 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   border-color: var(--danger);
   color: #fff;
 }
+
+/* ── 流视图级「工作中 N 秒」活性指示器 ──────────────────────────────────────
+ * 条目级 shimmer（codex-tool-shimmer）之外，整轮 delta 静默期的活性信号：
+ * 旋转 spinner + 秒数跳动。旋转用 transform（GPU 合成），颜色走主题变量。 */
+
+@keyframes codex-working-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.codex-stream-working-spinner {
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: codex-working-spin 0.9s linear infinite;
+}

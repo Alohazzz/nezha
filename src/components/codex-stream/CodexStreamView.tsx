@@ -7,6 +7,7 @@ import type { AgentModelCatalog } from "../app-settings/types";
 import { codexEntryRenderers } from "./codexRenderers";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexComposer } from "./CodexComposer";
+import { CodexWorkingIndicator } from "./CodexWorkingIndicator";
 import { CodexStreamProjectContext } from "./codexStreamContext";
 
 /** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。
@@ -162,6 +163,9 @@ export function CodexStreamView({
               onOpenGitChanges={onOpenGitChanges}
             />
           ))}
+          {/* 整轮活性指示（Zcode 同款「工作中 N 秒」+ spinner）：delta 静默期
+              条目流完全不动，没有它长思考/长命令时看起来像卡住。 */}
+          {running && !bannerText && <CodexWorkingIndicator />}
           {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
         </div>
         {onComposerSubmit && (
