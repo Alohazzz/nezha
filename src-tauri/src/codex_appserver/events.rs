@@ -47,8 +47,8 @@ pub enum CodexEvent {
     ThreadStatusChanged { thread_id: String, status: proto::ThreadStatus },
     TurnStarted { thread_id: String, turn_id: String },
     TurnCompleted { thread_id: String, turn: TurnSummary },
-    ItemStarted { thread_id: String, turn_id: String, item: proto::ThreadItem },
-    ItemCompleted { thread_id: String, turn_id: String, item: proto::ThreadItem },
+    ItemStarted { thread_id: String, turn_id: String, item: proto::ThreadItem, started_at_ms: Option<i64> },
+    ItemCompleted { thread_id: String, turn_id: String, item: proto::ThreadItem, completed_at_ms: Option<i64> },
     AgentMessageDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
     ReasoningSummaryDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
     CommandExecutionOutputDelta { thread_id: String, turn_id: String, item_id: String, delta: String },
@@ -159,28 +159,45 @@ fn parse_notification(method: &str, params: Option<Value>) -> Result<CodexEvent,
             CodexEvent::TurnCompleted { thread_id: wire.thread_id, turn: wire.turn }
         }
         "item/started" => {
+            // 信封时间戳（#119）：item/started 携带 startedAtMs，透传给前端做
+            // 思考/命令动态计时；缺失（旧版本/回放）时为 None，前端本地兜底。
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
             struct Wire {
                 thread_id: String,
                 turn_id: String,
                 item: proto::ThreadItem,
+                #[serde(default)]
+                started_at_ms: Option<i64>,
             }
             let wire: Wire =
                 serde_json::from_value(params).map_err(|e| format!("item/started: {e}"))?;
-            CodexEvent::ItemStarted { thread_id: wire.thread_id, turn_id: wire.turn_id, item: wire.item }
+            CodexEvent::ItemStarted {
+                thread_id: wire.thread_id,
+                turn_id: wire.turn_id,
+                item: wire.item,
+                started_at_ms: wire.started_at_ms,
+            }
         }
         "item/completed" => {
+            // 同上：item/completed 携带 completedAtMs（完成定格时长用）。
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
             struct Wire {
                 thread_id: String,
                 turn_id: String,
                 item: proto::ThreadItem,
+                #[serde(default)]
+                completed_at_ms: Option<i64>,
             }
             let wire: Wire =
                 serde_json::from_value(params).map_err(|e| format!("item/completed: {e}"))?;
-            CodexEvent::ItemCompleted { thread_id: wire.thread_id, turn_id: wire.turn_id, item: wire.item }
+            CodexEvent::ItemCompleted {
+                thread_id: wire.thread_id,
+                turn_id: wire.turn_id,
+                item: wire.item,
+                completed_at_ms: wire.completed_at_ms,
+            }
         }
         "item/agentMessage/delta" => {
             let wire: proto::AgentMessageDeltaNotification = serde_json::from_value(params)
@@ -301,6 +318,58 @@ mod tests {
                 assert_eq!(turn.status, proto::TurnStatus::Completed);
             }
             other => panic!("expected TurnCompleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn item_events_carry_envelope_timestamps() {
+        // 形状取自 .agents/probe/probe_basic-wire.jsonl（#119）：信封带 startedAtMs
+        let started = parse_from_line(
+            r#"{"method":"item/started","params":{"threadId":"t1","turnId":"turn1","startedAtMs":1792725191199,"item":{"type":"reasoning","id":"rs_1","summary":[],"content":[]}}}"#,
+        )
+        .unwrap();
+        match started {
+            CodexEvent::ItemStarted { item, started_at_ms, .. } => {
+                assert_eq!(started_at_ms, Some(1_792_725_191_199));
+                let proto::ThreadItem::Reasoning { id, .. } = item else {
+                    panic!("expected reasoning item, got {item:?}")
+                };
+                assert_eq!(id, "rs_1");
+            }
+            other => panic!("expected ItemStarted, got {other:?}"),
+        }
+
+        let completed = parse_from_line(
+            r#"{"method":"item/completed","params":{"threadId":"t1","turnId":"turn1","completedAtMs":1792725193959,"item":{"type":"reasoning","id":"rs_1","summary":["done"],"content":[]}}}"#,
+        )
+        .unwrap();
+        match completed {
+            CodexEvent::ItemCompleted { completed_at_ms, .. } => {
+                assert_eq!(completed_at_ms, Some(1_792_725_193_959));
+            }
+            other => panic!("expected ItemCompleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn item_events_tolerate_missing_timestamps() {
+        // 旧版本 / 回放帧可能没有信封时间戳：解析不能失败，字段落 None
+        let started = parse_from_line(
+            r#"{"method":"item/started","params":{"threadId":"t1","turnId":"turn1","item":{"type":"reasoning","id":"rs_1","summary":[],"content":[]}}}"#,
+        )
+        .unwrap();
+        match started {
+            CodexEvent::ItemStarted { started_at_ms, .. } => assert_eq!(started_at_ms, None),
+            other => panic!("expected ItemStarted, got {other:?}"),
+        }
+
+        let completed = parse_from_line(
+            r#"{"method":"item/completed","params":{"threadId":"t1","turnId":"turn1","item":{"type":"reasoning","id":"rs_1","summary":[],"content":[]}}}"#,
+        )
+        .unwrap();
+        match completed {
+            CodexEvent::ItemCompleted { completed_at_ms, .. } => assert_eq!(completed_at_ms, None),
+            other => panic!("expected ItemCompleted, got {other:?}"),
         }
     }
 

@@ -31,7 +31,7 @@ export const CodexMcpToolCallEntry = memo(function CodexMcpToolCallEntry({
     <CodexToolCard
       entryId={item.id}
       icon={<Plug size={11} />}
-      category="MCP"
+      category={t("codex.tool.category.mcp")}
       text={`${item.server}: ${item.tool}`}
       status={status}
       failureDetail={item.error?.message ?? null}

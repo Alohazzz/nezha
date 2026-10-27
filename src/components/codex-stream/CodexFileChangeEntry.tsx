@@ -101,7 +101,7 @@ export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({
       <CodexToolCard
         entryId={item.id}
         icon={<FileEdit size={11} />}
-        category="File change"
+        category={t("codex.tool.category.fileChange")}
         text={single.path}
         status={status}
         autoExpandWhileRunning
@@ -119,7 +119,7 @@ export const CodexFileChangeEntry = memo(function CodexFileChangeEntry({
     <CodexToolCard
       entryId={item.id}
       icon={<FileEdit size={11} />}
-      category="File change"
+      category={t("codex.tool.category.fileChange")}
       text={t("codex.fileChange.summary", { count: files.length })}
       status={status}
       autoExpandWhileRunning

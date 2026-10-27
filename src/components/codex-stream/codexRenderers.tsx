@@ -39,9 +39,21 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
   userMessage: ({ entry }) => <CodexUserMessageEntry item={entry.item as CodexUserMessageItem} />,
   agentMessage: ({ entry }) => <CodexAgentMessageEntry item={entry.item as CodexAgentMessageItem} />,
   plan: ({ entry }) => <CodexPlanEntry item={entry.item as CodexPlanItem} />,
-  reasoning: ({ entry }) => <CodexReasoningEntry item={entry.item as CodexReasoningItem} revision={entry.revision} />,
+  reasoning: ({ entry }) => (
+    <CodexReasoningEntry
+      item={entry.item as CodexReasoningItem}
+      revision={entry.revision}
+      startedAtMs={entry.startedAtMs}
+      endedAtMs={entry.endedAtMs}
+    />
+  ),
   commandExecution: ({ entry }) => (
-    <CodexCommandEntry item={entry.item as CodexCommandExecutionItem} revision={entry.revision} />
+    <CodexCommandEntry
+      item={entry.item as CodexCommandExecutionItem}
+      revision={entry.revision}
+      startedAtMs={entry.startedAtMs}
+      endedAtMs={entry.endedAtMs}
+    />
   ),
   fileChange: ({ entry, onOpenGitChanges }) => (
     <CodexFileChangeEntry

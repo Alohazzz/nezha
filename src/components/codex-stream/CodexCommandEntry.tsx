@@ -4,20 +4,29 @@ import type { CodexCommandExecutionItem } from "../../types";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import { CodexToolCard } from "./CodexToolCard";
+import { CodexLiveDuration } from "./CodexLiveDuration";
 import { formatDuration, truncateOutputTail } from "./codexEntryShared";
 
-// 命令执行卡（issue #117 T3 自 CodexEntryItems 迁出；T5 接尾部截断）：骨架管
-// 行为（折叠持久 / 自动边沿 / 失败 tooltip），本卡只管内容渲染。行为矩阵：默认
-// 收起、流式中自动展开、完成自动收起。展开区只渲染输出尾部（~64KB、按整行取
-// 尾，spec user story 15）；全量输出保留在内存条目上，复制全文按钮复制完整文本。
+// 命令执行卡（issue #117 T3 自 CodexEntryItems 迁出；T5 接尾部截断；#119 补
+// 运行中动态秒数）：骨架管行为（折叠持久 / 自动边沿 / 失败 tooltip），本卡只管
+// 内容渲染。行为矩阵：默认收起、流式中自动展开、完成自动收起。展开区只渲染
+// 输出尾部（~64KB、按整行取尾，spec user story 15）；全量输出保留在内存条目上，
+// 复制全文按钮复制完整文本。
+// 运行中 meta 由 CodexLiveDuration 以条目 startedAtMs 起跳；完成后以权威
+// durationMs 替换（spec user story 8/9）。
 
 export const CodexCommandEntry = memo(function CodexCommandEntry({
   item,
   revision,
+  startedAtMs,
+  endedAtMs,
 }: {
   item: CodexCommandExecutionItem;
   /** T1 归并层的条目修订号（输出 delta 递增），驱动骨架自动展开边沿。 */
   revision?: number;
+  /** 归并层条目时间戳（#119）：running 时动态计时起点。 */
+  startedAtMs?: number | null;
+  endedAtMs?: number | null;
 }) {
   const { t } = useI18n();
   const running = item.status === "inProgress";
@@ -35,7 +44,7 @@ export const CodexCommandEntry = memo(function CodexCommandEntry({
     <CodexToolCard
       entryId={item.id}
       icon={<SquareTerminal size={11} />}
-      category="Command"
+      category={t("codex.tool.category.command")}
       text={item.command}
       status={status}
       statusLabel={item.exitCode !== null && item.exitCode !== 0 ? `exit ${item.exitCode}` : undefined}
@@ -49,7 +58,13 @@ export const CodexCommandEntry = memo(function CodexCommandEntry({
           {item.exitCode !== null && item.exitCode !== 0 && (
             <span style={s.codexToolMetaError}>exit {item.exitCode}</span>
           )}
-          {duration && <span style={s.codexToolMeta}>{duration}</span>}
+          {running && startedAtMs != null ? (
+            <span style={s.codexToolMeta}>
+              <CodexLiveDuration startedAtMs={startedAtMs} endedAtMs={endedAtMs} />
+            </span>
+          ) : (
+            duration && <span style={s.codexToolMeta}>{duration}</span>
+          )}
         </>
       }
     >

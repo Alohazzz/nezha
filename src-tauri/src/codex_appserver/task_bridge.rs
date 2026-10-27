@@ -301,37 +301,40 @@ async fn handle_event(
         CodexEvent::TurnStarted { .. } => true,
         // 数据面事件统一进 Channel（前端按 type 分发）。delta 类事件带 item_id，
         // 前端靠它把流式增量归并到 item/started 建立的那条条目上。
-        CodexEvent::ItemStarted { thread_id, turn_id, item } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, None, "item", "started", &item);
+        // item 帧透传信封毫秒时间戳（#119）：started → tsMs，completed → tsMs，
+        // 前端据此做思考/命令的动态计时；缺失时字段省略，前端本地时钟兜底。
+        CodexEvent::ItemStarted { thread_id, turn_id, item, started_at_ms } => {
+            emit_stream_event(on_output, task_id, thread_id, turn_id, None, "item", "started", &item, started_at_ms);
             true
         }
-        CodexEvent::ItemCompleted { thread_id, turn_id, item } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, None, "item", "completed", &item);
+        CodexEvent::ItemCompleted { thread_id, turn_id, item, completed_at_ms } => {
+            emit_stream_event(on_output, task_id, thread_id, turn_id, None, "item", "completed", &item, completed_at_ms);
             true
         }
         CodexEvent::AgentMessageDelta { thread_id, turn_id, item_id, delta } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "agentMessageDelta", "delta", &serde_json::json!({ "delta": delta }));
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "agentMessageDelta", "delta", &serde_json::json!({ "delta": delta }), None);
             true
         }
         CodexEvent::ReasoningSummaryDelta { thread_id, turn_id, item_id, delta } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "reasoningDelta", "delta", &serde_json::json!({ "delta": delta }));
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "reasoningDelta", "delta", &serde_json::json!({ "delta": delta }), None);
             true
         }
         CodexEvent::CommandExecutionOutputDelta { thread_id, turn_id, item_id, delta } => {
-            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "commandOutputDelta", "delta", &serde_json::json!({ "delta": delta }));
+            emit_stream_event(on_output, task_id, thread_id, turn_id, Some(item_id), "commandOutputDelta", "delta", &serde_json::json!({ "delta": delta }), None);
             true
         }
         CodexEvent::TokenUsageUpdated { thread_id, usage } => {
-            emit_stream_event(on_output, task_id, thread_id, String::new(), None, "tokenUsage", "updated", &usage);
+            emit_stream_event(on_output, task_id, thread_id, String::new(), None, "tokenUsage", "updated", &usage, None);
             true
         }
     }
 }
 
 /// 数据面事件 → Channel 结构化 JSON（前端 `useCodexStream` 消费）。
-/// 顶层形状：`{ taskId, type, phase, itemId?, threadId, turnId, payload }`。
+/// 顶层形状：`{ taskId, type, phase, itemId?, tsMs?, threadId, turnId, payload }`。
 /// Channel 是 per-task 独占通路（与 PTY 的 on_output 同款直投，绕开事件总线
 /// 广播——这是终端红线的同款约束），生命周期事件（task-status 等）才走 emit。
+#[allow(clippy::too_many_arguments)]
 fn emit_stream_event(
     on_output: &Channel<String>,
     task_id: &str,
@@ -341,6 +344,7 @@ fn emit_stream_event(
     kind: &str,
     phase: &str,
     payload: &impl serde::Serialize,
+    ts_ms: Option<i64>,
 ) {
     let frame = StreamFrame {
         task_id,
@@ -350,12 +354,14 @@ fn emit_stream_event(
         thread_id: &thread_id,
         turn_id: &turn_id,
         payload: serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
+        ts_ms,
     };
     let line = serde_json::to_string(&frame).unwrap_or_default();
     let _ = on_output.send(line);
 }
 
-/// Channel 数据帧。字段名 camelCase 对齐前端约定；itemId 仅 delta 类事件携带。
+/// Channel 数据帧。字段名 camelCase 对齐前端约定；itemId 仅 delta 类事件携带，
+/// tsMs 仅 item 帧透传信封时间戳（缺失时省略，前端本地时钟兜底）。
 #[derive(serde::Serialize)]
 struct StreamFrame<'a> {
     #[serde(rename = "taskId")]
@@ -369,6 +375,8 @@ struct StreamFrame<'a> {
     thread_id: &'a str,
     #[serde(rename = "turnId")]
     turn_id: &'a str,
+    #[serde(rename = "tsMs", skip_serializing_if = "Option::is_none")]
+    ts_ms: Option<i64>,
     payload: serde_json::Value,
 }
 
@@ -738,6 +746,7 @@ mod tests {
             thread_id: "th1",
             turn_id: "turn1",
             payload: serde_json::json!({ "delta": "hi" }),
+            ts_ms: None,
         };
         let v = serde_json::to_value(&frame).unwrap();
         assert_eq!(v["taskId"], "t1");
@@ -746,8 +755,10 @@ mod tests {
         assert_eq!(v["threadId"], "th1");
         assert_eq!(v["turnId"], "turn1");
         assert_eq!(v["payload"]["delta"], "hi");
+        // tsMs 为 None 时字段整体省略而不是下发 null
+        assert!(v.get("tsMs").is_none());
 
-        // item 类事件不带 itemId：字段应整体省略而不是下发 null
+        // item 类事件不带 itemId；tsMs 有值时以 camelCase 下发（#119 信封时间戳）
         let frame = StreamFrame {
             task_id: "t1",
             kind: "item",
@@ -756,8 +767,10 @@ mod tests {
             thread_id: "th1",
             turn_id: "turn1",
             payload: serde_json::json!({ "type": "agentMessage" }),
+            ts_ms: Some(1_792_725_191_199),
         };
         let v = serde_json::to_value(&frame).unwrap();
         assert!(v.get("itemId").is_none());
+        assert_eq!(v["tsMs"], 1_792_725_191_199i64);
     }
 }

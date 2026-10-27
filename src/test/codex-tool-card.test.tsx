@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { codexToolCardExpansion, CodexToolCard } from "../components/codex-stream/CodexToolCard";
+import { CodexReasoningEntry } from "../components/codex-stream/CodexReasoningEntry";
 
 // jsdom 缺少 Radix Popover 交互所需的 pointer capture API。
 if (!Element.prototype.hasPointerCapture) {
@@ -234,5 +235,110 @@ describe("CodexToolCard", () => {
       );
     });
     expect(childrenVisible()).toBe(true);
+  });
+});
+
+// ── 思考卡行为矩阵（issue #119）──────────────────────────────────────────────
+// 通过 CodexReasoningEntry 驱动：时间字段（startedAtMs/endedAtMs）决定 running/ok
+// 状态，骨架的自动边沿据此展开/收起；摘要行呈现动态/定格计时。
+
+describe("CodexReasoningEntry (issue #119)", () => {
+  function renderReasoning(props: {
+    startedAtMs?: number | null;
+    endedAtMs?: number | null;
+    revision?: number;
+    summary?: string[];
+  }) {
+    return render(
+      <I18nProvider>
+        <CodexReasoningEntry
+          item={{
+            type: "reasoning",
+            id: "think-1",
+            summary: props.summary ?? ["A stream of thought."],
+          }}
+          revision={props.revision}
+          startedAtMs={props.startedAtMs}
+          endedAtMs={props.endedAtMs}
+        />
+      </I18nProvider>,
+    );
+  }
+
+  function thoughtBodyVisible() {
+    // 展开区（完整 summary.join）与摘要行文本同源——用 body testid 精确定位
+    return screen.queryByTestId("codex-reasoning-body") !== null;
+  }
+
+  afterEach(() => {
+    codexToolCardExpansion.clear();
+    window.localStorage.clear();
+  });
+
+  it("auto-expands while running and shows the live ticking duration", () => {
+    renderReasoning({ startedAtMs: Date.now() - 2000, endedAtMs: null, revision: 1 });
+    // 运行中自动展开：思考文本直接可见
+    expect(thoughtBodyVisible()).toBe(true);
+    // 状态词 running（en 表下 status 与 chip 同文案，用 class 精确定位）与动态秒数
+    expect(document.querySelector('.codex-stream-tool-status[data-status="running"]')).not.toBeNull();
+    expect(screen.getByText(/^[0-9]+(\.[0-9]+)?s$/)).toBeTruthy();
+  });
+
+  it("auto-collapses on completion and freezes the total duration", () => {
+    const view = renderReasoning({ startedAtMs: 1000, endedAtMs: null, revision: 1 });
+    expect(thoughtBodyVisible()).toBe(true);
+
+    // 完成边沿：endedAtMs 写入 → status ok → 自动收起 + 定格时长
+    view.rerender(
+      <I18nProvider>
+        <CodexReasoningEntry
+          item={{ type: "reasoning", id: "think-1", summary: ["A stream of thought."] }}
+          revision={1}
+          startedAtMs={1000}
+          endedAtMs={4200}
+        />
+      </I18nProvider>,
+    );
+    expect(thoughtBodyVisible()).toBe(false);
+    expect(screen.getByText("Thought")).toBeTruthy();
+    // 定格时长 = 4200-1000 = 3.2s（权威帧时间差，不是本地时钟）
+    expect(screen.getByText("3.2s")).toBeTruthy();
+  });
+
+  it("manual toggle wins permanently over the auto rhythm", () => {
+    const view = renderReasoning({ startedAtMs: Date.now() - 1000, endedAtMs: null, revision: 1 });
+    expect(thoughtBodyVisible()).toBe(true);
+
+    // 流式中手动收起
+    fireEvent.click(screen.getByRole("button", { name: /A stream of thought/ }));
+    expect(thoughtBodyVisible()).toBe(false);
+
+    // revision 继续涨不被抢回
+    view.rerender(
+      <I18nProvider>
+        <CodexReasoningEntry
+          item={{ type: "reasoning", id: "think-1", summary: ["A stream of thought."] }}
+          revision={5}
+          startedAtMs={Date.now() - 1000}
+          endedAtMs={null}
+        />
+      </I18nProvider>,
+    );
+    expect(thoughtBodyVisible()).toBe(false);
+  });
+
+  it("renders the first summary line as the summary text and keeps a completed card collapsed by default", () => {
+    renderReasoning({ startedAtMs: 1000, endedAtMs: 4200 });
+    // 摘要首行截断可见
+    expect(screen.getByText(/A stream of thought/)).toBeTruthy();
+    // 完成态默认收起（现有行为矩阵语义）
+    expect(thoughtBodyVisible()).toBe(false);
+  });
+
+  it("truncates long summary lines to ~80 characters in the summary row", () => {
+    const longLine = "x".repeat(200);
+    renderReasoning({ startedAtMs: 1000, endedAtMs: 4200, summary: [longLine] });
+    const shown = screen.getByText(/^x+$/).textContent ?? "";
+    expect(shown.length).toBe(80);
   });
 });

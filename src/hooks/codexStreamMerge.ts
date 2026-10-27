@@ -28,16 +28,19 @@ type StreamingText =
   | { kind: "plan"; item: CodexPlanItem }
   | { kind: "reasoning"; item: CodexReasoningItem };
 
-/** 视图条目：渲染分发的判别形态。revision 见模块头注释。 */
+/** 视图条目：渲染分发的判别形态。revision 见模块头注释。
+ * 时间字段（issue #119）：startedAtMs / endedAtMs 为毫秒时间戳（内存态，不落盘）。
+ * 后端帧 tsMs 优先；缺失（乱序占位 / resume 回放）时以本地时钟兜底。
+ * endedAtMs 为 null = 条目尚未完成（reasoning 卡据此判定 running 态）。 */
 export type CodexStreamEntry =
-  | { kind: "userMessage"; item: CodexUserMessageItem; revision: number }
-  | { kind: "agentMessage"; item: CodexAgentMessageItem; revision: number }
-  | { kind: "plan"; item: CodexPlanItem; revision: number }
-  | { kind: "reasoning"; item: CodexReasoningItem; revision: number }
-  | { kind: "commandExecution"; item: CodexCommandExecutionItem; revision: number }
-  | { kind: "fileChange"; item: CodexFileChangeItem; revision: number }
-  | { kind: "mcpToolCall"; item: CodexMcpToolCallItem; revision: number }
-  | { kind: "fallback"; item: CodexThreadItem; revision: number };
+  | { kind: "userMessage"; item: CodexUserMessageItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "agentMessage"; item: CodexAgentMessageItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "plan"; item: CodexPlanItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "reasoning"; item: CodexReasoningItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "commandExecution"; item: CodexCommandExecutionItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "fileChange"; item: CodexFileChangeItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "mcpToolCall"; item: CodexMcpToolCallItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "fallback"; item: CodexThreadItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null };
 
 export interface StreamModel {
   entries: CodexStreamEntry[];
@@ -55,16 +58,16 @@ export function createStreamModel(): StreamModel {
 function classifyItem(item: CodexThreadItem): CodexStreamEntry {
   // CodexItemFallback.type 是宽 string，与字面量 case 无法收窄；
   // 按 shape 探测（fallback 是"只有 type + 未知键"的宽松接口）先行排除。
-  if (item.type === "userMessage") return { kind: "userMessage", item: item as CodexUserMessageItem, revision: 0 };
-  if (item.type === "agentMessage") return { kind: "agentMessage", item: item as CodexAgentMessageItem, revision: 0 };
-  if (item.type === "plan") return { kind: "plan", item: item as CodexPlanItem, revision: 0 };
-  if (item.type === "reasoning") return { kind: "reasoning", item: item as CodexReasoningItem, revision: 0 };
+  if (item.type === "userMessage") return { kind: "userMessage", item: item as CodexUserMessageItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  if (item.type === "agentMessage") return { kind: "agentMessage", item: item as CodexAgentMessageItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  if (item.type === "plan") return { kind: "plan", item: item as CodexPlanItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  if (item.type === "reasoning") return { kind: "reasoning", item: item as CodexReasoningItem, revision: 0, startedAtMs: null, endedAtMs: null };
   if (item.type === "commandExecution")
-    return { kind: "commandExecution", item: item as CodexCommandExecutionItem, revision: 0 };
-  if (item.type === "fileChange") return { kind: "fileChange", item: item as CodexFileChangeItem, revision: 0 };
-  if (item.type === "mcpToolCall") return { kind: "mcpToolCall", item: item as CodexMcpToolCallItem, revision: 0 };
+    return { kind: "commandExecution", item: item as CodexCommandExecutionItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  if (item.type === "fileChange") return { kind: "fileChange", item: item as CodexFileChangeItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  if (item.type === "mcpToolCall") return { kind: "mcpToolCall", item: item as CodexMcpToolCallItem, revision: 0, startedAtMs: null, endedAtMs: null };
   // 上游新增条目：保留不炸，但不参与视图渲染
-  return { kind: "fallback", item, revision: 0 };
+  return { kind: "fallback", item, revision: 0, startedAtMs: null, endedAtMs: null };
 }
 
 /** 已有条目的原位替换（保持顺序）：槽位与 byId 同步指向新 entry。 */
@@ -121,7 +124,21 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
           .join(""),
       );
     }
-    replaceEntry(model, classifyItem(item));
+    // 时间戳归并（issue #119）：帧 tsMs 优先（后端信封透传），缺失时本地时钟
+    // 兜底（占位/乱序/resume 回放场景——resume 重放可能只有 completed 帧）。
+    // completed 权威快照替换流式占位条目时必须沿用 existing 的 startedAtMs，
+    // 否则思考/命令卡的动态计时起点被冲掉。
+    const entry = classifyItem(item);
+    const existing = item.id ? model.byId.get(item.id) : undefined;
+    const frameTs = frame.tsMs;
+    if (frame.phase === "started") {
+      entry.startedAtMs = frameTs ?? Date.now();
+      entry.endedAtMs = null;
+    } else if (frame.phase === "completed") {
+      entry.startedAtMs = existing?.startedAtMs ?? frameTs ?? Date.now();
+      entry.endedAtMs = frameTs ?? Date.now();
+    }
+    replaceEntry(model, entry);
     return;
   }
 
@@ -147,15 +164,19 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
       };
     }
     if (!streaming) return;
-    const created: CodexStreamEntry = { ...streaming, revision: 0 };
+    // 占位条目以本地时钟记起点（#119）：乱序场景下 started 帧迟到会经权威
+    // 替换沿用此值；动态计时组件据此起跳。
+    const created: CodexStreamEntry = { ...streaming, revision: 0, startedAtMs: Date.now(), endedAtMs: null };
     model.entries.push(created);
     model.byId.set(key, created);
     return;
   }
 
   if (frame.type === "agentMessageDelta" && entry.kind === "agentMessage") {
+    // 条目级展开：时间字段（startedAtMs/endedAtMs）与 revision 外的全部
+    // entry 元数据随 {...entry} 原样携带，各分支只改 item 与 revision。
     const next: CodexStreamEntry = {
-      kind: "agentMessage",
+      ...entry,
       item: { ...entry.item, text: entry.item.text + delta },
       revision: entry.revision + 1,
     };
@@ -164,14 +185,14 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
     // 流式 reasoning 文本放 summary[0]；completed 的分段数组会整体替换它
     const head = entry.item.summary[0] ?? "";
     const next: CodexStreamEntry = {
-      kind: "reasoning",
+      ...entry,
       item: { ...entry.item, summary: [head + delta, ...entry.item.summary.slice(1)] },
       revision: entry.revision + 1,
     };
     replaceEntry(model, next);
   } else if (frame.type === "commandOutputDelta" && entry.kind === "commandExecution") {
     const next: CodexStreamEntry = {
-      kind: "commandExecution",
+      ...entry,
       item: { ...entry.item, aggregatedOutput: (entry.item.aggregatedOutput ?? "") + delta },
       revision: entry.revision + 1,
     };
@@ -198,6 +219,12 @@ function enforceEntryLimit(model: StreamModel): void {
   }
 }
 
+/** 帧时间戳运行时校验（#119）：非有限数视为缺失（畸形帧容错，与帧解析的
+ * 宽容语义一致）。 */
+function validTs(ts: number | undefined): number | undefined {
+  return typeof ts === "number" && Number.isFinite(ts) ? ts : undefined;
+}
+
 /**
  * 把一行帧 JSON 归并进 model（纯函数，无 React/Tauri 依赖）。
  * 非 JSON 行（异常回退的 PTY 字节）与畸形帧静默丢弃。
@@ -210,6 +237,7 @@ export function ingestFrameLine(model: StreamModel, lineText: string): void {
     return;
   }
   if (!frame || typeof frame !== "object" || typeof frame.type !== "string") return;
+  if (frame.tsMs !== undefined) frame.tsMs = validTs(frame.tsMs);
   applyFrame(model, frame);
   enforceEntryLimit(model);
 }

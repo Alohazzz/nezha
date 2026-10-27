@@ -78,6 +78,10 @@ const fileChangeEntry: CodexStreamEntry = {
 const reasoningEntry: CodexStreamEntry = {
   kind: "reasoning",
   revision: 0,
+  // #119：endedAtMs 有值 = 完成态（reasoning 无 status 字段，完成以终点时间判定）；
+  // 缺省会变 running 态触发自动展开，完成态才符合「默认收起」的历史语义。
+  startedAtMs: 1000,
+  endedAtMs: 4200,
   item: {
     type: "reasoning",
     id: "think-1",
@@ -211,15 +215,46 @@ describe("codex file change card", () => {
 
 describe("codex reasoning card", () => {
   it("is collapsed by default and persists expansion across unmount/remount", () => {
+    // #119：摘要行现在展示摘要首行片段，展开与否以展开区 body（完整 join）为准
     const first = renderView([reasoningEntry]);
-    expect(screen.queryByText(/Considering the registry/)).toBeNull();
+    expect(screen.queryByTestId("codex-reasoning-body")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Thinking/ }));
-    expect(screen.getByText(/Considering the registry/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Considering the registry/ }));
+    expect(screen.getByTestId("codex-reasoning-body")).toBeTruthy();
 
     first.unmount();
     renderView([reasoningEntry]);
     // 模块级 Map 持久：重挂载后仍展开
-    expect(screen.getByText(/Considering the registry/)).toBeTruthy();
+    expect(screen.getByTestId("codex-reasoning-body")).toBeTruthy();
+  });
+
+  it("shows the frozen duration on completed entries (time props reach the card)", () => {
+    // #119：归并层条目时间字段经注册表下传 → 摘要行渲染定格时长 4200-1000=3.2s
+    renderView([reasoningEntry]);
+    expect(screen.getByText("3.2s")).toBeTruthy();
+    expect(screen.getByText("Thought")).toBeTruthy();
+  });
+
+  it("renders running state for entries without endedAtMs and auto-expands while streaming", () => {
+    // #119：endedAtMs 缺省 = running → 状态词 Thinking + 自动展开（骨架边沿：
+    // useState 初始化按 running 展开）；动态秒数（本地时钟兜底）可见。
+    const runningEntry: CodexStreamEntry = {
+      kind: "reasoning",
+      revision: 1,
+      startedAtMs: Date.now() - 2000,
+      endedAtMs: null,
+      item: {
+        type: "reasoning",
+        id: "think-running",
+        summary: ["Streaming thought."],
+      } satisfies CodexReasoningItem,
+    };
+    renderView([runningEntry]);
+    // 状态词 running（en 表下 status 与 chip 同文案，用 class 精确定位状态词）
+    expect(document.querySelector('.codex-stream-tool-status[data-status="running"]')).not.toBeNull();
+    // 自动展开：展开区 body 直接可见
+    expect(screen.getByTestId("codex-reasoning-body")).toBeTruthy();
+    // 动态秒数已渲染（2s 起跳，容错时钟推进显示 2.x s 量级）
+    expect(screen.getByText(/^[0-9]+(\.[0-9]+)?s$/)).toBeTruthy();
   });
 });

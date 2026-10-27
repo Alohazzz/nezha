@@ -363,6 +363,12 @@ export interface CodexStreamFrame {
   phase: "started" | "completed" | "delta" | "updated";
   /** 仅 delta 类帧携带：流式增量所属条目的 id（`item/started` 建立的条目）。 */
   itemId?: string;
+  /**
+   * 仅 item 帧携带（issue #119）：后端透传的信封毫秒时间戳——started 帧
+   * `startedAtMs` / completed 帧 `completedAtMs`。缺失（旧版本 / 回放）时省略，
+   * 前端归并层以本地时钟兜底。
+   */
+  tsMs?: number;
   threadId: string;
   turnId: string;
   payload: CodexStreamPayload;

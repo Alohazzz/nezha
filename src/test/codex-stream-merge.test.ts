@@ -416,4 +416,140 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     expect(kinds(model)).toEqual(["userMessage", "userMessage"]);
     expect(model.byId.has("__local_1")).toBe(true);
   });
+
+  // ── 时间戳归并（issue #119）─────────────────────────────────────────────────
+
+  function tsOf(entry: unknown): { startedAtMs: unknown; endedAtMs: unknown } {
+    const e = entry as { startedAtMs?: unknown; endedAtMs?: unknown };
+    return { startedAtMs: e.startedAtMs, endedAtMs: e.endedAtMs };
+  }
+
+  function itemLineTs(
+    phase: "started" | "completed",
+    item: Record<string, unknown>,
+    tsMs: number,
+  ): string {
+    return line("item", { phase, tsMs, payload: item });
+  }
+
+  it("adopts envelope timestamps from started/completed frames", () => {
+    const model = createStreamModel();
+    feed(model, [
+      itemLineTs("started", { type: "reasoning", id: "rea-1", summary: [] }, 1000),
+      itemLineTs("completed", { type: "reasoning", id: "rea-1", summary: ["s"] }, 4200),
+    ]);
+    const entry = model.byId.get("rea-1");
+    expect(tsOf(entry)).toEqual({ startedAtMs: 1000, endedAtMs: 4200 });
+
+    // 命令条目同样采纳
+    feed(model, [
+      itemLineTs(
+        "started",
+        { type: "commandExecution", id: "cmd-1", command: "ls", cwd: "/", status: "inProgress", aggregatedOutput: null, exitCode: null, durationMs: null },
+        5000,
+      ),
+      itemLineTs(
+        "completed",
+        { type: "commandExecution", id: "cmd-1", command: "ls", cwd: "/", status: "completed", aggregatedOutput: "", exitCode: 0, durationMs: 700 },
+        5700,
+      ),
+    ]);
+    expect(tsOf(model.byId.get("cmd-1"))).toEqual({ startedAtMs: 5000, endedAtMs: 5700 });
+  });
+
+  it("falls back to the local clock when frames carry no timestamp", () => {
+    // resume 回放 / 旧版本后端：帧无 tsMs → 条目时间字段以本地时钟兜底，
+    // completed 后 endedAtMs ≥ startedAtMs（同一 tick 内可能相等）。
+    const model = createStreamModel();
+    const before = Date.now();
+    feed(model, [
+      itemLine("started", { type: "reasoning", id: "rea-1", summary: [] }),
+      itemLine("completed", { type: "reasoning", id: "rea-1", summary: ["s"] }),
+    ]);
+    const after = Date.now();
+    const { startedAtMs, endedAtMs } = tsOf(model.byId.get("rea-1"));
+    expect(startedAtMs).toBeGreaterThanOrEqual(before);
+    expect(startedAtMs).toBeLessThanOrEqual(after);
+    expect(endedAtMs).toBeGreaterThanOrEqual(startedAtMs as number);
+    expect(endedAtMs).toBeLessThanOrEqual(after);
+  });
+
+  it("stamps completed-only entries (resume replay without started) with the local clock", () => {
+    // resume 回放可能只重放 item/completed：没有 started 帧也没有帧 ts，
+    // 起点兜底为本地时钟——卡片仍渲染时长而非无时间态（review fix）。
+    const model = createStreamModel();
+    const before = Date.now();
+    feed(model, [
+      itemLine("completed", { type: "reasoning", id: "rea-1", summary: ["s"] }),
+      itemLine("completed", { type: "commandExecution", id: "cmd-1", command: "ls", cwd: "/", status: "completed", aggregatedOutput: "", exitCode: 0, durationMs: 700 }),
+    ]);
+    const after = Date.now();
+    for (const id of ["rea-1", "cmd-1"]) {
+      const { startedAtMs, endedAtMs } = tsOf(model.byId.get(id));
+      expect(startedAtMs).toBeGreaterThanOrEqual(before);
+      expect(startedAtMs).toBeLessThanOrEqual(after);
+      expect(endedAtMs).toBeGreaterThanOrEqual(startedAtMs as number);
+      expect(endedAtMs).toBeLessThanOrEqual(after);
+    }
+  });
+
+  it("stamps delta placeholder entries with the local clock as their start", () => {
+    // 乱序：started 未到，delta 先建占位条目 → startedAtMs = 本地时钟
+    const model = createStreamModel();
+    const before = Date.now();
+    feed(model, [deltaLine("reasoningDelta", "rea-x", "t1")]);
+    const after = Date.now();
+    const { startedAtMs, endedAtMs } = tsOf(model.byId.get("rea-x"));
+    expect(startedAtMs).toBeGreaterThanOrEqual(before);
+    expect(startedAtMs).toBeLessThanOrEqual(after);
+    expect(endedAtMs).toBeNull();
+  });
+
+  it("preserves startedAtMs when the authoritative completed snapshot replaces a streaming placeholder", () => {
+    // 关键坑（#119）：classifyItem 建全新 entry，若不沿用 existing 的
+    // startedAtMs，completed 权威替换会把流式占位/started 记录的起点冲掉。
+    const model = createStreamModel();
+    feed(model, [
+      itemLineTs("started", { type: "reasoning", id: "rea-1", summary: [] }, 1000),
+      deltaLine("reasoningDelta", "rea-1", "thinking"),
+      itemLineTs("completed", { type: "reasoning", id: "rea-1", summary: ["seg"] }, 4200),
+    ]);
+    expect(tsOf(model.byId.get("rea-1"))).toEqual({ startedAtMs: 1000, endedAtMs: 4200 });
+
+    // 占位条目路径：started 未到 → delta 建占位（本地时钟起点）→ completed 沿用
+    const model2 = createStreamModel();
+    const before = Date.now();
+    feed(model2, [deltaLine("reasoningDelta", "rea-2", "t1")]);
+    feed(model2, [
+      itemLineTs("completed", { type: "reasoning", id: "rea-2", summary: ["seg"] }, Date.now() + 50),
+    ]);
+    const { startedAtMs, endedAtMs } = tsOf(model2.byId.get("rea-2"));
+    expect(startedAtMs).toBeGreaterThanOrEqual(before);
+    expect(endedAtMs).toBeGreaterThanOrEqual(startedAtMs as number);
+  });
+
+  it("treats malformed tsMs as missing and falls back to the local clock", () => {
+    const model = createStreamModel();
+    feed(model, [
+      line("item", { phase: "started", tsMs: "not-a-number", payload: { type: "reasoning", id: "rea-1", summary: [] } }),
+      line("item", { phase: "completed", tsMs: Number.NaN, payload: { type: "reasoning", id: "rea-1", summary: ["s"] } }),
+    ]);
+    const { startedAtMs, endedAtMs } = tsOf(model.byId.get("rea-1"));
+    expect(typeof startedAtMs).toBe("number");
+    expect(Number.isFinite(startedAtMs)).toBe(true);
+    expect(endedAtMs).toBeGreaterThanOrEqual(startedAtMs as number);
+  });
+
+  it("keeps timestamps reference-stable through delta merges", () => {
+    // delta 不可变替换必须携带时间字段，memo 卡片据此持续计时
+    const model = createStreamModel();
+    feed(model, [
+      itemLineTs("started", { type: "reasoning", id: "rea-1", summary: [] }, 1000),
+      deltaLine("reasoningDelta", "rea-1", "a"),
+      deltaLine("reasoningDelta", "rea-1", "b"),
+    ]);
+    const entry = model.byId.get("rea-1");
+    expect(tsOf(entry)).toEqual({ startedAtMs: 1000, endedAtMs: null });
+    expect(revOf(entry)).toBe(2);
+  });
 });
