@@ -175,10 +175,14 @@ export function RunningView({
       : task.agent === "dsh"
         ? task.dshSessionId
         : task.claudeSessionId;
-  // structured 任务首期不支持恢复（阶段 2 决议：interrupted/failed 均按 failed 收口，
-  // resume 走 PTY 会破坏 structured 语义），隐藏恢复入口。
+  // structured 任务恢复走 `resume_codex_structured`（thread/resume 拉起 rollout），
+  // 有 thread id 即可恢复——不再沿用阶段 2「隐藏恢复入口」的旧决议（阶段 4 的
+  // composer resume 通道已覆盖同语义）；缺 thread id（首 turn 前就中断）时按钮禁用。
   const isStructured = task.runMode === "structured";
-  const resumeAvailable = !isStructured && (task.agent === "dsh" || !!resumeSessionId);
+  const resumeAvailable =
+    isStructured && task.status !== "done"
+      ? !!resumeSessionId
+      : task.agent === "dsh" || !!resumeSessionId;
   const restoreState = getRestoreState?.() ?? {};
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);

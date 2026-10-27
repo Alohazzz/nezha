@@ -1,7 +1,14 @@
-import { useRef, useCallback } from "react";
-import type { Project } from "../../types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Project, Skill } from "../../types";
 import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
+import {
+  ComposerMentionPopover,
+  expandMentionItem,
+  filterMentionItems,
+  loadSkills,
+  type MentionItem as ComposerMentionItem,
+} from "./ComposerMention";
 import { useI18n } from "../../i18n";
 import { APP_PLATFORM } from "../../platform";
 import {
@@ -32,6 +39,27 @@ function getMentionInfo(): {
   const query = textBefore.substring(atIdx + 1);
   if (query.includes(" ") || query.includes("\n")) return null;
   return { node: textNode, atOffset: atIdx, endOffset: range.startOffset, query };
+}
+
+/** 光标前 `$query` 检测（技能召唤触发符），结构与 getMentionInfo 一致。 */
+function getDollarInfo(): {
+  node: Text;
+  atOffset: number;
+  endOffset: number;
+  query: string;
+} | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  if (!range.collapsed) return null;
+  if (range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  const textNode = range.startContainer as Text;
+  const textBefore = textNode.textContent!.substring(0, range.startOffset);
+  const dollarIdx = textBefore.lastIndexOf("$");
+  if (dollarIdx === -1) return null;
+  const query = textBefore.substring(dollarIdx + 1);
+  if (query.includes(" ") || query.includes("\n")) return null;
+  return { node: textNode, atOffset: dollarIdx, endOffset: range.startOffset, query };
 }
 
 function createChipElement(file: FileEntry, crossProject?: CrossProjectRef): HTMLSpanElement {
@@ -261,6 +289,89 @@ export function PromptEditor({
     });
   }, [editorRef, onContentChange]);
 
+  // ── `$` 技能召唤（与 @ 提及互斥：@ 命中时技能弹层强制关闭）──────────────────
+  const [skillQuery, setSkillQuery] = useState<string | null>(null);
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSkillsLoading(true);
+    loadSkills().then((rows) => {
+      if (!cancelled) {
+        setSkills(rows);
+        setSkillsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const skillItems = useMemo(
+    () =>
+      skillQuery === null
+        ? []
+        : filterMentionItems(
+            skills.map(
+              (skill): ComposerMentionItem => ({ kind: "skill" as const, skill }),
+            ),
+            skillQuery,
+          ),
+    [skills, skillQuery],
+  );
+
+  const closeSkillMention = useCallback(() => {
+    setSkillQuery(null);
+    setSkillIndex(0);
+  }, []);
+
+  function updateSkillState() {
+    if (getMentionInfo()) {
+      closeSkillMention();
+      return;
+    }
+    const info = getDollarInfo();
+    if (info) {
+      setSkillQuery(info.query);
+      setSkillIndex(0);
+    } else {
+      closeSkillMention();
+    }
+  }
+
+  const selectSkill = useCallback(
+    (skill: Skill) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const info = getDollarInfo();
+      if (!info) return;
+
+      const { node, atOffset, endOffset } = info;
+      const range = document.createRange();
+      range.setStart(node, atOffset);
+      range.setEnd(node, endOffset);
+      range.deleteContents();
+
+      const inserted = document.createTextNode(expandMentionItem({ kind: "skill", skill }) + " ");
+      range.insertNode(inserted);
+
+      const newRange = document.createRange();
+      newRange.setStart(inserted, inserted.length);
+      newRange.collapse(true);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+
+      closeSkillMention();
+      onSetIsEmpty(false);
+      captureContent();
+      editor.focus();
+    },
+    [captureContent, closeSkillMention, editorRef, onSetIsEmpty],
+  );
+
   const selectFile = useCallback(
     (file: FileEntry, crossProject?: CrossProjectRef) => {
       const editor = editorRef.current;
@@ -343,9 +454,35 @@ export function PromptEditor({
     onSetIsEmpty(!text.trim() && !hasChips);
     captureContent();
     onUpdateMention();
+    updateSkillState();
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    // `$` 技能弹层的键盘导航优先于 @ 提及与提交
+    if (skillQuery !== null && skillItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSkillIndex(Math.min(skillIndex + 1, skillItems.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSkillIndex(Math.max(skillIndex - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const item = skillItems[skillIndex];
+        if (item?.kind === "skill") selectSkill(item.skill);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSkillMention();
+        return;
+      }
+    }
+
     if (!isComposingRef.current && (e.key === "Backspace" || e.key === "Delete")) {
       const editor = editorRef.current;
       const sel = window.getSelection();
@@ -434,10 +571,23 @@ export function PromptEditor({
     onSetIsEmpty(false);
     captureContent();
     onUpdateMention();
+    updateSkillState();
   }
 
   return (
     <div style={{ position: "relative" }}>
+      <ComposerMentionPopover
+        visible={skillQuery !== null}
+        trigger={skillQuery !== null ? "skill" : null}
+        query={skillQuery ?? ""}
+        items={skillItems}
+        loading={skillsLoading}
+        index={skillIndex}
+        onSetIndex={setSkillIndex}
+        onSelect={(item) => {
+          if (item.kind === "skill") selectSkill(item.skill);
+        }}
+      />
       {isEmpty && (
         <div
           style={{
@@ -466,7 +616,10 @@ export function PromptEditor({
         onInput={handleInput}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        onSelect={updateMentionState}
+        onSelect={() => {
+          updateMentionState();
+          updateSkillState();
+        }}
         onCompositionStart={() => {
           isComposingRef.current = true;
         }}
@@ -481,6 +634,7 @@ export function PromptEditor({
           }
           captureContent();
           onUpdateMention();
+          updateSkillState();
         }}
         style={
           {

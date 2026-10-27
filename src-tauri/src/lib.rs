@@ -658,6 +658,7 @@ pub fn run() {
             skills::get_skill_source_status,
             skills::clear_skill_hub,
             skills::list_skills,
+            skills::list_agent_commands,
             skills::list_skill_installations,
             skills::cleanup_broken_skill_installations,
             skills::get_skill_data_status,

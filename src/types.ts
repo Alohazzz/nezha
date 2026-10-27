@@ -910,6 +910,19 @@ export function isActiveTaskStatus(status: TaskStatus): boolean {
   );
 }
 
+/**
+ * structured 任务的「假完成」画像：快照标着 done，但 thread/rollout 会话痕迹
+ * 从未落地。进程被杀（应用崩溃/强退）时 forwarder 来不及发任何终态，这种残留
+ * 快照会被误读为成功完成——按 interrupted 收口，恢复按钮与方案定稿都据此防误判。
+ */
+export function isStructuredTaskWithoutSession(task: Task): boolean {
+  return (
+    task.runMode === "structured" &&
+    task.agent === "codex" &&
+    (!task.codexSessionId || !task.codexSessionPath)
+  );
+}
+
 // ── Notifications ────────────────────────────────────────────────────────────
 
 export interface NotificationItem {
@@ -1019,6 +1032,18 @@ export interface Skill {
   buildCommand?: string;
   /** frontmatter 解析失败时的错误说明 */
   hasError?: string;
+}
+
+/** Agent 自定义斜杠命令（`/` 快捷调用；Claude commands / Codex prompts 的 *.md） */
+export interface AgentCommand {
+  /** 命令名（文件名去 .md） */
+  name: string;
+  /** frontmatter description（缺省空串） */
+  description: string;
+  /** "global" | "project" */
+  scope: string;
+  /** 命令文件绝对路径 */
+  path: string;
 }
 
 export type SkillInstallationHealth = "ok" | "broken" | "diverged";

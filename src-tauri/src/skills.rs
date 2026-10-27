@@ -1594,6 +1594,75 @@ pub async fn list_skills() -> Result<Vec<Skill>, String> {
     .map_err(|e| e.to_string())?
 }
 
+// ── Agent slash commands（`/` 快捷调用）──────────────────────────────────────
+// 扫描 Claude Code / Codex 的自定义命令文件，供输入框 `/` 召唤弹层：
+// - Claude Code：~/.claude/commands/*.md 与 <project>/.claude/commands/*.md
+// - Codex：~/.codex/prompts/*.md 与 <project>/.codex/prompts/*.md
+// 展开为指令文本（见 expand 提示词约定）：让 agent 读取命令文件内容并按其执行。
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCommand {
+    /// 命令名（文件名去 .md，`/` 后输入的标识）
+    pub name: String,
+    /// frontmatter `description`（缺省为空串）
+    pub description: String,
+    /// "global" | "project"
+    pub scope: String,
+    /// 命令文件绝对路径
+    pub path: String,
+}
+
+fn scan_command_dir(dir: &Path, scope: &str, out: &mut Vec<AgentCommand>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // 只取顶层 *.md，不递归子目录（命令名不支持命名空间）
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let description = fs::read_to_string(&path)
+            .map(|content| parse_frontmatter(&content).description.unwrap_or_default())
+            .unwrap_or_default();
+        out.push(AgentCommand {
+            name: name.to_string(),
+            description,
+            scope: scope.to_string(),
+            path: path.to_string_lossy().to_string(),
+        });
+    }
+}
+
+#[tauri::command]
+pub async fn list_agent_commands(project_path: Option<String>) -> Result<Vec<AgentCommand>, String> {
+    tokio::task::spawn_blocking(move || {
+        let mut out: Vec<AgentCommand> = Vec::new();
+        if let Some(home) = crate::platform::home_dir() {
+            scan_command_dir(&home.join(".claude").join("commands"), "global", &mut out);
+            scan_command_dir(&home.join(".codex").join("prompts"), "global", &mut out);
+        }
+        if let Some(project) = project_path.as_deref() {
+            let root = Path::new(project);
+            if root.is_dir() {
+                scan_command_dir(&root.join(".claude").join("commands"), "project", &mut out);
+                scan_command_dir(&root.join(".codex").join("prompts"), "project", &mut out);
+            }
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn list_skill_installations(
     skill_name: Option<String>,

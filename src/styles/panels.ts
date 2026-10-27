@@ -1078,6 +1078,16 @@ export const panels = {
     marginBottom: 3,
     userSelect: "none" as const,
   },
+  skillMentionHint: {
+    padding: "10px 12px",
+    fontSize: 12,
+    color: "var(--text-hint)",
+  },
+  skillMentionIcon: {
+    color: "var(--text-hint)",
+    flexShrink: 0,
+    display: "flex",
+  },
   fileExplorerRoot: {
     flexShrink: 0,
     background: "var(--bg-sidebar)",
