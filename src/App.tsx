@@ -1165,6 +1165,8 @@ function App() {
           threadId: task.codexSessionId,
           prompt: text,
           images,
+          model: task.model ?? null,
+          effort: task.reasoningEffort ?? null,
           onOutput: channel,
         });
       } catch (err) {
@@ -1176,6 +1178,37 @@ function App() {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [followUpBusyTaskId, codexStream],
+  );
+
+  // structured 任务的模型 / 推理深度切换（composer `/model` `/effort` 内置命令，
+  // 对齐 Codex CLI TUI 同名能力）：活会话热更（turn/settings/update），并把
+  // 任务快照的 model / reasoningEffort 持久化——done 后 resume 走同一 override。
+  const handleSetStructuredModel = useCallback(
+    async (task: Task, model: string | undefined, effort: string | undefined) => {
+      try {
+        await invoke("set_codex_structured_model", {
+          taskId: task.id,
+          model: model ?? null,
+          effort: effort ?? null,
+        });
+      } catch (err) {
+        showToast(t("toast.structuredModelFailed", { error: String(err) }), "error");
+        return;
+      }
+      const appliedLabel =
+        [model ?? t("newTask.modelDefault"), effort].filter(Boolean).join(" · ") ||
+        t("newTask.modelDefault");
+      showToast(t("toast.structuredModelApplied", { label: appliedLabel }), "success");
+      setTasks((prev) => {
+        const next = prev.map((tk) =>
+          tk.id === task.id ? { ...tk, model, reasoningEffort: effort } : tk,
+        );
+        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+        return next;
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   async function invokeRunTask(
@@ -3873,6 +3906,7 @@ function App() {
               getCodexStream={codexStream.getStream}
               onCodexApprovalResolved={codexStream.setApprovalResolved}
               onFollowUpStructured={handleFollowUpStructured}
+              onSetStructuredModel={handleSetStructuredModel}
               followUpBusyTaskId={followUpBusyTaskId}
               onBack={handleBack}
               onSwitchProject={handleProjectClick}

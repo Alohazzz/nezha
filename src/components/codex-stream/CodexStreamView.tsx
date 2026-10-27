@@ -3,6 +3,7 @@ import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { CodexStreamEntry } from "../../hooks/useCodexStream";
 import type { CodexTokenUsage } from "../../types";
+import type { AgentModelCatalog } from "../app-settings/types";
 import { codexEntryRenderers } from "./codexRenderers";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexComposer } from "./CodexComposer";
@@ -86,6 +87,11 @@ export function CodexStreamView({
   onComposerSubmit,
   onImageToast,
   onOpenGitChanges,
+  modelCatalog,
+  model,
+  reasoningEffort,
+  showModelBadge,
+  onSetStructuredModel,
 }: {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
@@ -106,6 +112,12 @@ export function CodexStreamView({
   onImageToast?: (message: string, kind: "warning" | "error") => void;
   /** 截断 diff → GitChanges 右面板的跳转入口（openRightPanel("git-changes")）。 */
   onOpenGitChanges?: () => void;
+  /** `/model` `/effort` 内置命令支撑：目录 + 当前值 + 写入通道（App 层落 RPC）。 */
+  modelCatalog?: AgentModelCatalog;
+  model?: string;
+  reasoningEffort?: string;
+  showModelBadge?: boolean;
+  onSetStructuredModel?: (model: string | undefined, effort: string | undefined) => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -155,7 +167,17 @@ export function CodexStreamView({
             busy={followUpBusy}
             disabled={composerDisabled}
             projectPath={projectPath}
+            modelCatalog={modelCatalog}
+            model={model}
+            reasoningEffort={reasoningEffort}
+            showModelBadge={showModelBadge}
             onSubmit={onComposerSubmit}
+            onSetModel={
+              onSetStructuredModel ? (next) => onSetStructuredModel(next, reasoningEffort) : undefined
+            }
+            onSetEffort={
+              onSetStructuredModel ? (next) => onSetStructuredModel(model, next) : undefined
+            }
             onToast={onImageToast}
           />
         )}

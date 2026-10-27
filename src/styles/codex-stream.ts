@@ -420,6 +420,49 @@ export const codexStream = {  codexStreamRoot: {
     flexShrink: 0,
   },
 
+  // `/model` `/effort` 内置命令选择浮层（CodexModelPicker）底部当前值回显
+  codexModelPickerCurrent: {
+    marginTop: 4,
+    padding: "4px 7px 2px",
+    borderTop: "1px solid var(--border-dim)",
+    color: "var(--text-hint)",
+    fontSize: 11,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+
+  // composer footer 的当前模型徽标（/model 选择结果回显，点击可重开选择器）
+  codexComposerModelBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    maxWidth: 180,
+    padding: "2px 8px",
+    borderRadius: 999,
+    border: "1px solid var(--border-dim)",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    fontSize: 11,
+    fontFamily: "var(--font-ui)",
+    cursor: "pointer",
+    flexShrink: 0,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+  },
+
+  codexComposerModelBadgeName: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+
+  codexComposerModelBadgeEffort: {
+    flexShrink: 0,
+    color: "var(--text-hint)",
+  },
+
   codexComposerSendBtn: {
     display: "flex",
     alignItems: "center",

@@ -20,6 +20,10 @@ import type {
   YunxiaoWritebackResult,
 } from "../types";
 import type { QuestionMode } from "./app-settings/types";
+import {
+  EMPTY_AGENT_MODEL_CATALOG,
+  type AgentModelCatalog,
+} from "./app-settings/types";
 import { TaskPanel } from "./TaskPanel";
 import { NewTaskView, type NewTaskDraft } from "./NewTaskView";
 import { RunningView } from "./RunningView";
@@ -137,6 +141,7 @@ export function ProjectPage({
   getCodexStream,
   onCodexApprovalResolved,
   onFollowUpStructured,
+  onSetStructuredModel,
   followUpBusyTaskId,
   onBack,
   onSwitchProject,
@@ -275,6 +280,12 @@ export function ProjectPage({
   onCodexApprovalResolved?: (taskId: string) => void;
   /** structured 任务 done 态继续对话（thread/resume 通道）。 */
   onFollowUpStructured?: (task: Task, text: string, images: string[]) => void;
+  /** structured 任务模型 / 推理深度切换（composer `/model` `/effort` 内置命令）。 */
+  onSetStructuredModel?: (
+    task: Task,
+    model: string | undefined,
+    effort: string | undefined,
+  ) => void;
   followUpBusyTaskId?: string | null;
   onBack: () => void;
   onSwitchProject: (project: Project) => void;
@@ -354,6 +365,10 @@ export function ProjectPage({
   }, [initialPlanPreviewId, onInitialPlanPreviewConsumed]);
   // 云效云项目 id（PlanTaskView 议题链接用）。
   const [yunxiaoProjectId, setYunxiaoProjectId] = useState("");
+  // Codex 模型目录（structured composer `/model` `/effort` 选择器数据源）。
+  const [codexModelCatalog, setCodexModelCatalog] = useState<AgentModelCatalog>(
+    EMPTY_AGENT_MODEL_CATALOG,
+  );
 
   // 构建面板首次打开后保持挂载：切走/关闭右侧面板时用 display:none 隐藏而非卸载，
   // 保住构建日志、逐项目状态、计时与运行句柄（构建中的收起条也因此常驻）。
@@ -363,9 +378,12 @@ export function ProjectPage({
   }, [rightPanel]);
 
   useEffect(() => {
-    invoke<{ yunxiao?: { projectId?: string } }>("load_app_settings")
+    invoke<{ yunxiao?: { projectId?: string }; codex_model_catalog?: AgentModelCatalog }>(
+      "load_app_settings",
+    )
       .then((appSettings) => {
         setYunxiaoProjectId(appSettings.yunxiao?.projectId ?? "");
+        setCodexModelCatalog(appSettings.codex_model_catalog ?? EMPTY_AGENT_MODEL_CATALOG);
       })
       .catch(() => undefined);
   }, []);
@@ -578,6 +596,12 @@ export function ProjectPage({
                     ? (text, images) => onFollowUpStructured(task, text, images)
                     : undefined
                 }
+                onSetStructuredModel={
+                  task.runMode === "structured" && onSetStructuredModel
+                    ? (model, effort) => onSetStructuredModel(task, model, effort)
+                    : undefined
+                }
+                codexModelCatalog={task.agent === "codex" ? codexModelCatalog : undefined}
                 followUpBusy={followUpBusyTaskId === task.id}
                 onOpenGitChanges={handleOpenGitChanges}
                 onRename={(name) => onRenameTask(task.id, name)}

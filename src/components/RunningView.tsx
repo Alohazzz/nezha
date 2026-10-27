@@ -10,6 +10,7 @@ import type {
   ThemeVariant,
 } from "../types";
 import type { CodexStreamState } from "../hooks/useCodexStream";
+import type { AgentModelCatalog } from "./app-settings/types";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
@@ -112,6 +113,8 @@ export function RunningView({
   codexStream,
   onCodexApprovalResolved,
   onFollowUp,
+  onSetStructuredModel,
+  codexModelCatalog,
   followUpBusy,
   onOpenGitChanges,
   onRename,
@@ -150,6 +153,11 @@ export function RunningView({
    *  images 为 dataUrl 数组（issue #118：composer 粘贴/选择的图片随消息发送）。 */
   onFollowUp?: (text: string, images: string[]) => void;
   followUpBusy?: boolean;
+  /** structured 任务的模型 / 推理深度切换（`/model` `/effort` 内置命令的写入通道）。
+   *  缺省 = composer 不注入内置命令（PTY 等非 structured 场景）。 */
+  onSetStructuredModel?: (model: string | undefined, effort: string | undefined) => void;
+  /** Codex 模型目录（选择器数据源；仅 structured codex 任务由 ProjectPage 传入）。 */
+  codexModelCatalog?: AgentModelCatalog;
   /** 截断 diff → GitChanges 右面板的跳转入口（issue #117 T4）。 */
   onOpenGitChanges?: () => void;
   onRename: (name: string) => void;
@@ -737,6 +745,11 @@ export function RunningView({
             followUpBusy={followUpBusy}
             projectPath={projectPath}
             onImageToast={showToast}
+            modelCatalog={codexModelCatalog}
+            model={task.model}
+            reasoningEffort={task.reasoningEffort}
+            showModelBadge={!!onSetStructuredModel}
+            onSetStructuredModel={onSetStructuredModel}
           />
         ) : (
         <div style={s.interruptedSessionWrap}>
@@ -814,6 +827,11 @@ export function RunningView({
             onImageToast={showToast}
             onOpenGitChanges={onOpenGitChanges}
             composerDisabled={codexStream.approval !== null}
+            modelCatalog={codexModelCatalog}
+            model={task.model}
+            reasoningEffort={task.reasoningEffort}
+            showModelBadge={!!onSetStructuredModel}
+            onSetStructuredModel={onSetStructuredModel}
           />
         ) : (
         <div style={s.terminalContainer}>
@@ -856,6 +874,11 @@ export function RunningView({
           projectPath={projectPath}
           onImageToast={showToast}
           onOpenGitChanges={onOpenGitChanges}
+          modelCatalog={codexModelCatalog}
+          model={task.model}
+          reasoningEffort={task.reasoningEffort}
+          showModelBadge={!!onSetStructuredModel}
+          onSetStructuredModel={onSetStructuredModel}
         />
       ) : (
         <SessionView sessionPath={sessionPath} />

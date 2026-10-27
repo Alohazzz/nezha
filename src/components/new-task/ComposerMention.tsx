@@ -100,12 +100,10 @@ export type MentionItem =
   | { kind: "builtin"; name: string; description: string }
   | { kind: "file"; path: string };
 
-/** structured composer 的内置斜杠命令（对齐 Codex CLI TUI 同名能力）。
- * `/model` 模型切换、`/effort` 推理深度切换——展开为选择器而非插入文本。 */
-export const BUILTIN_COMMANDS: readonly { name: string; description: string }[] = [
-  { name: "model", description: "切换模型（会话级，后续 turn 生效）" },
-  { name: "effort", description: "切换推理深度（低/中/高）" },
-];
+/** structured composer 的内置斜杠命令（对齐 Codex CLI TUI 同名能力）：
+ * `/model` 模型切换、`/effort` 推理深度切换——选中展开为选择器而非插入文本。
+ * description 由宿主注入 i18n 文案，这里只定命令名。 */
+export const BUILTIN_COMMAND_NAMES = ["model", "effort"] as const;
 
 function subsequenceMatch(haystack: string, needle: string): boolean {
   if (!needle) return true;
@@ -165,6 +163,23 @@ export function filterMentionItems(
       ),
   );
   return scored.slice(0, 12).map((s) => s.item);
+}
+
+/** `/` 弹层候选合并：内置命令排前（固定入口好找），同名时自定义命令优先
+ * （用户自建 model.md 应胜过内置 /model）。 */
+export function mergeBuiltinWithCommands(
+  builtin: readonly { name: string; description: string }[],
+  commands: readonly AgentCommand[],
+): MentionItem[] {
+  const names = new Set(commands.map((c) => c.name));
+  const builtinItems: MentionItem[] = builtin
+    .filter((cmd) => !names.has(cmd.name))
+    .map((cmd) => ({ kind: "builtin" as const, name: cmd.name, description: cmd.description }));
+  const commandItems: MentionItem[] = commands.map((command) => ({
+    kind: "command" as const,
+    command,
+  }));
+  return [...builtinItems, ...commandItems];
 }
 
 /** 选中候选项后展开/插入的文本。builtin 命令不走文本展开（宿主拦截开选择器）。 */
@@ -372,15 +387,7 @@ export function useComposerMention(
         state.query,
       );
     if (state.trigger === "command") {
-      const custom = commands.map((command) => ({ kind: "command" as const, command }));
-      const builtin = (builtinCommands ?? []).map((cmd) => ({
-        kind: "builtin" as const,
-        name: cmd.name,
-        description: cmd.description,
-      }));
-      // 内置命令排前（固定入口好找），同名时自定义命令优先
-      const names = new Set(commands.map((c) => c.name));
-      const merged = [...builtin.filter((b) => !names.has(b.name)), ...custom];
+      const merged = mergeBuiltinWithCommands(builtinCommands ?? [], commands);
       return filterMentionItems(merged, state.query);
     }
     return filterMentionItems(

@@ -403,29 +403,11 @@ impl CodexAppServerSession {
             .map(|t| t.id.clone())
             .ok_or_else(|| SessionError::Protocol("thread not started".to_string()))?;
         let wire_input: Vec<serde_json::Value> = input.iter().map(|i| i.to_wire()).collect();
-        // 会话级模型 override（/model /effort 内置命令）随每个新 turn/start 下发：
-        // 上游语义是「override 本 turn 及后续 turn」，故只需在设置后的第一个
-        // turn 携带，之后 thread 已记住；重复携带无害但省掉更干净。
-        let (model, effort) = {
+        let override_snapshot = {
             let status = self.core.status.lock();
-            (
-                status.model_override.model.clone(),
-                status.model_override.effort.clone(),
-            )
+            status.model_override.clone()
         };
-        let mut params = json!({
-            "threadId": thread_id,
-            "input": wire_input,
-        });
-        {
-            let obj = params.as_object_mut().expect("params is object");
-            if let Some(model) = model.as_deref() {
-                obj.insert("model".to_string(), json!(model));
-            }
-            if let Some(effort) = effort.as_deref() {
-                obj.insert("effort".to_string(), json!(effort));
-            }
-        }
+        let params = build_turn_start_params(thread_id, wire_input, &override_snapshot);
         let result = self
             .request("turn/start", params)
             .await
@@ -815,6 +797,28 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
     }
 }
 
+/// turn/start 参数构造（含会话级模型 override）。override 字段只在非 None 时
+/// 下发：上游 `TurnStartParams.model/effort` 是「override 本 turn 及后续 turn」，
+/// 缺省沿用 thread 已记住的设置，不带空键。
+fn build_turn_start_params(
+    thread_id: String,
+    wire_input: Vec<serde_json::Value>,
+    model_override: &ModelOverride,
+) -> serde_json::Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "input": wire_input,
+    });
+    let obj = params.as_object_mut().expect("params is object");
+    if let Some(model) = model_override.model.as_deref() {
+        obj.insert("model".to_string(), json!(model));
+    }
+    if let Some(effort) = model_override.effort.as_deref() {
+        obj.insert("effort".to_string(), json!(effort));
+    }
+    params
+}
+
 /// 从 `codex_cli_rs/0.163.0 ...` 提取 (major, minor)。
 pub fn parse_codex_version(user_agent: &str) -> Option<(u32, u32)> {
     let rest = user_agent.strip_prefix("codex_cli_rs/")?;
@@ -877,6 +881,56 @@ mod tests {
         assert_eq!(parse_codex_version(ua), Some((0, 163)));
         assert_eq!(parse_codex_version("unknown"), None);
         assert_eq!(parse_codex_version("codex_cli_rs/x.y"), None);
+    }
+
+    #[test]
+    fn turn_start_params_carry_model_override_only_when_set() {
+        let input = vec![TurnInputItem::Text("hi".to_string())];
+        let wire: Vec<serde_json::Value> = input.iter().map(|i| i.to_wire()).collect();
+
+        // 无 override：不出现 model/effort 键（缺省沿用 thread 设置）
+        let params = build_turn_start_params("t1".into(), wire.clone(), &ModelOverride::default());
+        assert_eq!(params["threadId"], "t1");
+        assert!(params.get("model").is_none());
+        assert!(params.get("effort").is_none());
+
+        // 双 override：camelCase 键原样下发
+        let params = build_turn_start_params(
+            "t1".into(),
+            wire,
+            &ModelOverride {
+                model: Some("gpt-5.2".into()),
+                effort: Some("high".into()),
+            },
+        );
+        assert_eq!(params["model"], "gpt-5.2");
+        assert_eq!(params["effort"], "high");
+    }
+
+    #[test]
+    fn model_override_set_and_clear() {
+        let core = SessionCore::test_core();
+        let session = CodexAppServerSession { core };
+        assert_eq!(session.model_override(), ModelOverride::default());
+
+        session.set_model_override(Some(Some("gpt-5.2")), Some(Some("low")));
+        assert_eq!(
+            session.model_override(),
+            ModelOverride {
+                model: Some("gpt-5.2".into()),
+                effort: Some("low".into()),
+            }
+        );
+
+        // None 字段保持不变；Some(None) 显式清空
+        session.set_model_override(Some(None), None);
+        assert_eq!(
+            session.model_override(),
+            ModelOverride {
+                model: None,
+                effort: Some("low".into()),
+            }
+        );
     }
 
     #[test]

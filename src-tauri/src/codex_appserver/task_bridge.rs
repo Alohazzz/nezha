@@ -428,6 +428,9 @@ fn emit_failed(app: &AppHandle, task_id: &str, reason: &str) {
 /// structured 任务的继续对话（done 后输入框提交，阶段 4 增强）：
 /// spawn 新 app-server 进程 → `thread/resume` 恢复上下文 → 重挂 forwarder → 发起新 turn。
 /// 与 `run_structured_task` 同序登记；失败即返回 Err，前端 toast。
+/// `model` / `effort`（任务快照的会话级 override，`/model` `/effort` 写入）经
+/// resume 后的首个 turn/start 携带，与新建任务的 override 语义一致。
+#[allow(clippy::too_many_arguments)]
 pub async fn resume_structured_task(
     app: AppHandle,
     task_manager: &crate::TaskManager,
@@ -437,6 +440,8 @@ pub async fn resume_structured_task(
     thread_id: String,
     prompt: String,
     images: Vec<String>,
+    model: Option<String>,
+    effort: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     // 图片落盘先于会话拉起：落盘失败直接 Err，不留下半启动的会话。
@@ -451,6 +456,12 @@ pub async fn resume_structured_task(
     .await
     .map_err(|e| format!("codex app-server resume failed: {e:?}"))?;
     let session = Arc::new(session);
+    // 任务快照携带的模型 / 推理深度设为会话级 override（新进程新状态机，
+    // 与 run_structured_task 同款写入；turn/start 携带，thread/resume 的
+    // override 缺省时沿用 rollout 里的 thread 设置，这里以显式 override 为准）。
+    if model.is_some() || effort.is_some() {
+        session.set_model_override(model.as_deref().map(Some), effort.as_deref().map(Some));
+    }
 
     // 与 run_task 同序的登记：清取消/手动完成标记（done 后继续对话是新的一轮）。
     task_manager.cancelled_tasks.lock().remove(&task_id);
@@ -486,6 +497,8 @@ pub async fn resume_structured_task(
 
 /// structured 任务的继续对话命令（前端 done 态输入框提交）。
 /// `threadId` 用任务快照里的 `codexSessionId`（thread id，rollout 可从磁盘恢复）。
+/// `model` / `effort` 为任务快照的会话级 override（`/model` `/effort` 写入，
+/// 缺省沿用 thread 原设置）。
 #[tauri::command]
 pub async fn resume_codex_structured(
     app: AppHandle,
@@ -496,6 +509,8 @@ pub async fn resume_codex_structured(
     thread_id: String,
     prompt: String,
     images: Option<Vec<String>>,
+    model: Option<String>,
+    effort: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let images = images.unwrap_or_default();
@@ -511,6 +526,8 @@ pub async fn resume_codex_structured(
         thread_id,
         prompt,
         images,
+        model,
+        effort,
         on_output,
     )
     .await
