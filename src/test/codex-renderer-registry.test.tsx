@@ -6,6 +6,7 @@ import { codexEntryRenderers } from "../components/codex-stream/codexRenderers";
 import { codexToolCardExpansion } from "../components/codex-stream/CodexToolCard";
 import type { CodexStreamEntry } from "../hooks/codexStreamMerge";
 import type {
+  CodexCollabAgentToolCallItem,
   CodexCommandExecutionItem,
   CodexFileChangeItem,
   CodexMcpToolCallItem,
@@ -95,6 +96,25 @@ const fallbackEntry: CodexStreamEntry = {
   item: { type: "wizardSpell", id: "u-1", payload: { level: 3 } },
 };
 
+const collabEntry: CodexStreamEntry = {
+  kind: "collabAgentToolCall",
+  revision: 0,
+  startedAtMs: 1000,
+  endedAtMs: 31_000,
+  item: {
+    type: "collabAgentToolCall",
+    id: "call_wait_1",
+    tool: "wait",
+    status: "completed",
+    senderThreadId: "root-thread",
+    receiverThreadIds: ["child-thread-aaaa1111"],
+    prompt: null,
+    model: null,
+    reasoningEffort: null,
+    agentsStates: { "child-thread-aaaa1111": { status: "completed", message: "review done" } },
+  } satisfies CodexCollabAgentToolCallItem,
+};
+
 function renderView(entries: CodexStreamEntry[]) {
   return render(
     <I18nProvider>
@@ -120,6 +140,7 @@ describe("codex renderer registry", () => {
       "commandExecution",
       "fileChange",
       "mcpToolCall",
+      "collabAgentToolCall",
       "fallback",
     ] as const) {
       expect(codexEntryRenderers[kind], `missing renderer for ${kind}`).toBeTruthy();
@@ -165,6 +186,53 @@ describe("codex renderer registry", () => {
       .getAllByRole("button", { name: /wizardSpell/ })
       .map((b) => b.getAttribute("data-expanded"));
     expect(expandedFlags).toEqual(["true", null]);
+  });
+});
+
+// ── 协作卡：上游 collabAgentToolCall 不再落 fallback 原始 JSON ─────────────────
+
+describe("codex collab agent tool call card", () => {
+  it("renders the collab card instead of the unknown-type fallback", () => {
+    renderView([collabEntry]);
+    // 动作词进摘要行（本地化文案），不是一坨原始 JSON
+    expect(screen.getByRole("button", { name: /Waiting for sub-agents/ })).toBeTruthy();
+    // 兜底卡的「未知类型」提示不出现
+    expect(screen.queryByText(/Unknown entry type/)).toBeNull();
+    // 原始字段名不会以 JSON 形态裸露在摘要行
+    expect(screen.queryByText(/"receiverThreadIds"/)).toBeNull();
+  });
+
+  it("reveals the sub-agent state rows on expand", () => {
+    renderView([collabEntry]);
+    fireEvent.click(screen.getByRole("button", { name: /Waiting for sub-agents/ }));
+    expect(screen.getByText("Sub-agents")).toBeTruthy();
+    // 短 id（末 8 位）+ 状态词 + 消息
+    expect(screen.getByText("aaaa1111")).toBeTruthy();
+    expect(screen.getByText("completed")).toBeTruthy();
+    expect(screen.getByText("review done")).toBeTruthy();
+  });
+
+  it("does not render the failure tooltip for a completed wait", () => {
+    renderView([collabEntry]);
+    // wait 超时/正常结束都是 completed 语义，不该被画成失败
+    const card = document.querySelector('.codex-stream-tool-card[data-status="failed"]');
+    expect(card).toBeNull();
+  });
+
+  it("marks a failed collab call as failed and exposes the agent error message", () => {
+    const failedEntry: CodexStreamEntry = {
+      kind: "collabAgentToolCall",
+      revision: 0,
+      item: {
+        type: "collabAgentToolCall",
+        id: "call_spawn_fail",
+        tool: "spawnAgent",
+        status: "failed",
+        agentsStates: { "child-2222": { status: "errored", message: "model unavailable" } },
+      } satisfies CodexCollabAgentToolCallItem,
+    };
+    renderView([failedEntry]);
+    expect(document.querySelector('.codex-stream-tool-card[data-status="failed"]')).not.toBeNull();
   });
 });
 
@@ -257,5 +325,59 @@ describe("codex reasoning card", () => {
     expect(screen.getByTestId("codex-reasoning-body")).toBeTruthy();
     // 动态秒数已渲染（2s 起跳，容错时钟推进显示 2.x s 量级）
     expect(screen.getByText(/^[0-9]+(\.[0-9]+)?s$/)).toBeTruthy();
+  });
+});
+
+// ── 失败 / 中断横幅：必须常驻可见，不能被长流滚出视野 ───────────────────────
+
+describe("codex stream status banner", () => {
+  it("renders the failure reason above the scroll area, not inside the entry stream", () => {
+    // 回归：失败横幅早先是流首行，几百条条目之后早被滚走，任务看起来像正常结束。
+    const { container } = render(
+      <I18nProvider>
+        <CodexStreamView
+          entries={[commandEntry]}
+          usage={null}
+          approval={null}
+          onApprovalResolved={() => {}}
+          running={false}
+          statusText="quota exhausted: no credits remaining"
+          statusTone="error"
+        />
+      </I18nProvider>,
+    );
+
+    const banner = container.querySelector(".codex-stream-banner");
+    expect(banner).not.toBeNull();
+    expect(banner?.getAttribute("data-tone")).toBe("error");
+    expect(banner?.textContent).toContain("quota exhausted");
+
+    // 横幅必须是滚动区的兄弟节点（不随条目滚动）
+    const scrollArea = banner?.parentElement?.querySelector(".codex-stream-root") ??
+      container.querySelector('[style*="overflow-y"]');
+    expect(scrollArea).not.toBeNull();
+    expect(scrollArea?.contains(banner as Node)).toBe(false);
+  });
+
+  it("uses the warning tone for interrupted / cancelled turns", () => {
+    const { container } = render(
+      <I18nProvider>
+        <CodexStreamView
+          entries={[]}
+          usage={null}
+          approval={null}
+          onApprovalResolved={() => {}}
+          running={false}
+          statusText="Turn stopped"
+          statusTone="warning"
+        />
+      </I18nProvider>,
+    );
+    expect(container.querySelector(".codex-stream-banner")?.getAttribute("data-tone")).toBe("warning");
+  });
+
+  it("renders no banner when the task has no terminal status text", () => {
+    const { container } = renderView([commandEntry]);
+    expect(container.querySelector(".codex-stream-banner")).toBeNull();
   });
 });

@@ -756,6 +756,7 @@ export function RunningView({
                   ? "running.interruptedStructuredTitle"
                   : "running.interruptedTitle",
             )}
+            statusTone="warning"
             onOpenGitChanges={onOpenGitChanges}
             onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
@@ -838,6 +839,7 @@ export function RunningView({
                   ? t("task.cancelled")
                   : undefined
             }
+            statusTone={task.status === "failed" ? "error" : "warning"}
             onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
             projectPath={projectPath}
@@ -882,12 +884,22 @@ export function RunningView({
         // done/failed/cancelled 且有会话文件：structured 任务保持流视图 + composer
         // （Paseo 式会话框，继续对话不用换视图）；历史条目留在内存流里，
         // resume 通道只追加新一轮内容（thread/resume 不回放历史）。
+        // 失败 / 取消态必须把原因交回横幅——这条分支早先没传 statusText，
+        // 失败任务连一句提示都没有，看流尾像正常结束。
         <CodexStreamView
           entries={codexStream.entries}
           usage={codexStream.usage}
           approval={null}
           onApprovalResolved={() => {}}
           running={false}
+          statusText={
+            task.status === "failed"
+              ? (task.failureReason ?? t("task.failed"))
+              : task.status === "cancelled"
+                ? t("task.cancelled")
+                : undefined
+          }
+          statusTone={task.status === "failed" ? "error" : "warning"}
           onComposerSubmit={onFollowUp}
           followUpBusy={followUpBusy}
           projectPath={projectPath}

@@ -73,6 +73,11 @@ pub enum CodexEvent {
 
 /// turn 完成时的摘要:上游 `Turn` 对象含完整 items 数组(itemsView:"summary"),
 /// 这里只取状态与耗时;items 明细已由 item/* 事件流过。
+///
+/// `error` 保留原始 JSON 而非解析成 `proto::TurnError`:这是唯一可读的失败原因
+/// (不带出来前端只能显示写死的 "turn failed"),但它必须**宽容解析**——TurnError
+/// 内部字段随上游版本增删,严格反序列化失败会让整帧 `turn/completed` 被丢弃,
+/// 任务就永远等不到终态(比没有原因严重得多)。
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnSummary {
@@ -80,8 +85,36 @@ pub struct TurnSummary {
     pub status: proto::TurnStatus,
     #[serde(default)]
     pub duration_ms: Option<f64>,
+    #[serde(default)]
+    pub error: Option<Value>,
     #[serde(flatten)]
     pub _rest: Value,
+}
+
+impl TurnSummary {
+    /// 失败原因文本:取 `error.message`(上游 TurnError 的主字段),缺失或非字符串
+    /// 时依次退回 `additionalDetails` / `codexErrorInfo` 的字符串化形态。
+    /// 任何一步取不到都返回 None,由调用方决定兜底文案。
+    pub fn error_message(&self) -> Option<String> {
+        let error = self.error.as_ref()?.as_object()?;
+        let pick = |key: &str| {
+            error
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        pick("message")
+            .or_else(|| pick("additionalDetails"))
+            .or_else(|| {
+                error
+                    .get("codexErrorInfo")
+                    .filter(|v| v.is_string())
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+    }
 }
 
 /// 从 wire 帧解析内部事件。返回 `Err(解析失败的方法名)` 供上层记 dev log。
@@ -457,6 +490,62 @@ mod tests {
                 assert_eq!(method, "mcpServer/elicitation/request");
             }
             other => panic!("expected UnsupportedServerRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failed_turn_carries_upstream_error_message() {
+        // 失败 turn 的 error.message 是用户唯一能看到的失败原因——必须带出来,
+        // 不能只剩写死的 "turn failed"(上游 TurnError 形状见 v2/thread_data.rs)
+        let line = r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn1","status":"failed","items":[],"itemsView":"summary","durationMs":42.0,"error":{"message":"quota exhausted","codexErrorInfo":"usageLimitExceeded"}}}}"#;
+        match parse_from_line(line).unwrap() {
+            CodexEvent::TurnCompleted { turn, .. } => {
+                assert_eq!(turn.status, proto::TurnStatus::Failed);
+                assert_eq!(turn.error_message().as_deref(), Some("quota exhausted"));
+            }
+            other => panic!("expected TurnCompleted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failed_turn_without_error_object_still_parses() {
+        // 宽容红线:TurnError 字段随上游版本增删,error 必须按原始 JSON 收下——
+        // 严格反序列化失败会让整帧 turn/completed 被丢弃,任务永远等不到终态。
+        for line in [
+            // 完全没有 error
+            r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn1","status":"failed","items":[],"itemsView":"summary"}}}"#,
+            // error 是未知形状(字段类型全变)
+            r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn1","status":"failed","items":[],"itemsView":"summary","error":{"unknownFutureField":{"nested":1}}}}}"#,
+            // error 甚至是 null
+            r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn1","status":"failed","items":[],"itemsView":"summary","error":null}}}"#,
+        ] {
+            match parse_from_line(line).unwrap() {
+                CodexEvent::TurnCompleted { turn, .. } => {
+                    assert_eq!(turn.status, proto::TurnStatus::Failed);
+                    assert_eq!(turn.error_message(), None);
+                }
+                other => panic!("expected TurnCompleted, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn failed_turn_falls_back_to_alternate_error_fields() {
+        // message 缺失时退回 additionalDetails,再退回 codexErrorInfo 字符串
+        let line = r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn1","status":"failed","items":[],"itemsView":"summary","error":{"message":"   ","additionalDetails":"see provider log","codexErrorInfo":"badRequest"}}}}"#;
+        match parse_from_line(line).unwrap() {
+            CodexEvent::TurnCompleted { turn, .. } => {
+                assert_eq!(turn.error_message().as_deref(), Some("see provider log"));
+            }
+            other => panic!("expected TurnCompleted, got {other:?}"),
+        }
+
+        let info_only = r#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"turn1","status":"failed","items":[],"itemsView":"summary","error":{"codexErrorInfo":"badRequest"}}}}"#;
+        match parse_from_line(info_only).unwrap() {
+            CodexEvent::TurnCompleted { turn, .. } => {
+                assert_eq!(turn.error_message().as_deref(), Some("badRequest"));
+            }
+            other => panic!("expected TurnCompleted, got {other:?}"),
         }
     }
 }

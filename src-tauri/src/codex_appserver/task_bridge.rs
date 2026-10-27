@@ -283,7 +283,10 @@ async fn handle_event(
                     false
                 }
                 codex_app_server_protocol::TurnStatus::Failed => {
-                    emit_failed(app, task_id, "turn failed");
+                    // 带上游的失败原因（TurnError.message）：早先写死 "turn failed"，
+                    // 用户只能看到一句无信息量的话，看不出是配额、鉴权还是模型报错。
+                    let reason = turn.error_message().unwrap_or_else(|| "turn failed".to_string());
+                    emit_failed(app, task_id, &reason);
                     false
                 }
                 codex_app_server_protocol::TurnStatus::InProgress => true,

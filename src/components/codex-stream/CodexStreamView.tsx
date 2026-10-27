@@ -84,6 +84,7 @@ export function CodexStreamView({
   onApprovalResolved,
   running,
   statusText,
+  statusTone = "warning",
   followUpBusy,
   composerDisabled,
   projectPath,
@@ -103,6 +104,8 @@ export function CodexStreamView({
   onApprovalResolved: () => void;
   running: boolean;
   statusText?: string | null;
+  /** 横幅语义色：失败 = error（红），中断 / 断开 = warning（黄）。 */
+  statusTone?: "error" | "warning";
   /** composer 提交回调：running 态走 steer、其余走 resume（App 层分发）。
    *  images 为 dataUrl 数组（issue #118：粘贴/选择图片随消息发送）。 */
   onComposerSubmit?: (text: string, images: string[]) => void;
@@ -134,8 +137,9 @@ export function CodexStreamView({
   // entries 变化时重算，不引入额外的渲染压力。
   const renderItems = useMemo(() => groupCommandEntries(entries), [entries]);
 
-  // 失败/中断类状态是必须第一眼看到的收口信息：置顶为横幅而非追加在流尾
-  //（几百个条目之后），否则进程崩溃 / turn 失败时流视图看起来像"假死"。
+  // 失败/中断类状态是必须第一眼看到的收口信息。**必须钉在滚动区外**：
+  // 早先把它作为流首行渲染，几百条条目之后失败横幅早被滚出视野，任务看起来
+  // 像"假死或正常结束"。这里改为滚动区上方的常驻横幅。
   const bannerText = statusText ?? null;
   const showEmptyHint = entries.length === 0 && !bannerText;
 
@@ -155,13 +159,19 @@ export function CodexStreamView({
   return (
     <CodexStreamProjectContext.Provider value={projectPath ?? null}>
       <div style={s.codexStreamViewRoot}>
+        {/* 终端态横幅在滚动区之上且不随内容滚动——失败原因必须常驻可见。 */}
+        {bannerText && (
+          <div className="codex-stream-banner" role="status" data-tone={statusTone}>
+            <span className="codex-stream-banner-icon" aria-hidden="true" />
+            <span className="codex-stream-banner-text">{bannerText}</span>
+          </div>
+        )}
         <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
           {showEmptyHint && (
             <div style={s.codexStreamEmpty}>
               {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
             </div>
           )}
-          {bannerText && <div style={s.codexStreamEmpty}>{bannerText}</div>}
           {renderItems.map((item, i) =>
             item.kind === "commandGroup" ? (
               <CodexCommandGroupEntry

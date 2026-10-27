@@ -622,4 +622,45 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     expect(model.entries).toEqual([]);
     expect(model.byId.size).toBe(0);
   });
+
+  it("classifies collabAgentToolCall as its own kind instead of the unknown fallback", () => {
+    // 回归：上游 collabAgentToolCall（多智能体协作，wait/spawnAgent 等）没有注册
+    // 渲染器时落到 fallback 原始 JSON 卡，看起来像一条报错——实际是正常工具调用。
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("started", {
+        type: "collabAgentToolCall",
+        id: "call_wait_1",
+        tool: "wait",
+        status: "inProgress",
+        senderThreadId: "thread-1",
+        receiverThreadIds: [],
+        prompt: null,
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {},
+      }),
+    ]);
+    expect(kinds(model)).toEqual(["collabAgentToolCall"]);
+    expect(itemOf(model.entries[0]).tool).toBe("wait");
+  });
+
+  it("keeps collabAgentToolCall entries stable through the completed snapshot", () => {
+    // started → completed 是同一 id 的原位替换，不能追加成两张卡
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("started", { type: "collabAgentToolCall", id: "call_c1", tool: "spawnAgent", status: "inProgress" }),
+      itemLine("completed", {
+        type: "collabAgentToolCall",
+        id: "call_c1",
+        tool: "spawnAgent",
+        status: "completed",
+        receiverThreadIds: ["child-1"],
+        agentsStates: { "child-1": { status: "completed", message: "ok" } },
+      }),
+    ]);
+    expect(model.entries).toHaveLength(1);
+    expect(itemOf(model.entries[0]).status).toBe("completed");
+    expect(revOf(model.entries[0])).toBe(0);
+  });
 });

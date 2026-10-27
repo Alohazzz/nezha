@@ -481,6 +481,56 @@ export interface CodexPlanItem {
   text: string;
 }
 
+/** 协作工具名（上游 `CollabAgentTool`）：多智能体调度动作，`wait` / `spawnAgent` 等。 */
+export type CodexCollabTool =
+  | "spawnAgent"
+  | "sendInput"
+  | "resumeAgent"
+  | "wait"
+  | "closeAgent"
+  | "sendMessage"
+  | "followupTask"
+  | "interruptAgent"
+  | "listAgents";
+
+/** 协作调用的目标智能体状态（上游 `CollabAgentStatus`）。 */
+export type CodexCollabAgentStatus =
+  | "pendingInit"
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "errored"
+  | "shutdown"
+  | "notFound";
+
+export interface CodexCollabAgentState {
+  status: CodexCollabAgentStatus;
+  message?: string | null;
+}
+
+/** 多智能体协作工具调用（上游 `ThreadItem::CollabAgentToolCall`）。
+ *  status 缺省（started 帧尚未到达 / 回放条目）时按 inProgress 处理。 */
+export interface CodexCollabAgentToolCallItem {
+  type: "collabAgentToolCall";
+  id: string;
+  tool: CodexCollabTool | string;
+  status?: "inProgress" | "completed" | "failed" | "interrupted";
+  senderThreadId?: string;
+  receiverThreadIds?: string[];
+  /** 发起时下发的提示词（spawnAgent / sendInput 有，wait / listAgents 无）。 */
+  prompt?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  agentsStates?: Record<string, CodexAgentStateLike>;
+}
+
+/** agentsStates 的宽容形态：上游还有 receiverAgents 等未定型字段。 */
+export interface CodexAgentStateLike {
+  status?: string;
+  message?: string | null;
+  [key: string]: unknown;
+}
+
 /** 上游新增 / 视图暂不渲染的条目：保留 type + id 便于调试，不参与展示。 */
 export interface CodexItemFallback {
   type: string;
@@ -496,6 +546,7 @@ export type CodexThreadItem =
   | CodexFileChangeItem
   | CodexMcpToolCallItem
   | CodexPlanItem
+  | CodexCollabAgentToolCallItem
   | CodexItemFallback;
 
 export function isCodexThreadItem(payload: CodexStreamPayload): payload is CodexThreadItem {

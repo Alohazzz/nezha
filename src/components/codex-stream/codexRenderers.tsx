@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { CodexStreamEntry } from "../../hooks/codexStreamMerge";
 import type {
   CodexAgentMessageItem,
+  CodexCollabAgentToolCallItem,
   CodexCommandExecutionItem,
   CodexFileChangeItem,
   CodexItemFallback,
@@ -11,6 +12,7 @@ import type {
   CodexUserMessageItem,
 } from "../../types";
 import { CodexAgentMessageEntry } from "./CodexAgentMessageEntry";
+import { CodexCollabAgentEntry } from "./CodexCollabAgentEntry";
 import { CodexCommandEntry } from "./CodexCommandEntry";
 import { CodexFallbackEntry } from "./CodexFallbackEntry";
 import { CodexFileChangeEntry } from "./CodexFileChangeEntry";
@@ -63,6 +65,13 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
     />
   ),
   mcpToolCall: ({ entry }) => <CodexMcpToolCallEntry item={entry.item as CodexMcpToolCallItem} revision={entry.revision} />,
+  collabAgentToolCall: ({ entry }) => (
+    <CodexCollabAgentEntry
+      item={entry.item as CodexCollabAgentToolCallItem}
+      startedAtMs={entry.startedAtMs}
+      endedAtMs={entry.endedAtMs}
+    />
+  ),
   fallback: ({ entry, entryIndex }) => (
     <CodexFallbackEntry item={entry.item as CodexItemFallback} entryIndex={entryIndex} />
   ),

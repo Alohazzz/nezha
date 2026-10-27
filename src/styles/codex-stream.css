@@ -201,3 +201,93 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   border-top-color: var(--accent);
   animation: codex-working-spin 0.9s linear infinite;
 }
+
+/* ── 终端态横幅（失败 / 中断 / 断开）───────────────────────────────────────────
+ * 常驻在流滚动区之上，不随条目滚动；失败原因是收口信息，必须第一眼看到。 */
+
+.codex-stream-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 7px 28px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--bg-root);
+  color: var(--text-primary);
+}
+
+.codex-stream-banner[data-tone="error"] {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 9%, var(--bg-root));
+  border-bottom-color: color-mix(in srgb, var(--color-error) 35%, var(--border-dim));
+}
+
+.codex-stream-banner[data-tone="warning"] {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--bg-root));
+  border-bottom-color: color-mix(in srgb, var(--color-warning) 35%, var(--border-dim));
+}
+
+.codex-stream-banner-icon {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: currentColor;
+}
+
+.codex-stream-banner-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  /* 失败原因常多行（上游 TurnError.message）：不截断，允许换行。 */
+  white-space: pre-wrap;
+}
+
+/* ── 协作卡（collabAgentToolCall）子智能体行 ─────────────────────────────────
+ * 一行一个目标：短 thread id + 状态词 + 消息。状态词按 data-tone 出色，
+ * 不用卡片级 data-status（那张表属于工具卡骨架的 status 语义）。 */
+
+.codex-stream-collab-agent {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.codex-stream-collab-agent-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-hint);
+  flex-shrink: 0;
+}
+
+.codex-stream-collab-agent-status {
+  font-size: 11px;
+  flex-shrink: 0;
+  color: var(--text-hint);
+}
+
+.codex-stream-collab-agent-status[data-tone="running"] {
+  color: var(--accent);
+}
+
+.codex-stream-collab-agent-status[data-tone="ok"] {
+  color: var(--color-success);
+}
+
+.codex-stream-collab-agent-status[data-tone="failed"] {
+  color: var(--color-error);
+}
+
+.codex-stream-collab-agent-message {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

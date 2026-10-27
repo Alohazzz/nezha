@@ -1,5 +1,6 @@
 import type {
   CodexAgentMessageItem,
+  CodexCollabAgentToolCallItem,
   CodexCommandExecutionItem,
   CodexFileChangeItem,
   CodexMcpToolCallItem,
@@ -40,6 +41,7 @@ export type CodexStreamEntry =
   | { kind: "commandExecution"; item: CodexCommandExecutionItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "fileChange"; item: CodexFileChangeItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "mcpToolCall"; item: CodexMcpToolCallItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "collabAgentToolCall"; item: CodexCollabAgentToolCallItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "fallback"; item: CodexThreadItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null };
 
 export interface StreamModel {
@@ -66,6 +68,16 @@ function classifyItem(item: CodexThreadItem): CodexStreamEntry {
     return { kind: "commandExecution", item: item as CodexCommandExecutionItem, revision: 0, startedAtMs: null, endedAtMs: null };
   if (item.type === "fileChange") return { kind: "fileChange", item: item as CodexFileChangeItem, revision: 0, startedAtMs: null, endedAtMs: null };
   if (item.type === "mcpToolCall") return { kind: "mcpToolCall", item: item as CodexMcpToolCallItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  // 多智能体协作调用（spawnAgent / wait / sendInput 等）：上游正式条目类型，
+  // 曾经因未注册渲染器落到 fallback 原始 JSON 卡，被误读成报错（wait 超时尤其像）。
+  if (item.type === "collabAgentToolCall")
+    return {
+      kind: "collabAgentToolCall",
+      item: item as CodexCollabAgentToolCallItem,
+      revision: 0,
+      startedAtMs: null,
+      endedAtMs: null,
+    };
   // 上游新增条目：保留不炸，但不参与视图渲染
   return { kind: "fallback", item, revision: 0, startedAtMs: null, endedAtMs: null };
 }
