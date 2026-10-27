@@ -36,6 +36,7 @@ import {
 } from "./components/delivery-plan/planBranchGuard";
 import {
   isActiveTaskStatus,
+  isStructuredTaskWithoutSession,
   DEFAULT_TERMINAL_FONT_SIZE,
   clampTerminalFontSize,
   DEFAULT_TERMINAL_SCROLLBACK,
@@ -257,6 +258,19 @@ function normalizeInterruptedTasksOnStartup(
   const interruptedAt = Date.now();
   const changedProjectIds = new Set<string>();
   const normalized = tasks.map((task) => {
+    // structured 任务的「假完成」降级：进程被杀（应用崩溃/强退）时 forwarder
+    // 来不及发任何终态，残留的 done 快照按 interrupted 收口，让恢复按钮与
+    // 方案链路拿到正确的待恢复语义。
+    if (task.status === "done" && isStructuredTaskWithoutSession(task)) {
+      changedProjectIds.add(task.projectId);
+      return {
+        ...task,
+        status: "interrupted" as TaskStatus,
+        failureReason: "structured session lost before completion",
+        updatedAt: interruptedAt,
+        attentionRequestedAt: task.attentionRequestedAt ?? interruptedAt,
+      };
+    }
     const hasLiveChild = activeTaskIds.has(task.id);
     if (!isActiveTaskStatus(task.status) && !(task.status === "interrupted" && hasLiveChild)) {
       return task;
@@ -1881,10 +1895,22 @@ function App() {
   }
 
   function handleResumeTask(taskId: string) {
-    // 云效任务恢复：附件目录可能在任务完成/取消时已清理，prompt 里的图片路径可能失效
     const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task) return;
+    // 云效任务恢复：附件目录可能在任务完成/取消时已清理，prompt 里的图片路径可能失效
     if (task?.yunxiaoWorkitemId && task.prompt.includes("[Attached images]")) {
       showToast(t("yunxiao.images.cleanupHint"), "warning");
+    }
+    // structured 任务不走 PTY resume（会破坏 structured 语义）：恢复 =
+    // `resume_codex_structured`（thread/resume 拉 rollout 起新 turn），
+    // 指令用轻量的继续文案——上下文由 rollout 完整带回。
+    if (task.runMode === "structured") {
+      if (!task.codexSessionId) {
+        showToast(t("running.resumeUnavailable"), "warning");
+        return;
+      }
+      void handleFollowUpStructured(task, t("running.resumePrompt"));
+      return;
     }
     queueResumeTask(taskId);
   }
@@ -3037,10 +3063,18 @@ function App() {
   }
 
   // 方案讨论任务结束为 done（标记完成或会话自然退出）→ 方案定稿（draft → finalized）。
+  // 守卫：structured 讨论任务缺会话痕迹（thread/rollout 未落地）时视为异常中断的
+  // 「假完成」，不定稿——否则崩溃残留的 done 快照会把没讨论完的方案错误定稿。
   useEffect(() => {
     const donePlanIds = new Set(
       tasks
-        .filter((t) => t.yunxiaoPlanDiscussion && t.planId && t.status === "done")
+        .filter(
+          (t) =>
+            t.yunxiaoPlanDiscussion &&
+            t.planId &&
+            t.status === "done" &&
+            !isStructuredTaskWithoutSession(t),
+        )
         .map((t) => t.planId as string),
     );
     if (donePlanIds.size === 0) return;
