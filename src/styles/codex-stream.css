@@ -5,7 +5,7 @@
 /* ── 工具卡摘要行交互态 ─────────────────────────────────────────────────── */
 
 .codex-stream-tool-header:hover {
-  background: var(--bg-subtle);
+  color: var(--text-primary);
 }
 
 .codex-stream-tool-header:focus-visible {
@@ -20,11 +20,6 @@
 
 .codex-stream-tool-card[data-status="running"] .codex-stream-tool-status {
   color: var(--accent);
-}
-
-/* 展开态摘要行底边（原 inline 条件合并迁出） */
-.codex-stream-tool-header[data-expanded] {
-  border-bottom: 1px solid var(--border-dim);
 }
 
 /* 失败态状态词颜色（原 codexToolStatusFailed inline 合并迁出）；
@@ -134,33 +129,12 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   color: var(--text-primary);
 }
 
-/* ── 运行态：类别标签文案扫光（user story 16）──────────────────────────────
- * 纯 background-position 动画（GPU 合成友好），不用旋转图标/spinner。
- * 大量并发卡片同时扫光也不占渲染主循环。 */
-
-@keyframes codex-tool-shimmer {
-  0% {
-    background-position: -120% 0;
-  }
-  100% {
-    background-position: 220% 0;
-  }
-}
+/* ── 运行态：类别词高亮（原 chip 扫光随去卡片化退役）────────────────────────
+ * 摘要行已是纯文本行，运行态直接给类别词上 accent 色；条目级活性另有
+ * 「工作中 N 秒」spinner（codex-stream-working-spinner）。 */
 
 .codex-stream-tool-category[data-running] {
-  background: linear-gradient(
-    100deg,
-    var(--bg-subtle) 0%,
-    var(--bg-subtle) 38%,
-    var(--accent) 50%,
-    var(--bg-subtle) 62%,
-    var(--bg-subtle) 100%
-  );
-  background-size: 220% 100%;
-  color: transparent;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: codex-tool-shimmer 1.6s linear infinite;
+  color: var(--accent);
 }
 
 /* ── T4 diff 视图（issue #117）────────────────────────────────────────────────

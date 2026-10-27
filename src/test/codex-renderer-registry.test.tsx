@@ -232,12 +232,13 @@ describe("codex reasoning card", () => {
     // #119：归并层条目时间字段经注册表下传 → 摘要行渲染定格时长 4200-1000=3.2s
     renderView([reasoningEntry]);
     expect(screen.getByText("3.2s")).toBeTruthy();
-    expect(screen.getByText("Thought")).toBeTruthy();
+    // 完成态不渲染状态词（密集度改版：类别词「思考」+ 时长已足够）
+    expect(screen.queryByText("Thought")).toBeNull();
   });
 
   it("renders running state for entries without endedAtMs and auto-expands while streaming", () => {
-    // #119：endedAtMs 缺省 = running → 状态词 Thinking + 自动展开（骨架边沿：
-    // useState 初始化按 running 展开）；动态秒数（本地时钟兜底）可见。
+    // #119：endedAtMs 缺省 = running → 自动展开（骨架边沿：useState 初始化按
+    // running 展开）；动态秒数（本地时钟兜底）可见，但不渲染状态词。
     const runningEntry: CodexStreamEntry = {
       kind: "reasoning",
       revision: 1,
@@ -250,8 +251,8 @@ describe("codex reasoning card", () => {
       } satisfies CodexReasoningItem,
     };
     renderView([runningEntry]);
-    // 状态词 running（en 表下 status 与 chip 同文案，用 class 精确定位状态词）
-    expect(document.querySelector('.codex-stream-tool-status[data-status="running"]')).not.toBeNull();
+    // 状态词不再渲染（类别词已高亮）
+    expect(document.querySelector(".codex-stream-tool-status")).toBeNull();
     // 自动展开：展开区 body 直接可见
     expect(screen.getByTestId("codex-reasoning-body")).toBeTruthy();
     // 动态秒数已渲染（2s 起跳，容错时钟推进显示 2.x s 量级）

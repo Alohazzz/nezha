@@ -47,8 +47,9 @@ function writeExpansion(entryId: string, expanded: boolean): void {
   }
 }
 
-/** 失败详情 tooltip：状态词触发，含错误尾部 + 复制按钮（user stories 12-13）。 */
-function FailedDetailPopover({ detail, label }: { detail: string; label: string }) {
+/** 失败详情 tooltip：状态词触发，含错误尾部 + 复制按钮（user stories 12-13）。
+ *  导出给命令卡复用——命令卡不渲染状态词，改由红色 exit 码承担同一入口。 */
+export function FailedDetailPopover({ detail, label }: { detail: string; label: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -125,6 +126,7 @@ export const CodexToolCard = memo(function CodexToolCard({
   icon,
   category,
   text,
+  label,
   meta,
   status,
   statusLabel,
@@ -134,6 +136,9 @@ export const CodexToolCard = memo(function CodexToolCard({
   autoExpandWhileRunning = true,
   autoCollapseOnDone = true,
   streamingRevision,
+  showStatus = true,
+  compact = false,
+  hideTextWhenExpanded = false,
   onToggleExpand,
   children,
 }: {
@@ -143,7 +148,10 @@ export const CodexToolCard = memo(function CodexToolCard({
   /** 类别标签 chip 文案（Command / MCP / File change / Thinking）。 */
   category: string;
   /** 摘要行主文本（命令、工具名等）。 */
-  text: string;
+  text?: string;
+  /** 摘要行前缀文案（非等宽、不截断）：聚合组用它写「4 个命令」这类阶段词，
+   *  与后面的等宽命令文本分开排版。 */
+  label?: ReactNode;
   /** 元信息 slot：耗时 / exit code / diff 统计等。 */
   meta?: ReactNode;
   status: CodexToolStatus;
@@ -162,6 +170,15 @@ export const CodexToolCard = memo(function CodexToolCard({
   /** 条目级流式修订号（T1 归并层的 revision）：running 且首次出现时触发
    * 自动展开边沿。仅在 status === "running" 期间有意义。 */
   streamingRevision?: number;
+  /** 是否渲染右侧状态词。默认 true；命令 / 思考卡传 false——成功与运行中都不再
+   * 重复「完成 / 运行中」（类别词高亮 + 耗时已足够），失败仍由红色 exit 码表达。 */
+  showStatus?: boolean;
+  /** 紧凑形态（聚合组内的子行）：省略图标与类别词，只留主文本 + meta，
+   * 由外层组的左侧竖线表达层级（与 ZCode 展开后的子工具行一致）。 */
+  compact?: boolean;
+  /** 展开后清空摘要主文本。聚合组用它避免「展开后的子行命令」与摘要行重复
+   *  （ZCode execute-group 的 expandedSecondaryText={null} 同款）。 */
+  hideTextWhenExpanded?: boolean;
   /** 展开/收起回调（父级同步箭头方向等）。 */
   onToggleExpand?: (expanded: boolean) => void;
   children?: ReactNode;
@@ -257,32 +274,37 @@ export const CodexToolCard = memo(function CodexToolCard({
 
   const running = status === "running";
   const failed = status === "failed";
-  const label =
+  const statusWord =
     statusLabel ??
     (running ? t("codex.tool.running") : failed ? t("codex.tool.failed") : t("codex.tool.done"));
   const showFailTooltip = failed && typeof failureDetail === "string" && failureDetail.length > 0;
 
   // 摘要行内容（可折叠 / 不折叠两形态共用；review fix：不折叠形态也要渲染摘要行，
   // 否则无输出的命令卡 / 无参 MCP 卡只剩一个空边框盒）。
+  // 顺序对齐 ZCode：图标 → 类别词 → 阶段文案 → 主文本 → meta → 状态词 → chevron。
   const summaryRow = (
     <>
-      <span style={s.codexToolIcon}>{icon}</span>
-      <span
-        className="codex-stream-tool-category"
-        style={s.codexToolCategory}
-        data-running={running || undefined}
-      >
-        {category}
-      </span>
-      <span style={s.codexToolText}>{text}</span>
-      {meta}
-      {showFailTooltip ? (
-        <FailedDetailPopover detail={failureDetail!} label={statusLabel ?? label} />
-      ) : (
-        <span className="codex-stream-tool-status" style={s.codexToolStatus} data-status={status}>
-          {label}
+      {!compact && <span style={s.codexToolIcon}>{icon}</span>}
+      {!compact && (
+        <span
+          className="codex-stream-tool-category"
+          style={s.codexToolCategory}
+          data-running={running || undefined}
+        >
+          {category}
         </span>
       )}
+      {label && <span style={s.codexToolLabel}>{label}</span>}
+      {!(expanded && hideTextWhenExpanded) && <span style={s.codexToolText}>{text}</span>}
+      {meta}
+      {showStatus &&
+        (showFailTooltip ? (
+          <FailedDetailPopover detail={failureDetail!} label={statusLabel ?? statusWord} />
+        ) : (
+          <span className="codex-stream-tool-status" style={s.codexToolStatus} data-status={status}>
+            {statusWord}
+          </span>
+        ))}
       {collapsible &&
         (expanded ? (
           <ChevronDown size={11} style={s.codexToolChevron} />

@@ -40,7 +40,9 @@ export const CodexReasoningEntry = memo(function CodexReasoningEntry({
       category={t("codex.tool.category.thinking")}
       text={summaryLine}
       status={status}
-      statusLabel={done ? t("codex.tool.thought") : t("codex.tool.thinking")}
+      // 不渲染状态词：类别词「思考」+ 右侧耗时已经表达完整，再叠「已思考 /
+      // 思考中」是同一行内的重复信息（密集度改版）
+      showStatus={false}
       autoExpandWhileRunning
       autoCollapseOnDone
       streamingRevision={revision}

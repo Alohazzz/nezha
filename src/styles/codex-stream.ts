@@ -7,7 +7,7 @@ export const codexStream = {  codexStreamRoot: {
     padding: "16px 28px 32px",
     display: "flex",
     flexDirection: "column",
-    gap: 14,
+    gap: 8,
   },
 
   codexStreamViewRoot: {
@@ -91,7 +91,6 @@ export const codexStream = {  codexStreamRoot: {
     fontSize: 11.5,
     fontFamily: "var(--font-mono)",
     color: "var(--text-secondary)",
-    background: "var(--bg-root)",
     overflowX: "auto",
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
@@ -125,8 +124,7 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   codexReasoningBlock: {
-    borderLeft: "2px solid var(--border-dim)",
-    marginLeft: 4,
+    margin: 0,
     padding: "4px 12px",
     fontSize: 12,
     color: "var(--text-muted)",
@@ -338,8 +336,6 @@ export const codexStream = {  codexStreamRoot: {
     whiteSpace: "pre",
     maxHeight: 320,
     overflowY: "auto",
-    background: "var(--bg-root)",
-    borderTop: "1px solid var(--border-dim)",
   },
 
   // ── usage 条 ──────────────────────────────────────────────────────────────
@@ -581,15 +577,14 @@ export const codexStream = {  codexStreamRoot: {
     wordBreak: "break-word",
   },
 
-  // ── 统一工具卡骨架（issue #117 T2）─────────────────────────────────────────
-  // 伪类 / data-* 状态选择器 / shimmer keyframes 在 codex-stream.css。
+  // ── 统一工具卡骨架（issue #117 T2；去卡片化改版：ZCode 式扁平行）────────────
+  // 摘要行无边框无底色：图标 + 类别词 + 主文本 + meta/状态 + chevron 纯文本行；
+  // 展开区内容块保留浅底/左界线承载输出与 diff。伪类 / data-* 状态选择器 /
+  // shimmer keyframes 在 codex-stream.css。
 
   codexToolCard: {
-    border: "1px solid var(--border-dim)",
-    borderRadius: 8,
-    overflow: "hidden",
+    background: "transparent",
     fontSize: 12.5,
-    background: "var(--bg-root)",
     flexShrink: 0,
   },
 
@@ -597,8 +592,8 @@ export const codexStream = {  codexStreamRoot: {
     display: "flex",
     alignItems: "center",
     gap: 7,
-    padding: "6px 10px",
-    background: "var(--bg-input)",
+    padding: "3px 0",
+    background: "transparent",
     borderBottom: "1px solid transparent",
     color: "var(--text-secondary)",
     fontSize: 12,
@@ -615,16 +610,13 @@ export const codexStream = {  codexStreamRoot: {
     flexShrink: 0,
   },
 
+  // 类别词（命令 / 思考 / MCP…）：去 chip 底色，纯文本弱化色（ZCode 同款）
   codexToolCategory: {
     display: "inline-flex",
     alignItems: "center",
-    padding: "1px 7px",
-    borderRadius: 9,
-    background: "var(--bg-subtle)",
     color: "var(--text-muted)",
-    fontSize: 10.5,
-    fontWeight: 600,
-    letterSpacing: "0.02em",
+    fontSize: 11,
+    fontWeight: 500,
     flexShrink: 0,
     whiteSpace: "nowrap",
   },
@@ -636,6 +628,15 @@ export const codexStream = {  codexStreamRoot: {
     whiteSpace: "nowrap",
     flex: 1,
     minWidth: 0,
+  },
+
+  // 摘要行前缀阶段词（聚合组「4 个命令 / 正在执行」）：非等宽、不参与截断，
+  // 与后面的等宽命令文本并排（ZCode summary 的 kindLabel + secondaryText 结构）
+  codexToolLabel: {
+    color: "var(--text-muted)",
+    fontSize: 12,
+    flexShrink: 0,
+    whiteSpace: "nowrap",
   },
 
   codexToolMeta: {
@@ -668,13 +669,49 @@ export const codexStream = {  codexStreamRoot: {
     color: "var(--text-hint)",
   },
 
+  // 展开区内容块：浅底 + 圆角 + 左缩进（与摘要行平齐 18px = 图标+类别宽度），
+  // 与 ZCode 的工具输出块同款观感
   codexToolBody: {
-    background: "var(--bg-root)",
+    background: "var(--bg-subtle)",
+    borderRadius: 8,
+    marginLeft: 18,
+    padding: "2px 0",
+    overflow: "hidden",
   },
 
   // 命令卡输出体：相对定位容器，复制按钮绝对定位右上（原 inline style 迁出）
   codexCommandOutputWrap: {
     position: "relative",
+  },
+
+  // 展开区的完整原始命令：摘要行显示的是剥离 shell 包裹后的命令，这里保证
+  // 原始命令（含 bash -lc 包裹与转义）仍完整可读可复制
+  codexCommandFull: {
+    margin: 0,
+    padding: "6px 12px",
+    borderBottom: "1px solid var(--border-dim)",
+    fontSize: 11,
+    fontFamily: "var(--font-mono)",
+    color: "var(--text-hint)",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+
+  // 聚合组展开区：左侧竖线 + 缩进表达层级（ZCode execute-group 的子工具列同款），
+  // 子命令行本身不再带图标 / 类别词
+  codexCommandGroupBody: {
+    marginLeft: 6,
+    paddingLeft: 10,
+    borderLeft: "1px solid var(--border-dim)",
+    display: "flex",
+    flexDirection: "column",
+  },
+
+  // 聚合组摘要行的失败计数（红色，与成功计数同排）
+  codexToolMetaFailed: {
+    color: "var(--color-error)",
+    fontSize: 11,
+    flexShrink: 0,
   },
 
   // 命令卡截断提示条（issue #117 T5）：提示文案 + 复制全文按钮
@@ -683,7 +720,7 @@ export const codexStream = {  codexStreamRoot: {
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
-    padding: "4px 10px",
+    padding: "4px 12px",
     borderBottom: "1px solid var(--border-dim)",
     fontSize: 11,
     color: "var(--text-hint)",

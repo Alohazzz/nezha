@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { CodexStreamEntry } from "../../hooks/useCodexStream";
@@ -8,6 +8,8 @@ import { codexEntryRenderers } from "./codexRenderers";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexComposer } from "./CodexComposer";
 import { CodexWorkingIndicator } from "./CodexWorkingIndicator";
+import { CodexCommandGroupEntry } from "./CodexCommandGroupEntry";
+import { groupCommandEntries } from "./codexCommandSummary";
 import { CodexStreamProjectContext } from "./codexStreamContext";
 
 /** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。
@@ -127,6 +129,11 @@ export function CodexStreamView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
 
+  // 视图层分组：连续 ≥2 条命令塌缩成一行「终端 · N 个命令」（降密集主手段）。
+  // 分组是纯函数，归并模型不动；entries 引用每次增量都会变，useMemo 只在
+  // entries 变化时重算，不引入额外的渲染压力。
+  const renderItems = useMemo(() => groupCommandEntries(entries), [entries]);
+
   // 失败/中断类状态是必须第一眼看到的收口信息：置顶为横幅而非追加在流尾
   //（几百个条目之后），否则进程崩溃 / turn 失败时流视图看起来像"假死"。
   const bannerText = statusText ?? null;
@@ -155,14 +162,22 @@ export function CodexStreamView({
             </div>
           )}
           {bannerText && <div style={s.codexStreamEmpty}>{bannerText}</div>}
-          {entries.map((entry, i) => (
-            <EntryRenderer
-              key={(entry.item && "id" in entry.item && entry.item.id) || `idx-${i}`}
-              entry={entry}
-              entryIndex={i}
-              onOpenGitChanges={onOpenGitChanges}
-            />
-          ))}
+          {renderItems.map((item, i) =>
+            item.kind === "commandGroup" ? (
+              <CodexCommandGroupEntry
+                key={item.groupKey}
+                groupKey={item.groupKey}
+                commands={item.commands}
+              />
+            ) : (
+              <EntryRenderer
+                key={(item.entry.item && "id" in item.entry.item && item.entry.item.id) || `idx-${i}`}
+                entry={item.entry}
+                entryIndex={item.entryIndex}
+                onOpenGitChanges={onOpenGitChanges}
+              />
+            ),
+          )}
           {/* 整轮活性指示（Zcode 同款「工作中 N 秒」+ spinner）：delta 静默期
               条目流完全不动，没有它长思考/长命令时看起来像卡住。 */}
           {running && !bannerText && <CodexWorkingIndicator />}

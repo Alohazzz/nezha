@@ -90,9 +90,10 @@ describe("CodexCommandEntry output tail truncation", () => {
 
   it("feeds failure tooltip from the same tail logic (huge failed output → bounded detail)", () => {
     renderEntry(makeItem(bigOutput(20000), { status: "failed", exitCode: 1 }));
-    // 失败态 tooltip 触发按钮出现（骨架接管）；详情进入 tooltip 的尾部受同一上限约束
+    // 失败详情入口挂在红色 exit 码上（命令卡不渲染状态词，exit 码承担同一入口）；
+    // 详情进入 tooltip 的尾部受同一上限约束
     const trigger = screen.getByTitle("View failure detail");
-    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toBe("exit 1");
     fireEvent.click(trigger);
     const detail = screen.getByTestId("failure-detail");
     // tooltip 只承载尾部（骨架本身截 2000 字符）——不为全量 2.4MB

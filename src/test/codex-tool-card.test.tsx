@@ -279,8 +279,8 @@ describe("CodexReasoningEntry (issue #119)", () => {
     renderReasoning({ startedAtMs: Date.now() - 2000, endedAtMs: null, revision: 1 });
     // 运行中自动展开：思考文本直接可见
     expect(thoughtBodyVisible()).toBe(true);
-    // 状态词 running（en 表下 status 与 chip 同文案，用 class 精确定位）与动态秒数
-    expect(document.querySelector('.codex-stream-tool-status[data-status="running"]')).not.toBeNull();
+    // 运行态不渲染状态词（密集度改版）：类别词高亮 + 跳秒耗时已表达同一信息
+    expect(document.querySelector(".codex-stream-tool-status")).toBeNull();
     expect(screen.getByText(/^[0-9]+(\.[0-9]+)?s$/)).toBeTruthy();
   });
 
@@ -300,7 +300,8 @@ describe("CodexReasoningEntry (issue #119)", () => {
       </I18nProvider>,
     );
     expect(thoughtBodyVisible()).toBe(false);
-    expect(screen.getByText("Thought")).toBeTruthy();
+    // 完成态同样不渲染状态词（不再有 "Thought"），只留定格时长
+    expect(document.querySelector(".codex-stream-tool-status")).toBeNull();
     // 定格时长 = 4200-1000 = 3.2s（权威帧时间差，不是本地时钟）
     expect(screen.getByText("3.2s")).toBeTruthy();
   });
