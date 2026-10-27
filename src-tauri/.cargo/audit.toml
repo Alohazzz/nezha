@@ -12,4 +12,29 @@
 ignore = [
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # crypto-bigint 0.5.x timing variability (RUSTSEC-2026-0387, fixed in >=0.7.6).
+    # Transitive via codex-secrets -> age -> hpke -> p256 -> elliptic-curve; the
+    # codex git dependency is rev-pinned, so it cannot be upgraded independently.
+    # nezha never feeds secret material through this path itself.
+    "RUSTSEC-2026-0387",
+    # hickory-proto 0.25.x CPU exhaustion via O(n^2) name compression
+    # (RUSTSEC-2026-0119, fixed in >=0.26.1). Transitive via
+    # codex-network-proxy -> rama-dns -> hickory-resolver; nezha does not
+    # expose a DNS resolver service.
+    "RUSTSEC-2026-0119",
+    # hickory-proto 0.25.x NSEC3 unbounded loop (RUSTSEC-2026-0118).
+    # No fixed release exists upstream — ignoring is the only option. Same
+    # exposure note as above.
+    "RUSTSEC-2026-0118",
+    # zstd 0.13.x data leak across reused stream contexts (RUSTSEC-2026-0391,
+    # fixed in >=0.14.3). nezha declares zstd = "0.13" directly; 0.14 is a
+    # semver-breaking API change. nezha compresses/decompresses whole buffers
+    # without reusing a context across streams, so the vulnerable pattern does
+    # not apply. Revisit when upgrading to zstd 0.14.
+    "RUSTSEC-2026-0391",
+    # zstd-safe 7.x advisory set (RUSTSEC-2026-0398 / -0403, fixed in >=8.2.0).
+    # zstd-safe 8.x pairs with zstd 0.14; blocked by the same semver boundary
+    # as above. Revisit together with the zstd 0.14 upgrade.
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
 ]
