@@ -142,6 +142,8 @@ export function ProjectPage({
   onCodexApprovalResolved,
   onFollowUpStructured,
   onSetStructuredModel,
+  codexStructuredModel,
+  codexStructuredEffort,
   onCodexBuiltinAction,
   followUpBusyTaskId,
   onBack,
@@ -287,6 +289,9 @@ export function ProjectPage({
     model: string | undefined,
     effort: string | undefined,
   ) => void;
+  /** structured 通道的全局模型 / 思考深度（应用级设置，composer 回显与选择器选中态）。 */
+  codexStructuredModel?: string;
+  codexStructuredEffort?: string;
   /** structured 任务非选择器内置命令（`/compact` `/review` `/stop`）。 */
   onCodexBuiltinAction?: (task: Task, action: "compact" | "review" | "stop") => void;
   followUpBusyTaskId?: string | null;
@@ -604,6 +609,8 @@ export function ProjectPage({
                     ? (model, effort) => onSetStructuredModel(task, model, effort)
                     : undefined
                 }
+                codexStructuredModel={codexStructuredModel}
+                codexStructuredEffort={codexStructuredEffort}
                 onCodexBuiltinAction={
                   task.runMode === "structured" && onCodexBuiltinAction
                     ? (action) => onCodexBuiltinAction(task, action)

@@ -415,6 +415,11 @@ function App() {
   // NewTaskView 的任务级选择器已移除。设置面板自包含保存后经 CHANGED 事件同步到
   // 此 state；云效直发任务在后端强制 PTY，与此值无关。
   const [codexRunMode, setCodexRunMode] = useState<TaskRunMode>("pty");
+  // Codex structured 通道的全局模型 / 思考深度 override（composer `/model`
+  // `/effort` 的读写源，唯一事实来源同在 ~/.nezha/settings.json）：改一次，
+  // 对此后启动/续跑的所有 structured 任务生效，不再逐任务改。undefined = 跟随默认。
+  const [codexStructuredModel, setCodexStructuredModel] = useState<string | undefined>(undefined);
+  const [codexStructuredEffort, setCodexStructuredEffort] = useState<string | undefined>(undefined);
   const [uiFontFamily, setUiFontFamily] = useState<FontFamily>(() =>
     getInitialFontFamily("nezha:uiFontFamily", DEFAULT_UI_FONT),
   );
@@ -682,7 +687,12 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke<{ terminal_scrollback?: unknown; codex_run_mode?: unknown }>("load_app_settings")
+    invoke<{
+      terminal_scrollback?: unknown;
+      codex_run_mode?: unknown;
+      codex_structured_model?: string | null;
+      codex_structured_reasoning_effort?: string | null;
+    }>("load_app_settings")
       .then((settings) => {
         if (cancelled) return;
         setTerminalScrollbackState(clampTerminalScrollback(settings.terminal_scrollback));
@@ -690,6 +700,8 @@ function App() {
         if (settings.codex_run_mode === "pty" || settings.codex_run_mode === "structured") {
           setCodexRunMode(settings.codex_run_mode);
         }
+        setCodexStructuredModel(settings.codex_structured_model ?? undefined);
+        setCodexStructuredEffort(settings.codex_structured_reasoning_effort ?? undefined);
         // 一次性迁移：旧版任务级选择器的 localStorage 记忆（缺省通道曾是全局记忆）
         // 只在全局设置仍为新字段默认值 pty 时采纳一次，采纳后删除该键。
         const legacy = localStorage.getItem("nezha.codexRunMode");
@@ -707,15 +719,21 @@ function App() {
     };
   }, []);
 
-  // 设置面板（自包含模式）保存后广播 CHANGED：codexRunMode 从后端重读真值，
-  // 避免 App state 与面板内状态漂移（handleSubmitTask 依赖此值赋任务快照）。
+  // 设置面板（自包含模式）保存后广播 CHANGED：codexRunMode / structured 模型
+  // 从后端重读真值，避免 App state 与面板内状态漂移（handleSubmitTask 依赖此值赋任务快照）。
   useEffect(() => {
     const handler = () => {
-      invoke<{ codex_run_mode?: unknown }>("load_app_settings")
+      invoke<{
+        codex_run_mode?: unknown;
+        codex_structured_model?: string | null;
+        codex_structured_reasoning_effort?: string | null;
+      }>("load_app_settings")
         .then((settings) => {
           if (settings.codex_run_mode === "pty" || settings.codex_run_mode === "structured") {
             setCodexRunMode(settings.codex_run_mode);
           }
+          setCodexStructuredModel(settings.codex_structured_model ?? undefined);
+          setCodexStructuredEffort(settings.codex_structured_reasoning_effort ?? undefined);
         })
         .catch(() => {});
     };
@@ -1168,8 +1186,9 @@ function App() {
           threadId: task.codexSessionId,
           prompt: text,
           images,
-          model: task.model ?? null,
-          effort: task.reasoningEffort ?? null,
+          // 全局 override（应用级 /model /effort 设置）：resume 起新 turn 时携带
+          model: codexStructuredModel ?? null,
+          effort: codexStructuredEffort ?? null,
           onOutput: channel,
         });
       } catch (err) {
@@ -1179,17 +1198,26 @@ function App() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [followUpBusyTaskId, codexStream],
+    [followUpBusyTaskId, codexStream, codexStructuredModel, codexStructuredEffort],
   );
 
   // structured 任务的模型 / 推理深度切换（composer `/model` `/effort` 内置命令，
-  // 对齐 Codex CLI TUI 同名能力）：活会话热更（turn/settings/update），并把
-  // 任务快照的 model / reasoningEffort 持久化——done 后 resume 走同一 override。
+  // 对齐 Codex CLI TUI 同名能力）——**应用级全局配置**：写入 ~/.nezha/settings.json
+  // （save_codex_structured_model），改一次对此后启动/续跑的所有 structured 任务
+  // 生效，不再逐任务改快照。活会话热更仍走 set_codex_structured_model
+  // （turn/settings/update + 会话级 override），让当前任务的下一个 turn 立即跟上。
   const handleSetStructuredModel = useCallback(
     async (task: Task, model: string | undefined, effort: string | undefined) => {
+      // 热更当前活会话（运行中任务的下一 turn 立即生效）；done 态无活会话不报错。
+      await invoke("set_codex_structured_model", {
+        taskId: task.id,
+        model: model ?? null,
+        effort: effort ?? null,
+      }).catch(() => {
+        /* 无活会话（done 态）后端静默成功；其余失败也只影响热更，全局写入继续 */
+      });
       try {
-        await invoke("set_codex_structured_model", {
-          taskId: task.id,
+        await invoke("save_codex_structured_model", {
           model: model ?? null,
           effort: effort ?? null,
         });
@@ -1197,17 +1225,8 @@ function App() {
         showToast(t("toast.structuredModelFailed", { error: String(err) }), "error");
         return;
       }
-      const appliedLabel =
-        [model ?? t("newTask.modelDefault"), effort].filter(Boolean).join(" · ") ||
-        t("newTask.modelDefault");
-      showToast(t("toast.structuredModelApplied", { label: appliedLabel }), "success");
-      setTasks((prev) => {
-        const next = prev.map((tk) =>
-          tk.id === task.id ? { ...tk, model, reasoningEffort: effort } : tk,
-        );
-        persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
-        return next;
-      });
+      setCodexStructuredModel(model);
+      setCodexStructuredEffort(effort);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -1290,8 +1309,10 @@ function App() {
       yunxiaoPlanDiscussion: task.yunxiaoPlanDiscussion === true,
       // 方案执行待办标记：后端 2.2a 防线据此对 structured 通道豁免（跟随全局设置）。
       planId: task.planId,
-      model: task.model,
-      reasoningEffort: task.reasoningEffort,
+      // 模型 / 思考深度：structured 走应用级全局 override（/model /effort 全局
+      // 生效，不再逐任务改）；PTY 仍用任务快照（NewTaskView 选择器语义）。
+      model: runMode === "structured" ? codexStructuredModel : task.model,
+      reasoningEffort: runMode === "structured" ? codexStructuredEffort : task.reasoningEffort,
       images,
       texts,
       cols: tm.terminalSizeRef.current.cols,
@@ -3935,6 +3956,8 @@ function App() {
               onCodexApprovalResolved={codexStream.setApprovalResolved}
               onFollowUpStructured={handleFollowUpStructured}
               onSetStructuredModel={handleSetStructuredModel}
+              codexStructuredModel={codexStructuredModel}
+              codexStructuredEffort={codexStructuredEffort}
               onCodexBuiltinAction={handleCodexBuiltinAction}
               followUpBusyTaskId={followUpBusyTaskId}
               onBack={handleBack}

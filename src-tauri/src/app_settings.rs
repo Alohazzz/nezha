@@ -39,6 +39,15 @@ fn normalize_codex_run_mode(value: String) -> String {
     }
 }
 
+/// structured 全局 override 的"清除值"语义：`"default"`（大小写不敏感）与空串
+/// 等价于不 override，收敛为 None（与 set_codex_structured_model 的 normalized 同语义）。
+fn normalize_structured_override(value: Option<String>) -> Option<String> {
+    match value {
+        Some(v) if v.eq_ignore_ascii_case("default") => None,
+        other => other,
+    }
+}
+
 fn default_shift_enter_newline() -> bool {
     true
 }
@@ -230,6 +239,14 @@ pub struct AppSettings {
     /// 创建的 Codex 任务一律跟随此值；云效直发任务在后端强制 PTY，不受影响。
     #[serde(default = "default_codex_run_mode")]
     pub codex_run_mode: String,
+    /// Codex structured 通道的全局模型 override（None = 跟随 Codex 默认模型）。
+    /// composer `/model` 的写入落点，对此后启动/续跑的所有 structured 任务生效；
+    /// 旧的会话级热更（turn/settings/update）仍走 set_codex_structured_model。
+    #[serde(default)]
+    pub codex_structured_model: Option<String>,
+    /// Codex structured 通道的全局思考深度 override（None = 跟随模型默认）。
+    #[serde(default)]
+    pub codex_structured_reasoning_effort: Option<String>,
     #[serde(default = "default_agent_enabled")]
     pub dsh_enabled: bool,
     #[serde(default = "default_send_shortcut")]
@@ -288,6 +305,8 @@ impl Default for AppSettings {
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
             codex_run_mode: default_codex_run_mode(),
+            codex_structured_model: None,
+            codex_structured_reasoning_effort: None,
             dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -733,6 +752,22 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_enabled: settings.claude_enabled,
         codex_enabled: settings.codex_enabled,
         codex_run_mode: normalize_codex_run_mode(settings.codex_run_mode),
+        codex_structured_model: normalize_structured_override(
+            normalize_optional_catalog_value(
+                settings.codex_structured_model,
+                "Codex structured model",
+                MAX_MODEL_ID_BYTES,
+            )
+            .unwrap_or_default(),
+        ),
+        codex_structured_reasoning_effort: normalize_structured_override(
+            normalize_optional_catalog_value(
+                settings.codex_structured_reasoning_effort,
+                "Codex structured reasoning effort",
+                MAX_REASONING_EFFORT_BYTES,
+            )
+            .unwrap_or_default(),
+        ),
         dsh_enabled: settings.dsh_enabled,
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
@@ -788,6 +823,8 @@ fn load_settings_unlocked() -> AppSettings {
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
             codex_run_mode: default_codex_run_mode(),
+            codex_structured_model: None,
+            codex_structured_reasoning_effort: None,
             dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -1431,6 +1468,45 @@ pub async fn save_codex_run_mode(run_mode: String) -> Result<AppSettings, String
     .map_err(|e| e.to_string())?
 }
 
+/// Codex structured 通道的全局模型 / 思考深度 override（composer `/model`
+/// `/effort` 的写入落点）。任一传 None 即清除该项 override（回跟随默认）；
+/// `"default"` / 空串同样视为清除。保存后广播由前端 CHANGED 事件完成，
+/// 对此后启动/续跑的所有 structured 任务生效。
+#[tauri::command]
+pub async fn save_codex_structured_model(
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let normalized = |value: Option<String>| match value {
+            Some(v) => {
+                let trimmed = v.trim();
+                if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            None => None,
+        };
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.codex_structured_model = normalized(model);
+        settings.codex_structured_reasoning_effort = normalized(effort);
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized_settings = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized_settings)
+            .map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized_settings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn save_shift_enter_newline(enabled: bool) -> Result<AppSettings, String> {
     tokio::task::spawn_blocking(move || {
@@ -1768,6 +1844,47 @@ mod codex_run_mode_tests {
         let dirty: AppSettings = serde_json::from_str(r#"{"codex_run_mode":"yolo"}"#).unwrap();
         let normalized = normalize_settings(dirty);
         assert_eq!(normalized.codex_run_mode, "pty");
+    }
+}
+
+#[cfg(test)]
+mod codex_structured_model_tests {
+    use super::*;
+
+    #[test]
+    fn codex_structured_model_defaults_to_none_and_survives_roundtrip() {
+        let raw = serde_json::to_string(&AppSettings::default()).unwrap();
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert!(value["codex_structured_model"].is_null());
+        assert!(value["codex_structured_reasoning_effort"].is_null());
+
+        // 旧 settings.json 无此字段 → serde default 回落 None，无需迁移。
+        let absent: AppSettings = serde_json::from_str(r#"{"send_shortcut":"enter"}"#).unwrap();
+        assert_eq!(absent.codex_structured_model, None);
+        assert_eq!(absent.codex_structured_reasoning_effort, None);
+
+        let with_values: AppSettings =
+            serde_json::from_str(r#"{"codex_structured_model":"gpt-5.3","codex_structured_reasoning_effort":"high"}"#)
+                .unwrap();
+        assert_eq!(with_values.codex_structured_model.as_deref(), Some("gpt-5.3"));
+        assert_eq!(with_values.codex_structured_reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn codex_structured_model_normalizes_blank_and_default_to_none() {
+        let dirty: AppSettings = serde_json::from_str(
+            r#"{"codex_structured_model":"  ","codex_structured_reasoning_effort":"Default"}"#,
+        )
+        .unwrap();
+        let normalized = normalize_settings(dirty);
+        assert_eq!(normalized.codex_structured_model, None);
+        // "default"（大小写不敏感）= 清除 override，与 set_codex_structured_model 同语义
+        assert_eq!(normalized.codex_structured_reasoning_effort, None);
+
+        let trimmed: AppSettings =
+            serde_json::from_str(r#"{"codex_structured_model":"  gpt-5.3  "}"#).unwrap();
+        let normalized = normalize_settings(trimmed);
+        assert_eq!(normalized.codex_structured_model.as_deref(), Some("gpt-5.3"));
     }
 }
 

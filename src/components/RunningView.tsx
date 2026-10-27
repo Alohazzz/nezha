@@ -114,6 +114,8 @@ export function RunningView({
   onCodexApprovalResolved,
   onFollowUp,
   onSetStructuredModel,
+  codexStructuredModel,
+  codexStructuredEffort,
   onCodexBuiltinAction,
   codexModelCatalog,
   followUpBusy,
@@ -157,6 +159,9 @@ export function RunningView({
   /** structured 任务的模型 / 推理深度切换（`/model` `/effort` 内置命令的写入通道）。
    *  缺省 = composer 不注入内置命令（PTY 等非 structured 场景）。 */
   onSetStructuredModel?: (model: string | undefined, effort: string | undefined) => void;
+  /** structured 通道的全局模型 / 思考深度（应用级设置，composer 回显与选择器选中态）。 */
+  codexStructuredModel?: string;
+  codexStructuredEffort?: string;
   /** structured 任务的非选择器内置命令（`/compact` `/review` `/stop`）。 */
   onCodexBuiltinAction?: (action: "compact" | "review" | "stop") => void;
   /** Codex 模型目录（选择器数据源；仅 structured codex 任务由 ProjectPage 传入）。 */
@@ -757,8 +762,8 @@ export function RunningView({
             projectPath={projectPath}
             onImageToast={showToast}
             modelCatalog={codexModelCatalog}
-            model={task.model}
-            reasoningEffort={task.reasoningEffort}
+            model={codexStructuredModel}
+            reasoningEffort={codexStructuredEffort}
             showModelBadge={!!onSetStructuredModel}
             onSetStructuredModel={onSetStructuredModel}
             onBuiltinAction={onCodexBuiltinAction}
@@ -840,8 +845,8 @@ export function RunningView({
             onOpenGitChanges={onOpenGitChanges}
             composerDisabled={codexStream.approval !== null}
             modelCatalog={codexModelCatalog}
-            model={task.model}
-            reasoningEffort={task.reasoningEffort}
+            model={codexStructuredModel}
+            reasoningEffort={codexStructuredEffort}
             showModelBadge={!!onSetStructuredModel}
             onSetStructuredModel={onSetStructuredModel}
             onBuiltinAction={onCodexBuiltinAction}
@@ -889,8 +894,8 @@ export function RunningView({
           onImageToast={showToast}
           onOpenGitChanges={onOpenGitChanges}
           modelCatalog={codexModelCatalog}
-          model={task.model}
-          reasoningEffort={task.reasoningEffort}
+          model={codexStructuredModel}
+          reasoningEffort={codexStructuredEffort}
           showModelBadge={!!onSetStructuredModel}
           onSetStructuredModel={onSetStructuredModel}
           onBuiltinAction={onCodexBuiltinAction}
