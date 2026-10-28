@@ -318,6 +318,31 @@ async fn handle_event(
             );
             true
         }
+        CodexEvent::UserInputRequested { request_id, params } => {
+            // 与审批同款：反向请求已在 mod.rs 入等待表，这里广播 UI 事件 + 置状态。
+            // 前端问答卡片回传 `respond_codex_user_input` 靠 request_id。
+            match serde_json::to_value(&params) {
+                Ok(mut payload) => {
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.insert("task_id".to_string(), serde_json::json!(task_id));
+                        obj.insert("request_id".to_string(), serde_json::json!(request_id));
+                    }
+                    let _ = app.emit("codex-user-input-requested", payload);
+                }
+                Err(e) => eprintln!("[codex_appserver] serialize user input: {e}"),
+            }
+            let _ = app.emit(
+                "task-status",
+                serde_json::json!({ "task_id": task_id, "status": "input_required" }),
+            );
+            crate::system_notify::notify_task_event(
+                app,
+                task_id,
+                crate::system_notify::NotifyCategory::Confirm,
+                None,
+            );
+            true
+        }
         CodexEvent::UnsupportedServerRequest { .. } => {
             // mod.rs 已自动拒绝；事件不必下发前端
             true
@@ -769,6 +794,35 @@ pub async fn respond_codex_approval(
         other => return Err(format!("unknown approval action: {other}")),
     };
     respond_approval(&task_manager, &task_id, request_id, action).await?;
+    let _ = app.emit(
+        "task-status",
+        serde_json::json!({ "task_id": task_id, "status": "running" }),
+    );
+    Ok(())
+}
+
+/// 应答 structured 任务的模型提问（`request_user_input` 工具）。
+///
+/// `answers` 是 question id → 用户选中的答案数组（多选即多条）。空 map 表示
+/// 用户放弃作答——**必须回**，否则 core 侧 `rx_response.await` 让 turn 永挂。
+/// 成功后回 `running` 状态，与审批应答同语义。
+#[tauri::command]
+pub async fn respond_codex_user_input(
+    app: AppHandle,
+    task_manager: State<'_, crate::TaskManager>,
+    task_id: String,
+    request_id: i64,
+    answers: std::collections::HashMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let session = take_session_impl(&task_manager, &task_id)
+        .ok_or_else(|| "structured session not found for task".to_string())?;
+    session
+        .respond_user_input(
+            codex_app_server_protocol::RequestId::Integer(request_id),
+            answers,
+        )
+        .await
+        .map_err(|e| format!("{e:?}"))?;
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "running" }),

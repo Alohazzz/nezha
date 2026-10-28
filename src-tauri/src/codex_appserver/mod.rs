@@ -99,6 +99,8 @@ struct SessionCore {
     errors_tx: broadcast::Sender<SessionError>,
     status: parking_lot::Mutex<SessionStatusInternal>,
     approvals: parking_lot::Mutex<HashMap<proto::RequestId, PendingApproval>>,
+    /// 待应答的模型提问（`item/tool/requestUserInput`）：request_id → 原始 params。
+    user_inputs: parking_lot::Mutex<HashMap<proto::RequestId, proto::ToolRequestUserInputParams>>,
     cwd: String,
     approval_policy: String,
     sandbox: String,
@@ -223,6 +225,7 @@ impl CodexAppServerSession {
             errors_tx,
             status: parking_lot::Mutex::new(SessionStatusInternal::default()),
             approvals: parking_lot::Mutex::new(HashMap::new()),
+            user_inputs: parking_lot::Mutex::new(HashMap::new()),
             cwd: request.cwd.clone(),
             approval_policy: request.approval_policy.clone(),
             sandbox: request.sandbox.clone(),
@@ -285,6 +288,7 @@ impl CodexAppServerSession {
             "cwd": cwd,
             "approvalPolicy": approval_policy,
             "sandbox": sandbox,
+            "config": thread_config_overrides(),
         });
         let result = self
             .request("thread/start", params)
@@ -338,7 +342,12 @@ impl CodexAppServerSession {
     /// 按 threadId 恢复已有 thread（done 后继续对话，阶段 4 增强）。
     /// rollout 文件从磁盘加载回上下文；path 仅作一致性校验传回。
     pub async fn resume_thread(&self, thread_id: &str) -> Result<ThreadInfo, SessionError> {
-        let params = json!({ "threadId": thread_id });
+        // config 覆盖要跟着 resume 一起下发：thread 是按 threadId 从 rollout 重建的，
+        // 不带的 feature 开关就只对新建 thread 生效，续聊会退回"不能提问"。
+        let params = json!({
+            "threadId": thread_id,
+            "config": thread_config_overrides(),
+        });
         let result = self
             .request("thread/resume", params)
             .await
@@ -616,6 +625,38 @@ impl CodexAppServerSession {
         Ok(())
     }
 
+    /// 应答模型提问（`item/tool/requestUserInput`）。
+    ///
+    /// `answers` 是 question id → 用户选中的答案数组。**必须应答**：core 侧
+    /// `request_user_input` 是 `rx_response.await`，不回答 turn 会一直挂着。
+    /// 用户放弃作答时传空 map（不是拒答），模型拿到空答案后会自行决定继续或收尾。
+    pub async fn respond_user_input(
+        &self,
+        request_id: proto::RequestId,
+        answers: HashMap<String, Vec<String>>,
+    ) -> Result<(), SessionError> {
+        // 先读不删：写失败时条目要留着让用户重试——删掉的话卡片没了、turn 还在等。
+        let params = {
+            let inputs = self.core.user_inputs.lock();
+            inputs.get(&request_id).cloned().ok_or_else(|| {
+                SessionError::Protocol("user input request not found/expired".to_string())
+            })?
+        };
+        let response = build_user_input_response(&params, &answers);
+        let result = serde_json::to_value(&response)
+            .map_err(|e| SessionError::Protocol(format!("encode user input: {e}")))?;
+        let line = rpc::encode_response(&request_id, &result);
+        self.write_line(&line)
+            .await
+            .map_err(|e| SessionError::Protocol(format!("write user input response: {e}")))?;
+        self.core.user_inputs.lock().remove(&request_id);
+        let mut status = self.core.status.lock();
+        if status.phase == SessionPhase::AwaitingApproval {
+            status.phase = SessionPhase::TurnRunning;
+        }
+        Ok(())
+    }
+
     /// 订阅事件流(delta / turn 生命周期 / 审批请求都从这里出)。
     pub fn subscribe(&self) -> broadcast::Receiver<CodexEvent> {
         self.core.events_tx.subscribe()
@@ -786,6 +827,24 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
                         params,
                     });
                 }
+                Ok(CodexEvent::UserInputRequested { request_id, params }) => {
+                    // 与审批同款：置状态 + 入等待表 + 广播,三步都不做 I/O。
+                    // 与审批分开存表——两者的应答形状完全不同（决策对象 vs answers map），
+                    // 混在一张表里 respond_* 无法判断该序列化成哪一种。
+                    {
+                        let mut status = core.status.lock();
+                        if status.phase == SessionPhase::TurnRunning {
+                            status.phase = SessionPhase::AwaitingApproval;
+                        }
+                    }
+                    core.user_inputs
+                        .lock()
+                        .insert(request_id.clone(), params.clone());
+                    let _ = core.events_tx.send(CodexEvent::UserInputRequested {
+                        request_id,
+                        params,
+                    });
+                }
                 Ok(CodexEvent::UnsupportedServerRequest { request_id, method }) => {
                     eprintln!("[codex_appserver] unsupported server request {method}; auto-declining");
                     // 自动拒绝防 turn 卡死:reader 持有 stdin,直接写回应答
@@ -834,6 +893,50 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
             }
         }
     }
+}
+
+/// 把用户答案整理成上游应答形状。
+///
+/// 只保留服务端声明过的 question id——多余键会被模型当成"答了不存在的问题"，
+/// 而空白答案等价于未答（上游 `answers` 是 `Vec<String>`，塞空串会让模型
+/// 把空字符串当成用户的选择）。用户整体跳过时得到空 map，仍是**合法应答**。
+fn build_user_input_response(
+    params: &proto::ToolRequestUserInputParams,
+    answers: &HashMap<String, Vec<String>>,
+) -> proto::ToolRequestUserInputResponse {
+    let filtered: HashMap<String, proto::ToolRequestUserInputAnswer> = params
+        .questions
+        .iter()
+        .filter_map(|question| {
+            let values = answers.get(&question.id)?;
+            let non_empty: Vec<String> = values
+                .iter()
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+                .collect();
+            if non_empty.is_empty() {
+                return None;
+            }
+            Some((question.id.clone(), proto::ToolRequestUserInputAnswer { answers: non_empty }))
+        })
+        .collect();
+    proto::ToolRequestUserInputResponse { answers: filtered }
+}
+
+/// 每个 thread 都要带上的 config 覆盖（上游按 CLI `-c` 同一套 raw override 解析，
+/// 扁平点号键即可）。
+///
+/// `features.default_mode_request_user_input`：`request_user_input` 工具在 Default
+/// 协作模式下默认**不注册**（只有 Plan 模式天然可用，见上游
+/// `tools::request_user_input_available_modes`）。不开这个开关，模型调用会被
+/// handler 顶回 "unavailable in Default mode"，只能退化成一堆纯文本选项让用户
+/// 按编号回复——弹窗永远等不到反向请求。Nezha 不切 Plan 模式（那会连带换掉整套
+/// developer instructions），只开这一个 feature。
+fn thread_config_overrides() -> serde_json::Value {
+    json!({
+        "features.default_mode_request_user_input": true,
+    })
 }
 
 /// turn/start 参数构造（含会话级模型 override）。override 字段只在非 None 时
@@ -901,6 +1004,7 @@ impl SessionCore {
             errors_tx: broadcast::channel(16).0,
             status: parking_lot::Mutex::new(SessionStatusInternal::default()),
             approvals: parking_lot::Mutex::new(HashMap::new()),
+            user_inputs: parking_lot::Mutex::new(HashMap::new()),
             cwd: ".".to_string(),
             approval_policy: "untrusted".to_string(),
             sandbox: "read-only".to_string(),
@@ -1025,5 +1129,64 @@ mod tests {
         assert_eq!(core.status.lock().phase, SessionPhase::Starting);
         handle_wire_line(&core, "totally not json").await;
         assert_eq!(core.status.lock().phase, SessionPhase::Starting);
+    }
+
+    #[tokio::test]
+    async fn user_input_request_enters_awaiting_state_and_waiting_table() {
+        // 与审批同款：解析成功 → 置 AwaitingApproval + 入等待表。
+        // 关键差异是**不能**走自动 decline 分支，否则模型永远拿不到答案。
+        let core = SessionCore::test_core();
+        handle_wire_line(
+            &core,
+            r#"{"method":"turn/started","params":{"threadId":"t1","turn":{"id":"turn1","status":"inProgress","items":[]}}}"#,
+        )
+        .await;
+        handle_wire_line(
+            &core,
+            concat!(
+                r#"{"method":"item/tool/requestUserInput","id":4,"params":{"threadId":"t1","turnId":"turn1","#,
+                r#""itemId":"call_x","isBlocking":true,"questions":[{"id":"q1","header":"H","question":"Q?",#,
+                r#""options":[{"label":"A","description":"a"}]}]}}"#
+            ),
+        )
+        .await;
+        assert_eq!(core.status.lock().phase, SessionPhase::AwaitingApproval);
+        assert_eq!(core.user_inputs.lock().len(), 1);
+        // 审批表必须保持为空——两种反向请求的应答形状不同，不能混表
+        assert!(core.approvals.lock().is_empty());
+    }
+
+    #[test]
+    fn build_user_input_response_filters_unknown_and_empty_answers() {
+        // 只保留服务端声明过的 question id，且空白答案视为未答；
+        // 用户点「跳过」（空 map）产出的空 answers 仍是合法应答。
+        let params: proto::ToolRequestUserInputParams = serde_json::from_value(json!({
+            "threadId": "t1",
+            "turnId": "turn1",
+            "itemId": "call_y",
+            "isBlocking": true,
+            "questions": [
+                { "id": "q1", "header": "A", "question": "first?", "options": [{ "label": "x", "description": "x" }] },
+                { "id": "q2", "header": "B", "question": "second?", "options": [{ "label": "y", "description": "y" }] },
+            ],
+        }))
+        .unwrap();
+
+        let mut answers = HashMap::new();
+        answers.insert("q1".to_string(), vec!["  x  ".to_string()]);
+        answers.insert("q2".to_string(), vec!["   ".to_string()]); // 全空白 → 丢弃
+        answers.insert("bogus".to_string(), vec!["ignored".to_string()]); // 不存在的问题 → 丢弃
+        let response = build_user_input_response(&params, &answers);
+        assert_eq!(response.answers.len(), 1);
+        assert_eq!(response.answers["q1"].answers, vec!["x".to_string()]);
+
+        // 跳过：空 answers 是合法应答（不能当成错误，否则 turn 挂死）
+        let skipped = build_user_input_response(&params, &HashMap::new());
+        assert!(skipped.answers.is_empty());
+
+        // 多选：同一 id 的多个值保序全量保留
+        let mut multi = HashMap::new();
+        multi.insert("q1".to_string(), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(build_user_input_response(&params, &multi).answers["q1"].answers, vec!["a", "b"]);
     }
 }

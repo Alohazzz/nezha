@@ -62,6 +62,13 @@ pub enum CodexEvent {
         request_id: proto::RequestId,
         params: proto::CommandExecutionRequestApprovalParams,
     },
+    /// 模型主动提问(`item/tool/requestUserInput`):`request_user_input` 工具调用
+    /// 触发的反向请求。`request_id` 必须原样带回 `respond_user_input`——
+    /// 不回的话 core 侧 `rx_response.await` 永挂,turn 卡死在等待态。
+    UserInputRequested {
+        request_id: proto::RequestId,
+        params: proto::ToolRequestUserInputParams,
+    },
     /// 当前不支持的反向请求(MCP elicitation / fileChange / dynamic tool 等),
     /// 上层必须自动应答拒绝防 turn 卡死。
     UnsupportedServerRequest { request_id: proto::RequestId, method: String },
@@ -144,6 +151,15 @@ fn parse_server_request(
                 serde_json::from_value(params)
                     .map_err(|e| format!("item/commandExecution/requestApproval: {e}"))?;
             Ok(CodexEvent::ApprovalRequested { request_id, params: approval })
+        }
+        // 模型主动提问：0.163 起 app-server 有这条反向请求（EXPERIMENTAL，
+        // 需客户端 initialize 声明 experimentalApi）。不接的话会被下面按
+        // "不支持" 自动 decline，模型拿到空答案后只能退化成纯文本列选项。
+        "item/tool/requestUserInput" => {
+            let params = params.unwrap_or(Value::Null);
+            let input: proto::ToolRequestUserInputParams = serde_json::from_value(params)
+                .map_err(|e| format!("item/tool/requestUserInput: {e}"))?;
+            Ok(CodexEvent::UserInputRequested { request_id, params: input })
         }
         // 其余反向请求当前不支持:保留 id 供上层自动拒绝,防 turn 卡死
         other => Ok(CodexEvent::UnsupportedServerRequest {
@@ -478,6 +494,53 @@ mod tests {
                 assert_eq!(decisions[2], proto::CommandExecutionApprovalDecision::Cancel);
             }
             other => panic!("expected ApprovalRequested, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_input_request_is_parsed_with_questions() {
+        // 形状取自上游 `ToolRequestUserInputParams`（0.163，EXPERIMENTAL）。
+        // 这条反向请求过去落在 UnsupportedServerRequest 里被自动 decline，
+        // 模型拿不到答案只能退化成纯文本列选项。
+        let line = concat!(
+            r#"{"method":"item/tool/requestUserInput","id":7,"params":{"#,
+            r#""threadId":"t1","turnId":"turn1","itemId":"call_abc","#,
+            r#""questions":[{"id":"scope","header":"范围","question":"改哪些入口?",#,
+            r#""isOther":true,"isSecret":false,"options":[{"label":"仅PC","description":"风险最小"}]}],#,
+            r#""isBlocking":true}}"#
+        );
+        match parse_from_line(line).unwrap() {
+            CodexEvent::UserInputRequested { request_id, params } => {
+                assert_eq!(request_id, proto::RequestId::Integer(7));
+                assert_eq!(params.item_id, "call_abc");
+                assert!(params.is_blocking);
+                let question = params.questions.first().expect("one question");
+                assert_eq!(question.id, "scope");
+                assert_eq!(question.header, "范围");
+                assert!(question.is_other);
+                let options = question.options.as_ref().expect("options");
+                assert_eq!(options[0].label, "仅PC");
+            }
+            other => panic!("expected UserInputRequested, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_input_request_without_is_blocking_defaults_to_blocking() {
+        // 老样本/精简样本可能不带 isBlocking：缺省必须按阻塞处理，
+        // 否则上层会把它当成"可以晚点再答"，turn 静默挂住。
+        let line = concat!(
+            r#"{"method":"item/tool/requestUserInput","id":8,"params":{"#,
+            r#""threadId":"t1","turnId":"turn1","itemId":"call_def","#,
+            r#""questions":[{"id":"q1","header":"H","question":"Q?",#,
+            r#""options":[{"label":"A","description":"a"}]}]}}"#
+        );
+        match parse_from_line(line).unwrap() {
+            CodexEvent::UserInputRequested { params, .. } => {
+                assert!(params.is_blocking);
+                assert!(!params.questions[0].is_other);
+            }
+            other => panic!("expected UserInputRequested, got {other:?}"),
         }
     }
 
