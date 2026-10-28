@@ -533,3 +533,9 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* 折叠头里状态词与跳动秒数之间的分隔符：两者是一句话，视觉间距要小于普通 gap。 */
+.codex-stream-turn-sep {
+  color: var(--codex-row-icon);
+  margin: 0 -2px;
+}

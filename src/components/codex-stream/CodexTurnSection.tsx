@@ -61,11 +61,17 @@ function ProcessHeader({
     >
       <ChevronRight size={11} className="codex-stream-turn-chevron" data-open={open || undefined} />
       <span className="codex-stream-turn-label">{label}</span>
-      {/* 运行中把跳动秒数摆在头部右侧：收起态也能看到本轮已经跑了多久。 */}
+      {/* 运行中的跳动秒数接在同一句里（「工作中 · 12s」），不单独再占一个槽位——
+          同一行出现「工作中」和裸秒数两段，等于把同一件事说了两遍。 */}
       {running && segment.startedAtMs != null && (
-        <span style={s.codexToolMeta}>
-          <CodexLiveDuration startedAtMs={segment.startedAtMs} endedAtMs={null} />
-        </span>
+        <>
+          <span className="codex-stream-turn-sep" aria-hidden="true">
+            ·
+          </span>
+          <span style={s.codexToolMeta}>
+            <CodexLiveDuration startedAtMs={segment.startedAtMs} endedAtMs={null} />
+          </span>
+        </>
       )}
     </button>
   );

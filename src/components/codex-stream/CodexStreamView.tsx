@@ -153,6 +153,11 @@ export function CodexStreamView({
     [entries, running, interrupted],
   );
   const summary = useMemo(() => summarizeCodexStream(entries, segments), [entries, segments]);
+  // 运行中的段若有过程，折叠头的「正在工作 · N 秒」就是活性信号；只有在还没
+  // 攒出任何过程（刚发指令、模型还在想）时才需要流尾兜底指示。
+  const activeSegment = segments[segments.length - 1];
+  const needsWorkingIndicator =
+    running && (!activeSegment || activeSegment.processItems.length === 0);
 
   // 用户主动上滚即停止跟随；滚回底部恢复跟随（终端自动滚动同款交互）
   const handleScroll = () => {
@@ -209,9 +214,10 @@ export function CodexStreamView({
                 onOpenGitChanges={onOpenGitChanges}
               />
             ))}
-            {/* 整轮活性指示（Zcode 同款「工作中 N 秒」+ spinner）：delta 静默期
-                条目流完全不动，没有它长思考/长命令时看起来像卡住。 */}
-            {running && !bannerText && <CodexWorkingIndicator />}
+            {/* 整轮活性指示：仅在还没有任何过程时使用（刚发指令、模型还在想）。
+                一旦折叠头出现，它就是唯一计时来源——两处各起一个计数器会给出
+                两个互相矛盾的秒数。 */}
+            {running && !bannerText && needsWorkingIndicator && <CodexWorkingIndicator />}
             {/* 轮尾收口：结束的那一刻必须能一眼看出「结束了、花了多久、改了什么」。
                 此前只有失败才有横幅，正常结束的流视图走到最后一条工具卡就停住。 */}
             {!running && entries.length > 0 && (
