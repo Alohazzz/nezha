@@ -5,12 +5,20 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+  # 给已发布的 tag 补跑构建：发版时若构建失败，Release 会是个没有安装包的空壳
+  # （v0.36.0 即此情况）。tag 不可重打，用这里把产物补挂到现有 Release 上。
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的 tag（如 v0.36.0）"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,11 +28,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # 手动补跑时按输入的 tag 检出，保证构建的是已发布 tag 的代码。
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Check tag matches package.json / Cargo.toml / tauri.conf.json
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME#v}"
+          # push 触发用 GITHUB_REF_NAME；dispatch 触发读输入。
+          TAG_NAME="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${TAG_NAME#v}"
           PKG=$(jq -r .version package.json)
           TAURI=$(jq -r .version src-tauri/tauri.conf.json)
           CARGO=$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' src-tauri/Cargo.toml)
@@ -38,6 +51,14 @@ jobs:
     name: Build ${{ matrix.name }}
     needs: verify-version
     runs-on: ${{ matrix.runner }}
+    # codex-app-server-protocol 走 git 依赖拉取整个 openai/codex 仓库，其中包含一条
+    # 193 字符的 TUI snapshot 文件名。默认 CARGO_HOME（C:\Users\runneradmin\.cargo）
+    # 下拼接后总长 266 字符，超过 Windows MAX_PATH=260，cargo 检出直接报
+    # Filesystem(30) path too long，导致整个 release 构建失败（v0.36.0 即此原因）。
+    # 缩短 CARGO_HOME 把路径落回 260 以内，并用 git CLI 检出配合 core.longpaths 兜底。
+    env:
+      CARGO_HOME: C:\c
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     strategy:
       fail-fast: false
       # 只发 Windows（x64 + ARM64）：macOS / Linux 的安装包用不上，构建却在每次
@@ -59,6 +80,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # git CLI 检出长路径需要该配置；系统级设置失败不致命（CARGO_HOME 已缩短）。
+          git config --system core.longpaths true
+          Write-Host "core.longpaths=$(& git config --system --get core.longpaths)"
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -142,7 +173,25 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      # 手动补跑只能给已存在的 Release 追加安装包：gh release upload 不会碰正文，
+      # 避免把仓库里手写的发版公告覆盖成自动生成的 release notes。
+      - name: Upload assets to existing release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find release-artifacts -type f -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::没有找到任何构建产物，拒绝更新 Release"
+            exit 1
+          fi
+          printf '即将上传 %d 个文件到 %s\n' "${#files[@]}" "$TAG"
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
       - name: Create GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
