@@ -278,6 +278,14 @@
 }
 
 /* ── 方案预览面板（plan-preview）：plan.md 的 Markdown 渲染 ────────────── */
+/* 原 inline style（planPanelMarkdown）迁出：容器排版并入 .plan-md，两处
+   预览面板（PlanPreviewPanel / IssuePlanViewDialog）共用。 */
+.plan-md {
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
 
 .plan-md h1,
 .plan-md h2,

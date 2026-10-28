@@ -1,7 +1,12 @@
-import { Marked, marked } from "marked";
+import { Marked, marked, type Tokens } from "marked";
 import DOMPurify from "dompurify";
+import { resolveMermaidAutoRenderDecision, shouldRenderMermaidCodeBlock } from "./mermaidLanguage";
 
 export type TocEntry = { depth: number; text: string; id: string };
+
+export type MessageMarkdownSegment =
+  | { type: "html"; html: string }
+  | { type: "mermaid"; code: string; autoRender: boolean };
 
 /**
  * 智能体正文（会话消息 / 计划 / 评审报告）的 Markdown 渲染。
@@ -15,6 +20,51 @@ export type TocEntry = { depth: number; text: string; id: string };
  */
 export function renderMessageMarkdown(text: string): string {
   return marked(text, { async: false, breaks: true }) as string;
+}
+
+/**
+ * 把消息 markdown 按「mermaid 代码块」切段：html 段是整段渲染的 HTML 片段，
+ * mermaid 段交给 React 组件动态渲染成 SVG。
+ *
+ * 为什么切段而不是在 HTML 里塞占位符再 hydrate：消息正文经 `dangerouslySetInnerHTML`
+ * 整体注入，React 无法在注入的 DOM 里挂组件。在 marked 的**块级 token 边界**上
+ * 切开，每个子串仍是合法的独立 markdown 文档（fenced code block 不会被从中间
+ * 截断），html 段顺序拼接后与整体渲染等价——SessionView 的复制全文、导出等
+ * 功能不受影响。
+ *
+ * 真实 `.md` 文件预览（renderMarkdownWithToc）不走这里，保持 CommonMark 语义。
+ */
+export function renderMessageMarkdownSegments(text: string): MessageMarkdownSegment[] {
+  const segments: MessageMarkdownSegment[] = [];
+  let htmlBuffer = "";
+
+  const flushHtml = () => {
+    if (htmlBuffer) {
+      segments.push({ type: "html", html: htmlBuffer });
+      htmlBuffer = "";
+    }
+  };
+
+  const instance = new Marked();
+  const tokens = instance.lexer(text);
+  for (const token of tokens) {
+    if (
+      token.type === "code" &&
+      shouldRenderMermaidCodeBlock((token as Tokens.Code).lang ?? "", (token as Tokens.Code).text)
+    ) {
+      const code = (token as Tokens.Code).text;
+      // 未过预算门禁的超大图表仍按普通代码块渲染，避免布局计算卡死 UI。
+      if (resolveMermaidAutoRenderDecision(code).shouldRender) {
+        flushHtml();
+        segments.push({ type: "mermaid", code, autoRender: true });
+        continue;
+      }
+    }
+    // 每个小块单独 parse 再拼接（breaks 语义与 renderMessageMarkdown 一致）。
+    htmlBuffer += instance.parse(token.raw, { async: false, breaks: true }) as string;
+  }
+  flushHtml();
+  return segments;
 }
 
 export function isMarkdownFileName(fileName: string): boolean {
