@@ -591,6 +591,44 @@ export function isCodexThreadItem(payload: CodexStreamPayload): payload is Codex
   return typeof payload === "object" && payload !== null && "type" in payload;
 }
 
+/** structured 任务的模型提问事件（`codex-user-input-requested`）：
+ *  Codex 的 `request_user_input` 工具调用触发的反向请求，对应 ZCode 的
+ *  AskUserQuestion 弹窗。字段镜像协议 `ToolRequestUserInputParams`。 */
+export interface CodexUserInputRequest {
+  /** 后端追加：提问所属任务。 */
+  task_id: string;
+  /** 后端追加：原样带回 `respond_codex_user_input` 的请求 id。 */
+  request_id: number;
+  threadId: string;
+  turnId: string;
+  /** 工具调用 id（上游 `call_id`）。 */
+  itemId: string;
+  questions: CodexUserInputQuestion[];
+  /** 是否阻塞当前 turn：真值时模型在等答案，必须先应答才能继续。 */
+  isBlocking?: boolean;
+  /** 上游自带的自动决议窗口（毫秒）；缺失表示不自动决议。 */
+  autoResolutionMs?: number | null;
+}
+
+export interface CodexUserInputQuestion {
+  /** 答案映射键：`answers[qid]` 回传。 */
+  id: string;
+  /** 弹窗芯片上的短标签（上游约定 ≤12 字符）。 */
+  header: string;
+  question: string;
+  /** 是否提供「其他」自由输入项；上游 `normalize` 恒置真。 */
+  isOther?: boolean;
+  /** 敏感输入：自由输入框按密码样式渲染。 */
+  isSecret?: boolean;
+  /** 选项列表；缺失或空表示纯自由文本作答。 */
+  options?: CodexUserInputOption[] | null;
+}
+
+export interface CodexUserInputOption {
+  label: string;
+  description: string;
+}
+
 /** structured 任务命令执行审批事件（`codex-approval-requested`，阶段 3 渲染审批卡片）。 */
 export interface CodexApprovalRequest {
   /** 后端追加：审批所属任务。 */

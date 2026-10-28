@@ -427,6 +427,7 @@ pub fn run() {
             pty::resume_task,
             pty::fork_task,
             codex_appserver::task_bridge::respond_codex_approval,
+            codex_appserver::task_bridge::respond_codex_user_input,
             codex_appserver::task_bridge::resume_codex_structured,
             codex_appserver::task_bridge::steer_codex_structured,
             codex_appserver::task_bridge::set_codex_structured_model,

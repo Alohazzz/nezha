@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   CodexApprovalRequest,
   CodexTokenUsage,
+  CodexUserInputRequest,
   CodexUserMessageItem,
 } from "../types";
 import {
@@ -27,13 +28,15 @@ export interface CodexStreamState {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
   approval: CodexApprovalRequest | null;
+  /** 模型提问（`request_user_input` 工具），与审批互斥地占用底部卡片区。 */
+  userInput: CodexUserInputRequest | null;
 }
 
 // 视图层（CodexStreamView 等）从此处导入条目类型；定义已上移纯函数层
 export type { CodexStreamEntry } from "./codexStreamMerge";
 
 function emptyState(): CodexStreamState {
-  return { entries: [], usage: null, approval: null };
+  return { entries: [], usage: null, approval: null, userInput: null };
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
@@ -69,7 +72,12 @@ export function useCodexStream() {
       for (const taskId of dirty) {
         const model = modelsRef.current.get(taskId);
         const state: CodexStreamState = model
-          ? { entries: model.entries.slice(), usage: model.usage, approval: prev[taskId]?.approval ?? null }
+          ? {
+              entries: model.entries.slice(),
+              usage: model.usage,
+              approval: prev[taskId]?.approval ?? null,
+              userInput: prev[taskId]?.userInput ?? null,
+            }
           : emptyState();
         if (next === prev) next = { ...prev };
         next[taskId] = state;
@@ -140,6 +148,36 @@ export function useCodexStream() {
     });
   }, []);
 
+  // 模型提问与审批是两条独立的全局事件，各自入库到同一任务的快照。
+  // 同时挂起时卡片区只渲染提问（提问会阻塞 turn，比审批更紧急）；
+  // 两者都清掉后 composer 才恢复可输入。
+  useEffect(() => {
+    let mounted = true;
+    const p = listen<CodexUserInputRequest>("codex-user-input-requested", (e) => {
+      if (!mounted) return;
+      const taskId = e.payload?.task_id;
+      if (!taskId) return;
+      if (!modelsRef.current.get(taskId)) {
+        modelsRef.current.set(taskId, createStreamModel());
+      }
+      setSnapshot((prev) => ({
+        ...prev,
+        [taskId]: { ...(prev[taskId] ?? emptyState()), userInput: e.payload },
+      }));
+    });
+    return () => {
+      mounted = false;
+      p.then((fn) => fn());
+    };
+  }, []);
+
+  const setUserInputResolved = useCallback((taskId: string) => {
+    setSnapshot((prev) => {
+      if (!prev[taskId]) return prev;
+      return { ...prev, [taskId]: { ...prev[taskId], userInput: null } };
+    });
+  }, []);
+
   const resetTask = useCallback((taskId: string) => {
     modelsRef.current.delete(taskId);
     dirtyRef.current.delete(taskId);
@@ -164,7 +202,7 @@ export function useCodexStream() {
     }
     setSnapshot((prev) => {
       if (!prev[taskId]) return prev;
-      return { ...prev, [taskId]: { ...prev[taskId], approval: null } };
+      return { ...prev, [taskId]: { ...prev[taskId], approval: null, userInput: null } };
     });
   }, [scheduleFlush]);
 
@@ -211,5 +249,13 @@ export function useCodexStream() {
     };
   }, []);
 
-  return { ingestFrameLine: ingest, getStream, setApprovalResolved, resetTask, beginFollowUpRound, appendLocalUserMessage };
+  return {
+    ingestFrameLine: ingest,
+    getStream,
+    setApprovalResolved,
+    setUserInputResolved,
+    resetTask,
+    beginFollowUpRound,
+    appendLocalUserMessage,
+  };
 }

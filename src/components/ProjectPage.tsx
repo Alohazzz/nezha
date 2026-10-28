@@ -140,6 +140,7 @@ export function ProjectPage({
   onSnapshot,
   getCodexStream,
   onCodexApprovalResolved,
+  onCodexUserInputResolved,
   onFollowUpStructured,
   onSetStructuredModel,
   codexStructuredModel,
@@ -281,6 +282,8 @@ export function ProjectPage({
   /** codex structured 流快照（issue #116 阶段 3）；structured 任务渲染流视图用。 */
   getCodexStream?: (taskId: string) => CodexStreamState;
   onCodexApprovalResolved?: (taskId: string) => void;
+  /** structured 任务模型提问已应答（收起问答卡片）。 */
+  onCodexUserInputResolved?: (taskId: string) => void;
   /** structured 任务 done 态继续对话（thread/resume 通道）。 */
   onFollowUpStructured?: (task: Task, text: string, images: string[]) => void;
   /** structured 任务模型 / 推理深度切换（composer `/model` `/effort` 内置命令）。 */
@@ -597,6 +600,11 @@ export function ProjectPage({
                 onCodexApprovalResolved={
                   onCodexApprovalResolved
                     ? () => onCodexApprovalResolved(task.id)
+                    : undefined
+                }
+                onCodexUserInputResolved={
+                  onCodexUserInputResolved
+                    ? () => onCodexUserInputResolved(task.id)
                     : undefined
                 }
                 onFollowUp={

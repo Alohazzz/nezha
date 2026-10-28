@@ -2,9 +2,10 @@ import { memo, useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { CodexStreamEntry } from "../../hooks/useCodexStream";
-import type { CodexTokenUsage } from "../../types";
+import type { CodexTokenUsage, CodexUserInputRequest } from "../../types";
 import type { AgentModelCatalog } from "../app-settings/types";
 import { CodexApprovalCard } from "./CodexApprovalCard";
+import { CodexQuestionCard } from "./CodexQuestionCard";
 import { CodexComposer } from "./CodexComposer";
 import { CodexWorkingIndicator } from "./CodexWorkingIndicator";
 import { CodexTurnSection } from "./CodexTurnSection";
@@ -87,6 +88,8 @@ export function CodexStreamView({
   usage,
   approval,
   onApprovalResolved,
+  userInput,
+  onUserInputResolved,
   running,
   statusText,
   statusTone = "warning",
@@ -132,6 +135,9 @@ export function CodexStreamView({
   onSetStructuredModel?: (model: string | undefined, effort: string | undefined) => void;
   /** 非选择器类内置命令动作（/compact /review /stop；App 层落 RPC / 中断）。 */
   onBuiltinAction?: (action: "compact" | "review" | "stop") => void;
+  /** 模型提问（`request_user_input`）：非空时底部渲染问答卡片。 */
+  userInput?: CodexUserInputRequest | null;
+  onUserInputResolved?: () => void;
 }) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -228,7 +234,17 @@ export function CodexStreamView({
                 statusText={bannerText}
               />
             )}
-            {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+            {/* 提问优先于审批：提问会阻塞 turn，而审批只是拒绝一条命令。
+                两者同时挂起时只渲染提问，避免两张 sticky 卡片叠在一起。 */}
+            {userInput ? (
+              <CodexQuestionCard
+                request={userInput}
+                onResolved={() => onUserInputResolved?.()}
+                onError={(message) => onImageToast?.(message, "error")}
+              />
+            ) : (
+              approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />
+            )}
           </div>
           {onComposerSubmit && (
             <CodexComposer

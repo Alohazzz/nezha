@@ -9,8 +9,7 @@ import type {
   FontFamily,
   ThemeVariant,
 } from "../types";
-import type { CodexStreamState } from "../hooks/useCodexStream";
-import type { AgentModelCatalog } from "./app-settings/types";
+import type { CodexStreamState } from "../hooks/useCodexStream";import type { AgentModelCatalog } from "./app-settings/types";
 import { permissionModeLabel } from "../types";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
@@ -112,6 +111,7 @@ export function RunningView({
   getRestoreState,
   codexStream,
   onCodexApprovalResolved,
+  onCodexUserInputResolved,
   onFollowUp,
   onSetStructuredModel,
   codexStructuredModel,
@@ -152,6 +152,8 @@ export function RunningView({
   /** 非空 = structured 任务：主内容区渲染结构化流视图而非终端（issue #116 阶段 3）。 */
   codexStream?: CodexStreamState;
   onCodexApprovalResolved?: () => void;
+  /** 模型提问已应答（卡片收起；上层清 userInput 槽位）。 */
+  onCodexUserInputResolved?: () => void;
   /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。
    *  images 为 dataUrl 数组（issue #118：composer 粘贴/选择的图片随消息发送）。 */
   onFollowUp?: (text: string, images: string[]) => void;
@@ -831,6 +833,8 @@ export function RunningView({
             usage={codexStream.usage}
             approval={codexStream.approval}
             onApprovalResolved={() => onCodexApprovalResolved?.()}
+            userInput={codexStream.userInput}
+            onUserInputResolved={() => onCodexUserInputResolved?.()}
             running={isActive}
             statusText={
               task.status === "failed"
@@ -845,7 +849,7 @@ export function RunningView({
             projectPath={projectPath}
             onImageToast={showToast}
             onOpenGitChanges={onOpenGitChanges}
-            composerDisabled={codexStream.approval !== null}
+            composerDisabled={codexStream.approval !== null || codexStream.userInput !== null}
             modelCatalog={codexModelCatalog}
             model={codexStructuredModel}
             reasoningEffort={codexStructuredEffort}
