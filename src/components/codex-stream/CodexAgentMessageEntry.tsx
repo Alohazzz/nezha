@@ -8,12 +8,14 @@ import { CodexMarkdown } from "./CodexMarkdown";
 
 export const CodexAgentMessageEntry = memo(function CodexAgentMessageEntry({
   item,
+  onOpenLink,
 }: {
   item: CodexAgentMessageItem;
+  onOpenLink?: (href: string) => void;
 }) {
   return (
     <div style={s.codexAgentMessage} className="session-prose">
-      <CodexMarkdown text={item.text} />
+      <CodexMarkdown text={item.text} onOpenLink={onOpenLink} />
     </div>
   );
 });

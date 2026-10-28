@@ -64,13 +64,22 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
 function EntryRenderer({
   entry,
   onOpenGitChanges,
+  onOpenLink,
   entryIndex,
 }: {
   entry: CodexStreamEntry;
   onOpenGitChanges?: () => void;
+  onOpenLink?: (href: string) => void;
   entryIndex?: number;
 }) {
-  return <CodexEntry entry={entry} onOpenGitChanges={onOpenGitChanges} entryIndex={entryIndex} />;
+  return (
+    <CodexEntry
+      entry={entry}
+      onOpenGitChanges={onOpenGitChanges}
+      onOpenLink={onOpenLink}
+      entryIndex={entryIndex}
+    />
+  );
 }
 
 /** 顶层条目流是否还有「不属于任何轮」的内容（会话从助手侧开始 / 续跑回放）。
@@ -100,6 +109,7 @@ export function CodexStreamView({
   onComposerSubmit,
   onImageToast,
   onOpenGitChanges,
+  onOpenLink,
   modelCatalog,
   model,
   reasoningEffort,
@@ -131,6 +141,8 @@ export function CodexStreamView({
   onImageToast?: (message: string, kind: "warning" | "error") => void;
   /** 截断 diff → GitChanges 右面板的跳转入口（openRightPanel("git-changes")）。 */
   onOpenGitChanges?: () => void;
+  /** agent 消息正文链接点击委托（沉淀文档在应用内打开 / 外链走系统浏览器）。 */
+  onOpenLink?: (href: string) => void;
   /** `/model` `/effort` 内置命令支撑：目录 + 当前值 + 写入通道（App 层落 RPC）。 */
   modelCatalog?: AgentModelCatalog;
   model?: string;
@@ -199,6 +211,7 @@ export function CodexStreamView({
         entry={item.entry}
         entryIndex={item.entryIndex}
         onOpenGitChanges={onOpenGitChanges}
+        onOpenLink={onOpenLink}
       />
     );
 
@@ -232,6 +245,7 @@ export function CodexStreamView({
                 key={segment.key}
                 segment={segment}
                 onOpenGitChanges={onOpenGitChanges}
+                onOpenLink={onOpenLink}
               />
             ))}
             {/* 整轮活性指示：仅在还没有任何过程时使用（刚发指令、模型还在想）。

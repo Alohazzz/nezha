@@ -122,6 +122,7 @@ export function RunningView({
   codexModelCatalog,
   followUpBusy,
   onOpenGitChanges,
+  onOpenLink,
   onRename,
   onGenerateName,
   themeVariant,
@@ -174,6 +175,8 @@ export function RunningView({
   codexModelCatalog?: AgentModelCatalog;
   /** 截断 diff → GitChanges 右面板的跳转入口（issue #117 T4）。 */
   onOpenGitChanges?: () => void;
+  /** structured 流正文链接点击（沉淀文档打开 / 外链浏览器），ProjectPage 接线。 */
+  onOpenLink?: (href: string) => void;
   onRename: (name: string) => void;
   onGenerateName: () => Promise<void>;
   themeVariant: ThemeVariant;
@@ -781,6 +784,7 @@ export function RunningView({
             )}
             statusTone="warning"
             onOpenGitChanges={onOpenGitChanges}
+            onOpenLink={onOpenLink}
             onComposerSubmit={onFollowUp}
             followUpBusy={followUpBusy}
             projectPath={projectPath}
@@ -871,6 +875,7 @@ export function RunningView({
             projectPath={projectPath}
             onImageToast={showToast}
             onOpenGitChanges={onOpenGitChanges}
+            onOpenLink={onOpenLink}
             composerDisabled={codexStream.approval !== null || codexStream.userInput !== null}
             modelCatalog={codexModelCatalog}
             model={codexStructuredModel}
@@ -932,6 +937,7 @@ export function RunningView({
           projectPath={projectPath}
           onImageToast={showToast}
           onOpenGitChanges={onOpenGitChanges}
+          onOpenLink={onOpenLink}
           modelCatalog={codexModelCatalog}
           model={codexStructuredModel}
           reasoningEffort={codexStructuredEffort}

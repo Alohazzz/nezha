@@ -36,14 +36,22 @@ import { CodexUserMessageEntry } from "./CodexUserMessageEntry";
 
 /** 单个 renderer 的统一入参：整个 entry 下传（含 revision）。
  * onOpenGitChanges：截断 diff 的跳转入口（GitChanges 右面板），仅 fileChange 用。
+ * onOpenLink：agent 消息正文链接点击委托（沉淀文档打开 / 外链浏览器），仅 agentMessage 用。
  * entryIndex：视图层位置序号，仅 fallback 用（无 id 条目的展开键消歧）。 */
-type EntryProps = { entry: CodexStreamEntry; onOpenGitChanges?: () => void; entryIndex?: number };
+type EntryProps = {
+  entry: CodexStreamEntry;
+  onOpenGitChanges?: () => void;
+  onOpenLink?: (href: string) => void;
+  entryIndex?: number;
+};
 
 type EntryRenderer = (props: EntryProps) => ReactNode;
 
 export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer> = {
   userMessage: ({ entry }) => <CodexUserMessageEntry item={entry.item as CodexUserMessageItem} />,
-  agentMessage: ({ entry }) => <CodexAgentMessageEntry item={entry.item as CodexAgentMessageItem} />,
+  agentMessage: ({ entry, onOpenLink }) => (
+    <CodexAgentMessageEntry item={entry.item as CodexAgentMessageItem} onOpenLink={onOpenLink} />
+  ),
   plan: ({ entry }) => <CodexPlanEntry item={entry.item as CodexPlanItem} />,
   imageView: ({ entry }) => <CodexImageViewEntry item={entry.item as CodexImageViewItem} />,
   reasoning: ({ entry }) => (

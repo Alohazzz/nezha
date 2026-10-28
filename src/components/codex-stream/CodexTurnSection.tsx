@@ -80,9 +80,11 @@ function ProcessHeader({
 export const CodexTurnSection = memo(function CodexTurnSection({
   segment,
   onOpenGitChanges,
+  onOpenLink,
 }: {
   segment: CodexTurnSegment;
   onOpenGitChanges?: () => void;
+  onOpenLink?: (href: string) => void;
 }) {
   const { t } = useI18n();
   // 折叠态跟随 segment.defaultOpen，但只在边沿切换时改——运行中每帧重渲染
@@ -115,7 +117,7 @@ export const CodexTurnSection = memo(function CodexTurnSection({
   return (
     <section className="codex-stream-turn" data-state={segment.state}>
       {segment.userMessage && (
-        <CodexEntry entry={segment.userMessage} onOpenGitChanges={onOpenGitChanges} />
+        <CodexEntry entry={segment.userMessage} onOpenGitChanges={onOpenGitChanges} onOpenLink={onOpenLink} />
       )}
       {showHeader && <ProcessHeader segment={segment} open={open} onToggle={handleToggle} />}
       {showHeader && open && (
@@ -136,6 +138,7 @@ export const CodexTurnSection = memo(function CodexTurnSection({
                 entry={item.entry}
                 entryIndex={item.entryIndex}
                 onOpenGitChanges={onOpenGitChanges}
+                onOpenLink={onOpenLink}
               />
             ),
           )}
@@ -143,7 +146,7 @@ export const CodexTurnSection = memo(function CodexTurnSection({
       )}
       {/* 结论：过程收起时它才是这一轮唯一可见的结果。 */}
       {segment.answer && (
-        <CodexEntry entry={segment.answer} onOpenGitChanges={onOpenGitChanges} />
+        <CodexEntry entry={segment.answer} onOpenGitChanges={onOpenGitChanges} onOpenLink={onOpenLink} />
       )}
       {/* 本轮有过程但没留下任何结论：明确写出来，别让空白被误读成「正常完成」。
           计划 / 图片这类条目本身就是交付物，不该被判定成「没答复」。 */}
