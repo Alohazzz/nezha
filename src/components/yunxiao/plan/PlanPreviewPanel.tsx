@@ -12,7 +12,7 @@ import type {
 import { firstEnabledAgent, isAgentEnabled } from "../../../types";
 import { getLastYunxiaoAgent, getLastYunxiaoPermission } from "../../../utils/yunxiao";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
-import { renderMessageMarkdown } from "../../../utils/markdown";
+import { MessageMarkdownBody } from "../../mermaid/MessageMarkdownBody";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
 import { UnattendedToggle } from "./UnattendedToggle";
 import { HtmlPreviewPane } from "../../file-viewer/HtmlPreviewPane";
@@ -223,11 +223,6 @@ export function PlanPreviewPanel({
     await onDeletePlan(plan.id);
   }, [onDeletePlan, plan.id]);
 
-  const html = useMemo(() => {
-    if (!markdown.trim()) return "";
-    return renderMessageMarkdown(markdown);
-  }, [markdown]);
-
   return (
     <div style={s.bbDialogOverlay}>
       <div style={s.planPreviewDialog}>
@@ -324,11 +319,7 @@ export function PlanPreviewPanel({
             </div>
           ) : (
             <>
-              <div
-                className="plan-md"
-                style={s.planPanelMarkdown}
-                dangerouslySetInnerHTML={{ __html: html }}
-              />
+              <MessageMarkdownBody text={markdown} className="plan-md" />
               {images.length > 0 && (
                 <div style={s.planPanelGallery}>
                   {images.map((image) => (

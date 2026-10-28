@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 
-// ── 思考摘要行（对标 ZCode ReasoningTrigger）─────────────────────────────────
-// 思考正文不再自动展开，摘要行直接承载思考文本：
+// ── 摘要行跑马灯（对标 ZCode ReasoningTrigger，思考卡先行、各工具卡复用）──────
+// 正文不再自动展开，摘要行直接承载实况文本：
 // - 流式态：取「最新一行非空内容」单行展示；文本超出可用宽度后把视口推到
 //   末尾并双侧渐隐——最新 token 永远可见，旧内容向左溢出，形成跑马灯效果。
 // - 完成态：退回静态单行省略号（由调用方给截断后的摘要首行）。
@@ -9,7 +9,7 @@ import { memo, useEffect, useRef, useState } from "react";
 // 性能：observer 只随 live 挂载一次；逐帧变化只做 scrollLeft / overflow 边沿
 // 比较（溢出状态不变就不 setState），不会因为每个 delta 重建 observer。
 
-/** 取流式思考文本的最后一行非空内容（ZCode resolveReasoningStreamingSummary 同款）。 */
+/** 取流式文本的最后一行非空内容（ZCode resolveReasoningStreamingSummary 同款）。 */
 export function resolveLatestThoughtLine(text: string): string {
   const lines = text.replace(/\r\n?/gu, "\n").split("\n");
   for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -22,10 +22,15 @@ export function resolveLatestThoughtLine(text: string): string {
 export const CodexThoughtLine = memo(function CodexThoughtLine({
   text,
   live,
+  mono = false,
+  testId = "codex-reasoning-summary",
 }: {
   text: string;
   /** true = 流式态（跟随尾部滚动）；false = 完成态（静态省略号）。 */
   live: boolean;
+  /** true = 等宽字体（命令输出 / diff 等代码类文本）。 */
+  mono?: boolean;
+  testId?: string;
 }) {
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const textRef = useRef<HTMLSpanElement | null>(null);
@@ -62,7 +67,7 @@ export const CodexThoughtLine = memo(function CodexThoughtLine({
 
   if (!live) {
     return (
-      <span className="codex-stream-thought-line" data-testid="codex-reasoning-summary">
+      <span className={mono ? "codex-stream-thought-line mono" : "codex-stream-thought-line"} data-testid={testId}>
         {text}
       </span>
     );
@@ -71,10 +76,10 @@ export const CodexThoughtLine = memo(function CodexThoughtLine({
   return (
     <span
       ref={viewportRef}
-      className="codex-stream-thought-line"
+      className={mono ? "codex-stream-thought-line mono" : "codex-stream-thought-line"}
       data-live="true"
       data-overflowing={overflowing || undefined}
-      data-testid="codex-reasoning-summary"
+      data-testid={testId}
     >
       <span ref={textRef} className="codex-stream-thought-line-text">
         {text}

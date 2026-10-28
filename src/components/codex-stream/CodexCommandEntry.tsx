@@ -7,14 +7,14 @@ import { CodexToolCard, FailedDetailPopover } from "./CodexToolCard";
 import { CodexLiveDuration } from "./CodexLiveDuration";
 import { formatDuration, truncateOutputTail } from "./codexEntryShared";
 import { summarizeCommand } from "./codexCommandSummary";
+import { CodexThoughtLine, resolveLatestThoughtLine } from "./CodexThoughtLine";
 
 // 命令执行卡（issue #117 T3 自 CodexEntryItems 迁出；T5 接尾部截断；#119 补
-// 运行中动态秒数）：骨架管行为（折叠持久 / 自动边沿 / 失败 tooltip），本卡只管
-// 内容渲染。行为矩阵：默认收起、流式中自动展开、完成自动收起。展开区只渲染
-// 输出尾部（~64KB、按整行取尾，spec user story 15）；全量输出保留在内存条目上，
-// 复制全文按钮复制完整文本。
-// 运行中 meta 由 CodexLiveDuration 以条目 startedAtMs 起跳；完成后以权威
-// durationMs 替换（spec user story 8/9）。
+// 运行中动态秒数）：骨架管行为（折叠持久 / 失败 tooltip），本卡只管内容渲染。
+//
+// 结构化改版（与思考卡交互一致）：正文不再自动展开 / 完成自动收起——改在摘要行
+// 内跑马灯跟播最新一行输出（CodexThoughtLine：取最后一行非空内容、超宽跟随
+// 尾部并双侧渐隐），完整输出保留在手动展开区。展开状态仍由骨架的模块级 Map 持久。
 //
 // 密集度改版：摘要行渲染**剥离 shell 包裹**后的真实命令（原始命令完整留在
 // 展开区），不渲染成功/运行中的状态词，meta 只保留一条语义（耗时 或 红色
@@ -52,6 +52,8 @@ export const CodexCommandEntry = memo(function CodexCommandEntry({
     ? truncateOutputTail(item.aggregatedOutput).text || item.status
     : null;
   const exitCode = item.exitCode !== null && item.exitCode !== 0 ? item.exitCode : null;
+  // 流式中：摘要行跟播最新一行输出（跑马灯）；完成后：静态显示命令本身。
+  const liveLine = running ? resolveLatestThoughtLine(item.aggregatedOutput ?? "") : "";
 
   return (
     <CodexToolCard
@@ -59,13 +61,25 @@ export const CodexCommandEntry = memo(function CodexCommandEntry({
       icon={<SquareTerminal size={11} />}
       category={t("codex.tool.category.command")}
       text={summarizeCommand(item.command)}
+      textSlot={
+        running ? (
+          <CodexThoughtLine
+            text={liveLine}
+            live
+            mono
+            testId="codex-command-live-line"
+          />
+        ) : undefined
+      }
       status={status}
       showStatus={showStatus}
       compact={compact}
       failureDetail={failureDetail}
       collapsible={hasOutput}
-      autoExpandWhileRunning
-      autoCollapseOnDone
+      autoExpandWhileRunning={false}
+      autoCollapseOnDone={false}
+      // 展开后输出已完整呈现，摘要行不再重复跟播（与思考卡一致）
+      hideTextWhenExpanded
       streamingRevision={revision}
       meta={
         // 单段 meta：失败只留红色 exit 码（它同时是失败详情入口），成功只留耗时。

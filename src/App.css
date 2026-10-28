@@ -14,6 +14,7 @@
 @import "./styles/row-actions.css";
 @import "./styles/task-list.css";
 @import "./styles/codex-stream.css";
+@import "./styles/mermaid.css";
 
 /* ── Image lightbox thumbnails (click-to-preview) ───────────────── */
 /* 缩略图可点击放大：zoom-in 手势 + hover 提示，样式本体在 styles/common.ts */

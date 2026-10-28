@@ -1,0 +1,183 @@
+/* ── Mermaid 流程图渲染（消息 markdown 中的 mermaid 代码块）──────────────
+   对照 ZCode ai-elements/mermaid-block 的能力面：图表渲染 / 加载态 / 失败回退
+   纯文本 / 双击或按钮放大。主题色全部走 CSS 变量，六套主题自动适配。 */
+
+.nezha-mermaid {
+  position: relative;
+  margin: 8px 0;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-dim);
+  overflow-x: auto;
+  min-height: 72px;
+}
+
+.nezha-mermaid-svg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+}
+.nezha-mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 双击可放大：手势提示（hover 时轻微提亮，不动布局） */
+.nezha-mermaid-svg {
+  cursor: zoom-in;
+}
+
+.nezha-mermaid-expand {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.nezha-mermaid:hover .nezha-mermaid-expand {
+  opacity: 1;
+}
+.nezha-mermaid-expand:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nezha-mermaid-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 64px;
+  color: var(--text-hint);
+  font-size: 12.5px;
+}
+.nezha-mermaid-loading-spin {
+  animation: nezha-mermaid-spin 0.9s linear infinite;
+}
+@keyframes nezha-mermaid-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 渲染失败 / 未过预算门禁时的纯文本回退，观感对齐 .session-prose pre */
+.nezha-mermaid-plain {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre;
+}
+.nezha-mermaid-plain code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* ── 放大预览对话框 ─────────────────────────────────────────────── */
+
+.nezha-mermaid-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  z-index: 1000;
+}
+
+.nezha-mermaid-preview-content {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: 90vw;
+  height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+  z-index: 1001;
+}
+
+.nezha-mermaid-preview-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-dim);
+  flex-shrink: 0;
+}
+
+.nezha-mermaid-preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.nezha-mermaid-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nezha-mermaid-preview-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.nezha-mermaid-preview-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.nezha-mermaid-preview-scale {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.nezha-mermaid-preview-viewport {
+  flex: 1;
+  overflow: hidden;
+  cursor: grab;
+}
+.nezha-mermaid-preview-viewport:active {
+  cursor: grabbing;
+}
+
+.nezha-mermaid-preview-canvas {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+}
+.nezha-mermaid-preview-canvas svg {
+  max-width: none;
+}

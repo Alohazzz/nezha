@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import type { Plan, Task } from "../../types";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../utils/plan";
-import { renderMessageMarkdown } from "../../utils/markdown";
+import { MessageMarkdownBody } from "../mermaid/MessageMarkdownBody";
 import { topoSortPlanIssues } from "../../utils/planDeps";
 import type { PlanDeps } from "../../utils/planDeps";
 import { parsePlanDeps } from "../../utils/planDeps";
@@ -159,11 +159,6 @@ export function IssuePlanViewDialog({
       .filter((issue): issue is NonNullable<typeof issue> => !!issue);
   }, [deps, plan.issues]);
 
-  const html = useMemo(() => {
-    if (!markdown.trim()) return "";
-    return renderMessageMarkdown(markdown);
-  }, [markdown]);
-
   return (
     <div style={s.bbDialogOverlay}>
       <div style={s.planPreviewDialog}>
@@ -292,11 +287,7 @@ export function IssuePlanViewDialog({
               />
             </div>
           ) : (
-            <div
-              className="plan-md"
-              style={s.planPanelMarkdown}
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
+            <MessageMarkdownBody text={markdown} className="plan-md" />
           )}
         </div>
       </div>

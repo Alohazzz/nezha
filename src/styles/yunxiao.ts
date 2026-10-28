@@ -1611,12 +1611,6 @@ export const yunxiao = {
     overflow: "hidden",
     flexShrink: 0,
   },
-  planPanelMarkdown: {
-    padding: "12px 14px",
-    fontSize: 12.5,
-    lineHeight: 1.7,
-    color: "var(--text-primary)",
-  },
   planPanelEmpty: {
     padding: "24px 16px",
     fontSize: 12.5,

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight, Wrench, Copy, Check } from "lucide-react";
 import { useI18n } from "../i18n";
-import { renderMessageMarkdown } from "../utils/markdown";
+import { MessageMarkdownBody } from "./mermaid/MessageMarkdownBody";
 
 interface SessionContent {
   type: "text" | "tool_use" | "thinking";
@@ -216,11 +216,7 @@ function MessageBlock({ message }: { message: SessionMessage }) {
         <ThinkingBlock key={i} thinking={t.thinking ?? ""} />
       ))}
       {textParts.map((t, i) => (
-        <div
-          key={i}
-          className="session-prose"
-          dangerouslySetInnerHTML={{ __html: renderMessageMarkdown(t.text ?? "") }}
-        />
+        <MessageMarkdownBody key={i} text={t.text ?? ""} className="session-prose" />
       ))}
       {toolParts.map((t, i) => (
         <ToolUseCard key={i} name={t.name ?? ""} input={t.input ?? ""} />

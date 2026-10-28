@@ -100,3 +100,63 @@ describe("CodexCommandEntry output tail truncation", () => {
     expect((detail.textContent ?? "").length).toBeLessThan(64 * 1024 + 4096);
   });
 });
+
+// ── 结构化改版：命令卡与思考卡交互一致 ────────────────────────────────────────
+// 运行中不再自动弹开卡体，摘要行改为跑马灯跟播最新一行输出；完成态退回
+// 静态命令文本，完整输出留在手动展开区。
+
+describe("CodexCommandEntry streaming marquee", () => {
+  it("stays collapsed while running and streams the latest output line in the summary row", () => {
+    renderEntry(
+      makeItem("building...\ncompiling src/index.ts", {
+        status: "inProgress",
+        exitCode: null,
+        durationMs: null,
+      }),
+    );
+    // 卡体不自动展开：完整输出不可见
+    expect(screen.queryByTestId("codex-command-output-pre")).toBeNull();
+    // 摘要行承载输出实况（最后一行非空内容）
+    const live = screen.getByTestId("codex-command-live-line");
+    expect(live.textContent).toBe("compiling src/index.ts");
+    expect(live.getAttribute("data-live")).toBe("true");
+    // 完成前的静态命令文本不重复渲染（textSlot 顶掉了 text）
+    expect(screen.queryByText("npm run build")).toBeNull();
+  });
+
+  it("falls back to the static command text once completed", () => {
+    renderEntry(makeItem("done"));
+    expect(screen.queryByTestId("codex-command-live-line")).toBeNull();
+    // 完成态摘要行回到命令文本；输出留在展开区（默认收起）
+    expect(screen.getByText("npm run build")).toBeTruthy();
+    expect(screen.queryByTestId("codex-command-output-pre")).toBeNull();
+  });
+
+  it("does not pop the body open when output arrives mid-run (collapsible false→true flip)", () => {
+    // 回归（用户实测截图）：无输出命令卡先以 collapsible=false 挂载（此时骨架
+    // expanded 占位为 true），输出 delta 到达后翻成 collapsible=true——遗留的
+    // true 不得把折叠形态顶开（历史上靠完成自动收起兜住，该边沿已退役）。
+    const view = renderEntry(
+      makeItem(null, { status: "inProgress", exitCode: null, durationMs: null }),
+    );
+    // 无输出阶段：非折叠形态，children 直接渲染（展开区 pre 尚不存在）
+    expect(screen.queryByTestId("codex-command-output-pre")).toBeNull();
+
+    view.rerender(
+      <I18nProvider>
+        <CodexCommandEntry
+          item={makeItem("first output line", {
+            status: "inProgress",
+            exitCode: null,
+            durationMs: null,
+          })}
+          revision={2}
+        />
+      </I18nProvider>,
+    );
+    // collapsible 翻转后卡体必须保持收起：完整输出只在手动展开区
+    expect(screen.queryByTestId("codex-command-output-pre")).toBeNull();
+    // 摘要行走输出跑马灯
+    expect(screen.getByTestId("codex-command-live-line").textContent).toBe("first output line");
+  });
+});

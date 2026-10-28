@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Columns2, Maximize2 } from "lucide-react";
 import type {
   Project,
@@ -74,6 +75,10 @@ import { ShellTerminalPanel, type ShellTerminalPanelHandle } from "./ShellTermin
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useToast } from "./Toast";
 import { useProjectPanels } from "../hooks/useProjectPanels";
+import {
+  classifyMarkdownLink,
+  draftDocumentPathCandidates,
+} from "./codex-stream/draftDocuments";
 import { useKnowledgePending } from "../hooks/useKnowledgePending";
 import { resolveProjectGitContext, useGitRoots } from "../hooks/useGitRoots";
 import type { CodexStreamState } from "../hooks/useCodexStream";
@@ -635,6 +640,11 @@ export function ProjectPage({
                 codexModelCatalog={task.agent === "codex" ? codexModelCatalog : undefined}
                 followUpBusy={followUpBusyTaskId === task.id}
                 onOpenGitChanges={handleOpenGitChanges}
+                onOpenLink={
+                  task.runMode === "structured"
+                    ? (href) => handleOpenSessionDocument(href, task.id, worktreePath)
+                    : undefined
+                }
                 onRename={(name) => onRenameTask(task.id, name)}
                 onGenerateName={() => onGenerateTaskName(task.id)}
                 themeVariant={themeVariant}
@@ -972,6 +982,44 @@ export function ProjectPage({
   // 稳定引用（review fix）：每次渲染新建箭头会击穿 RunningView → CodexStreamView
   // 的 memo 链，diff 截断跳转入口统一走这个回调。
   const handleOpenGitChanges = useCallback(() => openRightPanel("git-changes"), [openRightPanel]);
+
+  // structured 会话正文里的链接：外链走系统浏览器；项目内相对路径（含沉淀
+  // 文档）校验存在 → 自动进分栏 → 右列 FileViewer 打开。失败 toast，不开错误态 tab。
+  const handleOpenSessionDocument = useCallback(
+    async (href: string, taskId: string, worktreePath: string | null) => {
+      const target = classifyMarkdownLink(href);
+      if (target.kind === "external") {
+        try {
+          await openUrl(target.href);
+        } catch {
+          showToast(t("toast.sessionLinkExternalFailed"), "error");
+        }
+        return;
+      }
+      if (target.kind !== "projectPath") {
+        showToast(t("toast.sessionLinkUnsupported"), "warning");
+        return;
+      }
+      const candidates = draftDocumentPathCandidates({
+        href: target.href,
+        projectPath: project.path,
+        worktreePath,
+        taskId,
+      });
+      for (const path of candidates) {
+        try {
+          await invoke("read_file_content", { path, projectPath: project.path });
+        } catch {
+          continue;
+        }
+        if (layoutMode !== "partition") toggleLayoutMode();
+        handleFileSelect(path, target.fileName);
+        return;
+      }
+      showToast(t("toast.sessionPathMissing", { name: target.fileName }), "warning");
+    },
+    [project.path, layoutMode, toggleLayoutMode, handleFileSelect, showToast, t],
+  );
 
   const handleNewTask = useCallback(() => {
     clearFileAndDiff();

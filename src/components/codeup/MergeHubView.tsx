@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Send, Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { appConfirm } from "../AppConfirmDialog";
-import DOMPurify from "dompurify";
+import { MessageMarkdownBody } from "../mermaid/MessageMarkdownBody";
 import type { CodeupMr, CodeupRepository, CodeupReviewFinding } from "../../types";
-import { renderMessageMarkdown } from "../../utils/markdown";
 import s from "../../styles";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -216,15 +215,6 @@ export function MergeHubView({
       );
     }
   }, []);
-
-  // 报告是 Markdown，渲染为 sanitized HTML 后以 .md-preview 排版，避免直接铺开卡片导致错乱。
-  const reviewReportHtml = useMemo(
-    () =>
-      reviewModal?.content
-        ? DOMPurify.sanitize(renderMessageMarkdown(reviewModal.content))
-        : "",
-    [reviewModal?.content],
-  );
 
   const closeReview = useCallback(() => {
     if (writeback?.publishing) return; // 发布中不允许误关弹窗
@@ -477,9 +467,10 @@ export function MergeHubView({
                   ) : reviewModal.error ? (
                     <div style={s.bbGateHint}>{reviewModal.error}</div>
                   ) : reviewModal.content ? (
-                    <div
+                    <MessageMarkdownBody
+                      text={reviewModal.content}
                       className="md-preview"
-                      dangerouslySetInnerHTML={{ __html: reviewReportHtml }}
+                      sanitize
                     />
                   ) : (
                     <div style={s.bbGateHint}>该 MR 暂无审查报告，请先执行「代码审查」。</div>
