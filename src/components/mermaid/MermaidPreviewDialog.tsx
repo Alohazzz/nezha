@@ -21,15 +21,14 @@ export function MermaidPreviewDialog({ open, onOpenChange, svg }: MermaidPreview
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const viewportRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   // 拖拽期间的可变状态走 ref，pointermove 高频回调不触发重渲染（AGENTS.md 性能规范）。
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null);
 
   const resetView = useCallback(() => {
     setScale(1);
     setOffset({ x: 0, y: 0 });
-  }, []);
-
-  const fitToWindow = useCallback(() => {
+  }, []);  const fitToWindow = useCallback(() => {
     const viewport = viewportRef.current;
     const svgEl = viewport?.querySelector("svg");
     if (!viewport || !svgEl) {
@@ -66,15 +65,26 @@ export function MermaidPreviewDialog({ open, onOpenChange, svg }: MermaidPreview
     setScale((prev) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev * factor)));
   }, []);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    setScale((prev) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev * factor)));
-  }, []);
+  // Ctrl/Cmd+滚轮缩放。React 的 onWheel 是 passive 监听，preventDefault 无效
+  // （浏览器页面缩放拦不住还会刷控制台错误），所以挂原生非 passive listener。
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!open || !content) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setScale((prev) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev * factor)));
+    };
+    content.addEventListener("wheel", onWheel, { passive: false });
+    return () => content.removeEventListener("wheel", onWheel);
+  }, [open]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // 按钮点击不进入拖拽：pointer capture 会把后续指针事件重定向到 Content，
+    // 按钮将收不到 click（这是「预览框按钮全部无效」的原因，勿删此守卫）。
+    if ((e.target as HTMLElement).closest("button")) return;
     dragRef.current = {
       pointerId: e.pointerId,
       startX: e.clientX,
@@ -103,9 +113,9 @@ export function MermaidPreviewDialog({ open, onOpenChange, svg }: MermaidPreview
       <Dialog.Portal>
         <Dialog.Overlay className="nezha-mermaid-preview-overlay" />
         <Dialog.Content
+          ref={contentRef}
           className="nezha-mermaid-preview-content"
           aria-label={t("mermaid.ariaLabel")}
-          onWheel={handleWheel}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
