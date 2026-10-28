@@ -17,7 +17,7 @@ import { formatDuration } from "./codexEntryShared";
 //
 // 摘要行语义：类别固定「协作」，主文本是中文动作词（等待 / 派发子智能体 …），
 // meta 给目标数量与耗时；展开区展示下发的提示词与每个目标智能体的状态。
-// 行为矩阵与命令卡一致：默认收起、运行中自动展开、完成自动收起。
+// 行为矩阵与思考卡一致：默认收起、不自动展开 / 完成不自动收起。
 //
 // 注意 status 缺省：started 帧缺失（回放 / 乱序）时上游可能只给 inProgress 快照，
 // 统一按运行中处理，不要让卡片因缺字段渲染成「完成」。
@@ -83,8 +83,8 @@ export const CodexCollabAgentEntry = memo(function CodexCollabAgentEntry({
           : null
       }
       collapsible={hasBody}
-      autoExpandWhileRunning
-      autoCollapseOnDone
+      autoExpandWhileRunning={false}
+      autoCollapseOnDone={false}
       meta={
         // 目标数 + 耗时并存：wait 常常跑几分钟（截图里的 186 秒就是等待），
         // 只给目标数会让用户完全看不出这一条已经等了多久。

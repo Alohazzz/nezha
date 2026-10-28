@@ -65,7 +65,6 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
   fileChange: ({ entry, onOpenGitChanges }) => (
     <CodexFileChangeEntry
       item={entry.item as CodexFileChangeItem}
-      revision={entry.revision}
       onOpenGitChanges={onOpenGitChanges}
     />
   ),

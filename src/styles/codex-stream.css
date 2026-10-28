@@ -180,6 +180,12 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   min-width: max-content;
 }
 
+/* mono 变体：命令输出 / diff 等代码类文本的跑马灯（字体对齐展开区等宽） */
+.codex-stream-thought-line.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
 .codex-stream-tool-card:hover .codex-stream-thought-line[data-live],
 .codex-stream-tool-header:focus-visible .codex-stream-thought-line[data-live] {
   color: var(--text-secondary);

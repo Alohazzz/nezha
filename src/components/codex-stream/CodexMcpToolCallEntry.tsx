@@ -7,7 +7,8 @@ import { CodexToolCard } from "./CodexToolCard";
 import { formatDuration, formatJsonText } from "./codexEntryShared";
 
 // MCP 工具调用卡（issue #117 T3 自 CodexEntryItems 迁出 + 重做展开区）。
-// 行为矩阵：默认收起、运行中自动展开、完成自动收起。展开后**参数与结果分两块
+// 行为矩阵（与思考卡一致）：默认收起、不自动展开 / 完成不自动收起——运行态
+// 由类别词高亮与耗时表达，明细留在手动展开区。展开后**参数与结果分两块
 // 结构化区域展示**（user story 11），不再整包 JSON 倾倒：
 // - Arguments：arguments 的 pretty JSON；
 // - Result：content 文本块优先（`{type:"text"}` 直接给文本），其余块与
@@ -36,8 +37,8 @@ export const CodexMcpToolCallEntry = memo(function CodexMcpToolCallEntry({
       status={status}
       failureDetail={item.error?.message ?? null}
       collapsible={hasBody}
-      autoExpandWhileRunning
-      autoCollapseOnDone
+      autoExpandWhileRunning={false}
+      autoCollapseOnDone={false}
       meta={duration ? <span style={s.codexToolMeta}>{duration}</span> : null}
     >
       {item.arguments !== undefined && (

@@ -96,3 +96,48 @@ describe("CodexFileChangeEntry", () => {
     expect(addHeader.textContent).toContain("added");
   });
 });
+
+// ── 结构化改版：文件变更卡与思考卡交互一致 ────────────────────────────────────
+// 编辑期间（inProgress）不再自动弹开卡体，摘要行跑马灯跟播最新一行变更；
+// 完整 diff 留在手动展开区。
+
+describe("CodexFileChangeEntry streaming marquee", () => {
+  function renderRunning(item: CodexFileChangeItem) {
+    return render(
+      <I18nProvider>
+        <CodexFileChangeEntry item={{ ...item, status: "inProgress" }} />
+      </I18nProvider>,
+    );
+  }
+
+  it("stays collapsed while streaming and marquee-scrolls the latest diff line", () => {
+    renderRunning(singleFile);
+    // 卡体不自动展开：diff 内容不可见
+    expect(screen.queryByText("b")).toBeNull();
+    // 摘要行承载最新一行变更（+ 前缀）
+    const live = screen.getByTestId("codex-filechange-live-line");
+    expect(live.textContent).toBe("+b");
+    expect(live.getAttribute("data-live")).toBe("true");
+  });
+
+  it("multi-file parent streams the latest change across files while collapsed", () => {
+    renderRunning(multiFile);
+    // 子卡不出现（父卡保持收起）
+    expect(screen.queryByRole("button", { name: /src\/a\.ts/ })).toBeNull();
+    // 最新变更是最后一个文件的最后一行
+    expect(screen.getByTestId("codex-filechange-live-line").textContent).toBe("+bb");
+  });
+
+  it("falls back to the static path once completed", () => {
+    renderEntry(singleFile);
+    expect(screen.queryByTestId("codex-filechange-live-line")).toBeNull();
+    expect(screen.getByText("src/one.ts")).toBeTruthy();
+    expect(screen.queryByText("b")).toBeNull();
+  });
+
+  it("does not stream an empty line when the diff has no parsed rows yet", () => {
+    // 流式累积初期：diff 文本还没有 hunk 行 → 跑马灯挂载但内容为空
+    renderRunning(makeItem([{ path: "", kind: { type: "update", movePath: null }, diff: "" }]));
+    expect(screen.getByTestId("codex-filechange-live-line").textContent).toBe("");
+  });
+});

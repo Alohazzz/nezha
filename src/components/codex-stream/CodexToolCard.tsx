@@ -10,7 +10,10 @@ import s from "../../styles";
 //
 // - 展开状态持久：模块级 Map<entryId, boolean>，跨任务切换 / 跨卸载重挂载保持。
 //   不进 React 状态、不进 localStorage；带条目上限防泄漏（长会话丢最老记录）。
-// - 自动边沿：进入 running → 自动展开一次；running → 完成边沿 → 自动收起一次。
+// - 自动边沿（可选）：进入 running → 自动展开一次；running → 完成边沿 → 自动
+//   收起一次。结构化改版后五类工具卡（命令 / 文件变更 / MCP / 协作 / 思考）
+//   全部传 false——实况内容走摘要行跑马灯（CodexThoughtLine），不再弹卡体；
+//   边沿机制保留给未来需要「默认展开」的内容型卡（如图片卡）。
 //   流式增长（revision 递增）不参与触发——进入 running 即展开，避免每帧比较。
 //   用户手动 toggle 后该条目的自动逻辑**永久让位**（manualWins ref）。
 //   边沿用 ref 比较前后值识别，只在真正切换时 setState——高频帧回调不 setState
@@ -198,6 +201,24 @@ export const CodexToolCard = memo(function CodexToolCard({
   // setExpanded updater——React 严格模式 / 并发重试会多次调用 updater）。
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+
+  // ── collapsible 翻转收口：无输出命令卡先以 collapsible=false 挂载（此时
+  // expanded 硬编码 true，只是非折叠形态下的占位），输出 delta 到达后翻成
+  // true——遗留的 true 会把折叠形态直接顶开（历史上靠「完成自动收起」边沿
+  // 兜住，自动收起退役后必须在这里回落默认值）。用户手动 toggle 过的条目
+  // 不动（manualWins 优先），有持久化记录的也不动（那是用户意志）。
+  const prevCollapsibleRef = useRef(collapsible);
+  useEffect(() => {
+    const prev = prevCollapsibleRef.current;
+    prevCollapsibleRef.current = collapsible;
+    if (prev === collapsible) return;
+    if (collapsible && !manualWinsRef.current && readExpansion(entryId) === undefined) {
+      const fallback = defaultExpanded || (autoExpandWhileRunning && status === "running");
+      if (expandedRef.current !== fallback) {
+        setExpanded(fallback);
+      }
+    }
+  }, [collapsible, entryId, defaultExpanded, autoExpandWhileRunning, status]);
 
   // ── 手动优先：用户 toggle 过的条目，自动逻辑永久让位 ─────────────────────
   const manualWinsRef = useRef(false);
