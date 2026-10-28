@@ -4,7 +4,6 @@ import { CODE_EXTS } from "../../utils";
 import type { FileEntry, CrossProjectRef, MentionItem } from "./MentionPopover";
 import {
   ComposerMentionPopover,
-  expandMentionItem,
   filterMentionItems,
   loadSkills,
   type MentionItem as ComposerMentionItem,
@@ -129,6 +128,59 @@ function createChipElement(file: FileEntry, crossProject?: CrossProjectRef): HTM
   return chip;
 }
 
+/** 技能引用 chip：展示 `$name` 紧凑形态，序列化时由 dataset.skillName 还原 token
+ * （serializeEditor），canonical 指令在提交时展开（NewTaskView.expandSkillTokens）。 */
+function createSkillChipElement(skill: Skill): HTMLSpanElement {
+  const chip = document.createElement("span");
+  chip.contentEditable = "false";
+  chip.dataset.skillName = skill.name;
+  chip.dataset.skillPath = `${skill.path}/SKILL.md`;
+  if (skill.displayName) chip.dataset.skillLabel = skill.displayName;
+
+  const iconSpan = document.createElement("span");
+  iconSpan.innerHTML = SKILL_SVG;
+  iconSpan.style.cssText = "display:inline-flex;align-items:center;flex-shrink:0;";
+
+  const nameSpan = document.createElement("span");
+  nameSpan.textContent = `$${skill.name}`;
+
+  chip.appendChild(iconSpan);
+  chip.appendChild(nameSpan);
+
+  chip.style.cssText = [...SKILL_CHIP_BASE_STYLES, "background:color-mix(in srgb, var(--accent) 8%, transparent)"].join(";");
+
+  return chip;
+}
+
+const SKILL_CHIP_BASE_STYLES = [
+  "display:inline-flex",
+  "align-items:center",
+  "gap:3px",
+  "padding:0px 4px 0px 3px",
+  "border:none",
+  "border-radius:3px",
+  "font-size:13.5px",
+  "font-weight:500",
+  "color:var(--accent)",
+  "vertical-align:middle",
+  "margin:0 1px",
+  "cursor:default",
+  "-webkit-user-select:none",
+  "user-select:none",
+  "line-height:inherit",
+  "opacity:0.85",
+];
+
+const SKILL_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3z"/></svg>`;
+
+/** 编辑器内不可编辑的原子块：文件引用与技能引用共用一套光标/退格语义。 */
+function isChipElement(node: unknown): node is HTMLElement {
+  return (
+    node instanceof HTMLElement &&
+    (Boolean(node.dataset.filePath) || Boolean(node.dataset.skillName))
+  );
+}
+
 function getAdjacentChip(range: Range, key: "Backspace" | "Delete"): HTMLElement | null {
   if (!range.collapsed) return null;
 
@@ -150,7 +202,7 @@ function getAdjacentChip(range: Range, key: "Backspace" | "Delete"): HTMLElement
     sibling = isBackspace ? sibling.previousSibling : sibling.nextSibling;
   }
 
-  return sibling instanceof HTMLElement && sibling.dataset.filePath ? sibling : null;
+  return isChipElement(sibling) ? sibling : null;
 }
 
 function removeChipAtCaret(chip: HTMLElement) {
@@ -172,6 +224,13 @@ function removeChipAtCaret(chip: HTMLElement) {
   sel?.addRange(range);
 }
 
+/** 编辑器里是否存在原子块（文件 / 技能 chip）：判空与草稿缓存都用它。 */
+function editorHasChips(editor: HTMLDivElement): boolean {
+  return !!(
+    editor.querySelector("[data-file-path]") || editor.querySelector("[data-skill-name]")
+  );
+}
+
 function serializeEditor(editor: HTMLDivElement): string {
   const parts: string[] = [];
 
@@ -188,6 +247,10 @@ function serializeEditor(editor: HTMLDivElement): string {
         } else {
           parts.push(`@${el.dataset.filePath}`);
         }
+      } else if (el.dataset.skillName) {
+        // 技能 chip 序列化为紧凑引用 `$name`；canonical 指令在提交时展开
+        // （NewTaskView.handleSubmit → expandSkillTokens）。
+        parts.push(`$${el.dataset.skillName}`);
       } else if (el.tagName === "DIV" || el.tagName === "P") {
         if (parts.length > 0 && parts[parts.length - 1] !== "\n") {
           parts.push("\n");
@@ -285,7 +348,7 @@ export function PromptEditor({
     onContentChange?.({
       html: editor.innerHTML,
       text: editor.textContent || "",
-      hasChips: !!editor.querySelector("[data-file-path]"),
+      hasChips: editorHasChips(editor),
     });
   }, [editorRef, onContentChange]);
 
@@ -354,11 +417,14 @@ export function PromptEditor({
       range.setEnd(node, endOffset);
       range.deleteContents();
 
-      const inserted = document.createTextNode(expandMentionItem({ kind: "skill", skill }) + " ");
-      range.insertNode(inserted);
+      // 插入不可编辑的技能 chip（只显示 `$name`），canonical 长句留到提交时展开。
+      const chip = createSkillChipElement(skill);
+      range.insertNode(chip);
 
+      const space = document.createTextNode(" ");
+      chip.after(space);
       const newRange = document.createRange();
-      newRange.setStart(inserted, inserted.length);
+      newRange.setStart(space, 1);
       newRange.collapse(true);
       const sel = window.getSelection()!;
       sel.removeAllRanges();
@@ -450,7 +516,7 @@ export function PromptEditor({
     // Skip processing during IME composition to prevent duplicate text on Linux WebKitGTK
     if (isComposingRef.current) return;
     const text = editor.textContent || "";
-    const hasChips = !!editor.querySelector("[data-file-path]");
+    const hasChips = editorHasChips(editor);
     onSetIsEmpty(!text.trim() && !hasChips);
     captureContent();
     onUpdateMention();
@@ -493,7 +559,7 @@ export function PromptEditor({
           e.preventDefault();
           removeChipAtCaret(chip);
           const text = editor.textContent || "";
-          const hasChips = !!editor.querySelector("[data-file-path]");
+          const hasChips = editorHasChips(editor);
           onSetIsEmpty(!text.trim() && !hasChips);
           captureContent();
           onUpdateMention();
@@ -629,7 +695,7 @@ export function PromptEditor({
           const editor = editorRef.current;
           if (editor) {
             const text = editor.textContent || "";
-            const hasChips = !!editor.querySelector("[data-file-path]");
+            const hasChips = editorHasChips(editor);
             onSetIsEmpty(!text.trim() && !hasChips);
           }
           captureContent();

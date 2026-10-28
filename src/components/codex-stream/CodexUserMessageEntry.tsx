@@ -1,6 +1,8 @@
 import { memo, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Sparkles } from "lucide-react";
 import type { CodexUserMessageItem } from "../../types";
+import { splitSkillMentions } from "../../skillMention";
 import { useCodexStreamProjectPath } from "./codexStreamContext";
 import { ImageLightbox } from "../common/ImageLightbox";
 import s from "../../styles";
@@ -11,6 +13,8 @@ import s from "../../styles";
 // - 上游回放帧（resume 重放的权威条目）：附件本地路径，CSP 只放行 self/data:
 //   blob:，不能直接当 src，经 read_image_preview 转 dataUrl（FileViewer 预览
 //   同一命令）。加载失败不渲染该图（文本仍在，图片缺失不阻塞消息流）。
+// 技能提及在正文里是 canonical 长句（带 SKILL.md 路径），渲染时折回紧凑 chip，
+// 气泡不至于被路径撑满（对齐 ZCode 的 mention chip）。
 // 不折叠、不包骨架。
 
 export const CodexUserMessageEntry = memo(function CodexUserMessageEntry({
@@ -30,7 +34,16 @@ export const CodexUserMessageEntry = memo(function CodexUserMessageEntry({
   return (
     <div style={s.codexUserBubbleWrap}>
       <div style={s.codexUserBubble}>
-        {text}
+        {splitSkillMentions(text).map((part, i) =>
+          part.type === "skill" ? (
+            <span key={i} style={s.codexUserSkillChip} title={part.path}>
+              <Sparkles size={11} strokeWidth={2.2} />
+              {part.label}
+            </span>
+          ) : (
+            <span key={i}>{part.text}</span>
+          ),
+        )}
         {images.length > 0 && (
           <div style={s.codexUserBubbleImages}>
             {images.map((src, i) => (

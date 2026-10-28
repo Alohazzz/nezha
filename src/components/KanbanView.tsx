@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { LayoutGrid, Star, X } from "lucide-react";
 import type { Project, Task, TaskStatus } from "../types";
+import { compactSkillMentions } from "../skillMention";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { shortenPath } from "../utils";
@@ -55,7 +56,7 @@ const COLUMN_DOT_STYLE: Record<ColumnKey, CSSProperties> = {
 
 function taskTitle(task: Task): string {
   if (task.name && task.name.trim()) return task.name;
-  const prompt = task.prompt.trim();
+  const prompt = compactSkillMentions(task.prompt).trim();
   return prompt.length > 0 ? prompt.split("\n")[0] : "(untitled)";
 }
 

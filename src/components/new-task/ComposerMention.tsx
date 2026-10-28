@@ -3,12 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { FileCode2, FileText, Sparkles, SquareSlash } from "lucide-react";
 import type { AgentCommand, Skill } from "../../types";
 import { CODE_EXTS } from "../../utils";
+import { skillToken } from "../../skillMention";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 
 /**
  * composer 快捷召唤（参照 ZCode 的 slash-command 形态），支持三种触发符：
- * - `$query` 技能：选中后展开为「请读取并遵循 xxx 技能：<SKILL.md 路径>」
+ * - `$query` 技能：选中后写入紧凑引用 `$name`，提交时再展开为
+ *   「请读取并遵循 xxx 技能：<SKILL.md 路径>」（见 skillMention.ts）
  * - `/query` 命令：Agent 自定义命令（Claude commands / Codex prompts），
  *   展开为「请执行 xxx 命令：读取 <命令文件> 的内容并严格按其执行」
  * - `@query` 文件：项目文件引用，插入相对路径（agent 按路径读取）
@@ -44,6 +46,11 @@ export function loadSkills(): Promise<Skill[]> {
       SKILL_CACHE = [];
       return SKILL_CACHE;
     });
+}
+
+/** 同步读已加载的技能缓存：提交前展开 `$name` 用（未加载过则返回空，词元原样保留）。 */
+export function peekCachedSkills(): Skill[] {
+  return SKILL_CACHE ?? [];
 }
 
 export function loadAgentCommands(projectPath: string | null): Promise<AgentCommand[]> {
@@ -191,11 +198,12 @@ export function mergeBuiltinWithCommands(
   return [...builtinItems, ...commandItems];
 }
 
-/** 选中候选项后展开/插入的文本。builtin 命令不走文本展开（宿主拦截开选择器）。 */
+/** 选中候选项后插入的文本。builtin 命令不走文本展开（宿主拦截开选择器）。
+ * 技能只写入紧凑引用 `$name`——canonical 指令（带 SKILL.md 路径）由提交前的
+ * `expandSkillTokens` 生成，输入框里不再塞长句。 */
 export function expandMentionItem(item: MentionItem): string {
   if (item.kind === "skill") {
-    const skill = item.skill;
-    return `请读取并遵循 ${skill.displayName || skill.name} 技能：${skill.path}/SKILL.md`;
+    return skillToken(item.skill);
   }
   if (item.kind === "command") {
     return (
@@ -502,6 +510,8 @@ export function useComposerMention(
     items,
     loading,
     index: state?.index ?? 0,
+    /** 已加载的技能清单：宿主提交时用它把 `$name` 展开成 canonical 指令。 */
+    skills,
     setIndex: (index: number) => setState((prev) => (prev ? { ...prev, index } : prev)),
     close,
     syncFromCaret,

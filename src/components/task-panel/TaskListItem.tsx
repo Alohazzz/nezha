@@ -1,6 +1,7 @@
 import { useState, memo } from "react";
 import { Trash2, Star, Play, GitBranch, Hourglass, Loader2 } from "lucide-react";
 import { taskStatusI18nKey, type Task } from "../../types";
+import { compactSkillMentions } from "../../skillMention";
 import { StatusIcon } from "../StatusIcon";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
@@ -33,7 +34,7 @@ export const TaskListItem = memo(
   }) {
     const { t } = useI18n();
     const [hov, setHov] = useState(false);
-    const displayTitle = task.name ?? task.prompt;
+    const displayTitle = task.name ?? compactSkillMentions(task.prompt);
     return (
       <div
         style={{

@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import type { CodexStreamState } from "../hooks/useCodexStream";import type { AgentModelCatalog } from "./app-settings/types";
 import { permissionModeLabel } from "../types";
+import { compactSkillMentions } from "../skillMention";
 import { StatusIcon } from "./StatusIcon";
 import { TerminalView } from "./TerminalView";
 import { SessionView } from "./SessionView";
@@ -451,7 +452,7 @@ export function RunningView({
                 outline: "none",
               }}
               value={editValue}
-              placeholder={task.prompt.slice(0, 60)}
+              placeholder={compactSkillMentions(task.prompt).slice(0, 60)}
               onChange={(e) => setEditValue(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -480,7 +481,7 @@ export function RunningView({
               }}
             >
               {(() => {
-                const t = task.name ?? task.prompt;
+                const t = task.name ?? compactSkillMentions(task.prompt);
                 return t.slice(0, 70) + (t.length > 70 ? "…" : "");
               })()}
             </span>

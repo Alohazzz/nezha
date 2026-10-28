@@ -602,6 +602,25 @@ export const codexStream = {  codexStreamRoot: {
     wordBreak: "break-word",
   },
 
+  // 气泡内的技能提及 chip：正文里存的是 canonical 长句（带 SKILL.md 路径），
+  // 展示层折成 `$name` 紧凑形态，避免路径把气泡撑满。
+  codexUserSkillChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    margin: "0 2px",
+    padding: "0 6px",
+    borderRadius: 5,
+    background: "var(--accent-subtle)",
+    color: "var(--accent)",
+    fontSize: 12.5,
+    fontWeight: 600,
+    lineHeight: 1.5,
+    verticalAlign: "baseline",
+    whiteSpace: "nowrap" as const,
+    userSelect: "none" as const,
+  },
+
   // ── 统一工具卡骨架（issue #117 T2；去卡片化改版：ZCode 式扁平行）────────────
   // 摘要行无边框无底色：图标 + 类别词 + 主文本 + meta/状态 + chevron 纯文本行；
   // 展开区内容块保留浅底/左界线承载输出与 diff。伪类 / data-* 状态选择器 /

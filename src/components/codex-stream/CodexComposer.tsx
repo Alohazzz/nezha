@@ -9,6 +9,7 @@ import {
 } from "../new-task/ComposerMention";
 import { CodexModelPicker } from "./CodexModelPicker";
 import { ImageAttachments } from "../new-task/ImageAttachments";
+import { expandSkillTokens } from "../../skillMention";
 import type { AgentModelCatalog } from "../app-settings/types";
 import {
   composerCanSend,
@@ -198,7 +199,9 @@ export function CodexComposer({
   const submit = () => {
     if (!canSend) return;
     const imageUrls = imagesRef.current.map((img) => img.dataUrl);
-    onSubmit(text.trim(), imageUrls);
+    // 输入框里是紧凑的 `$skill` 引用，提交这一刻才展开成带 SKILL.md 路径的指令，
+    // agent 收到的提示词与改动前逐字一致。
+    onSubmit(expandSkillTokens(text, mention.skills).trim(), imageUrls);
     setText("");
     setImages([]);
     mention.close();

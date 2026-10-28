@@ -17,6 +17,8 @@ import {
   type MentionItem,
 } from "./new-task/MentionPopover";
 import { PromptEditor, usePromptEditor, type PromptEditorContent } from "./new-task/PromptEditor";
+import { peekCachedSkills } from "./new-task/ComposerMention";
+import { expandSkillTokens } from "../skillMention";
 import { ImageAttachments } from "./new-task/ImageAttachments";
 import { TextAttachments, type PastedText } from "./new-task/TextAttachments";
 import { AgentPermSelector } from "./new-task/AgentPermSelector";
@@ -492,7 +494,9 @@ export function NewTaskView({
       }
     }
     submittedRef.current = true;
-    const finalPrompt = planMode && text ? `${text}\n\nPlease use plan mode.` : text;
+    // 编辑器里是紧凑的 `$skill` 引用，提交时才展开成带 SKILL.md 路径的指令。
+    const expanded = expandSkillTokens(text, peekCachedSkills());
+    const finalPrompt = planMode && expanded ? `${expanded}\n\nPlease use plan mode.` : expanded;
     onSubmit({
       prompt: finalPrompt,
       agent,

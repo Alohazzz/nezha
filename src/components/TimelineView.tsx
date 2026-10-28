@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Clock } from "lucide-react";
 import type { Project, Task } from "../types";
+import { compactSkillMentions } from "../skillMention";
 import { ProjectAvatar } from "./ProjectAvatar";
 import { StatusIcon } from "./StatusIcon";
 import { useI18n, pluralKey } from "../i18n";
@@ -43,7 +44,7 @@ function formatTime(ts: number): string {
 
 function taskTitle(task: Task): string {
   if (task.name && task.name.trim()) return task.name;
-  const prompt = task.prompt.trim();
+  const prompt = compactSkillMentions(task.prompt).trim();
   return prompt.length > 0 ? prompt.split("\n")[0] : "(untitled)";
 }
 
