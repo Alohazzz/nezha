@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { marked } from "marked";
 import { FileText, Loader2, Play, Trash2, X } from "lucide-react";
 import type {
   AgentEnabledState,
@@ -13,6 +12,7 @@ import type {
 import { firstEnabledAgent, isAgentEnabled } from "../../../types";
 import { getLastYunxiaoAgent, getLastYunxiaoPermission } from "../../../utils/yunxiao";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
+import { renderMessageMarkdown } from "../../../utils/markdown";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
 import { UnattendedToggle } from "./UnattendedToggle";
 import { HtmlPreviewPane } from "../../file-viewer/HtmlPreviewPane";
@@ -225,7 +225,7 @@ export function PlanPreviewPanel({
 
   const html = useMemo(() => {
     if (!markdown.trim()) return "";
-    return marked.parse(markdown, { async: false }) as string;
+    return renderMessageMarkdown(markdown);
   }, [markdown]);
 
   return (

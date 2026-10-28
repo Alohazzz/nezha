@@ -1,7 +1,21 @@
-import { Marked } from "marked";
+import { Marked, marked } from "marked";
 import DOMPurify from "dompurify";
 
 export type TocEntry = { depth: number; text: string; id: string };
+
+/**
+ * 智能体正文（会话消息 / 计划 / 评审报告）的 Markdown 渲染。
+ *
+ * 与 `renderMarkdownWithToc` 的区别只在软换行：模型经常写成「`1. **小标题**` 换行
+ * 再缩进写正文」，CommonMark 会把单换行折叠成空格，界面上标题和正文并成一行。
+ * 这类文本是给人看的对话回复，语义上每行都是有意断行，所以按硬换行渲染
+ * （与 GitHub 评论区、ChatGPT 的观感一致）。
+ *
+ * 真实 `.md` 文件预览不能走这里——那里的软换行属于文档排版，必须保持 CommonMark 语义。
+ */
+export function renderMessageMarkdown(text: string): string {
+  return marked(text, { async: false, breaks: true }) as string;
+}
 
 export function isMarkdownFileName(fileName: string): boolean {
   const ext = fileName.split(".").pop()?.toLowerCase();

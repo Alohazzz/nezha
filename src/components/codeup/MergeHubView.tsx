@@ -3,9 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Send, Download, FileText, GitMerge, Play, RefreshCw, X } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { appConfirm } from "../AppConfirmDialog";
-import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { CodeupMr, CodeupRepository, CodeupReviewFinding } from "../../types";
+import { renderMessageMarkdown } from "../../utils/markdown";
 import s from "../../styles";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -221,7 +221,7 @@ export function MergeHubView({
   const reviewReportHtml = useMemo(
     () =>
       reviewModal?.content
-        ? DOMPurify.sanitize(marked.parse(reviewModal.content, { async: false }) as string)
+        ? DOMPurify.sanitize(renderMessageMarkdown(reviewModal.content))
         : "",
     [reviewModal?.content],
   );

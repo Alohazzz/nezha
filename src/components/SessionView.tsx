@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronRight, Wrench, Copy, Check } from "lucide-react";
-import { marked } from "marked";
 import { useI18n } from "../i18n";
+import { renderMessageMarkdown } from "../utils/markdown";
 
 interface SessionContent {
   type: "text" | "tool_use" | "thinking";
@@ -219,7 +219,7 @@ function MessageBlock({ message }: { message: SessionMessage }) {
         <div
           key={i}
           className="session-prose"
-          dangerouslySetInnerHTML={{ __html: marked(t.text ?? "", { async: false }) as string }}
+          dangerouslySetInnerHTML={{ __html: renderMessageMarkdown(t.text ?? "") }}
         />
       ))}
       {toolParts.map((t, i) => (

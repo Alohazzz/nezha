@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { marked } from "marked";
 import s from "../../styles";
+import { renderMessageMarkdown } from "../../utils/markdown";
 
 // SessionView 的 marked 管线同款（AGENTS.md：单条 >10KB 禁止同步 marked 大文本）。
 // 结构化流里单条消息通常远小于该阈值；超过时退回纯文本渲染，不做同步解析。
@@ -21,7 +21,7 @@ export function CodexMarkdown({ text, className }: MarkdownProps) {
   const html = useMemo(() => {
     if (text.length > SYNC_MARKDOWN_LIMIT) return null;
     try {
-      return marked(text, { async: false }) as string;
+      return renderMessageMarkdown(text);
     } catch {
       return null;
     }

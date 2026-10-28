@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { marked } from "marked";
 import {
   CircleStop,
   Loader2,
@@ -11,6 +10,7 @@ import {
 } from "lucide-react";
 import type { Plan, Task } from "../../types";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../utils/plan";
+import { renderMessageMarkdown } from "../../utils/markdown";
 import { topoSortPlanIssues } from "../../utils/planDeps";
 import type { PlanDeps } from "../../utils/planDeps";
 import { parsePlanDeps } from "../../utils/planDeps";
@@ -161,7 +161,7 @@ export function IssuePlanViewDialog({
 
   const html = useMemo(() => {
     if (!markdown.trim()) return "";
-    return marked.parse(markdown, { async: false }) as string;
+    return renderMessageMarkdown(markdown);
   }, [markdown]);
 
   return (
