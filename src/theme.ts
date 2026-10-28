@@ -1,7 +1,7 @@
 import type { ThemeMode, ThemeVariant } from "./types";
 
 export type LightThemeMode = Extract<ThemeMode, "light" | "eyecare">;
-export type DarkThemeMode = Extract<ThemeMode, "dark" | "midnight">;
+export type DarkThemeMode = Extract<ThemeMode, "dark" | "midnight" | "zinc" | "claude">;
 
 export const THEME_STORAGE_KEY = "nezha:theme";
 export const LIGHT_THEME_STORAGE_KEY = "nezha:lightTheme";
@@ -13,7 +13,9 @@ export function isThemeMode(value: string | null): value is ThemeMode {
     value === "midnight" ||
     value === "light" ||
     value === "system" ||
-    value === "eyecare"
+    value === "eyecare" ||
+    value === "zinc" ||
+    value === "claude"
   );
 }
 
@@ -22,7 +24,7 @@ export function isLightThemeMode(value: string | null): value is LightThemeMode 
 }
 
 export function isDarkThemeMode(value: string | null): value is DarkThemeMode {
-  return value === "dark" || value === "midnight";
+  return value === "dark" || value === "midnight" || value === "zinc" || value === "claude";
 }
 
 export function resolveThemeVariant(

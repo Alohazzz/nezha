@@ -50,7 +50,7 @@ export function AgentConfigPanel({
   themeVariant: ThemeVariant;
 }) {
   const shikiTheme =
-    themeVariant === "dark" || themeVariant === "midnight"
+    themeVariant !== "light" && themeVariant !== "eyecare"
       ? "github-dark"
       : themeVariant === "eyecare"
         ? "solarized-light"

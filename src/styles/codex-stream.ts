@@ -506,7 +506,7 @@ export const codexStream = {  codexStreamRoot: {
     borderRadius: 8,
     border: "none",
     background: "var(--accent)",
-    color: "var(--bg-root)",
+    color: "var(--fg-on-accent)",
     fontSize: 12,
     cursor: "pointer",
     flexShrink: 0,

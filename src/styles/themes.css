@@ -386,3 +386,82 @@ html.midnight {
   --code-line-hover-bg: rgba(255, 255, 255, 0.04);
   --image-checker-bg: rgba(255, 255, 255, 0.04);
 }
+
+/* Design tokens: zinc dark theme (neutral gray).
+   Layered on top of `html.dark`, mirroring paseo's zincDark: a hueless zinc
+   ramp (#18181b content, #131316 sidebar) with a near-white monochrome accent.
+   The near-white accent needs dark text on accent surfaces. Must stay AFTER
+   `html.dark` to win at equal specificity. */
+html.zinc {
+  --bg-root: #18181b;
+  --bg-shell: #131316;
+  --bg-titlebar: #131316;
+  --bg-sidebar: #131316;
+  --bg-sidebar-elevated: #17171a;
+  --bg-panel: #18181b;
+  --bg-card: #27272a;
+  --bg-hover: #2e2e33;
+  --bg-selected: #3f3f46;
+  --bg-subtle: #1f1f22;
+  --bg-input: #27272a;
+
+  --border-dim: #27272a;
+  --border-medium: #303036;
+  --border-strong: #3f3f46;
+  --border-focus: #fafafa;
+
+  --bg-selected: #2e2e33;
+  --control-selected-bg: rgba(255, 255, 255, 0.16);
+  --primary-action-bg: #fafafa;
+  --primary-action-fg: #18181b;
+  --primary-action-hover: #ffffff;
+
+  --accent: #e4e4e7;
+  --accent-strong: #fafafa;
+  --accent-soft: rgba(228, 228, 231, 0.3);
+  --accent-hover: #fafafa;
+  --accent-subtle: rgba(228, 228, 231, 0.12);
+  --fg-on-accent: #18181b;
+
+  --code-line-hover-bg: rgba(255, 255, 255, 0.04);
+  --image-checker-bg: rgba(255, 255, 255, 0.04);
+}
+
+/* Design tokens: claude dark theme (warm neutral, orange accent).
+   Layered on top of `html.dark`, mirroring paseo's claudeDark: warm surfaces
+   (#1f1f1e content, #1a1918 sidebar) with the Claude orange accent. The orange
+   is light enough to keep dark text on accent surfaces. Must stay AFTER
+   `html.dark` to win at equal specificity. */
+html.claude {
+  --bg-root: #1f1f1e;
+  --bg-shell: #1a1918;
+  --bg-titlebar: #1a1918;
+  --bg-sidebar: #1a1918;
+  --bg-sidebar-elevated: #1e1d1b;
+  --bg-panel: #1f1f1e;
+  --bg-card: #2f2d2b;
+  --bg-hover: #38352f;
+  --bg-selected: #4a4745;
+  --bg-subtle: #262523;
+  --bg-input: #2f2d2b;
+
+  --border-dim: #2c2a27;
+  --border-medium: #36332f;
+  --border-strong: #4a4745;
+  --border-focus: #f5f0eb;
+
+  --bg-selected: #38352f;
+  --primary-action-bg: #d97757;
+  --primary-action-fg: #1f1f1e;
+  --primary-action-hover: #e89a7f;
+
+  --accent: #d97757;
+  --accent-strong: #e89a7f;
+  --accent-soft: rgba(217, 119, 87, 0.32);
+  --accent-hover: #e89a7f;
+  --accent-subtle: rgba(217, 119, 87, 0.14);
+  --fg-on-accent: #1f1f1e;
+
+  --code-line-hover-bg: rgba(255, 255, 255, 0.04);
+  --image-checker-bg: rgba(255, 255, 255, 0.04);
+}

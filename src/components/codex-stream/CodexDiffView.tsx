@@ -33,6 +33,8 @@ export const CODEX_DIFF_MAX_ROWS = 2000;
 const SHIKI_THEME_BY_VARIANT: Record<CodexThemeVariant, string> = {
   dark: "github-dark",
   midnight: "github-dark",
+  zinc: "github-dark",
+  claude: "github-dark",
   light: "github-light",
   eyecare: "solarized-light",
 };
