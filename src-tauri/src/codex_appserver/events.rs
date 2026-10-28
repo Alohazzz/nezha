@@ -502,13 +502,7 @@ mod tests {
         // 形状取自上游 `ToolRequestUserInputParams`（0.163，EXPERIMENTAL）。
         // 这条反向请求过去落在 UnsupportedServerRequest 里被自动 decline，
         // 模型拿不到答案只能退化成纯文本列选项。
-        let line = concat!(
-            r#"{"method":"item/tool/requestUserInput","id":7,"params":{"#,
-            r#""threadId":"t1","turnId":"turn1","itemId":"call_abc","#,
-            r#""questions":[{"id":"scope","header":"范围","question":"改哪些入口?",#,
-            r#""isOther":true,"isSecret":false,"options":[{"label":"仅PC","description":"风险最小"}]}],#,
-            r#""isBlocking":true}}"#
-        );
+        let line = r#"{"method":"item/tool/requestUserInput","id":7,"params":{"threadId":"t1","turnId":"turn1","itemId":"call_abc","questions":[{"id":"scope","header":"范围","question":"改哪些入口?","isOther":true,"isSecret":false,"options":[{"label":"仅PC","description":"风险最小"}]}],"isBlocking":true}}"#;
         match parse_from_line(line).unwrap() {
             CodexEvent::UserInputRequested { request_id, params } => {
                 assert_eq!(request_id, proto::RequestId::Integer(7));
@@ -529,12 +523,7 @@ mod tests {
     fn user_input_request_without_is_blocking_defaults_to_blocking() {
         // 老样本/精简样本可能不带 isBlocking：缺省必须按阻塞处理，
         // 否则上层会把它当成"可以晚点再答"，turn 静默挂住。
-        let line = concat!(
-            r#"{"method":"item/tool/requestUserInput","id":8,"params":{"#,
-            r#""threadId":"t1","turnId":"turn1","itemId":"call_def","#,
-            r#""questions":[{"id":"q1","header":"H","question":"Q?",#,
-            r#""options":[{"label":"A","description":"a"}]}]}}"#
-        );
+        let line = r#"{"method":"item/tool/requestUserInput","id":8,"params":{"threadId":"t1","turnId":"turn1","itemId":"call_def","questions":[{"id":"q1","header":"H","question":"Q?","options":[{"label":"A","description":"a"}]}]}}"#;
         match parse_from_line(line).unwrap() {
             CodexEvent::UserInputRequested { params, .. } => {
                 assert!(params.is_blocking);

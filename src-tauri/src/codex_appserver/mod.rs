@@ -1143,11 +1143,7 @@ mod tests {
         .await;
         handle_wire_line(
             &core,
-            concat!(
-                r#"{"method":"item/tool/requestUserInput","id":4,"params":{"threadId":"t1","turnId":"turn1","#,
-                r#""itemId":"call_x","isBlocking":true,"questions":[{"id":"q1","header":"H","question":"Q?",#,
-                r#""options":[{"label":"A","description":"a"}]}]}}"#
-            ),
+            r#"{"method":"item/tool/requestUserInput","id":4,"params":{"threadId":"t1","turnId":"turn1","itemId":"call_x","isBlocking":true,"questions":[{"id":"q1","header":"H","question":"Q?","options":[{"label":"A","description":"a"}]}]}}"#,
         )
         .await;
         assert_eq!(core.status.lock().phase, SessionPhase::AwaitingApproval);
