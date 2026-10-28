@@ -1037,6 +1037,18 @@ export const panels = {
     minWidth: 0,
   },
   mentionOptionName: { fontSize: 13, fontWeight: 500, color: "var(--text-primary)", flexShrink: 0 },
+  mentionOriginBadge: {
+    flexShrink: 0,
+    fontSize: 10,
+    lineHeight: "16px",
+    padding: "0 6px",
+    borderRadius: 8,
+    fontWeight: 600,
+    color: "var(--text-hint)",
+    background: "var(--bg-hover, rgba(128, 128, 128, 0.15))",
+    textTransform: "lowercase" as const,
+    userSelect: "none" as const,
+  },
   mentionOptionDir: {
     fontSize: 11.5,
     color: "var(--text-hint)",

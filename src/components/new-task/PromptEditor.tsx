@@ -325,6 +325,7 @@ export function PromptEditor({
   onSubmit,
   onContentChange,
   onPasteLargeText,
+  projectPath,
 }: {
   editorRef: React.RefObject<HTMLDivElement | null>;
   isComposingRef: React.MutableRefObject<boolean>;
@@ -340,6 +341,8 @@ export function PromptEditor({
   onSubmit: (immediate: boolean) => void;
   onContentChange?: (content: PromptEditorContent) => void;
   onPasteLargeText?: (text: string) => void;
+  /** 当前项目根路径；`$` 技能列表据此合并项目级 agent 技能目录 */
+  projectPath?: string | null;
 }) {
   const { t } = useI18n();
   const captureContent = useCallback(() => {
@@ -361,7 +364,7 @@ export function PromptEditor({
   useEffect(() => {
     let cancelled = false;
     setSkillsLoading(true);
-    loadSkills().then((rows) => {
+    loadSkills(projectPath ?? null).then((rows) => {
       if (!cancelled) {
         setSkills(rows);
         setSkillsLoading(false);
@@ -370,7 +373,7 @@ export function PromptEditor({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectPath]);
 
   const skillItems = useMemo(
     () =>

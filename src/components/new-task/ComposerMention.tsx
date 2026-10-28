@@ -25,32 +25,48 @@ import s from "../../styles";
 
 // ── 数据加载（模块级缓存，变更低频）─────────────────────────────────────────
 
-let SKILL_CACHE: Skill[] | null = null;
+// `$` 选择器用 list_composer_skills 合并视图（SkillHub + 用户级/项目级 agent 技能目录，
+// 后端已按「项目级 > 用户级 > hub」同名去重）；缓存按 projectPath 分桶，
+// 项目级技能随项目变化。浮层每次打开会后台重扫一次（见 useComposerMention），
+// 不为用户级目录挂 watcher。
+const SKILL_CACHE = new Map<string, Skill[]>();
 const COMMAND_CACHE = new Map<string, AgentCommand[]>();
 
 export function invalidateMentionCaches() {
-  SKILL_CACHE = null;
+  SKILL_CACHE.clear();
   COMMAND_CACHE.clear();
 }
 
-export function loadSkills(): Promise<Skill[]> {
-  if (SKILL_CACHE) return Promise.resolve(SKILL_CACHE);
-  return invoke<Skill[]>("list_skills")
+export function loadSkills(projectPath: string | null): Promise<Skill[]> {
+  const key = projectPath ?? "";
+  const cached = SKILL_CACHE.get(key);
+  if (cached) return Promise.resolve(cached);
+  return invoke<Skill[]>("list_composer_skills", { projectPath: projectPath ?? null })
     .then((rows) => {
-      SKILL_CACHE = rows ?? [];
-      return SKILL_CACHE;
+      const skills = rows ?? [];
+      SKILL_CACHE.set(key, skills);
+      return skills;
     })
     .catch((e) => {
-      // 404（未配置技能库）等错误按空列表处理，不打扰输入体验
-      console.warn("[composerMention] list_skills failed:", e);
-      SKILL_CACHE = [];
-      return SKILL_CACHE;
+      // 404（旧后端/未配置技能库）等错误按空列表处理，不打扰输入体验；
+      // 失败结果同样入缓存，避免每次按键都撞同一个错
+      console.warn("[composerMention] list_composer_skills failed:", e);
+      SKILL_CACHE.set(key, []);
+      return [];
     });
 }
 
-/** 同步读已加载的技能缓存：提交前展开 `$name` 用（未加载过则返回空，词元原样保留）。 */
+/** 同步读已加载的技能缓存：提交前展开 `$name` 用。合并各 projectPath 桶后
+ * 按名去重——跨桶同名时后端已按来源择优，这里只做并集兜底。 */
 export function peekCachedSkills(): Skill[] {
-  return SKILL_CACHE ?? [];
+  const byName = new Map<string, Skill>();
+  for (const skills of SKILL_CACHE.values()) {
+    for (const skill of skills) {
+      const key = skill.name.toLowerCase();
+      if (!byName.has(key)) byName.set(key, skill);
+    }
+  }
+  return [...byName.values()];
 }
 
 export function loadAgentCommands(projectPath: string | null): Promise<AgentCommand[]> {
@@ -88,6 +104,15 @@ function loadProjectFiles(projectPath: string): Promise<string[]> {
 // ── 触发检测 / 过滤 / 展开 ──────────────────────────────────────────────────
 
 export type MentionTrigger = "skill" | "command" | "file";
+
+/** SkillOrigin → i18n 后缀键（composer.mention.origin.<key>）。 */
+const ORIGIN_BADGE_KEY: Record<string, string> = {
+  hub: "hub",
+  codex: "codex",
+  claude: "claude",
+  agents: "agents",
+  project: "project",
+};
 
 /** 解析光标前的触发符 query；`trigger` 后不允许空格/换行。 */
 export function parseTriggerQuery(
@@ -300,6 +325,10 @@ export function ComposerMentionPopover({
                 : item.kind === "builtin"
                   ? item.description
                   : item.command.description;
+          const badge =
+            item.kind === "skill" && item.skill.source
+              ? ORIGIN_BADGE_KEY[item.skill.source]
+              : null;
           return (
             <div
               key={
@@ -327,6 +356,15 @@ export function ComposerMentionPopover({
             >
               {icon}
               <span style={s.mentionOptionName}>{name}</span>
+              {badge ? (
+                <span
+                  style={s.mentionOriginBadge}
+                  data-origin={badge}
+                  title={t(`composer.mention.origin.${badge}`)}
+                >
+                  {t(`composer.mention.origin.${badge}`)}
+                </span>
+              ) : null}
               <span style={s.mentionOptionDir}>{detail}</span>
             </div>
           );
@@ -368,7 +406,7 @@ export function useComposerMention(
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([loadSkills(), loadAgentCommands(projectPath)]).then(([sk, cmds]) => {
+    Promise.all([loadSkills(projectPath), loadAgentCommands(projectPath)]).then(([sk, cmds]) => {
       if (cancelled) return;
       setSkills(sk);
       setCommands(cmds);
@@ -378,6 +416,28 @@ export function useComposerMention(
       cancelled = true;
     };
   }, [projectPath]);
+
+  // 技能列表挂载时加载一次后不再自动更新；agent 技能目录没有 watcher，
+  // 借浮层每次打开（state 从 null 变为激活）后台重扫一次，命中缓存时零开销。
+  const skillTriggerActive = state?.trigger === "skill";
+  const reloadedOnceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!skillTriggerActive) {
+      reloadedOnceRef.current = null;
+      return;
+    }
+    const reloadKey = `${projectPath ?? ""}|${state?.query === "" ? "fresh" : "cached"}`;
+    if (reloadedOnceRef.current === reloadKey) return;
+    reloadedOnceRef.current = reloadKey;
+    let cancelled = false;
+    SKILL_CACHE.delete(projectPath ?? "");
+    loadSkills(projectPath).then((sk) => {
+      if (!cancelled) setSkills(sk);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [skillTriggerActive, projectPath, state?.query]);
 
   const fileMode = state?.trigger === "file";
   useEffect(() => {

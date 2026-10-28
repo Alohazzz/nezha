@@ -81,6 +81,11 @@ pub struct Skill {
     /// frontmatter 解析失败时的错误描述
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_error: Option<String>,
+    /// 选择器来源标识：`hub` = SkillHub 仓库；`codex` / `claude` / `agents` = 用户级
+    /// `~/.<dir>/skills`；`project` = 项目级 `<项目>/.<agent>/skills`。
+    /// 仅 composer 合并命令（list_composer_skills）填写；list_skills（面板）恒缺省。
+    #[serde(rename = "source", skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -488,6 +493,7 @@ fn parse_skill_entry(dir_path: &Path, name: &str) -> Skill {
         project,
         build_command,
         has_error,
+        origin: None,
     }
 }
 
@@ -1589,6 +1595,131 @@ pub async fn list_skills() -> Result<Vec<Skill>, String> {
             return Ok(Vec::new());
         };
         Ok(scan_skills_in(Path::new(hub_path)))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── Composer 技能选择器合并视图 ──────────────────────────────────────────────
+// `$` 选择器的数据源不止 SkillHub：agent 自己的用户级/项目级技能目录里也有
+// 可召唤的技能（~/.claude|codex|agents/skills 与 <项目>/.<agent>/skills）。
+// 这里把四个来源合并、按名字去重后交给前端；SkillHubView 面板继续用
+// list_skills（hub-only），其安装/软链健康度模型不适用于散装 agent 技能。
+
+/// 同名技能的来源优先级：项目级 > 用户级（codex > claude > agents）> hub。
+/// 项目目录是用户当前工作现场，本地覆盖全局；用户级三大目录排 hub 之前，
+/// 因为 hub 技能经 SkillHub 安装后往往在这些目录留有联接（联接已在扫描时折叠）。
+fn origin_priority(origin: &str) -> u8 {
+    match origin {
+        "project" => 0,
+        "codex" => 1,
+        "claude" => 2,
+        "agents" => 3,
+        _ => 4, // hub
+    }
+}
+
+/// 合并去重：同名（目录名，大小写不敏感）只保留优先级最高的一条。
+/// 输入各来源列表已扫描完毕；输出按名称字母序（与 hub 列表现状一致）。
+fn merge_composer_skills(sources: Vec<(String, Vec<Skill>)>) -> Vec<Skill> {
+    let mut best: std::collections::HashMap<String, (u8, Skill)> =
+        std::collections::HashMap::new();
+    for (origin, skills) in sources {
+        let prio = origin_priority(&origin);
+        for skill in skills {
+            let key = skill.name.to_lowercase();
+            match best.entry(key) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert((prio, skill));
+                }
+                std::collections::hash_map::Entry::Occupied(mut slot) => {
+                    if prio < slot.get().0 {
+                        slot.insert((prio, skill));
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<Skill> = best.into_values().map(|(_, skill)| skill).collect();
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+/// 目录联接/软链折叠：SkillHub 安装会在 ~/.codex/skills 等目录留下指向 hub 的联接，
+/// 同时扫描 hub 与这些目录会把同一技能算两遍。以 canonical 路径为键，
+/// 先扫到的来源（按调用方给定的优先顺序）胜出，后续指向同一目标的条目丢弃。
+fn dedupe_by_canonical_target(skills: Vec<Skill>) -> Vec<Skill> {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out = Vec::with_capacity(skills.len());
+    for skill in skills {
+        let canonical = Path::new(&skill.path).canonicalize().ok();
+        let key = canonical.unwrap_or_else(|| PathBuf::from(&skill.path));
+        if seen.insert(key) {
+            out.push(skill);
+        }
+    }
+    out
+}
+
+fn scan_agent_skills_dir(dir: &Path, origin: &str) -> Vec<Skill> {
+    let mut skills = Vec::new();
+    collect_skills(dir, &mut skills, 0);
+    dedupe_by_canonical_target(skills)
+        .into_iter()
+        .map(|mut skill| {
+            skill.origin = Some(origin.to_string());
+            skill
+        })
+        .collect()
+}
+
+/// composer `$` 选择器的合并技能列表：项目级 + 用户级三目录 + SkillHub，
+/// 同名去重（项目级 > 用户级 > hub），字母序。目录缺失静默跳过；
+/// project_path 缺省时只扫用户级与 hub。
+#[tauri::command]
+pub async fn list_composer_skills(
+    project_path: Option<String>,
+) -> Result<Vec<Skill>, String> {
+    tokio::task::spawn_blocking(move || {
+        let home = crate::platform::home_dir();
+        let mut sources: Vec<(String, Vec<Skill>)> = Vec::new();
+
+        // 项目级最先扫描 = 同名时优先保留（merge 按优先级比较，此处顺序仅影响 canonical 折叠）
+        if let Some(project) = project_path.as_deref() {
+            let root = Path::new(project);
+            if root.is_dir() {
+                for (sub, origin) in [
+                    (".codex/skills", "project"),
+                    (".claude/skills", "project"),
+                    (".agents/skills", "project"),
+                ] {
+                    let dir = root.join(sub);
+                    if dir.is_dir() {
+                        sources.push((origin.to_string(), scan_agent_skills_dir(&dir, origin)));
+                    }
+                }
+            }
+        }
+
+        if let Some(home) = home {
+            for (sub, origin) in [
+                (".codex/skills", "codex"),
+                (".claude/skills", "claude"),
+                (".agents/skills", "agents"),
+            ] {
+                let dir = home.join(sub);
+                if dir.is_dir() {
+                    sources.push((origin.to_string(), scan_agent_skills_dir(&dir, origin)));
+                }
+            }
+        }
+
+        let cfg = load_hub_config_internal();
+        if let Some(hub) = cfg.hub_path.as_deref() {
+            sources.push(("hub".to_string(), scan_skills_in(Path::new(hub))));
+        }
+
+        Ok(merge_composer_skills(sources))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2844,6 +2975,98 @@ mod tests {
             find_git_root(Path::new("C:\\repo\\hsp-skillhub\\his-knowledge-graph")),
             None
         );
+    }
+
+    fn origin_skill(origin: &str, name: &str, path: &str) -> Skill {
+        Skill {
+            name: name.to_string(),
+            display_name: None,
+            description: None,
+            path: path.to_string(),
+            scope: "universal".to_string(),
+            project: None,
+            build_command: None,
+            has_error: None,
+            origin: Some(origin.to_string()),
+        }
+    }
+
+    #[test]
+    fn merge_composer_skills_prefers_project_then_user_then_hub() {
+        // 同名四来源：项目级胜出；大小写不同的目录名也按同名去重。
+        let merged = merge_composer_skills(vec![
+            (
+                "hub".to_string(),
+                vec![origin_skill("hub", "code-review", "\\\\hub\\code-review")],
+            ),
+            (
+                "agents".to_string(),
+                vec![origin_skill("agents", "CODE-REVIEW", "C:\\agents\\CODE-REVIEW")],
+            ),
+            (
+                "codex".to_string(),
+                vec![origin_skill("codex", "code-review", "C:\\codex\\code-review")],
+            ),
+            (
+                "project".to_string(),
+                vec![origin_skill("project", "code-review", "C:\\proj\\.codex\\skills\\code-review")],
+            ),
+            (
+                "claude".to_string(),
+                vec![
+                    origin_skill("claude", "solo-skill", "C:\\claude\\solo-skill"),
+                    origin_skill("claude", "alpha", "C:\\claude\\alpha"),
+                ],
+            ),
+        ]);
+        let names: Vec<&str> = merged.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "code-review", "solo-skill"]);
+        let winner = merged.iter().find(|s| s.name == "code-review").unwrap();
+        assert_eq!(winner.origin.as_deref(), Some("project"));
+        assert_eq!(winner.path, "C:\\proj\\.codex\\skills\\code-review");
+    }
+
+    #[test]
+    fn merge_composer_skills_without_conflict_keeps_all_sources() {
+        // 不同名技能全部保留，来源字段原样带出。
+        let merged = merge_composer_skills(vec![
+            (
+                "codex".to_string(),
+                vec![origin_skill("codex", "archify", "C:\\codex\\archify")],
+            ),
+            (
+                "hub".to_string(),
+                vec![origin_skill("hub", "hsp-build-order", "\\\\hub\\hsp-build-order")],
+            ),
+        ]);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().all(|s| s.origin.is_some()));
+    }
+
+    #[test]
+    fn dedupe_by_canonical_target_folds_hub_link() {
+        // Windows 目录联接 / Unix 软链：指向 hub 内同一技能目录的两个条目只留一条。
+        let base = std::env::temp_dir().join(format!("nezha-fold-link-{}", now_ms()));
+        let target = base.join("hub-skill");
+        let link = base.join("linked-skill");
+        fs::create_dir_all(&target).unwrap();
+        #[cfg(windows)]
+        let created = create_junction(&target, &link).is_ok();
+        #[cfg(not(windows))]
+        let created = std::os::unix::fs::symlink(&target, &link).is_ok();
+        if !created {
+            // 无开发者模式/管理员权限等环境限制时跳过（不伪证）
+            let _ = fs::remove_dir_all(&base);
+            return;
+        }
+        let folded = dedupe_by_canonical_target(vec![
+            origin_skill("codex", "shared-skill", link.to_string_lossy().as_ref()),
+            origin_skill("hub", "shared-skill", target.to_string_lossy().as_ref()),
+        ]);
+        assert_eq!(folded.len(), 1);
+        // 先扫到的（用户级 codex）胜出，hub 侧同目标条目被折叠
+        assert_eq!(folded[0].origin.as_deref(), Some("codex"));
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

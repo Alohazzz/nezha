@@ -639,6 +639,7 @@ export function NewTaskView({
             setPastedTexts((prev) => [...prev, { id: `${Date.now()}-${Math.random()}`, text }]);
             setIsEmpty(false);
           }}
+          projectPath={project.path}
         />
 
         {/* Attachment previews (images + pasted text on a single row) */}

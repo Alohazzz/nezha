@@ -1155,6 +1155,11 @@ export interface SkillHubConfig {
   lastSyncError?: string;
 }
 
+/** `$` 技能选择器的来源标识（list_composer_skills 合并视图）：
+ * hub = SkillHub 仓库；codex / claude / agents = 用户级 ~/.<dir>/skills；
+ * project = 项目级 <项目>/.<agent>/skills。 */
+export type SkillOrigin = "hub" | "codex" | "claude" | "agents" | "project";
+
 export interface Skill {
   /** SKILL 目录名（权威标识） */
   name: string;
@@ -1172,6 +1177,8 @@ export interface Skill {
   buildCommand?: string;
   /** frontmatter 解析失败时的错误说明 */
   hasError?: string;
+  /** 合并视图来源（仅 list_composer_skills 填写；list_skills 面板数据缺省） */
+  source?: SkillOrigin;
 }
 
 /** Agent 自定义斜杠命令（`/` 快捷调用；Claude commands / Codex prompts 的 *.md） */
