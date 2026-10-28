@@ -12,3 +12,16 @@ export const CodexStreamProjectContext = createContext<string | null>(null);
 export function useCodexStreamProjectPath(): string | null {
   return useContext(CodexStreamProjectContext);
 }
+
+/**
+ * 当前这一轮是否仍在进行（CodexStreamView 的 `running`）。
+ *
+ * 用途：子智能体卡片没有自己的「轮次」概念——如果子智能体没来得及发 completed
+ * 事件父轮就结束了（被取消 / 进程退出 / 事件丢失），卡片会永远停在「运行中」，
+ * 用户看到界面还在转、任务其实已经结束。卡片据此在轮次结束时收口。
+ */
+export const CodexStreamTurnActiveContext = createContext(false);
+
+export function useCodexStreamTurnActive(): boolean {
+  return useContext(CodexStreamTurnActiveContext);
+}

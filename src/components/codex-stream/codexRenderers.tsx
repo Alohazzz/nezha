@@ -5,10 +5,12 @@ import type {
   CodexCollabAgentToolCallItem,
   CodexCommandExecutionItem,
   CodexFileChangeItem,
+  CodexImageViewItem,
   CodexItemFallback,
   CodexMcpToolCallItem,
   CodexPlanItem,
   CodexReasoningItem,
+  CodexSubAgentActivityItem,
   CodexUserMessageItem,
 } from "../../types";
 import { CodexAgentMessageEntry } from "./CodexAgentMessageEntry";
@@ -16,9 +18,11 @@ import { CodexCollabAgentEntry } from "./CodexCollabAgentEntry";
 import { CodexCommandEntry } from "./CodexCommandEntry";
 import { CodexFallbackEntry } from "./CodexFallbackEntry";
 import { CodexFileChangeEntry } from "./CodexFileChangeEntry";
+import { CodexImageViewEntry } from "./CodexImageViewEntry";
 import { CodexMcpToolCallEntry } from "./CodexMcpToolCallEntry";
 import { CodexPlanEntry } from "./CodexPlanEntry";
 import { CodexReasoningEntry } from "./CodexReasoningEntry";
+import { CodexSubAgentEntry } from "./CodexSubAgentEntry";
 import { CodexUserMessageEntry } from "./CodexUserMessageEntry";
 
 // ── renderer 注册表（issue #117 T3，对标 ZCode resolveRenderer）──────────────
@@ -41,6 +45,7 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
   userMessage: ({ entry }) => <CodexUserMessageEntry item={entry.item as CodexUserMessageItem} />,
   agentMessage: ({ entry }) => <CodexAgentMessageEntry item={entry.item as CodexAgentMessageItem} />,
   plan: ({ entry }) => <CodexPlanEntry item={entry.item as CodexPlanItem} />,
+  imageView: ({ entry }) => <CodexImageViewEntry item={entry.item as CodexImageViewItem} />,
   reasoning: ({ entry }) => (
     <CodexReasoningEntry
       item={entry.item as CodexReasoningItem}
@@ -72,7 +77,23 @@ export const codexEntryRenderers: Record<CodexStreamEntry["kind"], EntryRenderer
       endedAtMs={entry.endedAtMs}
     />
   ),
+  subAgentActivity: ({ entry }) => (
+    <CodexSubAgentEntry
+      item={entry.item as CodexSubAgentActivityItem}
+      startedAtMs={entry.startedAtMs}
+      endedAtMs={entry.endedAtMs}
+    />
+  ),
   fallback: ({ entry, entryIndex }) => (
     <CodexFallbackEntry item={entry.item as CodexItemFallback} entryIndex={entryIndex} />
   ),
 };
+
+/** 单条条目渲染入口：查表 + 分发。
+ *
+ * 轮次分段（codexTurnSegments → CodexTurnSection）与流视图顶层共用同一入口，
+ * 避免两处各写一遍 key / 索引逻辑；注册表仍是唯一分发点。 */
+export function CodexEntry(props: EntryProps) {
+  const render = codexEntryRenderers[props.entry.kind];
+  return <>{render(props)}</>;
+}

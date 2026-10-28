@@ -275,20 +275,35 @@ describe("CodexReasoningEntry (issue #119)", () => {
     window.localStorage.clear();
   });
 
-  it("auto-expands while running and shows the live ticking duration", () => {
+  it("stays collapsed while running and streams the latest thought in the summary row", () => {
     renderReasoning({ startedAtMs: Date.now() - 2000, endedAtMs: null, revision: 1 });
-    // 运行中自动展开：思考文本直接可见
-    expect(thoughtBodyVisible()).toBe(true);
+    // 结构化改版：思考正文不再自动展开，完整正文留在手动展开区
+    expect(thoughtBodyVisible()).toBe(false);
+    // 摘要行承载思考实况（最新一行）
+    const summary = screen.getByTestId("codex-reasoning-summary");
+    expect(summary.textContent).toBe("A stream of thought.");
+    expect(summary.getAttribute("data-live")).toBe("true");
     // 运行态不渲染状态词（密集度改版）：类别词高亮 + 跳秒耗时已表达同一信息
     expect(document.querySelector(".codex-stream-tool-status")).toBeNull();
     expect(screen.getByText(/^[0-9]+(\.[0-9]+)?s$/)).toBeTruthy();
   });
 
+  it("follows the latest non-empty line while streaming", () => {
+    renderReasoning({
+      startedAtMs: Date.now() - 1000,
+      endedAtMs: null,
+      revision: 3,
+      summary: ["first line", "second line", "   "],
+    });
+    // 尾部非空行才是「当前思考」
+    expect(screen.getByTestId("codex-reasoning-summary").textContent).toBe("second line");
+  });
+
   it("auto-collapses on completion and freezes the total duration", () => {
     const view = renderReasoning({ startedAtMs: 1000, endedAtMs: null, revision: 1 });
-    expect(thoughtBodyVisible()).toBe(true);
+    expect(thoughtBodyVisible()).toBe(false);
 
-    // 完成边沿：endedAtMs 写入 → status ok → 自动收起 + 定格时长
+    // 完成边沿：endedAtMs 写入 → status ok → 定格时长
     view.rerender(
       <I18nProvider>
         <CodexReasoningEntry
@@ -300,6 +315,8 @@ describe("CodexReasoningEntry (issue #119)", () => {
       </I18nProvider>,
     );
     expect(thoughtBodyVisible()).toBe(false);
+    // 完成态摘要行退回静态单行（不再跟播）
+    expect(screen.getByTestId("codex-reasoning-summary").getAttribute("data-live")).toBeNull();
     // 完成态同样不渲染状态词（不再有 "Thought"），只留定格时长
     expect(document.querySelector(".codex-stream-tool-status")).toBeNull();
     // 定格时长 = 4200-1000 = 3.2s（权威帧时间差，不是本地时钟）
@@ -308,13 +325,13 @@ describe("CodexReasoningEntry (issue #119)", () => {
 
   it("manual toggle wins permanently over the auto rhythm", () => {
     const view = renderReasoning({ startedAtMs: Date.now() - 1000, endedAtMs: null, revision: 1 });
-    expect(thoughtBodyVisible()).toBe(true);
-
-    // 流式中手动收起
-    fireEvent.click(screen.getByRole("button", { name: /A stream of thought/ }));
     expect(thoughtBodyVisible()).toBe(false);
 
-    // revision 继续涨不被抢回
+    // 手动展开完整思考正文
+    fireEvent.click(screen.getByRole("button", { name: /A stream of thought/ }));
+    expect(thoughtBodyVisible()).toBe(true);
+
+    // revision 继续涨不被抢回收起
     view.rerender(
       <I18nProvider>
         <CodexReasoningEntry
@@ -325,12 +342,12 @@ describe("CodexReasoningEntry (issue #119)", () => {
         />
       </I18nProvider>,
     );
-    expect(thoughtBodyVisible()).toBe(false);
+    expect(thoughtBodyVisible()).toBe(true);
   });
 
   it("renders the first summary line as the summary text and keeps a completed card collapsed by default", () => {
     renderReasoning({ startedAtMs: 1000, endedAtMs: 4200 });
-    // 摘要首行截断可见
+    // 完成态摘要首行截断可见
     expect(screen.getByText(/A stream of thought/)).toBeTruthy();
     // 完成态默认收起（现有行为矩阵语义）
     expect(thoughtBodyVisible()).toBe(false);

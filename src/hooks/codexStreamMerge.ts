@@ -3,10 +3,12 @@ import type {
   CodexCollabAgentToolCallItem,
   CodexCommandExecutionItem,
   CodexFileChangeItem,
+  CodexImageViewItem,
   CodexMcpToolCallItem,
   CodexPlanItem,
   CodexReasoningItem,
   CodexStreamFrame,
+  CodexSubAgentActivityItem,
   CodexThreadItem,
   CodexTokenUsage,
   CodexUserMessageItem,
@@ -37,11 +39,13 @@ export type CodexStreamEntry =
   | { kind: "userMessage"; item: CodexUserMessageItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "agentMessage"; item: CodexAgentMessageItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "plan"; item: CodexPlanItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "imageView"; item: CodexImageViewItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "reasoning"; item: CodexReasoningItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "commandExecution"; item: CodexCommandExecutionItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "fileChange"; item: CodexFileChangeItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "mcpToolCall"; item: CodexMcpToolCallItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "collabAgentToolCall"; item: CodexCollabAgentToolCallItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
+  | { kind: "subAgentActivity"; item: CodexSubAgentActivityItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null }
   | { kind: "fallback"; item: CodexThreadItem; revision: number; startedAtMs?: number | null; endedAtMs?: number | null };
 
 export interface StreamModel {
@@ -67,6 +71,9 @@ function classifyItem(item: CodexThreadItem): CodexStreamEntry {
   if (item.type === "commandExecution")
     return { kind: "commandExecution", item: item as CodexCommandExecutionItem, revision: 0, startedAtMs: null, endedAtMs: null };
   if (item.type === "fileChange") return { kind: "fileChange", item: item as CodexFileChangeItem, revision: 0, startedAtMs: null, endedAtMs: null };
+  // 图片查看（`view_image` 工具）：上游正式条目，只有 id + path。不注册就会落进
+  // 兜底 JSON 卡——用户看到的是 `{id, path, type}` 三个字段，而图本身看不到。
+  if (item.type === "imageView") return { kind: "imageView", item: item as CodexImageViewItem, revision: 0, startedAtMs: null, endedAtMs: null };
   if (item.type === "mcpToolCall") return { kind: "mcpToolCall", item: item as CodexMcpToolCallItem, revision: 0, startedAtMs: null, endedAtMs: null };
   // 多智能体协作调用（spawnAgent / wait / sendInput 等）：上游正式条目类型，
   // 曾经因未注册渲染器落到 fallback 原始 JSON 卡，被误读成报错（wait 超时尤其像）。
@@ -74,6 +81,17 @@ function classifyItem(item: CodexThreadItem): CodexStreamEntry {
     return {
       kind: "collabAgentToolCall",
       item: item as CodexCollabAgentToolCallItem,
+      revision: 0,
+      startedAtMs: null,
+      endedAtMs: null,
+    };
+  // 子智能体生命周期活动（上游 subAgentActivity：started / completed / interrupted）：
+  // 与 collabAgentToolCall 同源但语义不同——那条是父智能体的调度动作，这条是子智能体
+  // 自身的状态进展。不注册就会落进兜底卡只显示原始 JSON，用户看不出子智能体是否已结束。
+  if (item.type === "subAgentActivity")
+    return {
+      kind: "subAgentActivity",
+      item: item as CodexSubAgentActivityItem,
       revision: 0,
       startedAtMs: null,
       endedAtMs: null,
@@ -117,6 +135,76 @@ function dropTailingLocalEcho(model: StreamModel, text: string): void {
   }
 }
 
+/** 上游 kind 的终态判定：只有这两个之后不再有该智能体的后续活动。 */
+function isTerminalSubAgentKind(kind: string): boolean {
+  return kind === "completed" || kind === "interrupted";
+}
+
+/**
+ * 子智能体生命周期事件归并（`ThreadItem::SubAgentActivity`）。
+ *
+ * 与其它条目最大的不同：**不能按 item.id 归并**。上游每个活动事件都带新 id
+ * （started 是 `spawn-<child>`、completed 是 `<child>-turn-completed`，见
+ * app-server-protocol/thread_history 的用例），按 id 收就会把同一个子智能体
+ * 拆成两行——一行永远停在「运行中」，一行「已完成」，正是「不知道结束没结束」
+ * 的另一个来源。这里改为按 `agentThreadId` 聚合成一张卡，后到的事件覆盖状态，
+ * 卡片 id 固定用首个事件的 id（展开态才能跨状态切换保持）。
+ *
+ * `interacted` 直接丢弃：上游 TUI 也不把它单独成行（multi_agents.rs::
+ * sub_agent_activity_display 返回 None），每次都渲染会把起止信号淹没。
+ */
+function applySubAgentActivity(
+  model: StreamModel,
+  item: CodexSubAgentActivityItem,
+  frameTs: number | undefined,
+): void {
+  if (item.kind === "interacted") return;
+  const agentKey = item.agentThreadId || item.id;
+  if (!agentKey) return;
+
+  // 用带前缀的键避开与普通条目 id 的命名空间冲突（子智能体线程 id 也可能
+  // 以别的形态出现在 byId 里）。
+  const indexKey = `__subagent_${agentKey}`;
+  const existing = model.byId.get(indexKey);
+  const ts = frameTs ?? Date.now();
+
+  if (!existing) {
+    const created: CodexStreamEntry = {
+      kind: "subAgentActivity",
+      // 卡片 id 用首个事件 id：后续事件 id 会变，换 id 会重建卡片丢展开态。
+      item: { ...item },
+      revision: 0,
+      startedAtMs: ts,
+      endedAtMs: isTerminalSubAgentKind(item.kind) ? ts : null,
+    };
+    model.entries.push(created);
+    model.byId.set(indexKey, created);
+    if (created.item.id) model.byId.set(created.item.id, created);
+    return;
+  }
+
+  if (existing.kind !== "subAgentActivity") return;
+  // 后到事件覆盖 kind / model / path（completed 事件通常不带 model，
+  // 沿用已有的，避免把已知信息冲成空）。
+  const merged: CodexStreamEntry = {
+    ...existing,
+    item: {
+      ...existing.item,
+      kind: item.kind,
+      agentPath: item.agentPath || existing.item.agentPath,
+      agentThreadId: item.agentThreadId || existing.item.agentThreadId,
+      model: item.model ?? existing.item.model ?? null,
+      reasoningEffort: item.reasoningEffort ?? existing.item.reasoningEffort ?? null,
+    },
+    revision: existing.revision + 1,
+    endedAtMs: isTerminalSubAgentKind(item.kind) ? ts : existing.endedAtMs,
+  };
+  const idx = model.entries.indexOf(existing);
+  if (idx >= 0) model.entries[idx] = merged;
+  model.byId.set(indexKey, merged);
+  if (merged.item.id) model.byId.set(merged.item.id, merged);
+}
+
 function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
   if (frame.type === "tokenUsage") {
     const usage = frame.payload as CodexTokenUsage;
@@ -128,6 +216,11 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
 
   if (frame.type === "item") {
     const item = frame.payload as CodexThreadItem;
+    // 子智能体生命周期事件单独归并（见 applySubAgentActivity 注释）。
+    if (item.type === "subAgentActivity") {
+      applySubAgentActivity(model, item as CodexSubAgentActivityItem, frame.tsMs);
+      return;
+    }
     if (item.type === "userMessage") {
       dropTailingLocalEcho(
         model,
@@ -249,7 +342,8 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
 }
 
 /** 5000 条内存护栏：超出后丢最老条目并清理 byId。占位条目（id 为空的流式
- * __delta_* 条目）也要按插入时的身份键清掉，否则 byId 残留泄漏。 */
+ * __delta_* 条目）与子智能体聚合条目（`__subagent_<threadId>` 额外索引）也要
+ * 按各自的键清掉，否则 byId 残留泄漏。 */
 function enforceEntryLimit(model: StreamModel): void {
   if (model.entries.length <= MAX_ENTRIES) return;
   const dropped = model.entries.splice(0, model.entries.length - MAX_ENTRIES);
@@ -257,6 +351,11 @@ function enforceEntryLimit(model: StreamModel): void {
     const id = d.item && "id" in d.item ? d.item.id : undefined;
     if (id) {
       model.byId.delete(id);
+      // 子智能体条目还额外挂了聚合键，必须一并清（否则 byId 里留下永久孤儿，
+      // 让同一 threadId 的后续事件命中已被淘汰的条目）。
+      if (d.kind === "subAgentActivity") {
+        model.byId.delete(`__subagent_${d.item.agentThreadId || d.item.id}`);
+      }
     } else {
       // 无 id 的占位条目：只有 agentMessage / reasoning 两种 delta 占位，
       // 按 applyFrame 的 `__delta_<type>` 键同步清理（commandOutputDelta 占位

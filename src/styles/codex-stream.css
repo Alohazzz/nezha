@@ -137,6 +137,54 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   color: var(--accent);
 }
 
+/* ── 思考摘要行：单行跑马灯（对标 ZCode ReasoningTrigger）──────────────────
+ * 思考正文不再自动展开，改为在标题行内实况跟播最新一段思考：
+ * - 静态（完成态）：单行省略号；
+ * - 流式：文本超出可用宽度后由组件把 scrollLeft 推到末尾，配合双侧渐隐
+ *   让最新 token 始终可见、旧内容向左溢出。渐隐只在真正溢出时挂，短文本
+ *   不会莫名两端发虚。 */
+
+.codex-stream-thought-line {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--codex-row-label);
+}
+
+.codex-stream-thought-line[data-live] {
+  text-overflow: clip;
+}
+
+.codex-stream-thought-line[data-overflowing] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 16px,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black 16px,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+}
+
+.codex-stream-thought-line-text {
+  display: inline-block;
+  min-width: max-content;
+}
+
+.codex-stream-tool-card:hover .codex-stream-thought-line[data-live],
+.codex-stream-tool-header:focus-visible .codex-stream-thought-line[data-live] {
+  color: var(--text-secondary);
+}
+
 /* ── T4 diff 视图（issue #117）────────────────────────────────────────────────
  * 变更性质徽标按 data-kind 出色；diff 行按 data-type 出 +/- 底色。
  * 两段式渲染：plain 阶段同底色；shiki 高亮后 token 色由注入的 HTML span 自带。 */
@@ -289,5 +337,199 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   font-family: var(--font-mono);
   font-size: 11px;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ── 子智能体生命周期卡（subAgentActivity）展开区的身份表 ─────────────────────
+ * 键值两列：左列固定宽度，保证同屏多张卡片之间对齐；右列允许长路径折行。
+ * 摘要行本身由工具卡骨架渲染（状态词 + 跳动秒数），这里只管展开后的明细。 */
+
+.codex-stream-subagent-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 12px;
+  font-size: 11.5px;
+}
+
+.codex-stream-subagent-key {
+  color: var(--text-hint);
+  font-size: 11px;
+}
+
+.codex-stream-subagent-value {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ── 图片查看卡（imageView）展开区的路径附注 ─────────────────────────────────
+ * 缩略图本身在 codex-stream.ts（尺寸 / 边框 / zoom-in 光标）。这里只处理
+ * 路径行：Windows 长路径必须能断行，否则整张卡被撑出横向滚动。 */
+
+.codex-stream-image-path {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.codex-stream-image-path-label {
+  color: var(--text-hint);
+}
+
+.codex-stream-image-path-value {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.codex-image-preview:hover {
+  border-color: var(--accent);
+}
+
+/* ── 轮次段：过程折叠头 / 过程区 / 轮尾收口页脚 ──────────────────────────────
+ * 对标 ZCode 的 AssistantHistoryStatus + 轮尾状态行：一轮的过程收在折叠头下，
+ * 结论常驻；轮结束时用页脚把「花了多久 / 做了什么」收口。 */
+
+.codex-stream-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 折叠头：细上边界 + 弱化文字，视觉上是一条分隔而非卡片，避免每轮多出边框。
+ * 上边界只在本段前面有内容时才有意义，由段间距承担；这里只用颜色区分层级。 */
+.codex-stream-turn-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  margin: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--codex-row-meta);
+  font-size: 11.5px;
+  font-family: inherit;
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.codex-stream-turn-header:hover {
+  color: var(--text-secondary);
+}
+
+.codex-stream-turn-header:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.codex-stream-turn-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 运行态：折叠头本身就是活性信号，给 accent 色而非再加一个 spinner
+ * （流尾另有整轮「工作中 N 秒」指示，重复会显得噪）。 */
+.codex-stream-turn-header[data-state="running"] .codex-stream-turn-label {
+  color: var(--accent);
+}
+
+.codex-stream-turn-header[data-state="interrupted"] .codex-stream-turn-label {
+  color: var(--color-warning);
+}
+
+.codex-stream-turn-chevron {
+  flex-shrink: 0;
+  transition: transform 0.12s ease;
+}
+
+.codex-stream-turn-chevron[data-open] {
+  transform: rotate(90deg);
+}
+
+/* 过程区：左侧竖线表达「这些是被收起的过程」，与摘要行缩进对齐。 */
+.codex-stream-turn-process {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-dim);
+  margin-left: 4px;
+  min-width: 0;
+}
+
+.codex-stream-turn-empty-answer {
+  color: var(--codex-row-meta);
+  font-size: 12px;
+  font-style: italic;
+  padding: 2px 0;
+}
+
+/* ── 轮尾收口页脚 ───────────────────────────────────────────────────────────── */
+
+.codex-stream-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 0 2px;
+  border-top: 1px solid var(--border-dim);
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.codex-stream-footer-icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--color-success);
+}
+
+.codex-stream-footer[data-state="failed"] .codex-stream-footer-icon,
+.codex-stream-footer[data-state="failed"] .codex-stream-footer-label {
+  color: var(--color-error);
+}
+
+.codex-stream-footer[data-state="interrupted"] .codex-stream-footer-icon,
+.codex-stream-footer[data-state="interrupted"] .codex-stream-footer-label {
+  color: var(--color-warning);
+}
+
+.codex-stream-footer-label {
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.codex-stream-footer-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--codex-row-meta);
+  font-size: 11.5px;
+}
+
+.codex-stream-footer-stats [data-tone="failed"] {
+  color: var(--color-error);
+}
+
+/* 失败原因常多行：独占一整行，允许折行不截断。 */
+.codex-stream-footer-reason {
+  flex-basis: 100%;
+  color: var(--color-error);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

@@ -1,10 +1,29 @@
 // codex-stream 条目卡共享的小工具函数（issue #117 T3 拆分 CodexEntryItems 后的落点）。
 
-/** 毫秒时长 → "850ms" / "1.2s"；无时长返回空串。 */
+/** 秒数 → 时分秒分段；负值 / 非有限值夹 0。 */
+export function splitElapsedSeconds(totalSeconds: number): {
+  hours: number;
+  minutes: number;
+  seconds: number;
+} {
+  const secs = Number.isFinite(totalSeconds) ? Math.max(0, Math.floor(totalSeconds)) : 0;
+  return {
+    hours: Math.floor(secs / 3600),
+    minutes: Math.floor((secs % 3600) / 60),
+    seconds: secs % 60,
+  };
+}
+
+/** 毫秒时长 → "850ms" / "1.2s" / "3m 6s" / "1h 2m 3s"；无时长返回空串。
+ *  亚分钟保留一位小数（短命令的毫秒级差异有意义），跨过 1 分钟改成分段，
+ *  避免长等待出现 "186.0s" 这种读不出量级的裸秒数。 */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return "";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  const safeMs = Math.max(0, ms);
+  if (safeMs < 1000) return `${Math.round(safeMs)}ms`;
+  if (safeMs < 60_000) return `${(safeMs / 1000).toFixed(1)}s`;
+  const { hours, minutes, seconds } = splitElapsedSeconds(safeMs / 1000);
+  return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${minutes}m ${seconds}s`;
 }
 
 /** JSON 值 → 稳定的两空格缩进文本；序列化失败退回 String()。 */

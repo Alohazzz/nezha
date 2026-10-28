@@ -4,13 +4,16 @@ import s from "../../styles";
 import type { CodexStreamEntry } from "../../hooks/useCodexStream";
 import type { CodexTokenUsage } from "../../types";
 import type { AgentModelCatalog } from "../app-settings/types";
-import { codexEntryRenderers } from "./codexRenderers";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexComposer } from "./CodexComposer";
 import { CodexWorkingIndicator } from "./CodexWorkingIndicator";
+import { CodexTurnSection } from "./CodexTurnSection";
+import { CodexTurnFooter } from "./CodexTurnFooter";
 import { CodexCommandGroupEntry } from "./CodexCommandGroupEntry";
-import { groupCommandEntries } from "./codexCommandSummary";
-import { CodexStreamProjectContext } from "./codexStreamContext";
+import { CodexEntry } from "./codexRenderers";
+import { segmentTurnEntries } from "./codexTurnSegments";
+import { summarizeCodexStream } from "./codexStreamSummary";
+import { CodexStreamProjectContext, CodexStreamTurnActiveContext } from "./codexStreamContext";
 
 /** usage 条：总 token + 上下文窗口占用（tokenUsage 帧驱动）。
  * 填充条宽度为动态百分比，经 ref 写 CSS 变量（规范禁 inline style 对象）。
@@ -66,9 +69,11 @@ function EntryRenderer({
   onOpenGitChanges?: () => void;
   entryIndex?: number;
 }) {
-  const render = codexEntryRenderers[entry.kind];
-  return <>{render({ entry, onOpenGitChanges, entryIndex })}</>;
+  return <CodexEntry entry={entry} onOpenGitChanges={onOpenGitChanges} entryIndex={entryIndex} />;
 }
+
+/** 顶层条目流是否还有「不属于任何轮」的内容（会话从助手侧开始 / 续跑回放）。
+ *  这类条目没有用户输入可依，仍按平铺渲染——塞进折叠段会藏起用户没发起的动作。 */
 
 /**
  * structured 任务实时流视图（issue #116 阶段 3；#117 T3 起条目渲染经
@@ -132,16 +137,22 @@ export function CodexStreamView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
 
-  // 视图层分组：连续 ≥2 条命令塌缩成一行「终端 · N 个命令」（降密集主手段）。
-  // 分组是纯函数，归并模型不动；entries 引用每次增量都会变，useMemo 只在
-  // entries 变化时重算，不引入额外的渲染压力。
-  const renderItems = useMemo(() => groupCommandEntries(entries), [entries]);
-
   // 失败/中断类状态是必须第一眼看到的收口信息。**必须钉在滚动区外**：
   // 早先把它作为流首行渲染，几百条条目之后失败横幅早被滚出视野，任务看起来
   // 像"假死或正常结束"。这里改为滚动区上方的常驻横幅。
   const bannerText = statusText ?? null;
   const showEmptyHint = entries.length === 0 && !bannerText;
+
+  // 轮次分段（对标 ZCode）：一条用户输入开启一轮，过程收进折叠段，结论留在主线。
+  // 纯函数 + useMemo：entries 每次增量都会换引用，只在真正变化时重算。
+  // 第一条用户消息之前的条目作为「无主条目」平铺渲染（会话从助手侧开始 /
+  // 冷恢复续跑）——用户没发起过这些动作，藏进折叠区就成了凭空出现的内容。
+  const interrupted = !running && statusTone === "warning" && bannerText !== null;
+  const { segments, orphanItems } = useMemo(
+    () => segmentTurnEntries(entries, { running, interrupted }),
+    [entries, running, interrupted],
+  );
+  const summary = useMemo(() => summarizeCodexStream(entries, segments), [entries, segments]);
 
   // 用户主动上滚即停止跟随；滚回底部恢复跟随（终端自动滚动同款交互）
   const handleScroll = () => {
@@ -156,66 +167,87 @@ export function CodexStreamView({
     el.scrollTop = el.scrollHeight;
   }, [entries]);
 
+  const renderItem = (item: (typeof orphanItems)[number], i: number) =>
+    item.kind === "commandGroup" ? (
+      <CodexCommandGroupEntry
+        key={item.groupKey}
+        groupKey={item.groupKey}
+        commands={item.commands}
+      />
+    ) : (
+      <EntryRenderer
+        key={(item.entry.item && "id" in item.entry.item && item.entry.item.id) || `idx-${i}`}
+        entry={item.entry}
+        entryIndex={item.entryIndex}
+        onOpenGitChanges={onOpenGitChanges}
+      />
+    );
+
   return (
     <CodexStreamProjectContext.Provider value={projectPath ?? null}>
-      <div style={s.codexStreamViewRoot}>
-        {/* 终端态横幅在滚动区之上且不随内容滚动——失败原因必须常驻可见。 */}
-        {bannerText && (
-          <div className="codex-stream-banner" role="status" data-tone={statusTone}>
-            <span className="codex-stream-banner-icon" aria-hidden="true" />
-            <span className="codex-stream-banner-text">{bannerText}</span>
-          </div>
-        )}
-        <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
-          {showEmptyHint && (
-            <div style={s.codexStreamEmpty}>
-              {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
+      <CodexStreamTurnActiveContext.Provider value={running}>
+        <div style={s.codexStreamViewRoot}>
+          {/* 终端态横幅在滚动区之上且不随内容滚动——失败原因必须常驻可见。 */}
+          {bannerText && (
+            <div className="codex-stream-banner" role="status" data-tone={statusTone}>
+              <span className="codex-stream-banner-icon" aria-hidden="true" />
+              <span className="codex-stream-banner-text">{bannerText}</span>
             </div>
           )}
-          {renderItems.map((item, i) =>
-            item.kind === "commandGroup" ? (
-              <CodexCommandGroupEntry
-                key={item.groupKey}
-                groupKey={item.groupKey}
-                commands={item.commands}
-              />
-            ) : (
-              <EntryRenderer
-                key={(item.entry.item && "id" in item.entry.item && item.entry.item.id) || `idx-${i}`}
-                entry={item.entry}
-                entryIndex={item.entryIndex}
+          <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
+            {showEmptyHint && (
+              <div style={s.codexStreamEmpty}>
+                {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
+              </div>
+            )}
+            {/* 无主条目（会话从助手侧开始）按平铺渲染，不进任何折叠段。 */}
+            {orphanItems.map(renderItem)}
+            {segments.map((segment) => (
+              <CodexTurnSection
+                key={segment.key}
+                segment={segment}
                 onOpenGitChanges={onOpenGitChanges}
               />
-            ),
+            ))}
+            {/* 整轮活性指示（Zcode 同款「工作中 N 秒」+ spinner）：delta 静默期
+                条目流完全不动，没有它长思考/长命令时看起来像卡住。 */}
+            {running && !bannerText && <CodexWorkingIndicator />}
+            {/* 轮尾收口：结束的那一刻必须能一眼看出「结束了、花了多久、改了什么」。
+                此前只有失败才有横幅，正常结束的流视图走到最后一条工具卡就停住。 */}
+            {!running && entries.length > 0 && (
+              <CodexTurnFooter
+                summary={summary}
+                failed={statusTone === "error"}
+                interrupted={statusTone === "warning" && bannerText !== null}
+                statusText={bannerText}
+              />
+            )}
+            {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+          </div>
+          {onComposerSubmit && (
+            <CodexComposer
+              mode={running ? "steer" : "resume"}
+              busy={followUpBusy}
+              disabled={composerDisabled}
+              projectPath={projectPath}
+              modelCatalog={modelCatalog}
+              model={model}
+              reasoningEffort={reasoningEffort}
+              showModelBadge={showModelBadge}
+              onSubmit={onComposerSubmit}
+              onSetModel={
+                onSetStructuredModel ? (next) => onSetStructuredModel(next, reasoningEffort) : undefined
+              }
+              onSetEffort={
+                onSetStructuredModel ? (next) => onSetStructuredModel(model, next) : undefined
+              }
+              onBuiltinAction={onBuiltinAction}
+              onToast={onImageToast}
+            />
           )}
-          {/* 整轮活性指示（Zcode 同款「工作中 N 秒」+ spinner）：delta 静默期
-              条目流完全不动，没有它长思考/长命令时看起来像卡住。 */}
-          {running && !bannerText && <CodexWorkingIndicator />}
-          {approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />}
+          <UsageBar usage={usage} />
         </div>
-        {onComposerSubmit && (
-          <CodexComposer
-            mode={running ? "steer" : "resume"}
-            busy={followUpBusy}
-            disabled={composerDisabled}
-            projectPath={projectPath}
-            modelCatalog={modelCatalog}
-            model={model}
-            reasoningEffort={reasoningEffort}
-            showModelBadge={showModelBadge}
-            onSubmit={onComposerSubmit}
-            onSetModel={
-              onSetStructuredModel ? (next) => onSetStructuredModel(next, reasoningEffort) : undefined
-            }
-            onSetEffort={
-              onSetStructuredModel ? (next) => onSetStructuredModel(model, next) : undefined
-            }
-            onBuiltinAction={onBuiltinAction}
-            onToast={onImageToast}
-          />
-        )}
-        <UsageBar usage={usage} />
-      </div>
+      </CodexStreamTurnActiveContext.Provider>
     </CodexStreamProjectContext.Provider>
   );
 }

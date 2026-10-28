@@ -254,6 +254,32 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     expect(model.byId.size).toBe(MAX_ENTRIES);
   });
 
+  it("cleans the aggregate index key when a sub-agent entry is evicted", () => {
+    // 子智能体条目在 byId 里挂两个键：自己的 item.id 和 `__subagent_<threadId>`。
+    // 只清前者会让被淘汰的条目永远留在 byId 里，后续事件命中死条目。
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("completed", {
+        type: "subAgentActivity",
+        id: "spawn-child-1",
+        kind: "started",
+        agentThreadId: "child-1",
+        agentPath: "/root/worker",
+      }),
+    ]);
+    expect(model.byId.has("spawn-child-1")).toBe(true);
+    expect(model.byId.has("__subagent_child-1")).toBe(true);
+
+    const lines: string[] = [];
+    for (let i = 0; i < MAX_ENTRIES + 5; i++) {
+      lines.push(itemLine("completed", { type: "userMessage", id: `um-${i}`, content: [] }));
+    }
+    feed(model, lines);
+
+    expect(model.byId.has("spawn-child-1")).toBe(false);
+    expect(model.byId.has("__subagent_child-1")).toBe(false);
+  });
+
   it("evicts __delta_* placeholder byId keys when id-less entries are dropped", () => {
     // 回归（review P2）：无 id 的流式占位条目按 __delta_<type> 键进 byId；
     // 驱逐时若不清理，占位键会永久残留（泄漏 + 指向已驱逐条目）。
@@ -662,5 +688,120 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     expect(model.entries).toHaveLength(1);
     expect(itemOf(model.entries[0]).status).toBe("completed");
     expect(revOf(model.entries[0])).toBe(0);
+  });
+
+  it("classifies subAgentActivity as its own kind instead of the unknown fallback", () => {
+    // 回归：上游 subAgentActivity 没有渲染器时落到兜底原始 JSON 卡，用户看不出
+    // 子智能体是刚起来、还在跑、还是已经结束。
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("completed", {
+        type: "subAgentActivity",
+        id: "evt_1",
+        kind: "completed",
+        agentThreadId: "child-thread-1",
+        agentPath: "/root/worker",
+        model: null,
+        reasoningEffort: null,
+      }),
+    ]);
+    expect(kinds(model)).toEqual(["subAgentActivity"]);
+    expect(itemOf(model.entries[0]).kind).toBe("completed");
+    expect(itemOf(model.entries[0]).agentPath).toBe("/root/worker");
+  });
+
+  it("merges started and completed events of one sub-agent into a single card", () => {
+    // 上游每个活动事件都带新 id（spawn-<child> / <child>-turn-completed）：
+    // 按 id 收会把同一个子智能体拆成「永远运行中」+「已完成」两行。必须按
+    // agentThreadId 聚合，卡片 id 固定用首个事件 id。
+    const model = createStreamModel();
+    feed(model, [
+      line("item", {
+        phase: "completed",
+        tsMs: 1000,
+        payload: {
+          type: "subAgentActivity",
+          id: "spawn-child-1",
+          kind: "started",
+          agentThreadId: "child-thread-1",
+          agentPath: "/root/worker",
+          model: "gpt-5",
+          reasoningEffort: "high",
+        },
+      }),
+      line("item", {
+        phase: "completed",
+        tsMs: 9000,
+        payload: {
+          type: "subAgentActivity",
+          id: "child-thread-1-turn-completed",
+          kind: "completed",
+          agentThreadId: "child-thread-1",
+          agentPath: "/root/worker",
+          model: null,
+          reasoningEffort: null,
+        },
+      }),
+    ]);
+
+    expect(model.entries).toHaveLength(1);
+    const entry = model.entries[0]!;
+    expect(entry.kind).toBe("subAgentActivity");
+    // 状态被终态事件覆盖
+    expect(itemOf(entry).kind).toBe("completed");
+    // 卡片 id 保持首个事件，展开态才不会因 id 变化被重置
+    expect(itemOf(entry).id).toBe("spawn-child-1");
+    // 终态事件不带 model，不能把已知信息冲掉
+    expect(itemOf(entry).model).toBe("gpt-5");
+    // 时序：起点取 started，终点取 completed
+    expect(entry.startedAtMs).toBe(1000);
+    expect(entry.endedAtMs).toBe(9000);
+    expect(revOf(entry)).toBe(1);
+  });
+
+  it("keeps two different sub-agents as separate cards", () => {
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("completed", {
+        type: "subAgentActivity",
+        id: "spawn-a",
+        kind: "started",
+        agentThreadId: "child-a",
+        agentPath: "/root/a",
+      }),
+      itemLine("completed", {
+        type: "subAgentActivity",
+        id: "spawn-b",
+        kind: "started",
+        agentThreadId: "child-b",
+        agentPath: "/root/b",
+      }),
+    ]);
+    expect(model.entries).toHaveLength(2);
+    expect(model.entries.map((e) => itemOf(e).agentPath)).toEqual(["/root/a", "/root/b"]);
+  });
+
+  it("drops subAgentActivity interacted events instead of adding a row", () => {
+    // interacted 是每次与子智能体交互都发一次的高频噪音；上游 TUI 也不单独成行。
+    // 放进来会把「开始 / 结束」两条关键信号淹没。
+    const model = createStreamModel();
+    feed(model, [
+      itemLine("completed", {
+        type: "subAgentActivity",
+        id: "evt_interacted",
+        kind: "interacted",
+        agentThreadId: "child-thread-1",
+        agentPath: "/root/worker",
+      }),
+      itemLine("completed", {
+        type: "subAgentActivity",
+        id: "evt_started",
+        kind: "started",
+        agentThreadId: "child-thread-1",
+        agentPath: "/root/worker",
+      }),
+    ]);
+    expect(kinds(model)).toEqual(["subAgentActivity"]);
+    expect(itemOf(model.entries[0]).kind).toBe("started");
   });
 });

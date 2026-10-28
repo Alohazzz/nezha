@@ -481,6 +481,18 @@ export interface CodexPlanItem {
   text: string;
 }
 
+/** 图片查看条目（上游 `ThreadItem::ImageView`，`view_image` 工具的产物）。
+ *  只有 id 与 path：path 是解析后的原生绝对路径（app-server 以
+ *  `LegacyAppPathString` 直接序列化成字符串），没有状态 / 尺寸字段。
+ *  未注册渲染器时它会落进兜底 JSON 卡——用户看到一坨原始字段，图本身反而
+ *  看不到，这正是本次要修的问题。 */
+export interface CodexImageViewItem {
+  type: "imageView";
+  id: string;
+  /** 图片的绝对路径（Windows 反斜杠原样透传）。 */
+  path: string;
+}
+
 /** 协作工具名（上游 `CollabAgentTool`）：多智能体调度动作，`wait` / `spawnAgent` 等。 */
 export type CodexCollabTool =
   | "spawnAgent"
@@ -531,6 +543,30 @@ export interface CodexAgentStateLike {
   [key: string]: unknown;
 }
 
+/** 子智能体活动阶段（上游 `SubAgentActivityKind`）。
+ *  `started` = 子智能体开始工作（运行中）；`completed` / `interrupted` = 终态；
+ *  `interacted` = 与子智能体的一次交互，上游 TUI 也不单独成行，这里同样折叠。 */
+export type CodexSubAgentActivityKind = "started" | "interacted" | "interrupted" | "completed";
+
+/** 子智能体生命周期活动（上游 `ThreadItem::SubAgentActivity`）。
+ *
+ * 与 `CodexCollabAgentToolCallItem` 的区别：那条是父智能体**发起**的调度动作
+ * （spawn / wait / sendInput），这条是子智能体**自身**被观察到的生命周期事件。
+ * 此前没有渲染器，落到兜底卡只显示一坨原始 JSON，用户完全看不出子智能体是刚起来、
+ * 还在跑、还是已经结束——「不知道结束没结束」就是这么来的。 */
+export interface CodexSubAgentActivityItem {
+  type: "subAgentActivity";
+  id: string;
+  kind: CodexSubAgentActivityKind | string;
+  /** 子智能体线程 id（= 子会话 id），用于下钻定位。 */
+  agentThreadId: string;
+  /** 规范智能体路径（如 `/root/worker`），摘要行展示的稳定名字。 */
+  agentPath: string;
+  /** 创建时解析出的模型 / 推理强度，旧记录可能缺省。 */
+  model?: string | null;
+  reasoningEffort?: string | null;
+}
+
 /** 上游新增 / 视图暂不渲染的条目：保留 type + id 便于调试，不参与展示。 */
 export interface CodexItemFallback {
   type: string;
@@ -546,7 +582,9 @@ export type CodexThreadItem =
   | CodexFileChangeItem
   | CodexMcpToolCallItem
   | CodexPlanItem
+  | CodexImageViewItem
   | CodexCollabAgentToolCallItem
+  | CodexSubAgentActivityItem
   | CodexItemFallback;
 
 export function isCodexThreadItem(payload: CodexStreamPayload): payload is CodexThreadItem {

@@ -211,6 +211,31 @@ export const codexStream = {  codexStreamRoot: {
     overflowX: "auto",
   },
 
+  // ── 图片查看卡（imageView）─────────────────────────────────────────────────
+  // 缩略图按容器宽度收缩，高度封顶避免长图把整轮对话挤出一屏；点击进灯箱看原图。
+  // 路径是附注信息，弱化到 hint 色并允许任意断行（Windows 长路径不截断）。
+
+  codexImagePreviewWrap: {
+    display: "flex",
+    justifyContent: "flex-start",
+  },
+
+  codexImagePreview: {
+    maxWidth: "100%",
+    maxHeight: 320,
+    objectFit: "contain",
+    borderRadius: 6,
+    border: "1px solid var(--border-dim)",
+    background: "var(--bg-root)",
+    cursor: "zoom-in",
+    display: "block",
+  },
+
+  codexImageError: {
+    fontSize: 11.5,
+    color: "var(--color-error)",
+  },
+
   // ── 文件变更卡（骨架化后的 diff 文本着色；hunk 高亮是 T4）──────────────────
   // review fix：删除无引用的死键 codexDiffMovePath / codexDiffKindBadge /
   // codexDiffLine / codexDiffLineAdd / codexDiffLineDel——diff 行着色走

@@ -11,6 +11,7 @@ import type {
   CodexFileChangeItem,
   CodexMcpToolCallItem,
   CodexReasoningItem,
+  CodexSubAgentActivityItem,
 } from "../types";
 
 // jsdom 缺少 Radix Popover 交互所需的 pointer capture API。
@@ -141,6 +142,8 @@ describe("codex renderer registry", () => {
       "fileChange",
       "mcpToolCall",
       "collabAgentToolCall",
+      "subAgentActivity",
+      "imageView",
       "fallback",
     ] as const) {
       expect(codexEntryRenderers[kind], `missing renderer for ${kind}`).toBeTruthy();
@@ -236,8 +239,109 @@ describe("codex collab agent tool call card", () => {
   });
 });
 
-// ── MCP 卡：参数与结果分离（user story 11）───────────────────────────────────
+// ── 子智能体生命周期卡：状态必须一眼可辨 ──────────────────────────────────────
 
+describe("codex sub-agent activity card", () => {
+  const subAgentEntry = (kind: string, endedAtMs: number | null = 4200): CodexStreamEntry => ({
+    kind: "subAgentActivity",
+    revision: 0,
+    startedAtMs: 1000,
+    endedAtMs,
+    item: {
+      type: "subAgentActivity",
+      id: `evt_${kind}`,
+      kind,
+      agentThreadId: "child-thread-aaaa1111",
+      agentPath: "/root/worker",
+      model: "glm-4",
+      reasoningEffort: "high",
+    } satisfies CodexSubAgentActivityItem,
+  });
+
+  it("uses the agent path as the summary text instead of dumping raw JSON", () => {
+    renderView([subAgentEntry("started")]);
+    expect(screen.getByRole("button", { name: /\/root\/worker/ })).toBeTruthy();
+    expect(screen.queryByText(/Unknown entry type/)).toBeNull();
+    expect(screen.queryByText(/"agentThreadId"/)).toBeNull();
+  });
+
+  it("maps activity kinds to distinct, readable status words", () => {
+    // 这三种状态必须互不相同——「不知道结束没结束」的直接原因就是它们此前
+    // 全部落进同一张无状态 JSON 卡。
+    // started 需要 running=true 才是「运行中」；轮次结束时无终态会收口（另一用例覆盖）。
+    const active = render(
+      <I18nProvider>
+        <CodexStreamView
+          entries={[subAgentEntry("started", null)]}
+          usage={null}
+          approval={null}
+          onApprovalResolved={() => {}}
+          running
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText("Running")).toBeTruthy();
+    active.unmount();
+
+    const done = renderView([subAgentEntry("completed")]);
+    expect(screen.getByText("Finished")).toBeTruthy();
+    expect(document.querySelector('.codex-stream-tool-card[data-status="ok"]')).not.toBeNull();
+    done.unmount();
+
+    renderView([subAgentEntry("interrupted")]);
+    expect(screen.getByText("Interrupted")).toBeTruthy();
+    expect(document.querySelector('.codex-stream-tool-card[data-status="failed"]')).not.toBeNull();
+  });
+
+  it("treats an unknown activity kind as still running rather than finished", () => {
+    // 上游新增枚举值时宁可多显示一秒「运行中」，也不能把还在跑的智能体画成已完成。
+    render(
+      <I18nProvider>
+        <CodexStreamView
+          entries={[subAgentEntry("someFutureKind", null)]}
+          usage={null}
+          approval={null}
+          onApprovalResolved={() => {}}
+          running
+        />
+      </I18nProvider>,
+    );
+    expect(document.querySelector('.codex-stream-tool-card[data-status="running"]')).not.toBeNull();
+  });
+
+  it("stops claiming 'running' once the turn ends without a terminal event", () => {
+    // 子智能体没发 completed 父轮就结束（取消 / 进程退出 / 事件丢失）时，
+    // 卡片必须收口——否则界面永远转圈，任务其实早已结束。
+    renderView([subAgentEntry("started", null)]); // renderView 传 running={false}
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.getByText("Ended (no result)")).toBeTruthy();
+    expect(document.querySelector('.codex-stream-tool-card[data-status="running"]')).toBeNull();
+  });
+
+  it("keeps showing 'running' while the turn is still active", () => {
+    render(
+      <I18nProvider>
+        <CodexStreamView
+          entries={[subAgentEntry("started", null)]}
+          usage={null}
+          approval={null}
+          onApprovalResolved={() => {}}
+          running
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText("Running")).toBeTruthy();
+  });
+
+  it("reveals identity details on expand", () => {
+    renderView([subAgentEntry("completed")]);
+    fireEvent.click(screen.getByRole("button", { name: /\/root\/worker/ }));
+    expect(screen.getByText("child-thread-aaaa1111")).toBeTruthy();
+    expect(screen.getByText("glm-4 · high")).toBeTruthy();
+  });
+});
+
+// ── MCP 卡：参数与结果分离（user story 11）───────────────────────────────────
 describe("codex mcp tool call card", () => {
   it("renders arguments and result as separate structured sections after expanding", () => {
     renderView([mcpEntry]);
@@ -304,9 +408,9 @@ describe("codex reasoning card", () => {
     expect(screen.queryByText("Thought")).toBeNull();
   });
 
-  it("renders running state for entries without endedAtMs and auto-expands while streaming", () => {
-    // #119：endedAtMs 缺省 = running → 自动展开（骨架边沿：useState 初始化按
-    // running 展开）；动态秒数（本地时钟兜底）可见，但不渲染状态词。
+  it("keeps running entries collapsed and streams the latest thought in the summary row", () => {
+    // 结构化改版：思考正文不再自动展开（自动展开会把工具与正文持续挤下去），
+    // 摘要行改为跟播最新一段思考；动态秒数仍走本地时钟兜底。
     const runningEntry: CodexStreamEntry = {
       kind: "reasoning",
       revision: 1,
@@ -321,8 +425,12 @@ describe("codex reasoning card", () => {
     renderView([runningEntry]);
     // 状态词不再渲染（类别词已高亮）
     expect(document.querySelector(".codex-stream-tool-status")).toBeNull();
-    // 自动展开：展开区 body 直接可见
-    expect(screen.getByTestId("codex-reasoning-body")).toBeTruthy();
+    // 保持收起：完整正文（展开区 body）不可见
+    expect(screen.queryByTestId("codex-reasoning-body")).toBeNull();
+    // 摘要行承载思考实况
+    const summary = screen.getByTestId("codex-reasoning-summary");
+    expect(summary.textContent).toBe("Streaming thought.");
+    expect(summary.getAttribute("data-live")).toBe("true");
     // 动态秒数已渲染（2s 起跳，容错时钟推进显示 2.x s 量级）
     expect(screen.getByText(/^[0-9]+(\.[0-9]+)?s$/)).toBeTruthy();
   });

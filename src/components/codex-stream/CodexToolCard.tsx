@@ -126,6 +126,7 @@ export const CodexToolCard = memo(function CodexToolCard({
   icon,
   category,
   text,
+  textSlot,
   label,
   meta,
   status,
@@ -149,6 +150,9 @@ export const CodexToolCard = memo(function CodexToolCard({
   category: string;
   /** 摘要行主文本（命令、工具名等）。 */
   text?: string;
+  /** 摘要行主文本的自定义渲染（替代 text 的默认等宽截断 span）。
+   *  思考卡用它挂跑马灯：文本需要自己的溢出/滚动语义，不能被默认截断吃掉。 */
+  textSlot?: ReactNode;
   /** 摘要行前缀文案（非等宽、不截断）：聚合组用它写「4 个命令」这类阶段词，
    *  与后面的等宽命令文本分开排版。 */
   label?: ReactNode;
@@ -295,7 +299,8 @@ export const CodexToolCard = memo(function CodexToolCard({
         </span>
       )}
       {label && <span style={s.codexToolLabel}>{label}</span>}
-      {!(expanded && hideTextWhenExpanded) && <span style={s.codexToolText}>{text}</span>}
+      {!(expanded && hideTextWhenExpanded) &&
+        (textSlot ?? (text ? <span style={s.codexToolText}>{text}</span> : null))}
       {meta}
       {showStatus &&
         (showFailTooltip ? (
