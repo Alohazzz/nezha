@@ -237,10 +237,14 @@ function applyFrame(model: StreamModel, frame: CodexStreamFrame): void {
     const existing = item.id ? model.byId.get(item.id) : undefined;
     const frameTs = frame.tsMs;
     if (frame.phase === "started") {
-      entry.startedAtMs = frameTs ?? Date.now();
+      entry.startedAtMs = frame.startedTsMs ?? frameTs ?? Date.now();
       entry.endedAtMs = null;
     } else if (frame.phase === "completed") {
-      entry.startedAtMs = existing?.startedAtMs ?? frameTs ?? Date.now();
+      // 历史回放帧（read_codex_stream_history）只落完成时刻，起点由后端按 turn
+      // 起始推算后经 startedTsMs 下发——优先采用，否则折叠头会按「打开页面
+      // 的那一刻」起算，历史轮次全都显示成 0 秒。
+      entry.startedAtMs =
+        existing?.startedAtMs ?? frame.startedTsMs ?? frameTs ?? Date.now();
       entry.endedAtMs = frameTs ?? Date.now();
     }
     replaceEntry(model, entry);
@@ -383,8 +387,18 @@ export function ingestFrameLine(model: StreamModel, lineText: string): void {
   } catch {
     return;
   }
+  ingestFrame(model, frame);
+}
+
+/**
+ * 把已解析的帧对象归并进 model。历史回放（`read_codex_stream_history`）返回
+ * 的就是解析后的对象数组，走这里省掉一次 stringify/parse；实时 Channel 仍
+ * 走 `ingestFrameLine`。
+ */
+export function ingestFrame(model: StreamModel, frame: CodexStreamFrame): void {
   if (!frame || typeof frame !== "object" || typeof frame.type !== "string") return;
   if (frame.tsMs !== undefined) frame.tsMs = validTs(frame.tsMs);
+  if (frame.startedTsMs !== undefined) frame.startedTsMs = validTs(frame.startedTsMs);
   applyFrame(model, frame);
   enforceEntryLimit(model);
 }

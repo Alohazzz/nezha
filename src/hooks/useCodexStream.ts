@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   CodexApprovalRequest,
+  CodexStreamFrame,
   CodexTokenUsage,
   CodexUserInputRequest,
   CodexUserMessageItem,
 } from "../types";
 import {
   createStreamModel,
+  ingestFrame,
   ingestFrameLine,
   type CodexStreamEntry,
   type StreamModel,
@@ -30,13 +33,27 @@ export interface CodexStreamState {
   approval: CodexApprovalRequest | null;
   /** 模型提问（`request_user_input` 工具），与审批互斥地占用底部卡片区。 */
   userInput: CodexUserInputRequest | null;
+  /** 从 rollout 会话文件回放历史的状态（实时帧到达后不再尝试）。 */
+  history: CodexHistoryStatus;
 }
+
+/** 历史回放（从 rollout 会话文件水合）的状态机。
+ *  `idle` 尚未尝试 / 已放弃（如任务仍在跑，实时帧才是权威）；
+ *  `loading` 正在读文件；`ready` 已灌入；`failed` 读取失败（保留 reason 供视图提示）。 */
+export type CodexHistoryStatus =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "ready"; entryCount: number }
+  | { state: "failed"; reason: string };
+
+/** 快照里的历史回放状态：视图据此区分「还没加载」与「真的没有记录」。 */
+const IDLE_HISTORY: CodexHistoryStatus = { state: "idle" };
 
 // 视图层（CodexStreamView 等）从此处导入条目类型；定义已上移纯函数层
 export type { CodexStreamEntry } from "./codexStreamMerge";
 
 function emptyState(): CodexStreamState {
-  return { entries: [], usage: null, approval: null, userInput: null };
+  return { entries: [], usage: null, approval: null, userInput: null, history: IDLE_HISTORY };
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
@@ -49,13 +66,23 @@ const FLUSH_THROTTLE_MS = 100; // RAF 不可用/被节流时的兜底
  * - `ingestFrameLine(taskId, line)`：App 层把 structured 任务的 Channel 文本喂进来；
  *   非 JSON 行（异常回退的 PTY 字节）静默丢弃（归并层兜底）。
  * - `getStream(taskId)`：返回该任务当前快照（未出现过的任务返回空态）。
+ * - `hydrateHistory(taskId, sessionPath, projectPath?)`：条目为空时从 rollout
+ *   会话文件回放历史（projectPath 缺省用 hook 参数）。
  * - 审批事件走全局 emit（`codex-approval-requested`），按 taskId 过滤后入库。
+ *
+ * @param projectPath 当前激活项目的根路径：历史回放要经后端的会话根校验，
+ *   校验需要项目路径（Codex 会话可能落在项目内 `.codex/sessions`）。
  */
-export function useCodexStream() {
+export function useCodexStream(projectPath?: string) {
   const modelsRef = useRef<Map<string, StreamModel>>(new Map());
   const dirtyRef = useRef<Set<string>>(new Set());
   const rafRef = useRef(0);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 正在回放的任务（防止视图重渲染触发并发读盘）。 */
+  const pendingRef = useRef<Set<string>>(new Set());
+  /** `taskId|sessionPath` → 已尝试回放（成功或失败都记）。失败不自动重试：
+   *  否则「读盘失败 → 状态变化 → effect 再触发」会打成死循环。 */
+  const attemptedRef = useRef<Set<string>>(new Set());
   const [snapshot, setSnapshot] = useState<Record<string, CodexStreamState>>({});
 
   const flush = useCallback(() => {
@@ -77,6 +104,7 @@ export function useCodexStream() {
               usage: model.usage,
               approval: prev[taskId]?.approval ?? null,
               userInput: prev[taskId]?.userInput ?? null,
+              history: prev[taskId]?.history ?? IDLE_HISTORY,
             }
           : emptyState();
         if (next === prev) next = { ...prev };
@@ -181,6 +209,13 @@ export function useCodexStream() {
   const resetTask = useCallback((taskId: string) => {
     modelsRef.current.delete(taskId);
     dirtyRef.current.delete(taskId);
+    // 重跑任务会生成新会话路径：清掉该任务的全部回放记录，让新历史能重新回放。
+    // 记录键是 `taskId|sessionPath`，必须按前缀清而不是按 taskId 精确删。
+    const prefix = `${taskId}|`;
+    for (const key of attemptedRef.current) {
+      if (key.startsWith(prefix)) attemptedRef.current.delete(key);
+    }
+    pendingRef.current.delete(taskId);
     setSnapshot((prev) => {
       if (!prev[taskId]) return prev;
       const next = { ...prev };
@@ -242,6 +277,63 @@ export function useCodexStream() {
     [snapshot],
   );
 
+  // ── 历史回放水合（历史任务重开后恢复会话视图）──────────────────────────────
+  // structured 条目只活在内存模型里：重开应用 / 打开已完成的历史任务时模型为空，
+  // 视图只能显示「没有智能体活动记录」。这里在条目为空时读一次 rollout 会话文件，
+  // 把后端转换好的流帧灌进同一个 model，渲染链路与实时完全一致。
+  //
+  // 竞态保护：
+  // - 同一 (taskId, sessionPath) 只尝试一次，失败也不自动重试（否则「失败 →
+  //   状态变化 → effect 再触发」会打成死循环）；
+  // - 回放期间若已有实时帧到达（model.entries 非空），放弃回放结果——实时帧
+  //   才是权威，回放会让同一轮内容重复；
+  // - resetTask 会清掉记录（重跑任务需要重新回放新一轮）。
+  const hydrateHistory = useCallback(
+    async (taskId: string, sessionPath: string, taskProjectPath?: string) => {
+      if (!taskId || !sessionPath) return;
+      const key = `${taskId}|${sessionPath}`;
+      if (attemptedRef.current.has(key)) return;
+      // 同任务并发调用（视图重渲染）只放行一次。
+      if (pendingRef.current.has(taskId)) return;
+      attemptedRef.current.add(key);
+      pendingRef.current.add(taskId);
+
+      const setHistory = (history: CodexHistoryStatus) => {
+        setSnapshot((prev) => {
+          const current = prev[taskId] ?? emptyState();
+          if (current.history === history) return prev;
+          return { ...prev, [taskId]: { ...current, history } };
+        });
+      };
+      setHistory({ state: "loading" });
+
+      try {
+        const result = await invoke<{ frames: CodexStreamFrame[] }>(
+          "read_codex_stream_history",
+          { sessionPath, projectPath: taskProjectPath || projectPath || "", taskId },
+        );
+        const current = modelsRef.current.get(taskId);
+        // 实时帧已经落地（任务正在跑 / 刚续跑）：回放会与实时内容重复，直接放弃。
+        if (current && current.entries.length > 0) {
+          setHistory({ state: "idle" });
+          return;
+        }
+        const model = current ?? createStreamModel();
+        modelsRef.current.set(taskId, model);
+        for (const frame of result.frames ?? []) ingestFrame(model, frame);
+        dirtyRef.current.add(taskId);
+        scheduleFlush();
+        setHistory({ state: "ready", entryCount: model.entries.length });
+      } catch (err) {
+        const message = typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
+        setHistory({ state: "failed", reason: message });
+      } finally {
+        pendingRef.current.delete(taskId);
+      }
+    },
+    [projectPath, scheduleFlush],
+  );
+
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -257,5 +349,6 @@ export function useCodexStream() {
     resetTask,
     beginFollowUpRound,
     appendLocalUserMessage,
+    hydrateHistory,
   };
 }

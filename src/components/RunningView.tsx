@@ -111,6 +111,7 @@ export function RunningView({
   getRestoreState,
   codexStream,
   onCodexApprovalResolved,
+  onHydrateCodexHistory,
   onCodexUserInputResolved,
   onFollowUp,
   onSetStructuredModel,
@@ -154,6 +155,8 @@ export function RunningView({
   onCodexApprovalResolved?: () => void;
   /** 模型提问已应答（卡片收起；上层清 userInput 槽位）。 */
   onCodexUserInputResolved?: () => void;
+  /** structured 任务历史回放（从 rollout 会话文件恢复流视图）。 */
+  onHydrateCodexHistory?: (sessionPath: string) => void;
   /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。
    *  images 为 dataUrl 数组（issue #118：composer 粘贴/选择的图片随消息发送）。 */
   onFollowUp?: (text: string, images: string[]) => void;
@@ -202,6 +205,22 @@ export function RunningView({
       ? !!resumeSessionId
       : task.agent === "dsh" || !!resumeSessionId;
   const restoreState = getRestoreState?.() ?? {};
+
+  // structured 任务的历史条目只存在于内存模型里：重开应用 / 打开一个已完成的
+  // 历史任务时模型为空，流视图只能显示「没有智能体活动记录」。这里在条目为空
+  // 时触发一次 rollout 回放（hook 内部幂等 + 与实时帧竞态保护）。运行中的任务
+  // 不回放：实时 Channel 才是权威，回放会与正在到达的帧重复。
+  const codexEntryCount = codexStream?.entries.length ?? 0;
+  const historyState = codexStream?.history.state ?? "idle";
+  useEffect(() => {
+    if (!codexStream || !onHydrateCodexHistory) return;
+    if (codexEntryCount > 0) return;
+    if (!task.codexSessionPath) return;
+    // 只有 idle 才发起：loading / ready 不该重复调用，failed 也不自动重试
+    // （hook 内部同样按 (taskId, sessionPath) 去重，这里省一次无效调用）。
+    if (historyState !== "idle") return;
+    onHydrateCodexHistory(task.codexSessionPath);
+  }, [codexStream, codexEntryCount, historyState, onHydrateCodexHistory, task.codexSessionPath]);
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
 
@@ -746,6 +765,7 @@ export function RunningView({
           <CodexStreamView
             entries={codexStream.entries}
             usage={codexStream.usage}
+            history={codexStream.history}
             approval={null}
             onApprovalResolved={() => {}}
             running={false}
@@ -831,6 +851,7 @@ export function RunningView({
           <CodexStreamView
             entries={codexStream.entries}
             usage={codexStream.usage}
+            history={codexStream.history}
             approval={codexStream.approval}
             onApprovalResolved={() => onCodexApprovalResolved?.()}
             userInput={codexStream.userInput}
@@ -893,6 +914,7 @@ export function RunningView({
         <CodexStreamView
           entries={codexStream.entries}
           usage={codexStream.usage}
+          history={codexStream.history}
           approval={null}
           onApprovalResolved={() => {}}
           running={false}

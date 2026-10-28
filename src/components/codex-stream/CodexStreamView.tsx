@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
-import type { CodexStreamEntry } from "../../hooks/useCodexStream";
+import type { CodexHistoryStatus, CodexStreamEntry } from "../../hooks/useCodexStream";
 import type { CodexTokenUsage, CodexUserInputRequest } from "../../types";
 import type { AgentModelCatalog } from "../app-settings/types";
 import { CodexApprovalCard } from "./CodexApprovalCard";
@@ -86,6 +86,7 @@ function EntryRenderer({
 export function CodexStreamView({
   entries,
   usage,
+  history,
   approval,
   onApprovalResolved,
   userInput,
@@ -108,6 +109,9 @@ export function CodexStreamView({
 }: {
   entries: CodexStreamEntry[];
   usage: CodexTokenUsage | null;
+  /** 历史回放状态：区分「历史还在读」/「会话文件读失败」/「真的没有记录」。
+   *  缺省按 idle 处理（纯实时视图）。 */
+  history?: CodexHistoryStatus;
   approval: Parameters<typeof CodexApprovalCard>[0]["request"] | null;
   onApprovalResolved: () => void;
   running: boolean;
@@ -148,6 +152,10 @@ export function CodexStreamView({
   // 像"假死或正常结束"。这里改为滚动区上方的常驻横幅。
   const bannerText = statusText ?? null;
   const showEmptyHint = entries.length === 0 && !bannerText;
+  // 空态三态化：历史任务打开时会先从 rollout 回放，直接喊「没有记录」是错的。
+  const historyLoading = showEmptyHint && history?.state === "loading";
+  const historyFailureReason =
+    showEmptyHint && history?.state === "failed" ? history.reason : null;
 
   // 轮次分段（对标 ZCode）：一条用户输入开启一轮，过程收进折叠段，结论留在主线。
   // 纯函数 + useMemo：entries 每次增量都会换引用，只在真正变化时重算。
@@ -208,7 +216,13 @@ export function CodexStreamView({
           <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
             {showEmptyHint && (
               <div style={s.codexStreamEmpty}>
-                {running ? t("codex.stream.waitingFirst") : t("codex.stream.empty")}
+                {historyLoading
+                  ? t("codex.stream.historyLoading")
+                  : historyFailureReason !== null
+                    ? t("codex.stream.historyFailed", { error: historyFailureReason })
+                    : running
+                      ? t("codex.stream.waitingFirst")
+                      : t("codex.stream.empty")}
               </div>
             )}
             {/* 无主条目（会话从助手侧开始）按平铺渲染，不进任何折叠段。 */}

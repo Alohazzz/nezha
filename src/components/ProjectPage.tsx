@@ -140,6 +140,7 @@ export function ProjectPage({
   onSnapshot,
   getCodexStream,
   onCodexApprovalResolved,
+  onHydrateCodexHistory,
   onCodexUserInputResolved,
   onFollowUpStructured,
   onSetStructuredModel,
@@ -284,6 +285,8 @@ export function ProjectPage({
   onCodexApprovalResolved?: (taskId: string) => void;
   /** structured 任务模型提问已应答（收起问答卡片）。 */
   onCodexUserInputResolved?: (taskId: string) => void;
+  /** structured 任务历史回放：条目为空时从 rollout 会话文件恢复流视图。 */
+  onHydrateCodexHistory?: (taskId: string, sessionPath: string, projectPath: string) => void;
   /** structured 任务 done 态继续对话（thread/resume 通道）。 */
   onFollowUpStructured?: (task: Task, text: string, images: string[]) => void;
   /** structured 任务模型 / 推理深度切换（composer `/model` `/effort` 内置命令）。 */
@@ -605,6 +608,11 @@ export function ProjectPage({
                 onCodexUserInputResolved={
                   onCodexUserInputResolved
                     ? () => onCodexUserInputResolved(task.id)
+                    : undefined
+                }
+                onHydrateCodexHistory={
+                  task.runMode === "structured" && onHydrateCodexHistory
+                    ? (sessionPath) => onHydrateCodexHistory(task.id, sessionPath, project.path)
                     : undefined
                 }
                 onFollowUp={

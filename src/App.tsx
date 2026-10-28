@@ -3948,6 +3948,7 @@ function App() {
               onSnapshot={tm.handleSnapshot}
               getCodexStream={codexStream.getStream}
               onCodexApprovalResolved={codexStream.setApprovalResolved}
+              onHydrateCodexHistory={codexStream.hydrateHistory}
               onCodexUserInputResolved={codexStream.setUserInputResolved}
               onFollowUpStructured={handleFollowUpStructured}
               onSetStructuredModel={handleSetStructuredModel}

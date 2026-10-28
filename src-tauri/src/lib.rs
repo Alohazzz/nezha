@@ -12,6 +12,7 @@ mod delivery_plan;
 mod build;
 mod codeup;
 pub mod codex_appserver;
+mod codex_history;
 mod config;
 mod drafts;
 mod dsh;
@@ -519,6 +520,7 @@ pub fn run() {
             build::cancel_build,
             build::get_running_builds,
             session::read_session_messages,
+            codex_history::read_codex_stream_history,
             session::export_session_markdown,
             config::init_project_config,
             config::read_project_config,

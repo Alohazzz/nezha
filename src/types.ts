@@ -370,6 +370,12 @@ export interface CodexStreamFrame {
    * 前端归并层以本地时钟兜底。
    */
   tsMs?: number;
+  /**
+   * 仅历史回放帧携带（`read_codex_stream_history`）：rollout 只落完成时刻，
+   * 起点由后端按 turn 起始 / 上一条目完成时刻推算。归并层优先用它做条目
+   * 起点，折叠头才能显示真实工作时长而不是「打开页面的那一刻」。
+   */
+  startedTsMs?: number;
   threadId: string;
   turnId: string;
   payload: CodexStreamPayload;
