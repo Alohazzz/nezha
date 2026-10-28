@@ -120,7 +120,7 @@ export function TaskPanel({
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const isDark = themeVariant === "dark" || themeVariant === "midnight";
+  const isDark = themeVariant !== "light" && themeVariant !== "eyecare";
   const hasAttention = tasks.some(
     (t) =>
       t.status === "input_required" ||

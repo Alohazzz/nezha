@@ -16,17 +16,31 @@ export function ThemePanel({
   onThemeModeChange,
 }: ThemePanelProps) {
   const { t } = useI18n();
-  type ManualMode = Extract<ThemeMode, "dark" | "light" | "eyecare" | "midnight">;
-  const manualThemeModes: ManualMode[] = ["dark", "midnight", "light", "eyecare"];
+  type ManualMode = Extract<
+    ThemeMode,
+    "dark" | "light" | "eyecare" | "midnight" | "zinc" | "claude"
+  >;
+  const manualThemeModes: ManualMode[] = [
+    "dark",
+    "midnight",
+    "zinc",
+    "claude",
+    "light",
+    "eyecare",
+  ];
   const currentModeLabel = systemPrefersDark ? t("theme.dark") : t("theme.light");
   const manualModeLabel =
     themeMode === "dark"
       ? t("theme.dark")
       : themeMode === "midnight"
         ? t("theme.midnight")
-        : themeMode === "eyecare"
-          ? t("theme.eyecare")
-          : t("theme.light");
+        : themeMode === "zinc"
+          ? t("theme.zinc")
+          : themeMode === "claude"
+            ? t("theme.claude")
+            : themeMode === "eyecare"
+              ? t("theme.eyecare")
+              : t("theme.light");
   const selectedLabel =
     themeMode === "system"
       ? t("theme.followingSystem", { mode: currentModeLabel })
@@ -85,7 +99,7 @@ export function ThemePanel({
     previewAccent: string;
   }) {
     const selected = themeMode === mode;
-    const isDark = mode === "dark" || mode === "midnight";
+    const isDark = mode !== "light" && mode !== "eyecare";
 
     return (
       <button
@@ -446,6 +460,22 @@ export function ThemePanel({
             previewBackground: "#1a1b1d",
             previewBorder: "#222427",
             previewAccent: "#e6e6e6",
+          })}
+          {renderThemeOption({
+            mode: "zinc",
+            title: t("theme.zinc"),
+            description: t("theme.zincDescription"),
+            previewBackground: "#18181b",
+            previewBorder: "#27272a",
+            previewAccent: "#e4e4e7",
+          })}
+          {renderThemeOption({
+            mode: "claude",
+            title: t("theme.claude"),
+            description: t("theme.claudeDescription"),
+            previewBackground: "#1f1f1e",
+            previewBorder: "#36332f",
+            previewAccent: "#d97757",
           })}
           {renderThemeOption({
             mode: "light",

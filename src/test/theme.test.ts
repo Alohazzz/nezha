@@ -3,6 +3,7 @@ import {
   getNextThemeMode,
   getPreferredDarkTheme,
   getPreferredLightTheme,
+  isDarkThemeMode,
   isThemeMode,
   resolveThemeVariant,
 } from "../theme";
@@ -21,7 +22,16 @@ describe("theme helpers", () => {
     expect(isThemeMode("light")).toBe(true);
     expect(isThemeMode("system")).toBe(true);
     expect(isThemeMode("eyecare")).toBe(true);
+    expect(isThemeMode("zinc")).toBe(true);
+    expect(isThemeMode("claude")).toBe(true);
     expect(isThemeMode("white")).toBe(false);
+  });
+
+  test("treats zinc and claude as dark-family modes", () => {
+    expect(isDarkThemeMode("zinc")).toBe(true);
+    expect(isDarkThemeMode("claude")).toBe(true);
+    expect(getPreferredDarkTheme("light", "zinc")).toBe("zinc");
+    expect(getPreferredDarkTheme("light", "claude")).toBe("claude");
   });
 
   test("keeps eyecare as the preferred light theme after midnight mode", () => {

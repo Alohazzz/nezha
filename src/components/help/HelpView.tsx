@@ -26,7 +26,7 @@ export function HelpView({ themeVariant }: { themeVariant: ThemeVariant }) {
   const [docId, setDocId] = useState<HelpDoc["id"]>("manual");
   const frameRef = useRef<HTMLIFrameElement>(null);
 
-  const isDark = themeVariant === "dark" || themeVariant === "midnight";
+  const isDark = themeVariant !== "light" && themeVariant !== "eyecare";
   const theme = isDark ? "dark" : "light";
   // 只在 iframe 首次加载时作为初始主题；后续主题切换经 postMessage 下发（改 src 会重载并丢阅读位置）。
   const themeAtLoad = useRef(theme);

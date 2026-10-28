@@ -67,6 +67,20 @@ export const MIDNIGHT_THEME = {
   background: "#1a1b1d",
 };
 
+// Zinc dark: DARK_THEME palette on paseo zincDark's content surface. When the
+// terminal sits on a panel the background is swapped to the live --bg-panel
+// anyway (themeOnPanel); the preset value matters for the standalone window.
+export const ZINC_THEME = {
+  ...DARK_THEME,
+  background: "#18181b",
+};
+
+// Claude dark: DARK_THEME palette on paseo claudeDark's warm content surface.
+export const CLAUDE_THEME = {
+  ...DARK_THEME,
+  background: "#1f1f1e",
+};
+
 // Solarized Light–inspired warm palette to match the eyecare CSS tokens.
 export const EYECARE_THEME = {
   background: "#fdf6e3",
@@ -95,16 +109,19 @@ export function themeFor(variant: ThemeVariant) {
   if (variant === "dark") return DARK_THEME;
   if (variant === "midnight") return MIDNIGHT_THEME;
   if (variant === "eyecare") return EYECARE_THEME;
+  if (variant === "zinc") return ZINC_THEME;
+  if (variant === "claude") return CLAUDE_THEME;
   return LIGHT_THEME;
 }
 
 export function minimumContrastRatioFor(variant: ThemeVariant): number {
-  // Dark-family variants (dark / midnight) ship a hand-tuned palette already
-  // readable on their backgrounds, so we skip xterm's auto contrast lift to
-  // preserve the original ANSI hues. Light-family variants (light / eyecare)
-  // pair light surfaces with high-saturation ANSI defaults that fall below
-  // WCAG AA — there we let xterm bump foregrounds until they hit 4.5:1.
-  return variant === "dark" || variant === "midnight" ? 1 : 4.5;
+  // Dark-family variants (dark / midnight / zinc / claude) ship a hand-tuned
+  // palette already readable on their backgrounds, so we skip xterm's auto
+  // contrast lift to preserve the original ANSI hues. Light-family variants
+  // (light / eyecare) pair light surfaces with high-saturation ANSI defaults
+  // that fall below WCAG AA — there we let xterm bump foregrounds until they
+  // hit 4.5:1.
+  return variant === "light" || variant === "eyecare" ? 4.5 : 1;
 }
 
 // 终端嵌在 var(--bg-panel) 表面（Agent 任务终端 / 嵌入式 Shell）时，把 xterm 背景

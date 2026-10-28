@@ -180,7 +180,7 @@ function FilePreviewPane({
   onJumpToLine: (line: number) => void;
 }) {
   const editorTheme =
-    themeVariant === "dark" || themeVariant === "midnight"
+    themeVariant !== "light" && themeVariant !== "eyecare"
       ? githubDark
       : themeVariant === "eyecare"
         ? solarizedLight

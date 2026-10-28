@@ -92,8 +92,11 @@ export function FileExplorerContextMenu({
             return <div key={`sep-${idx}`} style={s.fileCtxSeparator} />;
           }
           const isDestructive = item.action === "delete";
+          // baseColor 用的 --danger-fg 是语义 token（themes.css 四主题都有定义）；
+          // hover 底色用 --danger / --accent，前景一律 --fg-on-accent——近白 accent
+          // 的 zinc 主题下也由各主题自行给出可读的 on-accent 前景。
           const baseColor = isDestructive
-            ? "var(--danger-action-bg, #d23f3f)"
+            ? "var(--danger-fg)"
             : "var(--text-primary)";
           return (
             <button
@@ -102,11 +105,9 @@ export function FileExplorerContextMenu({
               style={{ ...s.fileCtxMenuItem, color: baseColor }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = isDestructive
-                  ? "var(--danger-action-bg, #d23f3f)"
+                  ? "var(--danger)"
                   : "var(--accent)";
-                e.currentTarget.style.color = isDestructive
-                  ? "var(--danger-action-fg, #ffffff)"
-                  : "var(--fg-on-accent)";
+                e.currentTarget.style.color = "var(--fg-on-accent)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";

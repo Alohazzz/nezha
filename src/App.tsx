@@ -623,13 +623,15 @@ function App() {
 
   useLayoutEffect(() => {
     const root = document.documentElement;
-    // The midnight variant layers on top of the dark token set: it keeps the
-    // `dark` class (so it inherits every dark token) and adds `midnight` for the
-    // few near-black overrides (menu border / surface backgrounds) declared later
-    // in themes.css, which win by source order at equal specificity.
-    root.classList.toggle("dark", themeVariant === "dark" || themeVariant === "midnight");
+    // Dark variants (midnight / zinc / claude) layer on top of the dark token
+    // set: they keep the `dark` class (so they inherit every dark token) and
+    // add their own class for the surface overrides declared later in
+    // themes.css, which win by source order at equal specificity.
+    root.classList.toggle("dark", themeVariant !== "light" && themeVariant !== "eyecare");
     root.classList.toggle("midnight", themeVariant === "midnight");
     root.classList.toggle("eyecare", themeVariant === "eyecare");
+    root.classList.toggle("zinc", themeVariant === "zinc");
+    root.classList.toggle("claude", themeVariant === "claude");
     localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeVariant, themeMode]);
 
@@ -647,7 +649,10 @@ function App() {
     const nativeTheme =
       themeMode === "system"
         ? null
-        : themeMode === "dark" || themeMode === "midnight"
+        : themeMode === "dark" ||
+            themeMode === "midnight" ||
+            themeMode === "zinc" ||
+            themeMode === "claude"
           ? "dark"
           : "light";
     getCurrentWindow().setTheme(nativeTheme).catch(console.error);

@@ -1036,7 +1036,7 @@ export const yunxiao = {
     borderRadius: 8,
     border: "1px solid var(--accent)",
     background: "var(--accent)",
-    color: "var(--text-on-accent, #fff)",
+    color: "var(--fg-on-accent)",
     fontSize: 12,
     fontWeight: 700,
     cursor: "pointer",

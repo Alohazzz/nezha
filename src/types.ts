@@ -20,8 +20,15 @@ export interface GitRoot {
 }
 
 export type AgentType = "claude" | "codex" | "dsh";
-export type ThemeMode = "system" | "dark" | "light" | "eyecare" | "midnight";
-export type ThemeVariant = "dark" | "light" | "eyecare" | "midnight";
+export type ThemeMode =
+  | "system"
+  | "dark"
+  | "light"
+  | "eyecare"
+  | "midnight"
+  | "zinc"
+  | "claude";
+export type ThemeVariant = "dark" | "light" | "eyecare" | "midnight" | "zinc" | "claude";
 export type PermissionMode = "ask" | "auto_edit" | "full_access";
 export type TaskDisplayWindow = 3 | 7 | 15 | 30 | "all";
 
