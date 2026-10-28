@@ -32,7 +32,7 @@ export const reviewComments = {
     zIndex: 1200,
     minWidth: 148,
     padding: "3px 0",
-    background: "var(--bg-sidebar)",
+    background: "var(--bg-card)",
     border: "1px solid var(--border-dim)",
     borderRadius: 6,
     boxShadow: "var(--shadow-popover)",

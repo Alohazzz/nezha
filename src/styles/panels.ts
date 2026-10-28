@@ -1256,7 +1256,7 @@ export const panels = {
   },
   fileSearchTypeContent: {
     zIndex: 2000,
-    background: "var(--bg-sidebar)",
+    background: "var(--bg-card)",
     border: "1px solid var(--border-medium)",
     borderRadius: 8,
     boxShadow: "var(--shadow-md)",
@@ -1444,7 +1444,7 @@ export const panels = {
   fileCtxMenu: {
     position: "fixed" as const,
     zIndex: 1000,
-    background: "var(--bg-sidebar)",
+    background: "var(--bg-card)",
     border: "1px solid var(--border-dim)",
     borderRadius: 6,
     boxShadow: "var(--shadow-popover)",

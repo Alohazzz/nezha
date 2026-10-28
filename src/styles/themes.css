@@ -1,15 +1,17 @@
-/* Design tokens: light theme */
+/* Design tokens: light theme.
+   Surface 分层对照 paseo：内容区纯白（surface0），侧边栏族独立下沉一档灰
+   （surfaceSidebar = zinc-100 #f4f4f5），两档落差构成左右对比。 */
 :root {
-  --bg-root: hsl(240deg 6% 99.4%);
-  --bg-shell: hsl(240deg 6% 99.4%);
-  --bg-titlebar: hsl(240deg 6% 99.4%);
-  --bg-sidebar: #fdfdfd;
+  --bg-root: #ffffff;
+  --bg-shell: #f4f4f5;
+  --bg-titlebar: #f4f4f5;
+  --bg-sidebar: #f4f4f5;
   --bg-sidebar-elevated: #fafafa;
   --bg-panel: #ffffff;
   --bg-card: #ffffff;
-  --bg-hover: hsl(240deg 6% 97.7%);
+  --bg-hover: hsl(240deg 6% 96%);
   --bg-selected: rgba(15, 23, 42, 0.08);
-  --bg-subtle: hsl(240deg 6% 99.4%);
+  --bg-subtle: #f4f4f5;
   --bg-input: #ffffff;
   --bg: var(--bg-root);
 
@@ -160,14 +162,16 @@
   --yunxiao-overdue-bg: rgba(248, 81, 73, 0.14);
 }
 
-/* Design tokens: eye-care theme (warm sepia, low-contrast) */
+/* Design tokens: eye-care theme (warm sepia, low-contrast).
+   内容区保留最亮的米黄面，侧边栏族沉一档暖灰，维持与 light/dark 相同的
+   左右两档落差。 */
 html.eyecare {
-  --bg-root: #f5ecd7;
-  --bg-shell: #f5ecd7;
-  --bg-titlebar: #f5ecd7;
-  --bg-sidebar: #f9f1dc;
-  --bg-sidebar-elevated: #f3e9cf;
-  --bg-panel: #fbf5e4;
+  --bg-root: #faf3df;
+  --bg-shell: #f3ead1;
+  --bg-titlebar: #f3ead1;
+  --bg-sidebar: #f3ead1;
+  --bg-sidebar-elevated: #f7efdb;
+  --bg-panel: #faf3df;
   --bg-card: #fdf9ec;
   --bg-hover: #ede2c4;
   --bg-selected: rgba(101, 84, 51, 0.12);
@@ -230,18 +234,20 @@ html.eyecare {
   --yunxiao-overdue-bg: rgba(178, 84, 72, 0.16);
 }
 
-/* Design tokens: dark theme */
+/* Design tokens: dark theme.
+   Surface 分层对照 paseo paseoDark：内容区 surface0，侧边栏族再深一档
+   （surfaceSidebar），保持约 3-4% 亮度的左右落差。 */
 html.dark {
   --bg-root: #1d212a;
-  --bg-shell: #262b36;
-  --bg-titlebar: #2b313e;
-  --bg-sidebar: #242a35;
-  --bg-sidebar-elevated: #202631;
-  --bg-panel: #2b313d;
-  --bg-card: #313847;
+  --bg-shell: #171b23;
+  --bg-titlebar: #171b23;
+  --bg-sidebar: #171b23;
+  --bg-sidebar-elevated: #1b202a;
+  --bg-panel: #1d212a;
+  --bg-card: #262c38;
   --bg-hover: #394154;
   --bg-selected: #34446d;
-  --bg-subtle: #343b4a;
+  --bg-subtle: #222734;
   --bg-input: #343b4a;
 
   --border-dim: rgba(255, 255, 255, 0.07);
@@ -356,14 +362,15 @@ html.dark {
 /* Design tokens: midnight dark theme (neutral near-black).
    Layered on top of `html.dark` (the element carries both classes), so this
    block only overrides the midnight-specific deltas — near-black surfaces
-   (#1A1B1D files & terminal) and #222427 menu/borders — and inherits the rest
-   of the dark palette. Must stay AFTER `html.dark` to win at equal specificity. */
+   (#1a1b1d files & terminal) with the sidebar family sunk one step deeper
+   (#141517 sidebar, paseo midnight 同款落差) — and inherits the rest of the
+   dark palette. Must stay AFTER `html.dark` to win at equal specificity. */
 html.midnight {
   --bg-root: #1a1b1d;
-  --bg-shell: #1a1b1d;
-  --bg-titlebar: #1a1b1d;
-  --bg-sidebar: #1a1b1d;
-  --bg-sidebar-elevated: #1f2123;
+  --bg-shell: #141517;
+  --bg-titlebar: #141517;
+  --bg-sidebar: #141517;
+  --bg-sidebar-elevated: #18191c;
   --bg-panel: #1a1b1d;
   --bg-card: #222427;
   --bg-hover: #26282b;
