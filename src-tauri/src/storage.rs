@@ -57,6 +57,10 @@ pub struct Task {
         skip_serializing_if = "Option::is_none"
     )]
     pub attention_requested_at: Option<i64>,
+    /// 最近一次置为「已完成未读」的时间戳（done/failed 置位、点击任务清除）。
+    /// 正交于 status 的读回执标志；缺省（含存量任务）视为已读。
+    #[serde(rename = "unreadAt", default, skip_serializing_if = "Option::is_none")]
+    pub unread_at: Option<i64>,
     #[serde(rename = "claudeSessionId", skip_serializing_if = "Option::is_none")]
     pub claude_session_id: Option<String>,
     #[serde(rename = "claudeSessionPath", skip_serializing_if = "Option::is_none")]

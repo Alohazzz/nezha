@@ -225,6 +225,22 @@ export const panels = {
     // 必须高于 railAvatarStacked(zIndex:1),否则被抬层的头像盖住
     zIndex: 2,
   },
+  // 项目「已完成未读」聚合蓝点：左下角，与右下的状态点/右上的角标互不遮挡。
+  railUnreadDot: {
+    position: "absolute" as const,
+    bottom: -1,
+    left: -1,
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "var(--unread-dot-bg)",
+    borderStyle: "solid" as const,
+    borderWidth: 2,
+    borderColor: "var(--bg-sidebar)",
+    boxSizing: "border-box" as const,
+    // 必须高于 railAvatarStacked(zIndex:1),否则被抬层的头像盖住
+    zIndex: 2,
+  },
   // 招手小人:绝对定位在头像右下,z-index 低于头像,缩回时被头像遮住
   railMascot: {
     position: "absolute" as const,

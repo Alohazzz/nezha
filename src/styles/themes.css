@@ -84,6 +84,8 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-error: var(--danger);
+  /* 「已完成未读」蓝点：信息性标识，不复用 accent（避免与 awaiting_review 语义混淆）。 */
+  --unread-dot-bg: #3b82f6;
   --usage-good: #22c55e;
   --usage-warn: #f59e0b;
   --usage-danger: #ef4444;
@@ -232,6 +234,9 @@ html.eyecare {
   --yunxiao-status-red-bg: rgba(178, 84, 72, 0.16);
   --yunxiao-overdue-fg: #a8443c;
   --yunxiao-overdue-bg: rgba(178, 84, 72, 0.16);
+
+  /* 「已完成未读」蓝点：护眼主题下沉的蓝，与暖底和谐。 */
+  --unread-dot-bg: #5878c8;
 }
 
 /* Design tokens: dark theme.
@@ -357,6 +362,9 @@ html.dark {
   --yunxiao-status-red-bg: rgba(248, 81, 73, 0.2);
   --yunxiao-overdue-fg: #ff7b72;
   --yunxiao-overdue-bg: rgba(248, 81, 73, 0.2);
+
+  /* 「已完成未读」蓝点：暗底提亮的蓝。midnight/zinc/claude 叠加在 dark 上时继承此值。 */
+  --unread-dot-bg: #6aa2ff;
 }
 
 /* Design tokens: midnight dark theme (neutral near-black).

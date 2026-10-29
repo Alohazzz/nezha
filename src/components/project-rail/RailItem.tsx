@@ -9,32 +9,47 @@ import type { ProjectStatus } from "./activity";
 
 // 项目状态指示:启用角标且存在待确认任务时显示数量角标,否则回退为小圆点。
 // borderColor 用于与所在容器背景描边融合(rail 与 drawer 背景不同)。
+// unreadCount>0 时左下角叠加「已完成未读」蓝点——信息性标识,与 attention 正交。
 export function AttentionIndicator({
   status,
   count,
+  unreadCount,
   showBadge,
   borderColor,
 }: {
   status: ProjectStatus;
   count: number;
+  unreadCount: number;
   showBadge: boolean;
   borderColor: string;
 }) {
-  if (!status) return null;
+  if (!status && unreadCount <= 0) return null;
   const isAttention = status === "attention";
-  if (showBadge && isAttention && count > 0) {
-    return (
-      <span style={{ ...s.railAttentionBadge, borderColor }}>{count > 99 ? "99+" : count}</span>
-    );
-  }
   return (
-    <span
-      style={{
-        ...s.railStatusDot,
-        background: isAttention ? "var(--color-warning)" : "var(--color-success)",
-        borderColor,
-      }}
-    />
+    <>
+      {status && (isAttention ? (
+        showBadge && count > 0 ? (
+          <span style={{ ...s.railAttentionBadge, borderColor }}>{count > 99 ? "99+" : count}</span>
+        ) : (
+          <span
+            style={{
+              ...s.railStatusDot,
+              background: "var(--color-warning)",
+              borderColor,
+            }}
+          />
+        )
+      ) : (
+        <span
+          style={{
+            ...s.railStatusDot,
+            background: "var(--color-success)",
+            borderColor,
+          }}
+        />
+      ))}
+      {unreadCount > 0 && <span aria-hidden style={{ ...s.railUnreadDot, borderColor }} />}
+    </>
   );
 }
 
@@ -43,6 +58,7 @@ export const RailItem = memo(function RailItem({
   isActive,
   status,
   attentionCount,
+  unreadCount,
   showBadge,
   waveNonce,
   isDragging,
@@ -54,6 +70,7 @@ export const RailItem = memo(function RailItem({
   isActive: boolean;
   status: ProjectStatus;
   attentionCount: number;
+  unreadCount: number;
   showBadge: boolean;
   waveNonce: number;
   isDragging: boolean;
@@ -125,6 +142,7 @@ export const RailItem = memo(function RailItem({
       <AttentionIndicator
         status={status}
         count={attentionCount}
+        unreadCount={unreadCount}
         showBadge={showBadge}
         borderColor="var(--bg-sidebar)"
       />

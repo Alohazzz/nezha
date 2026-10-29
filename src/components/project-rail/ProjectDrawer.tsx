@@ -154,6 +154,7 @@ export function ProjectDrawer({
                 <AttentionIndicator
                   status={activity.status}
                   count={activity.attentionCount}
+                  unreadCount={activity.unreadCount}
                   showBadge={showBadge}
                   borderColor="var(--bg-panel)"
                 />

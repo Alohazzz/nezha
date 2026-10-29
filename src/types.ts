@@ -677,6 +677,10 @@ export interface Task {
   /** 任务状态最近一次变更的时间戳；左侧任务列表按此字段排序与分组。缺省时回落到 createdAt。 */
   updatedAt?: number;
   attentionRequestedAt?: number;
+  /** 最近一次置为「已完成未读」的时间戳（done/failed 时置位、点击任务清除，毫秒）。
+   *  正交于 status 的读回执标志：非空即在任务列表/项目 rail 上亮未读蓝点；
+   *  缺省（含存量任务）视为已读。参照 ZCode unreadAt。 */
+  unreadAt?: number;
   starred?: boolean;
   failureReason?: string;
   codexSessionId?: string;

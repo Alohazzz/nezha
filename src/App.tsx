@@ -454,6 +454,10 @@ function App() {
   backfillHandlerRef.current = handleScanBackfillDrafts;
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [projectViews, setProjectViews] = useState<Record<string, ProjectViewState>>({});
+  // task-status 事件回调里做「正观看中豁免置未读」判定用；ref 同步避免把
+  // projectViews 塞进 listener effect 依赖导致反复退订/重订阅事件。
+  const projectViewsRef = useRef(projectViews);
+  projectViewsRef.current = projectViews;
   const [mountedProjectIds, setMountedProjectIds] = useState<string[]>([]);
   const [taskRunCounts, setTaskRunCounts] = useState<Record<string, number>>({});
   const [skillHubConfig, setSkillHubConfig] = useState<SkillHubConfig | null>(null);
@@ -945,7 +949,12 @@ function App() {
       "task-status",
       (e) => {
         const { task_id, status, failure_reason } = e.payload;
-        updateTaskStatus(task_id, status, undefined, failure_reason);
+        // 前台豁免：置未读前先看该任务是否正被用户打开（任一项目的选中任务）。
+        const viewingTaskId =
+          Object.values(projectViewsRef.current).find(
+            (view) => !view.isNewTask && view.selectedTaskId === task_id,
+          )?.selectedTaskId ?? null;
+        updateTaskStatus(task_id, status, undefined, failure_reason, viewingTaskId);
         if (!isActiveTaskStatus(status)) {
           // structured 流的终态收口：被终止的任务不会再有上游 completed 帧，
           // 在途条目（命令 / 文件变更 / MCP 调用）不落终态的话，聚合组永远显示
@@ -3746,6 +3755,7 @@ function App() {
     status: TaskStatus,
     extra?: Pick<Task, "attentionRequestedAt">,
     failureReason?: string,
+    viewingTaskId?: string | null,
   ) {
     setTasks((prev) => {
       let changed = false;
@@ -3758,12 +3768,34 @@ function App() {
             ? (extra?.attentionRequestedAt ?? Date.now())
             : undefined;
 
-        if (task.status === status && task.attentionRequestedAt === attentionRequestedAt) {
+        // 已完成未读读回执：done/failed 置位（正观看中豁免），重新激活清除。
+        // interrupted/detached/cancelled 有各自的提醒语义，不置位；每轮完成
+        // 都是一次新的未读，重复置位直接覆盖旧时间戳。
+        const unreadAt =
+          status === "done" || status === "failed"
+            ? taskId === viewingTaskId
+              ? undefined
+              : (task.unreadAt ?? Date.now())
+            : status === "pending" || status === "running"
+              ? undefined
+              : task.unreadAt;
+
+        if (
+          task.status === status &&
+          task.attentionRequestedAt === attentionRequestedAt &&
+          task.unreadAt === unreadAt
+        ) {
           return task;
         }
 
         changed = true;
-        const updated: Task = { ...task, status, attentionRequestedAt, updatedAt: Date.now() };
+        const updated: Task = {
+          ...task,
+          status,
+          attentionRequestedAt,
+          unreadAt,
+          updatedAt: Date.now(),
+        };
         if (status === "failed" && failureReason) updated.failureReason = failureReason;
         return updated;
       });
@@ -3805,6 +3837,27 @@ function App() {
       return changed ? next : prev;
     });
   }
+
+  // 显式选中任务即视为已读：清除「已完成未读」标志并持久化。任何选中入口
+  // （列表行点击、看板定位、时间线进入）都要走这里，含重复点击当前已打开的任务。
+  const markTaskRead = useCallback((taskId: string) => {
+    setTasks((prev) => {
+      let changed = false;
+      const next = prev.map((task) => {
+        if (task.id !== taskId) return task;
+        if (task.unreadAt === undefined) return task;
+        changed = true;
+        const updated: Task = { ...task, unreadAt: undefined };
+        return updated;
+      });
+
+      if (changed) {
+        const task = next.find((t) => t.id === taskId);
+        if (task) persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+      }
+      return changed ? next : prev;
+    });
+  }, [showToast, formatSaveTasksError]);
 
   function handleTerminalReady(taskId: string, generation: number) {
     tm.handleTerminalReady(taskId, generation);
@@ -3877,6 +3930,7 @@ function App() {
       handleProjectClick(project);
     }
     if (taskId) {
+      markTaskRead(taskId);
       updateProjectView(project.id, { selectedTaskId: taskId, isNewTask: false });
     }
   }
@@ -3910,9 +3964,10 @@ function App() {
               onNewTask={() =>
                 updateProjectView(project.id, { selectedTaskId: null, isNewTask: true })
               }
-              onSelectTask={(id) =>
-                updateProjectView(project.id, { selectedTaskId: id, isNewTask: false })
-              }
+              onSelectTask={(id) => {
+                markTaskRead(id);
+                updateProjectView(project.id, { selectedTaskId: id, isNewTask: false });
+              }}
               onDeleteTask={handleDeleteTask}
               onDeleteAllTasks={() => handleDeleteAllTasks(project)}
               onToggleTaskStar={handleToggleTaskStar}

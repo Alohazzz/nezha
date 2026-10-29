@@ -428,6 +428,24 @@ export const task = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  // 「已完成未读」标题加粗变体：与常规 500 字重形成可感知但不过度的对比。
+  taskCardTitleUnread: {
+    fontSize: 12.5,
+    fontWeight: 700,
+    color: "var(--text-primary)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  // 未读蓝点：标题行前置的独立小圆点，与 StatusIcon（状态色）并存。
+  taskUnreadDot: {
+    flexShrink: 0,
+    width: 7,
+    height: 7,
+    borderRadius: "50%",
+    background: "var(--unread-dot-bg)",
+    marginTop: 3,
+  },
   taskCardSub: { fontSize: 11, color: "var(--text-muted)", marginTop: 1 },
   taskDiffStats: {
     display: "inline-flex",

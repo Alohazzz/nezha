@@ -322,6 +322,7 @@ export function ProjectRail({
             isActive={project.id === activeProjectId}
             status={activity.status}
             attentionCount={activity.attentionCount}
+            unreadCount={activity.unreadCount}
             showBadge={attentionBadge}
             waveNonce={waveNonces.get(project.id) ?? 0}
             isDragging={isDragging}
@@ -366,6 +367,7 @@ export function ProjectRail({
             <AttentionIndicator
               status={draggedProjectActivity.status}
               count={draggedProjectActivity.attentionCount}
+              unreadCount={draggedProjectActivity.unreadCount}
               showBadge={attentionBadge}
               borderColor="var(--bg-sidebar)"
             />

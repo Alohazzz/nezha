@@ -5,9 +5,15 @@ export type ProjectStatus = "attention" | "running" | null;
 export type ProjectActivity = {
   status: ProjectStatus;
   attentionCount: number;
+  /** 「已完成未读」任务数：独立信息性标识，不计入 attentionCount、不受角标开关控制。 */
+  unreadCount: number;
 };
 
-export const EMPTY_PROJECT_ACTIVITY: ProjectActivity = { status: null, attentionCount: 0 };
+export const EMPTY_PROJECT_ACTIVITY: ProjectActivity = {
+  status: null,
+  attentionCount: 0,
+  unreadCount: 0,
+};
 
 export function getProjectActivity(
   activityByProjectId: Map<string, ProjectActivity>,
@@ -21,7 +27,7 @@ export function buildProjectActivityMap(tasks: Task[]): Map<string, ProjectActiv
   for (const task of tasks) {
     let activity = activityByProjectId.get(task.projectId);
     if (!activity) {
-      activity = { status: null, attentionCount: 0 };
+      activity = { status: null, attentionCount: 0, unreadCount: 0 };
       activityByProjectId.set(task.projectId, activity);
     }
 
@@ -33,6 +39,7 @@ export function buildProjectActivityMap(tasks: Task[]): Map<string, ProjectActiv
     } else if ((task.status === "running" || task.status === "pending") && activity.status === null) {
       activity.status = "running";
     }
+    if (task.unreadAt !== undefined) activity.unreadCount += 1;
   }
   return activityByProjectId;
 }
