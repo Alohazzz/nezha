@@ -181,3 +181,43 @@
 .nezha-mermaid-preview-canvas svg {
   max-width: none;
 }
+
+/* ── 文件查看器中的 .mmd / .mermaid 文件图形预览（FileViewer）──────────
+   适应窗口平铺：容器铺满整个预览区，SVG 等比缩放到可用空间（放大或缩小），
+   而非自然尺寸居中留白。mermaid 输出的 svg 自带 preserveAspectRatio，
+   拉伸容器时图形按原比例缩放不会变形。 */
+
+.mmd-preview-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 16px;
+  background: var(--bg-panel);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.mmd-preview-scroll .nezha-mermaid {
+  flex: 1;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-color: var(--border-dim);
+  min-width: 0;
+  min-height: 0;
+}
+
+.mmd-preview-scroll .nezha-mermaid-svg {
+  flex: 1;
+  min-height: 0;
+}
+
+.mmd-preview-scroll .nezha-mermaid-svg svg {
+  /* mermaid 12 会给 svg 写内联 style="max-width: XXXpx"（消息内流式场景靠它限宽），
+     内联样式只有 !important 能覆盖；这里要平铺放大，必须解除该上限。 */
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+}

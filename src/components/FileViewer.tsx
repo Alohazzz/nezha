@@ -13,6 +13,7 @@ import {
 } from "../utils/markdown";
 import { ImagePreviewPane } from "./file-viewer/ImagePreviewPane";
 import { HtmlPreviewPane } from "./file-viewer/HtmlPreviewPane";
+import { MermaidBlockWithPreview } from "./mermaid/MermaidBlockWithPreview";
 import { useLanguageExtension } from "./file-viewer/languageExtensions";
 import { CommentableEditor } from "./file-viewer/CommentableEditor";
 import { CommentDrawer } from "./file-viewer/CommentDrawer";
@@ -28,9 +29,14 @@ function isPreviewableImageFile(fileName: string): boolean {
   return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "webp" || ext === "bmp" || ext === "svg";
 }
 
+function isMermaidFileName(fileName: string): boolean {
+  const ext = fileName.split(".").pop()?.toLowerCase();
+  return ext === "mmd" || ext === "mermaid";
+}
+
 /** 打开时默认进入渲染预览（而非代码编辑）的文件类型。 */
 function defaultsToPreview(fileName: string): boolean {
-  return isMarkdownFile(fileName) || isHtmlFileName(fileName);
+  return isMarkdownFile(fileName) || isHtmlFileName(fileName) || isMermaidFileName(fileName);
 }
 
 const editorBaseTheme = EditorView.theme({
@@ -194,12 +200,14 @@ function FilePreviewPane({
   const isMarkdown = isMarkdownFile(fileName);
   const isPreviewableImage = isPreviewableImageFile(fileName);
   const isHtml = isHtmlFileName(fileName);
+  const isMermaid = isMermaidFileName(fileName);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const showMarkdownPreview = isMarkdown && previewMode && content !== null;
   const showHtmlPreview = isHtml && previewMode && content !== null;
+  const showMermaidPreview = isMermaid && previewMode && content !== null;
   // 知识库卡片预览时高亮「未发布的新增条目」：拉取该卡片相对 HEAD 的新增行，
   // 仅预览态生效；编辑态保持原始文本，不受任何装饰影响（可直接改）。
   const [pendingAdditions, setPendingAdditions] = useState<string[]>([]);
@@ -233,8 +241,11 @@ function FilePreviewPane({
   );
 
   const codeSymbols = useMemo(
-    () => (!isMarkdown && !isPreviewableImage && content !== null ? extractCodeSymbols(fileName, content) : []),
-    [isMarkdown, isPreviewableImage, fileName, content],
+    () =>
+      !isMarkdown && !isPreviewableImage && !isMermaid && content !== null
+        ? extractCodeSymbols(fileName, content)
+        : [],
+    [isMarkdown, isPreviewableImage, isMermaid, fileName, content],
   );
 
   const jumpToHeading = (id: string) => {
@@ -426,6 +437,10 @@ function FilePreviewPane({
                 {toc.length > 0 && (
                   <MarkdownToc toc={toc} activeId={activeHeadingId} onJump={jumpToHeading} />
                 )}
+              </div>
+            ) : showMermaidPreview ? (
+              <div className="mmd-preview-scroll">
+                <MermaidBlockWithPreview code={content} />
               </div>
             ) : showHtmlPreview ? (
               <HtmlPreviewPane
@@ -628,7 +643,8 @@ export function FileViewer({
   // 新打开的 markdown / html 文件 useEffect 同步 previewMode 前会有一帧 undefined，
   // 直接根据文件名兜底默认值，避免闪一帧编辑器
   const activePreviewMode = previewModes[activeTab.path] ?? defaultsToPreview(activeTab.name);
-  const activeCanPreview = isMarkdownFile(activeTab.name) || isHtmlFileName(activeTab.name);
+  const activeCanPreview =
+    isMarkdownFile(activeTab.name) || isHtmlFileName(activeTab.name) || isMermaidFileName(activeTab.name);
   const canCloseOtherTabs = tabs.length > 1;
   const activeTabIndex = tabs.findIndex((tab) => tab.path === activeTab.path);
   const canCloseTabsToRight = activeTabIndex !== -1 && activeTabIndex < tabs.length - 1;
