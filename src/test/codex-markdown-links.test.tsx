@@ -101,6 +101,36 @@ describe("classifyMarkdownLink", () => {
       fileName: "architecture.md",
     });
   });
+
+  it("percent-encoded 中文名解码（marked 会对 href 做 encodeURI）", () => {
+    // marked("[x](Dy开发技能最佳实践.html)") 输出 href="Dy%E5%BC%80…%E8%B7%B5.html"，
+    // 点击委托读到的是编码原值，必须解码后才能在盘上命中。
+    expect(
+      classifyMarkdownLink("Dy%E5%BC%80%E5%8F%91%E6%8A%80%E8%83%BD%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5.html"),
+    ).toEqual({
+      kind: "projectPath",
+      href: "Dy开发技能最佳实践.html",
+      fileName: "Dy开发技能最佳实践.html",
+    });
+    expect(classifyMarkdownLink("docs/%E8%AE%BE%E8%AE%A1.md")).toEqual({
+      kind: "projectPath",
+      href: "docs/设计.md",
+      fileName: "设计.md",
+    });
+  });
+
+  it("畸形 percent 序列回退原文，不抛异常", () => {
+    expect(classifyMarkdownLink("a%ZZb.md")).toMatchObject({
+      kind: "projectPath",
+      href: "a%ZZb.md",
+      fileName: "a%ZZb.md",
+    });
+    // 截断的 UTF-8 序列（%E5%BC 缺尾字节）decodeURIComponent 会抛，回退原文。
+    expect(classifyMarkdownLink("%E5%BC.md")).toMatchObject({
+      kind: "projectPath",
+      fileName: "%E5%BC.md",
+    });
+  });
 });
 
 // ── linkifyBareDraftNames：裸文件名转链接 ─────────────────────────────────────

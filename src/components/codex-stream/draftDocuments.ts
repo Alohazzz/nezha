@@ -54,11 +54,20 @@ export function classifyMarkdownLink(rawHref: string): MarkdownLinkTarget {
   }
   if (href.startsWith("~")) return { kind: "unsupported" };
 
+  // marked 渲染链接时会对目标做 percent-encode（中文文件名 → %E5%BC%80…），
+  // 点击委托读的是 DOM 属性原值，这里必须先解码再交路径解析；畸形编码
+  //（孤立 % / 截断的 UTF-8 序列）回退原文。
   const withoutLine = href.replace(/:\d+$/, "");
-  const segments = withoutLine.split(/[\\/]/).filter(Boolean);
+  let decoded = withoutLine;
+  try {
+    decoded = decodeURIComponent(withoutLine);
+  } catch {
+    // keep raw href
+  }
+  const segments = decoded.split(/[\\/]/).filter(Boolean);
   const fileName = segments[segments.length - 1] ?? "";
   if (!fileName) return { kind: "unsupported" };
-  return { kind: "projectPath", href: withoutLine, fileName };
+  return { kind: "projectPath", href: decoded, fileName };
 }
 
 /** file:// URL → 本地绝对路径（percent 解码 + Windows 盘符/分隔符还原）。
