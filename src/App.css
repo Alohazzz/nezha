@@ -280,6 +280,41 @@ body {
   animation: spin 1s linear infinite;
 }
 
+/* 任务状态圆点：替代原来的 14px lucide 图标，降低列表视觉噪音。
+   外层 slot 保持 14px 占位，行布局与旧图标等宽对齐。 */
+.status-icon-slot {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.status-icon-muted {
+  color: var(--text-muted);
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot--success {
+  background: var(--success);
+}
+.status-dot--danger {
+  background: var(--danger);
+}
+.status-dot--warning {
+  background: var(--warning);
+}
+.status-dot--accent {
+  background: var(--accent);
+}
+.status-dot--muted {
+  background: var(--text-hint);
+}
+
 /* 待确认任务新增时,小人从头像背后探出头招手再缩回去 */
 /* 只做 translate3d + opacity(都走合成层,不触发重排/重绘);中段保持静止,
    纯由 gif 自己播挥手,避免 CSS 位移与 gif 逐帧重绘互相打架导致的顿挫。 */
