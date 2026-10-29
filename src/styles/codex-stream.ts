@@ -24,24 +24,9 @@ export const codexStream = {  codexStreamRoot: {
     padding: "12px 0",
   },
 
-  // 流视图级「工作中 N 秒」活性指示器（delta 静默期防"假死"观感）；布局壳，
-  // spinner 旋转 / 呼吸动效在 codex-stream.css 的 .codex-stream-working*
-  codexStreamWorking: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    color: "var(--codex-row-meta)",
-    fontSize: 12.5,
-    padding: "4px 0",
-    flexShrink: 0,
-  },
-
-  codexStreamWorkingSpinner: {
-    width: 12,
-    height: 12,
-    borderRadius: "50%",
-    flexShrink: 0,
-  },
+  // 流视图级「工作中 N 秒」活性指示器：布局壳与 spinner 全部走 codex-stream.css
+  // 的 .codex-stream-working*（曾在这里留有一份从未被引用的副本，已删——
+  // 双份定义里 className 那份缺尺寸导致 spinner 以 0×0 渲染的回归别再发生）。
 
   // ── 通用条目卡片 ──────────────────────────────────────────────────────────
 
@@ -600,6 +585,9 @@ export const codexStream = {  codexStreamRoot: {
     lineHeight: 1.6,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
+    // body 全局 user-select: none 会罩住气泡；恢复文本可选（对齐 session-prose）。
+    // chip 自身仍是 none，选中拖拽时不会把 chip 文本带进选区。
+    userSelect: "text",
   },
 
   // 气泡内的技能提及 chip：正文里存的是 canonical 长句（带 SKILL.md 路径），

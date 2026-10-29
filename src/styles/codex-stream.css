@@ -242,7 +242,26 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 
 /* ── 流视图级「工作中 N 秒」活性指示器 ──────────────────────────────────────
  * 条目级 shimmer（codex-tool-shimmer）之外，整轮 delta 静默期的活性信号：
- * 旋转 spinner + 秒数跳动。旋转用 transform（GPU 合成），颜色走主题变量。 */
+ * 旋转 spinner + 秒数跳动。旋转用 transform（GPU 合成），颜色走主题变量。
+ * 布局壳曾有两个去处（组件 className 与 styles/codex-stream.ts 的
+ * codexStreamWorking），后者从未被引用、前者在 css 里缺定义——spinner 一直
+ * 以 0×0 渲染，肉眼不可见，「防假死」整段等于死代码。统一收口到这里。 */
+
+.codex-stream-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--codex-row-meta);
+  font-size: 12.5px;
+  padding: 4px 0;
+  flex-shrink: 0;
+}
+
+/* 折叠头内联变体：挂在过程区末尾（长命令静默期的流尾兜底），缩进对齐
+ * 过程区内容，字号沿用折叠头一行。 */
+.codex-stream-working[data-inline] {
+  padding: 2px 0;
+}
 
 @keyframes codex-working-spin {
   to {
@@ -250,10 +269,32 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   }
 }
 
+@keyframes codex-working-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 .codex-stream-working-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
   border: 1.5px solid var(--border-strong);
   border-top-color: var(--accent);
-  animation: codex-working-spin 0.9s linear infinite;
+  animation:
+    codex-working-spin 0.9s linear infinite,
+    codex-working-breathe 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .codex-stream-working-spinner {
+    animation: codex-working-breathe 1.6s ease-in-out infinite;
+  }
 }
 
 /* ── 终端态横幅（失败 / 中断 / 断开）───────────────────────────────────────────

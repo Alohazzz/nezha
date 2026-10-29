@@ -5,6 +5,7 @@ import s from "../../styles";
 import { CodexEntry } from "./codexRenderers";
 import { CodexCommandGroupEntry } from "./CodexCommandGroupEntry";
 import { CodexLiveDuration } from "./CodexLiveDuration";
+import { CodexWorkingIndicator } from "./CodexWorkingIndicator";
 import { formatWorkDuration } from "./codexDuration";
 import type { CodexTurnSegment } from "./codexTurnSegments";
 
@@ -34,8 +35,7 @@ function ProcessHeader({
   onToggle: () => void;
 }) {
   const { t } = useI18n();
-  const running = segment.state === "running";
-  // 时长只在起止都有值时才给：只有起点时用 Date.now() 兜底会让历史段每次都
+  const running = segment.state === "running";  // 时长只在起止都有值时才给：只有起点时用 Date.now() 兜底会让历史段每次都
   // 重新计算，静置一小时后再看历史，「已工作」就自己长大了。
   const duration =
     !running && segment.startedAtMs !== null && segment.endedAtMs !== null
@@ -141,6 +141,15 @@ export const CodexTurnSection = memo(function CodexTurnSection({
                 onOpenLink={onOpenLink}
               />
             ),
+          )}
+          {/* 长命令 / 长思考的 delta 静默期：最后一行内容可能十几分钟不动，
+              折叠头的跳动秒数又离视线落点太远。段内末尾的旋转 spinner 是
+              「还在跑」的就近信号（ZCode 段内 loading 同款）；轮一结束即卸载。 */}
+          {segment.state === "running" && (
+            <CodexWorkingIndicator
+              variant="inline"
+              startedAtMs={segment.startedAtMs}
+            />
           )}
         </div>
       )}

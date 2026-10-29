@@ -106,6 +106,24 @@ describe("turn section rendering", () => {
     expect(screen.getAllByText(/Working/).length).toBeGreaterThan(0);
   });
 
+  it("pins an inline loading spinner at the end of the running process area", () => {
+    // 长命令静默期（如 pnpm install 跑 2 分钟）：最后一行内容不动，段内末尾的
+    // 旋转 spinner 是「还在跑」的就近信号。
+    const running = renderStream([user("u1"), cmd("c1", 1_000, 2_000)], true);
+    const process = screen.getByTestId("codex-turn-process");
+    expect(process.querySelector(".codex-stream-working")).not.toBeNull();
+    expect(process.querySelector(".codex-stream-working-spinner")).not.toBeNull();
+    running.unmount();
+
+    // 同一条目流按已完成收口后，inline 指示器消失，不留定格残影
+    renderStream([user("u1"), cmd("c1", 1_000, 2_000)], false);
+    expect(
+      screen
+        .getByTestId("codex-turn-process")
+        .querySelector(".codex-stream-working"),
+    ).toBeNull();
+  });
+
   it("shows a stopped label for interrupted turns", () => {
     renderStream([user("u1"), cmd("c1")], false, "Turn stopped");
     expect(screen.getByRole("button", { name: /Stopped/ })).toBeTruthy();

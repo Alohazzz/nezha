@@ -13,12 +13,19 @@ import { splitElapsedSeconds } from "./codexEntryShared";
 //
 // 时长按组分段展示（≥1min 才出「分」，≥1h 才出「时」）：整轮跑十几分钟时
 // “659 秒”这种裸秒数无法一眼读出量级，是本次要修的观感问题。
+//
+// variant=inline：挂在活跃段过程区末尾（CodexTurnSection）——长命令 / 长思考
+// 运行中折叠头秒数在跳，但最后一行内容可能十几分钟不动，段内最后再放一个
+// 旋转 spinner 让「还在跑」的信号出现在视线落点（ZCode 段内同款布局）。
 
 export const CodexWorkingIndicator = memo(function CodexWorkingIndicator({
   startedAtMs,
+  variant = "tail",
 }: {
   /** 本轮开始时刻（毫秒）；缺省回落到组件挂载时刻。 */
   startedAtMs?: number | null;
+  /** tail = 流尾整轮指示（缺省）；inline = 过程区末尾的长静默兜底。 */
+  variant?: "tail" | "inline";
 }) {
   const { t } = useI18n();
   // 锚点只在挂载时取一次：运行中上游不会改写本轮起点，跟随 prop 变化反而
@@ -50,7 +57,11 @@ export const CodexWorkingIndicator = memo(function CodexWorkingIndicator({
         : t("codex.stream.working", { seconds });
 
   return (
-    <div className="codex-stream-working" role="status">
+    <div
+      className="codex-stream-working"
+      role="status"
+      data-inline={variant === "inline" || undefined}
+    >
       <span className="codex-stream-working-spinner" aria-hidden="true" />
       <span>{label}</span>
     </div>
