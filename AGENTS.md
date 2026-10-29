@@ -1,5 +1,9 @@
 # Nezha — AGENTS.md
 
+## 参照项目
+
+- **ZCode 源码**：`H:\Project\ZCode-main`——遇到「ZCode 是怎么做的」这类问题时，优先直接查该源码（而非猜测），实现 Nezha 功能时可参照其做法。
+
 ## 项目概述
 
 Nezha 是一款面向 AI 编程智能体（Claude Code、Codex）的桌面任务管理器，提供多项目工作区、实时终端输出、会话自动发现、权限感知执行、Git 集成和用量分析等核心功能。
