@@ -50,17 +50,16 @@ export const TaskListItem = memo(
         <div style={{ flexShrink: 0, marginTop: 1 }}>
           <StatusIcon status={task.status} />
         </div>
-        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "flex-start", gap: 6 }}>
-          {unread && <span aria-hidden style={s.taskUnreadDot} />}
-          <div
-            style={{ flex: 1, minWidth: 0 }}
-            title={unread ? t("task.unreadTitle") : undefined}
-          >
-            <div style={unread ? s.taskCardTitleUnread : s.taskCardTitle}>
-              {displayTitle.slice(0, 70)}
-              {displayTitle.length > 70 ? "…" : ""}
-            </div>
-            <div style={s.taskCardSub}>
+        <div
+          style={{ flex: 1, minWidth: 0 }}
+          title={unread ? t("task.unreadTitle") : undefined}
+        >
+          <div style={unread ? s.taskCardTitleUnread : s.taskCardTitle}>
+            {unread && <span aria-hidden style={s.taskUnreadDot} />}
+            {displayTitle.slice(0, 70)}
+            {displayTitle.length > 70 ? "…" : ""}
+          </div>
+          <div style={s.taskCardSub}>
             {t(`status.${taskStatusI18nKey(task.status)}`)}
             {waitingBadgeKind && (
               <span style={waitingBadgeBlocked ? s.taskWaitingBadgeBlocked : s.taskWaitingBadge}>
@@ -93,7 +92,6 @@ export const TaskListItem = memo(
                   <span style={s.taskDiffDeletions}>−{task.deletions}</span>
                 </span>
               )}
-            </div>
           </div>
         </div>
         {task.agent === "dsh" ? (

@@ -437,14 +437,19 @@ export const task = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  // 未读蓝点：标题行前置的独立小圆点，与 StatusIcon（状态色）并存。
+  // 未读蓝点：标题行内前置的小圆点，与标题文字基线居中对齐（inline + verticalAlign），
+  // 随行高自动对齐，不依赖硬编码 margin 偏移。
   taskUnreadDot: {
-    flexShrink: 0,
+    display: "inline-block" as const,
     width: 7,
     height: 7,
     borderRadius: "50%",
     background: "var(--unread-dot-bg)",
-    marginTop: 3,
+    marginRight: 6,
+    verticalAlign: "middle" as const,
+    // 7px 圆点相对 12.5px 文字居中时略偏上更接近视觉中心
+    position: "relative" as const,
+    top: -1,
   },
   taskCardSub: { fontSize: 11, color: "var(--text-muted)", marginTop: 1 },
   taskDiffStats: {
