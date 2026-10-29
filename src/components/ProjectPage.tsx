@@ -983,7 +983,8 @@ export function ProjectPage({
   // 的 memo 链，diff 截断跳转入口统一走这个回调。
   const handleOpenGitChanges = useCallback(() => openRightPanel("git-changes"), [openRightPanel]);
 
-  // structured 会话正文里的链接：外链走系统浏览器；项目内相对路径（含沉淀
+  // structured 会话正文里的链接：外链走系统浏览器；file:// 本地文件解码成
+  // 路径后交系统默认应用（.html 即默认浏览器）；项目内相对路径（含沉淀
   // 文档）校验存在 → 自动进分栏 → 右列 FileViewer 打开。失败 toast，不开错误态 tab。
   const handleOpenSessionDocument = useCallback(
     async (href: string, taskId: string, worktreePath: string | null) => {
@@ -993,6 +994,15 @@ export function ProjectPage({
           await openUrl(target.href);
         } catch {
           showToast(t("toast.sessionLinkExternalFailed"), "error");
+        }
+        return;
+      }
+      if (target.kind === "localFile") {
+        try {
+          await invoke("open_local_file", { path: target.path });
+        } catch {
+          const name = target.path.split(/[\\/]/).pop() ?? target.path;
+          showToast(t("toast.sessionLinkOpenFailed", { name }), "error");
         }
         return;
       }

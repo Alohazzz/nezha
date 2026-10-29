@@ -451,6 +451,7 @@ pub fn run() {
             fs_watcher::watch_dir,
             fs_watcher::unwatch_dir,
             fs::open_in_system_file_manager,
+            fs::open_local_file,
             fs::read_file_content,
             fs::read_file_mtimes,
             fs::read_image_preview,

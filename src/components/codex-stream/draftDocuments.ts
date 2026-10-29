@@ -1,11 +1,12 @@
-// 会话正文链接的识别与解析。可打开的目标分两类：
+// 会话正文链接的识别与解析。可打开的目标分三类：
 //   - 外链（http/https/mailto）→ 系统浏览器；
+//   - file:// 本地文件 → 解码成本地路径后交系统默认应用（.html 即默认浏览器）；
 //   - 项目内相对路径 → 右列 FileViewer 打开（read_file_content 服务端校验
 //     「必须在项目根内」，沙箱不会逃逸）。
 // 其中沉淀契约产物（drafts.rs::ALLOWED_DRAFT_FILES 白名单：discussion.md /
 // knowledge.json / backfill-issue.json）有额外的「裸文件名回落」语义：agent
 // 常不带路径地引用它们，实际位置固定在 .nezha/drafts/<taskId>/ 下。
-// 锚点、未知协议（javascript:/file: 等）、绝对路径（盘符 / ~）不支持打开。
+// 锚点、未知协议（javascript:/vscode: 等）、绝对路径（盘符 / ~）不支持打开。
 
 /** drafts.rs::ALLOWED_DRAFT_FILES 同款白名单。 */
 export const DRAFT_DOCUMENT_NAMES = [
@@ -19,6 +20,8 @@ export type DraftDocumentName = (typeof DRAFT_DOCUMENT_NAMES)[number];
 export type MarkdownLinkKind =
   /** 外部链接，点击走系统浏览器。 */
   | "external"
+  /** file:// 本地文件，点击解码成本地路径后交系统默认应用打开。 */
+  | "localFile"
   /** 项目内相对路径（含沉淀文档），点击在应用内打开。 */
   | "projectPath"
   /** 锚点 / 未知协议 / 绝对路径，不支持打开。 */
@@ -26,6 +29,7 @@ export type MarkdownLinkKind =
 
 export type MarkdownLinkTarget =
   | { kind: "external"; href: string }
+  | { kind: "localFile"; /** 解码后的本地绝对路径（Windows 盘符已还原为反斜杠形态）。 */ path: string }
   | { kind: "projectPath"; href: string; /** 路径 basename，用作 FileViewer tab 名。 */ fileName: string }
   | { kind: "unsupported" };
 
@@ -41,7 +45,8 @@ export function classifyMarkdownLink(rawHref: string): MarkdownLinkTarget {
   const href = rawHref.trim();
   if (!href || href.startsWith("#")) return { kind: "unsupported" };
   if (/^(https?:|mailto:)/i.test(href)) return { kind: "external", href };
-  // 多字符 scheme（file: / javascript: / vscode: …）一律不进应用内打开；
+  if (/^file:\/\//i.test(href)) return classifyFileUrl(href);
+  // 多字符 scheme（javascript: / vscode: …）一律不进应用内打开；
   // 单字母 `H:` 是 Windows 盘符（agent 引用项目文件的常态），放行到 resolve 阶段。
   // scheme 首段写成 {2,} 正是为了把单字母盘符排除在外。
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) && !/^[a-zA-Z]:/.test(href)) {
@@ -54,6 +59,28 @@ export function classifyMarkdownLink(rawHref: string): MarkdownLinkTarget {
   const fileName = segments[segments.length - 1] ?? "";
   if (!fileName) return { kind: "unsupported" };
   return { kind: "projectPath", href: withoutLine, fileName };
+}
+
+/** file:// URL → 本地绝对路径（percent 解码 + Windows 盘符/分隔符还原）。
+ *  非 localhost 的主机名（file://server/share 的 UNC 形态）一律不开——agent
+ *  产出的是本机文件链接，UNC 路径交给系统解析属于越权面。解析失败返回
+ *  unsupported。 */
+function classifyFileUrl(href: string): MarkdownLinkTarget {
+  try {
+    const url = new URL(href);
+    if (url.protocol.toLowerCase() !== "file:") return { kind: "unsupported" };
+    if (url.hostname && url.hostname.toLowerCase() !== "localhost") return { kind: "unsupported" };
+    if (!url.pathname || url.pathname.endsWith("/")) return { kind: "unsupported" };
+    let path = decodeURIComponent(url.pathname);
+    // Windows 形如 /C:/Users/... → C:\Users\...；Unix 保留开头的 /。
+    const winMatch = /^\/([a-zA-Z]:)(.*)$/.exec(path);
+    if (winMatch) {
+      path = `${winMatch[1]}${winMatch[2]}`.replace(/\//g, "\\");
+    }
+    return path ? { kind: "localFile", path } : { kind: "unsupported" };
+  } catch {
+    return { kind: "unsupported" };
+  }
 }
 
 /**

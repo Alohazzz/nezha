@@ -52,12 +52,47 @@ describe("classifyMarkdownLink", () => {
     });
   });
 
-  it("锚点 / file 等伪协议 / ~ → unsupported", () => {
+  it("锚点 / javascript 等伪协议 / ~ → unsupported", () => {
     expect(classifyMarkdownLink("#section")).toEqual({ kind: "unsupported" });
     expect(classifyMarkdownLink("~/notes/a.md")).toEqual({ kind: "unsupported" });
     expect(classifyMarkdownLink("javascript:alert(1)")).toEqual({ kind: "unsupported" });
-    expect(classifyMarkdownLink("file:///etc/passwd")).toEqual({ kind: "unsupported" });
     expect(classifyMarkdownLink("vscode://file/C:/repo/a.ts")).toEqual({ kind: "unsupported" });
+  });
+
+  it("file:// 本地文件 → localFile，percent 解码 + 盘符反斜杠还原", () => {
+    expect(classifyMarkdownLink("file:///C:/Users/SuYi/.answer-me-with-html/pages/demo.html")).toEqual({
+      kind: "localFile",
+      path: "C:\\Users\\SuYi\\.answer-me-with-html\\pages\\demo.html",
+    });
+    expect(
+      classifyMarkdownLink(
+        "file:///C:/Users/SuYi/.answer-me-with-html/pages/%E6%8A%80%E8%83%BD%E9%80%9F%E8%A7%88-20261028-172034.html",
+      ),
+    ).toEqual({
+      kind: "localFile",
+      path: "C:\\Users\\SuYi\\.answer-me-with-html\\pages\\技能速览-20261028-172034.html",
+    });
+    expect(classifyMarkdownLink("FILE:///C:/repo/Page.HTML")).toEqual({
+      kind: "localFile",
+      path: "C:\\repo\\Page.HTML",
+    });
+    expect(classifyMarkdownLink("file://localhost/C:/repo/a.html")).toEqual({
+      kind: "localFile",
+      path: "C:\\repo\\a.html",
+    });
+    // Unix 路径保留开头的 /。
+    expect(classifyMarkdownLink("file:///etc/passwd")).toEqual({
+      kind: "localFile",
+      path: "/etc/passwd",
+    });
+  });
+
+  it("file:// 的 UNC / 目录 / 坏 URL → unsupported", () => {
+    // 非 localhost 主机名 = UNC 形态，交系统解析属于越权面。
+    expect(classifyMarkdownLink("file://server/share/a.html")).toEqual({ kind: "unsupported" });
+    // 目录（尾随 /）与空路径不可打开。
+    expect(classifyMarkdownLink("file:///C:/repo/dir/")).toEqual({ kind: "unsupported" });
+    expect(classifyMarkdownLink("file:///")).toEqual({ kind: "unsupported" });
   });
 
   it("以 / 开头的路径仍按项目内处理（read_file_content 做沙箱校验）", () => {

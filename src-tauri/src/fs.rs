@@ -306,6 +306,30 @@ pub async fn open_in_system_file_manager(path: String, project_path: String) -> 
     .map_err(|e| e.to_string())?
 }
 
+/// 用系统默认应用打开任意本地文件（structured 会话正文里的 file:// 链接走这里）。
+///
+/// 不走 tauri-plugin-opener：其 open_path 除 capability 权限外还要求插件级
+/// path scope 白名单（scope.rs::is_path_allowed 对空 allowed 恒拒绝），而本场景
+/// 的目标是「agent 引用的任意路径」，配白名单要么全放行要么逐个加白，都不成立。
+/// 安全面收敛为：仅接受存在的普通文件（拒绝目录），打开动作交给系统关联。
+/// 「项目根内」校验不适用——链接常指向项目外的产物（如 agent 输出目录），
+/// 语义等同 explorer 双击。
+#[tauri::command]
+pub async fn open_local_file(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let target = std::path::PathBuf::from(&path);
+        if !target.is_absolute() {
+            return Err(format!("Not an absolute path: {}", path));
+        }
+        if !target.is_file() {
+            return Err(format!("Not an existing file: {}", path));
+        }
+        open::that_detached(&target).map_err(|e| format!("Failed to open file: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn read_dir_entries(path: String, project_path: String) -> Result<Vec<FsEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
