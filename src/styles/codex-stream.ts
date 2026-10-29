@@ -7,7 +7,7 @@ export const codexStream = {  codexStreamRoot: {
     padding: "16px 28px 32px",
     display: "flex",
     flexDirection: "column",
-    gap: 8,
+    gap: 12,
   },
 
   codexStreamViewRoot: {
@@ -32,7 +32,7 @@ export const codexStream = {  codexStreamRoot: {
     gap: 8,
     color: "var(--codex-row-meta)",
     fontSize: 12.5,
-    padding: "2px 0",
+    padding: "4px 0",
     flexShrink: 0,
   },
 
@@ -129,7 +129,7 @@ export const codexStream = {  codexStreamRoot: {
     fontSize: 12,
     color: "var(--codex-row-label)",
     fontStyle: "italic",
-    lineHeight: 1.55,
+    lineHeight: 1.65,
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
   },
@@ -636,7 +636,7 @@ export const codexStream = {  codexStreamRoot: {
     display: "flex",
     alignItems: "center",
     gap: 7,
-    padding: "3px 0",
+    padding: "5px 0",
     background: "transparent",
     borderBottom: "1px solid transparent",
     color: "var(--text-secondary)",
@@ -742,13 +742,15 @@ export const codexStream = {  codexStreamRoot: {
   },
 
   // 聚合组展开区：左侧竖线 + 缩进表达层级（ZCode execute-group 的子工具列同款），
-  // 子命令行本身不再带图标 / 类别词
+  // 子命令行本身不再带图标 / 类别词；子行间距对齐 ZCode 嵌套组的 space-y-2（8px）
   codexCommandGroupBody: {
     marginLeft: 6,
     paddingLeft: 10,
     borderLeft: "1px solid var(--border-dim)",
     display: "flex",
     flexDirection: "column",
+    gap: 6,
+    padding: "2px 0",
   },
 
   // 聚合组摘要行的失败计数（红色，与成功计数同排）

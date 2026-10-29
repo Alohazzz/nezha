@@ -405,7 +405,7 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 .codex-stream-turn {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -415,7 +415,7 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 0;
+  padding: 4px 0;
   margin: 0;
   background: none;
   border: none;
@@ -463,11 +463,14 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   transform: rotate(90deg);
 }
 
-/* 过程区：左侧竖线表达「这些是被收起的过程」，与摘要行缩进对齐。 */
+/* 过程区：左侧竖线表达「这些是被收起的过程」，与摘要行缩进对齐。
+ * 行间距对齐 ZCode 的 gap-4 组容器（16px）：行内无纵向 padding，
+ * 节奏完全由这里的 gap 承担。 */
 .codex-stream-turn-process {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
+  padding: 2px 0;
   padding-left: 10px;
   border-left: 1px solid var(--border-dim);
   margin-left: 4px;
