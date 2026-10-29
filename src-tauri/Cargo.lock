@@ -6395,6 +6395,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-app-server-protocol",
+ "encoding_rs",
  "font-kit",
  "futures-util",
  "hex",

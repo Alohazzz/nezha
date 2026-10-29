@@ -50,6 +50,8 @@ zstd = "0.13"
 futures-util = "0.3"
 sha2 = "0.10"
 hex = "0.4"
+# Windows legacy 代码页（GBK/Big5 等）输出解码兜底，见 encoding.rs。
+encoding_rs = "0.8"
 
 # Codex app-server 结构化接入(阶段 1,issue #116):只引协议类型,不引官方 client 全家桶。
 # pin = rust-v0.163.0(annotated tag 解引用后的 commit)。

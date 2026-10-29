@@ -1622,23 +1622,26 @@ fn path_starts_with(child: &str, dir: &str) -> bool {
 }
 
 async fn pump_pipe<R: tokio::io::AsyncRead + Unpin>(mut r: R, sink: Channel<String>) {
-    let mut buf: Vec<u8> = Vec::new();
+    // 构建脚本是 powershell.exe，中文系统上向管道输出的是 ANSI 代码页字节（GBK），
+    // from_utf8_lossy 会打成 �；走统一的 UTF-8 优先 / legacy 兜底解码。
+    // StreamDecoder 保证文本边界，8KB chunk 经解码后直接投递。
+    let mut decoder = crate::encoding::StreamDecoder::new();
     let mut chunk = [0u8; 8192];
     loop {
         match r.read(&mut chunk).await {
             Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                let s = decoder.push(&chunk[..n]);
+                if !s.is_empty() {
+                    let _ = sink.send(s);
+                }
+            }
             Err(_) => break,
         }
-        if buf.len() >= 4 * 1024 {
-            let s = String::from_utf8_lossy(&buf).into_owned();
-            let _ = sink.send(s);
-            buf.clear();
-        }
     }
-    if !buf.is_empty() {
-        let s = String::from_utf8_lossy(&buf).into_owned();
-        let _ = sink.send(s);
+    let tail = decoder.finish();
+    if !tail.is_empty() {
+        let _ = sink.send(tail);
     }
 }
 

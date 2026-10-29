@@ -382,6 +382,24 @@ fn setup_env(cmd: &mut CommandBuilder) {
         cmd.env("LC_CTYPE", "en_US.UTF-8");
     }
 
+    // Windows 专属的 UTF-8 倾向注入。上面的 LANG/LC_CTYPE 对 Windows 子进程无效
+    // （实测 PowerShell 不读它们）；这里补一批能被 Windows 生态感知的变量：
+    // - PYTHONUTF8/PYTHONIOENCODING：Python 3.7+ 官方 UTF-8 开关，agent 常跑的脚本受益；
+    // - NODE_OPTIONS：Node 子进程强制 UTF-8（乱码反馈里 agent 执行的 PowerShell 输出
+    //   即被按 GBK 误读）；注意追加而非覆盖用户已有配置。
+    // 终端里的 PowerShell/cmd 本身仍按系统代码页输出（由 encoding.rs 的解码兜底救），
+    // 这里不 chcp——改全局代码页影响面太大，且对 ConPTY 下已运行的进程不生效。
+    #[cfg(windows)]
+    {
+        const PYTHON_UTF8: &[(&str, &str)] = &[
+            ("PYTHONUTF8", "1"),
+            ("PYTHONIOENCODING", "utf-8"),
+        ];
+        for (key, value) in PYTHON_UTF8 {
+            cmd.env(*key, *value);
+        }
+    }
+
     // 设置终端类型，使 Claude Code / Codex 输出正确的转义序列
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -531,8 +549,9 @@ fn spawn_pty_reader(
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
         let mut buf = [0u8; PTY_READ_BUFFER_SIZE];
-        // 保存上次读取中不完整的 UTF-8 字节序列
-        let mut leftover: Vec<u8> = Vec::new();
+        // Windows legacy 代码页兜底解码（GBK 等）；非 Windows / UTF-8 合法时行为同纯 UTF-8。
+        // 跨 chunk 多字节边界由 StreamDecoder 内部处理，替代原先的 leftover 手工拼接。
+        let mut decoder = crate::encoding::StreamDecoder::new();
         let (emit_tx, emit_worker) = match emit_mode {
             PtyEmitMode::Immediate => (None, None),
             PtyEmitMode::Batched {
@@ -570,19 +589,8 @@ fn spawn_pty_reader(
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let mut combined = std::mem::take(&mut leftover);
-                    combined.extend_from_slice(&buf[..n]);
-
-                    let valid_len = match std::str::from_utf8(&combined) {
-                        Ok(_) => combined.len(),
-                        Err(e) => e.valid_up_to(),
-                    };
-
-                    if valid_len > 0 {
-                        // SAFETY：已确认 valid_len 之前的字节为有效 UTF-8
-                        let data = unsafe {
-                            std::str::from_utf8_unchecked(&combined[..valid_len]).to_owned()
-                        };
+                    let data = decoder.push(&buf[..n]);
+                    if !data.is_empty() {
                         // session_tx 需要独立副本；data 本身留给 emit 路径 move，避免多余堆分配
                         if let Some(ref tx) = session_tx {
                             let _ = tx.send(data.clone());
@@ -596,12 +604,16 @@ fn spawn_pty_reader(
                             send_pty_chunk(&app, &id, &sink, data);
                         }
                     }
-
-                    if valid_len < combined.len() {
-                        leftover = combined[valid_len..].to_vec();
-                    }
                 }
             }
+        }
+        // 收尾：reader 结束后可能有「半截多字节」滞留在解码器里，按既定编码刷出。
+        let tail = decoder.finish();
+        if !tail.is_empty() {
+            if let Some(ref tx) = session_tx {
+                let _ = tx.send(tail.clone());
+            }
+            send_pty_chunk(&app, &id, &sink, tail);
         }
         drop(emit_tx);
         if let Some(worker) = emit_worker {

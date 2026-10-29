@@ -16,6 +16,7 @@ mod codex_history;
 mod config;
 mod drafts;
 mod dsh;
+mod encoding;
 mod event_watcher;
 mod fs;
 mod fs_watcher;

@@ -213,6 +213,13 @@ async fn read_pipe_to_end<R: AsyncRead + Unpin>(
     Ok(data)
 }
 
+/// 把 headless agent 输出字节转为字符串：UTF-8 优先，Windows 上按 legacy 代码页兜底。
+/// agent 自身 stdout 恒为 UTF-8（行为不变）；兜底救的是 agent 派生的子命令
+/// 把 GBK 字节回灌到输出流的场景（见 encoding.rs 模块注释）。
+fn decode_agent_stream(bytes: &[u8]) -> String {
+    crate::encoding::decode_output_bytes(bytes)
+}
+
 /// 异步启动 headless agent 子进程（任务命名 / 议题补充共用）。
 /// 超时后通过 `start_kill()` 终止子进程，避免阻塞线程和后台 agent 持续运行（M-2 修复）。
 pub(crate) async fn run_headless_agent_with_timeout(
@@ -472,12 +479,12 @@ pub async fn generate_task_name(
     .await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = decode_agent_stream(&output.stderr);
+        let stdout = decode_agent_stream(&output.stdout);
         return Err(format!("Agent failed: {}{}", stderr, stdout));
     }
 
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    let raw = decode_agent_stream(&output.stdout);
     // Codex 只接受最后一个 `codex` 输出段里的 <TITLE>，避免命中 prompt 回显里的示例；
     // 未命中再回退到 banner 过滤。
     let answer = if is_codex {
@@ -960,9 +967,9 @@ pub async fn run_merge_code_review(
     )
     .await?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(decode_agent_stream(&output.stderr).trim().to_string());
     }
-    extract_review_findings(&String::from_utf8_lossy(&output.stdout))
+    extract_review_findings(&decode_agent_stream(&output.stdout))
 }
 
 /// 可写版 headless agent（Agent 会在 cwd 直接改文件，如解决冲突；带超时与 kill_on_drop）。
@@ -1079,7 +1086,7 @@ pub async fn run_conflict_resolution(
     )
     .await?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(decode_agent_stream(&output.stderr).trim().to_string());
     }
     // 校验冲突是否已解决：仍有冲突则返回剩余文件。
     let status = crate::git::run_git(&worktree_path, &["status", "--porcelain"])?;
@@ -1780,11 +1787,11 @@ pub async fn generate_yunxiao_writeback_summary(
     )
     .await?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = decode_agent_stream(&output.stderr);
+        let stdout = decode_agent_stream(&output.stdout);
         return Err(format!("Agent failed: {}{}", stderr, stdout));
     }
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+    let raw = decode_agent_stream(&output.stdout);
     let fallback =
         build_fallback_draft(&serial_number, task_name.trim(), &branch, &commits, &diff_stat);
     let dev = extract_tagged_block(&raw, "<DEV_SUMMARY>", "</DEV_SUMMARY>")
