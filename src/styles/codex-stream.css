@@ -551,14 +551,16 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 
 /* ── 模型提问卡片（request_user_input / ZCode AskUserQuestion 同构）────────────
    审批卡是「三按钮一次决策」，提问是多题表单：选项芯片 + 每题自由输入。
-   题数不设上限（上游建议 1~3，实测模型会一次列 5 个决策），所以 body 滚动。 */
+   题数不设上限（上游建议 1~3，实测模型会一次列 5 个决策），所以展开态
+   body 滚动、卡片封顶 50vh；整卡可收起成一行标题条，不挡会话内容。
+   高度走 max-height + 内部收缩：单题时卡片就是内容高，多题才触顶滚动。 */
 .codex-question-card {
   position: sticky;
   bottom: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  max-height: 60vh;
+  max-height: 50vh;
   border: 1px solid var(--accent);
   border-radius: 8px;
   overflow: hidden;
@@ -567,16 +569,35 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
 }
 
+.codex-question-card[data-collapsed] {
+  max-height: none;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+}
+
 .codex-question-header {
   display: flex;
   align-items: center;
   gap: 7px;
   flex-shrink: 0;
+  width: 100%;
   padding: 8px 12px;
+  border: none;
+  font-size: inherit;
+  font-family: inherit;
   font-weight: 600;
+  text-align: left;
+  cursor: pointer;
   color: var(--accent);
   background: var(--bg-input);
   border-bottom: 1px solid var(--border-dim);
+}
+
+.codex-question-header:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.codex-question-header svg:last-child {
+  margin-left: auto;
 }
 
 .codex-question-counter {
@@ -584,6 +605,18 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   font-weight: 400;
   font-size: 11.5px;
   color: var(--codex-row-meta);
+}
+
+/* counter 存在时它吃掉 margin-left:auto，箭头退回普通 gap 排布。 */
+.codex-question-counter + svg {
+  margin-left: 0;
+}
+
+.codex-question-collapsed-bar {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: var(--bg-input);
 }
 
 .codex-question-body {
@@ -650,6 +683,19 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 .codex-question-option:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 「其他…」伪选项：单行弱化样式，与真实选项区分；选中后隐藏并被输入框替代。 */
+.codex-question-option.other {
+  align-items: center;
+  padding: 5px 10px;
+  border-style: dashed;
+  color: var(--codex-row-meta);
+  font-weight: 400;
+}
+
+.codex-question-option.other[data-active] {
+  color: var(--text-primary);
 }
 
 .codex-question-option .label {

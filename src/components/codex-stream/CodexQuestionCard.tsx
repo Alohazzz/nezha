@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { HelpCircle, Send } from "lucide-react";
+import { ChevronDown, ChevronUp, HelpCircle, Send } from "lucide-react";
 import type { CodexUserInputQuestion, CodexUserInputRequest } from "../../types";
 import { useI18n } from "../../i18n";
 
@@ -13,9 +13,14 @@ import { useI18n } from "../../i18n";
  *
  * 两个必须守住的行为：
  * - **答题要回传**：core 侧是 `rx_response.await`，应答之前 turn 一直挂着；
- *   用户点「跳过」也要回空 answers，不能只是把卡片藏起来。
- * - **题目数量不设上限**：上游建议 1~3 题，但模型可能一次列更多（截图里的
- *   5 个决策就是这种），所以容器滚动而不是按题数排版。
+ *   用户点「跳过」也要回空 answers，不能只是把卡片藏起来——所以收起态的
+ *   标题条上仍保留「跳过」。
+ * - **题目数量不设上限**：上游建议 1~3 题，但模型可能一次列更多，所以
+ *   展开态 body 滚动、卡片最高 50vh；整卡可收起成一行标题条，不挡会话内容。
+ *
+ * 「其他」输入：带选项的题默认不渲染输入框，点选项列表末尾的「其他…」
+ * 伪选项才展开（点开即清掉已选选项，互斥语义不变）；无选项的题输入框
+ * 是唯一作答路径，保持常驻。
  */
 export function CodexQuestionCard({
   request,
@@ -31,6 +36,15 @@ export function CodexQuestionCard({
   /** 每题一条选择：有 options 时存 label，自由输入时存原文。 */
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [others, setOthers] = useState<Record<string, string>>({});
+  /** 带选项的题：点「其他…」伪选项后才出现的自由输入框。 */
+  const [otherOpen, setOtherOpen] = useState<Record<string, boolean>>({});
+  /** 折叠态只挂本卡片生命周期：新请求（request_id 变化）到达时强制重新展开。 */
+  const [collapsed, setCollapsed] = useState(false);
+
+  // 同一请求内用户收起后保持收起；换了请求（新提问）自动展开。
+  useEffect(() => {
+    setCollapsed(false);
+  }, [request.request_id]);
 
   const questions = useMemo(() => request.questions ?? [], [request.questions]);
 
@@ -51,6 +65,20 @@ export function CodexQuestionCard({
       if (text.trim()) next[questionId] = [text];
       else delete next[questionId];
       return next;
+    });
+  }, []);
+
+  /** 点「其他…」伪选项：展开输入框并清掉已选选项（互斥语义不变）。 */
+  const openOther = useCallback((questionId: string) => {
+    setOtherOpen((prev) => ({ ...prev, [questionId]: true }));
+    setAnswers((prev) => {
+      const next = { ...prev };
+      delete next[questionId];
+      return next;
+    });
+    setOthers((prev) => {
+      if (questionId in prev) return prev;
+      return { ...prev, [questionId]: "" };
     });
   }, []);
 
@@ -87,9 +115,16 @@ export function CodexQuestionCard({
   const answeredCount = questions.filter((q) => (answers[q.id]?.length ?? 0) > 0).length;
   const canSubmit = answeredCount > 0;
 
+  const toggleCollapsed = useCallback(() => setCollapsed((prev) => !prev), []);
+
   return (
-    <div className="codex-question-card">
-      <div className="codex-question-header">
+    <div className="codex-question-card" data-collapsed={collapsed || undefined}>
+      <button
+        type="button"
+        className="codex-question-header"
+        onClick={toggleCollapsed}
+        title={collapsed ? t("codex.question.expand") : t("codex.question.collapse")}
+      >
         <HelpCircle size={13} />
         <span>{t("codex.question.title")}</span>
         {questions.length > 1 && (
@@ -100,39 +135,57 @@ export function CodexQuestionCard({
             })}
           </span>
         )}
-      </div>
-      <div className="codex-question-body">
-        {questions.map((question) => (
-          <QuestionRow
-            key={question.id}
-            question={question}
-            selected={answers[question.id] ?? []}
-            otherValue={others[question.id] ?? ""}
-            busy={busy}
-            onPick={pick}
-            onTypeOther={typeOther}
-          />
-        ))}
-      </div>
-      <div className="codex-question-actions">
-        <button
-          type="button"
-          className="submit"
-          disabled={busy || !canSubmit}
-          onClick={submit}
-        >
-          <Send size={12} strokeWidth={2.5} />
-          <span>{t("codex.question.submit")}</span>
-        </button>
-        <button
-          type="button"
-          className="skip"
-          disabled={busy}
-          onClick={() => void respond({})}
-        >
-          <span>{t("codex.question.skip")}</span>
-        </button>
-      </div>
+        {collapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+      </button>
+      {collapsed ? (
+        <div className="codex-question-collapsed-bar">
+          <button
+            type="button"
+            className="skip"
+            disabled={busy}
+            onClick={() => void respond({})}
+          >
+            <span>{t("codex.question.skip")}</span>
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="codex-question-body">
+            {questions.map((question) => (
+              <QuestionRow
+                key={question.id}
+                question={question}
+                selected={answers[question.id] ?? []}
+                otherValue={others[question.id] ?? ""}
+                otherOpen={otherOpen[question.id] ?? false}
+                busy={busy}
+                onPick={pick}
+                onTypeOther={typeOther}
+                onOpenOther={openOther}
+              />
+            ))}
+          </div>
+          <div className="codex-question-actions">
+            <button
+              type="button"
+              className="submit"
+              disabled={busy || !canSubmit}
+              onClick={submit}
+            >
+              <Send size={12} strokeWidth={2.5} />
+              <span>{t("codex.question.submit")}</span>
+            </button>
+            <button
+              type="button"
+              className="skip"
+              disabled={busy}
+              onClick={() => void respond({})}
+            >
+              <span>{t("codex.question.skip")}</span>
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -141,20 +194,28 @@ function QuestionRow({
   question,
   selected,
   otherValue,
+  otherOpen,
   busy,
   onPick,
   onTypeOther,
+  onOpenOther,
 }: {
   question: CodexUserInputQuestion;
   selected: string[];
   otherValue: string;
+  /** 带选项的题：自由输入框是否已通过「其他…」伪选项展开。 */
+  otherOpen: boolean;
   busy: boolean;
   onPick: (questionId: string, label: string) => void;
   onTypeOther: (questionId: string, text: string) => void;
+  onOpenOther: (questionId: string) => void;
 }) {
   const { t } = useI18n();
   const options = question.options ?? [];
+  // 无选项的题（纯自由文本/密码）没有可点选的目标，输入框是唯一作答路径。
+  const freeForm = options.length === 0;
   const isOtherActive = otherValue.trim().length > 0;
+  const showOtherInput = freeForm || otherOpen;
 
   return (
     <div className="codex-question-row">
@@ -191,19 +252,34 @@ function QuestionRow({
               </button>
             );
           })}
+          {/* 「其他」收进伪选项：默认不占一行，点开后与选项互斥。 */}
+          {!otherOpen && (
+            <button
+              type="button"
+              className="codex-question-option other"
+              data-active={isOtherActive || undefined}
+              disabled={busy}
+              onClick={() => onOpenOther(question.id)}
+            >
+              <span className="label">{t("codex.question.other")}</span>
+            </button>
+          )}
         </div>
       )}
-      <input
-        type={question.isSecret ? "password" : "text"}
-        className="codex-question-other"
-        data-active={isOtherActive || undefined}
-        placeholder={t("codex.question.otherPlaceholder")}
-        value={otherValue}
-        disabled={busy}
-        spellCheck={false}
-        autoComplete="off"
-        onChange={(e) => onTypeOther(question.id, e.target.value)}
-      />
+      {showOtherInput && (
+        <input
+          type={question.isSecret ? "password" : "text"}
+          className="codex-question-other"
+          data-active={isOtherActive || undefined}
+          placeholder={t("codex.question.otherPlaceholder")}
+          value={otherValue}
+          disabled={busy}
+          spellCheck={false}
+          autoComplete="off"
+          autoFocus={!freeForm}
+          onChange={(e) => onTypeOther(question.id, e.target.value)}
+        />
+      )}
     </div>
   );
 }
