@@ -13,10 +13,10 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-function renderIndicator() {
+function renderIndicator(startedAtMs?: number | null) {
   return render(
     <I18nProvider>
-      <CodexWorkingIndicator />
+      <CodexWorkingIndicator startedAtMs={startedAtMs} />
     </I18nProvider>,
   );
 }
@@ -90,5 +90,30 @@ describe("CodexWorkingIndicator", () => {
       vi.advanceTimersByTime(659_000);
     });
     expect(screen.getByRole("status").textContent).toBe("Working · 10m 59s");
+  });
+
+  // 切页面重挂载归零问题：锚点必须是数据里的本轮开始时刻（startedAtMs），
+  // 而不是组件挂载时刻——重挂载后立即显示真实已跑秒数（ZCode 同款语义）。
+  it("continues from the provided startedAtMs instead of restarting at 0", () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem("nezha:language", "zh");
+    const anchor = Date.now();
+    vi.advanceTimersByTime(120_000); // 模拟离开页面 2 分钟后回来重挂载
+    renderIndicator(anchor);
+
+    expect(screen.getByRole("status").textContent).toBe("工作中 · 2 分 0 秒");
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(screen.getByRole("status").textContent).toBe("工作中 · 2 分 3 秒");
+  });
+
+  // 后端信封时刻与本地时钟的偏差可能让锚点略晚于当前时钟：不允许渲染负秒数。
+  it("clamps future startedAtMs to 0 seconds", () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem("nezha:language", "zh");
+    renderIndicator(Date.now() + 30_000);
+    expect(screen.getByRole("status").textContent).toBe("工作中 · 0 秒");
   });
 });

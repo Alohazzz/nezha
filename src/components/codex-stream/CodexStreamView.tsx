@@ -103,6 +103,9 @@ export function CodexStreamView({
   running,
   statusText,
   statusTone = "warning",
+  /** 本轮开始时刻（毫秒）：流尾「工作中」指示器的计时锚点，随任务数据持久，
+   *  切页面重挂载不归零；缺省回落指示器挂载时刻（旧行为）。 */
+  turnStartedAtMs,
   followUpBusy,
   composerDisabled,
   projectPath,
@@ -128,6 +131,8 @@ export function CodexStreamView({
   statusText?: string | null;
   /** 横幅语义色：失败 = error（红），中断 / 断开 = warning（黄）。 */
   statusTone?: "error" | "warning";
+  /** 本轮开始时刻（毫秒）；仅用于流尾「工作中」指示器的计时锚点。 */
+  turnStartedAtMs?: number | null;
   /** composer 提交回调：running 态走 steer、其余走 resume（App 层分发）。
    *  images 为 dataUrl 数组（issue #118：粘贴/选择图片随消息发送）。 */
   onComposerSubmit?: (text: string, images: string[]) => void;
@@ -250,8 +255,13 @@ export function CodexStreamView({
             ))}
             {/* 整轮活性指示：仅在还没有任何过程时使用（刚发指令、模型还在想）。
                 一旦折叠头出现，它就是唯一计时来源——两处各起一个计数器会给出
-                两个互相矛盾的秒数。 */}
-            {running && !bannerText && needsWorkingIndicator && <CodexWorkingIndicator />}
+                两个互相矛盾的秒数。锚点优先活跃段的 startedAtMs（随流数据持久），
+                无段时回落任务级 turnStartedAtMs（进入 running 时刻）。 */}
+            {running && !bannerText && needsWorkingIndicator && (
+              <CodexWorkingIndicator
+                startedAtMs={activeSegment?.startedAtMs ?? turnStartedAtMs ?? null}
+              />
+            )}
             {/* 轮尾收口：结束的那一刻必须能一眼看出「结束了、花了多久、改了什么」。
                 此前只有失败才有横幅，正常结束的流视图走到最后一条工具卡就停住。 */}
             {!running && entries.length > 0 && (

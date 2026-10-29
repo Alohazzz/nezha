@@ -862,6 +862,7 @@ export function RunningView({
             userInput={codexStream.userInput}
             onUserInputResolved={() => onCodexUserInputResolved?.()}
             running={isActive}
+            turnStartedAtMs={task.updatedAt ?? task.createdAt}
             statusText={
               task.status === "failed"
                 ? (task.failureReason ?? t("task.failed"))
