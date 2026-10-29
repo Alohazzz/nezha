@@ -377,6 +377,28 @@ function validTs(ts: number | undefined): number | undefined {
 }
 
 /**
+ * 任务终态收口：把仍在途（endedAtMs 为 null）的条目全部落终态。
+ *
+ * 任务被终止（/stop、ESC、取消、降级重跑）时，app-server 的 turn 中断**不会**
+ * 给在途的 commandExecution / fileChange / mcpToolCall 补发 completed 帧，这些
+ * 条目会永远停在 status=inProgress——聚合组头一直显示「正在执行」，子行的
+ * 动态计时（CodexLiveDuration）永远走秒。任务进入终态时由调用方（useCodexStream
+ * 的 task-status 接线）调用本函数：inProgress → failed（被终止 ≠ 成功完成），
+ * 同时写 endedAtMs 冻结计时。思考 / 消息类条目只冻结 endedAtMs（渲染端按
+ * endedAtMs 判定 running 态），item 本身没有 status 字段可落。
+ */
+export function finalizeInterruptedEntries(model: StreamModel, endedAtMs: number): void {
+  for (let i = 0; i < model.entries.length; i += 1) {
+    const entry = model.entries[i];
+    if (!entry || entry.endedAtMs != null) continue;
+    const item = entry.item as { status?: string };
+    const nextItem =
+      item && item.status === "inProgress" ? { ...item, status: "failed" } : entry.item;
+    model.entries[i] = { ...entry, item: nextItem, endedAtMs } as typeof entry;
+  }
+}
+
+/**
  * 把一行帧 JSON 归并进 model（纯函数，无 React/Tauri 依赖）。
  * 非 JSON 行（异常回退的 PTY 字节）与畸形帧静默丢弃。
  */

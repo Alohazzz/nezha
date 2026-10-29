@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_ENTRIES,
   createStreamModel,
+  finalizeInterruptedEntries,
   ingestFrameLine,
   type StreamModel,
 } from "../hooks/codexStreamMerge";
@@ -803,5 +804,77 @@ describe("codexStreamMerge（流式归并纯函数）", () => {
     ]);
     expect(kinds(model)).toEqual(["subAgentActivity"]);
     expect(itemOf(model.entries[0]).kind).toBe("started");
+  });
+
+  // ── 任务终态收口（finalizeInterruptedEntries）──────────────────────────────
+  // 任务被终止（/stop、ESC、取消）时上游不会给在途条目补发 completed 帧：
+  // 不收口的话命令聚合组永远显示「正在执行」、动态计时（CodexLiveDuration）
+  // 永远走秒（endedAtMs 为 null 是 running 判据）。
+  describe("finalizeInterruptedEntries（任务终态收口）", () => {
+    function buildModelWithInFlight(): StreamModel {
+      const model = createStreamModel();
+      feed(model, [
+        itemLine("completed", { type: "userMessage", id: "um-1", content: [{ type: "text", text: "go" }] }),
+        // 已完成：收口必须原样保留（状态与 endedAtMs 都不动）
+        itemLine("completed", {
+          type: "commandExecution",
+          id: "cmd-done",
+          command: "pnpm lint",
+          cwd: "/repo",
+          status: "completed",
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 100,
+        }),
+        // 在途：started 后只有输出 delta，没有 completed 帧
+        itemLine("started", {
+          type: "commandExecution",
+          id: "cmd-running",
+          command: "pnpm test",
+          cwd: "/repo",
+          status: "inProgress",
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        }),
+        deltaLine("commandOutputDelta", "cmd-running", "running...\n"),
+      ]);
+      return model;
+    }
+
+    it("finalizes in-flight commands as failed and freezes endedAtMs", () => {
+      const model = buildModelWithInFlight();
+      finalizeInterruptedEntries(model, 12345);
+
+      const done = model.entries.find((e) => e.item.id === "cmd-done");
+      expect(itemOf(done).status).toBe("completed");
+      expect(done && done.endedAtMs).not.toBeNull();
+
+      const running = model.entries.find((e) => e.item.id === "cmd-running");
+      expect(itemOf(running).status).toBe("failed");
+      expect(running && running.endedAtMs).toBe(12345);
+    });
+
+    it("leaves already-finalized entries untouched on repeated calls", () => {
+      const model = buildModelWithInFlight();
+      finalizeInterruptedEntries(model, 1000);
+      finalizeInterruptedEntries(model, 9999);
+      const running = model.entries.find((e) => e.item.id === "cmd-running");
+      // 第二次调用不能把已定格的终点时间冲成新值
+      expect(running && running.endedAtMs).toBe(1000);
+    });
+
+    it("freezes message-type entries (no status field) by endedAtMs only", () => {
+      const model = createStreamModel();
+      feed(model, [
+        itemLine("started", { type: "reasoning", id: "rea-1", summary: [] }),
+        deltaLine("reasoningDelta", "rea-1", "thinking"),
+      ]);
+      finalizeInterruptedEntries(model, 5555);
+      const entry = model.entries[0]!;
+      // reasoning / agentMessage 没有 status 字段：只冻结时间，内容保持
+      expect(itemOf(entry).summary).toEqual(["thinking"]);
+      expect(entry.endedAtMs).toBe(5555);
+    });
   });
 });

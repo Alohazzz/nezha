@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import {
   createStreamModel,
+  finalizeInterruptedEntries,
   ingestFrame,
   ingestFrameLine,
   type CodexStreamEntry,
@@ -224,6 +225,20 @@ export function useCodexStream(projectPath?: string) {
     });
   }, []);
 
+  // 任务终态收口（interrupted / failed / cancelled / done）：归并层纯函数把仍在
+  // 途的条目（endedAtMs 为 null）全部落终态——被终止的任务不会再有上游 completed
+  // 帧，不收口的话命令聚合组永远显示「正在执行」、动态计时永远走秒。
+  const finalizeTask = useCallback(
+    (taskId: string) => {
+      const model = modelsRef.current.get(taskId);
+      if (!model) return;
+      finalizeInterruptedEntries(model, Date.now());
+      dirtyRef.current.add(taskId);
+      scheduleFlush();
+    },
+    [scheduleFlush],
+  );
+
   // done 后继续对话（resume 通道）的开轮动作：清上一轮 usage/审批残留，但**保留
   // entries**——thread/resume 不会把历史 item 重放回 Channel（forwarder 又是
   // resume 之后才 subscribe），前端内存流是历史的唯一载体，reset 会让整个会话
@@ -347,6 +362,7 @@ export function useCodexStream(projectPath?: string) {
     setApprovalResolved,
     setUserInputResolved,
     resetTask,
+    finalizeTask,
     beginFollowUpRound,
     appendLocalUserMessage,
     hydrateHistory,

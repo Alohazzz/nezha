@@ -947,6 +947,11 @@ function App() {
         const { task_id, status, failure_reason } = e.payload;
         updateTaskStatus(task_id, status, undefined, failure_reason);
         if (!isActiveTaskStatus(status)) {
+          // structured 流的终态收口：被终止的任务不会再有上游 completed 帧，
+          // 在途条目（命令 / 文件变更 / MCP 调用）不落终态的话，聚合组永远显示
+          // 「正在执行」、动态计时永远走秒。done 也要走——正常收尾同样可能有
+          // 未收到完成帧的残留条目。
+          codexStream.finalizeTask(task_id);
           tm.removeTaskBuffers([task_id]);
           // 合并审核发起的任务：结束后清理该 MR 的临时 worktree。
           const codeupCleanup = codeupTaskCleanupRef.current[task_id];
