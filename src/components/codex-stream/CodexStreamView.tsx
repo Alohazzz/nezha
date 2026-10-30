@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../../i18n";
 import s from "../../styles";
 import type { CodexHistoryStatus, CodexStreamEntry } from "../../hooks/useCodexStream";
@@ -163,6 +163,21 @@ export function CodexStreamView({
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  // composer 的 memo 依赖引用稳定：onSetModel/onSetEffort 原先是每次渲染新建
+  // 的内联箭头，流帧（entries 换引用）重渲染会击穿 memo，composer 跟着每帧
+  // 重渲染、与打字回显争抢主线程（快打时文字落入延迟/重复录入）。
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const effortRef = useRef(reasoningEffort);
+  effortRef.current = reasoningEffort;
+  const handleSetStructuredModel = useCallback(
+    (next: string | undefined) => onSetStructuredModel?.(next, effortRef.current),
+    [onSetStructuredModel],
+  );
+  const handleSetEffort = useCallback(
+    (next: string | undefined) => onSetStructuredModel?.(modelRef.current, next),
+    [onSetStructuredModel],
+  );
 
   // 失败/中断类状态是必须第一眼看到的收口信息。**必须钉在滚动区外**：
   // 早先把它作为流首行渲染，几百条条目之后失败横幅早被滚出视野，任务看起来
@@ -295,12 +310,8 @@ export function CodexStreamView({
               reasoningEffort={reasoningEffort}
               showModelBadge={showModelBadge}
               onSubmit={onComposerSubmit}
-              onSetModel={
-                onSetStructuredModel ? (next) => onSetStructuredModel(next, reasoningEffort) : undefined
-              }
-              onSetEffort={
-                onSetStructuredModel ? (next) => onSetStructuredModel(model, next) : undefined
-              }
+              onSetModel={onSetStructuredModel ? handleSetStructuredModel : undefined}
+              onSetEffort={onSetStructuredModel ? handleSetEffort : undefined}
               onBuiltinAction={onBuiltinAction}
               onToast={onImageToast}
             />

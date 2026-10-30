@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { CornerDownLeft, ImagePlus, Square, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import {
@@ -37,7 +37,7 @@ const isImeComposing = (e: React.KeyboardEvent) =>
  *   （交互对齐 ZCode 与 NewTaskView）。dataUrl 随提交上抛，落盘在后端。
  * - 提交后本地乐观用户气泡由调用方（App 层）负责插入。
  */
-export function CodexComposer({
+export const CodexComposer = memo(function CodexComposer({
   mode,
   busy,
   disabled,
@@ -264,7 +264,9 @@ export function CodexComposer({
           onChange={(e) => {
             setText(e.target.value);
             mention.syncFromCaret(e.target.selectionStart);
-            autoResize();
+            // 高度自适应交给 useEffect([text])：autoResize 是强制 reflow
+            //（height=0 → 读 scrollHeight），onChange 里同步再跑一次等于每次
+            // 按键双倍 layout，快打时与回显争抢主线程。
           }}
           onClick={(e) => mention.syncFromCaret(e.currentTarget.selectionStart)}
           onPaste={handlePaste}
@@ -379,4 +381,4 @@ export function CodexComposer({
       </div>
     </div>
   );
-}
+});
