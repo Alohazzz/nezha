@@ -530,10 +530,20 @@ export function useComposerMention(
 
   /**
    * 键盘处理：弹层打开且有候选时拦截 ↑↓/Enter/Tab/Escape，返回 true 表示已消费
-   * （宿主应跳过自己的提交逻辑）。
+   * （宿主应跳过自己的提交逻辑）。IME 组合中的按键不拦截——确认候选的
+   * Enter / 取消组合的 ESC 必须先到输入法（isComposing 或 keyCode 229）。
    */
   const handleKeyDown = useCallback(
-    (e: { key: string; shiftKey: boolean; preventDefault: () => void }): boolean => {
+    (
+      e: {
+        key: string;
+        shiftKey: boolean;
+        isComposing?: boolean;
+        keyCode?: number;
+        preventDefault: () => void;
+      },
+    ): boolean => {
+      if (e.isComposing || e.keyCode === 229) return false;
       if (!activeRef.current || itemsRef.current.length === 0) return false;
       if (e.key === "ArrowDown") {
         e.preventDefault();

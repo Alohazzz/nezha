@@ -21,6 +21,10 @@ import {
 } from "./composerImages";
 import s from "../../styles";
 
+/** IME 组合中的按键（含 keyCode 229 的 legacy 报法）一律不当作提交/中断指令。 */
+const isImeComposing = (e: React.KeyboardEvent) =>
+  e.nativeEvent.isComposing || e.keyCode === 229;
+
 /**
  * structured 任务的常驻底部 composer（Paseo 式会话框的核心形态）：
  * - 任何状态都渲染——运行中提交 = `steer_codex_structured`（turn/steer 追加指令，
@@ -267,6 +271,8 @@ export function CodexComposer({
           onKeyDown={(e) => {
             // 快捷召唤弹层的键盘导航优先于提交
             if (mention.handleKeyDown(e)) return;
+            // IME 组合中（含 keyCode 229）不受理中断：ESC 是取消拼音组合的标准键
+            if (isImeComposing(e)) return;
             // ESC 中断当前 turn（PTY 终端按 ESC 打断的同款直觉）：仅运行中且
             // 无弹层受理时生效；斜杠/提及弹层开着时 ESC 归弹层关闭。
             if (e.key === "Escape" && canStop && !mention.active) {
@@ -275,7 +281,7 @@ export function CodexComposer({
               return;
             }
             // Enter 发送 / Shift+Enter 换行（与全局 sendShortcut 默认一致）
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               submit();
             }
