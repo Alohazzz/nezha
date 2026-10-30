@@ -653,6 +653,22 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   margin-left: 0;
 }
 
+/* full_access 自动应答倒计时提示条：标题条之下、题目区之上。
+   到期后（data-expired）文案换成"正在自动选择"，弱化到 meta 色避免像报错。 */
+.codex-question-auto-answer {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  color: var(--codex-row-meta);
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-question-auto-answer[data-expired] {
+  opacity: 0.75;
+}
+
 .codex-question-collapsed-bar {
   display: flex;
   align-items: center;

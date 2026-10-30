@@ -843,6 +843,9 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "codex.question.other": "Other…",
     "codex.question.expand": "Expand",
     "codex.question.collapse": "Collapse",
+    "codex.question.autoAnswerCountdown":
+      "No answer in {seconds}s — the recommended option will be picked automatically",
+    "codex.question.autoAnswerPending": "Picking the recommended option…",
     "codex.followUp.placeholder": "Continue the conversation…",
     "codex.followUp.send": "Send",
     "codex.composer.placeholderRunning": "Send a follow-up — it steers the running turn…",
@@ -2171,6 +2174,8 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "codex.question.other": "其他…",
     "codex.question.expand": "展开",
     "codex.question.collapse": "收起",
+    "codex.question.autoAnswerCountdown": "{seconds} 秒内未作答将自动选择推荐项",
+    "codex.question.autoAnswerPending": "正在自动选择推荐项…",
     "codex.followUp.placeholder": "继续对话…",
     "codex.followUp.send": "发送",
     "codex.composer.placeholderRunning": "追加指令——将在当前回合中生效…",

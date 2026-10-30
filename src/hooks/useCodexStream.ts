@@ -207,6 +207,29 @@ export function useCodexStream(projectPath?: string) {
     });
   }, []);
 
+  // full_access 下 30s 无人应答，后端已按推荐项自动应答：撤掉问答卡片，恢复
+  // composer。request_id 比对防止误清新提问（auto-answered 只可能对应旧请求）。
+  useEffect(() => {
+    let mounted = true;
+    const p = listen<{ task_id: string; request_id: number }>(
+      "codex-user-input-auto-answered",
+      (e) => {
+        if (!mounted) return;
+        const { task_id: taskId, request_id: requestId } = e.payload ?? {};
+        if (!taskId) return;
+        setSnapshot((prev) => {
+          const state = prev[taskId];
+          if (!state || state.userInput?.request_id !== requestId) return prev;
+          return { ...prev, [taskId]: { ...state, userInput: null } };
+        });
+      },
+    );
+    return () => {
+      mounted = false;
+      p.then((fn) => fn());
+    };
+  }, []);
+
   const resetTask = useCallback((taskId: string) => {
     modelsRef.current.delete(taskId);
     dirtyRef.current.delete(taskId);

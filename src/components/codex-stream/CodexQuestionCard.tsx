@@ -5,6 +5,26 @@ import type { CodexUserInputQuestion, CodexUserInputRequest } from "../../types"
 import { useI18n } from "../../i18n";
 
 /**
+ * full_access 倒计时：按秒重算的剩余提示。
+ *
+ * 后端定时器到期即自动选推荐项应答，这里只做**提示**——每秒 interval 到点后
+ * `deadline - Date.now()` 自然倒数，不需要本地精确计时；到 0 后显示「即将自动
+ * 选择」直到后端的 auto-answered 事件撤卡（两者都是约 30s 时刻，先后不保证）。
+ */
+function useAutoAnswerCountdown(deadline: number | null) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (deadline === null) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [deadline]);
+  if (deadline === null) return null;
+  const remainingMs = deadline - now;
+  return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+}
+
+/**
  * 模型提问卡片：结构化流底部 sticky 面板，逐题选/填后一次提交。
  *
  * 数据来自 Codex 的 `request_user_input` 工具调用（反向请求
@@ -47,6 +67,18 @@ export function CodexQuestionCard({
   }, [request.request_id]);
 
   const questions = useMemo(() => request.questions ?? [], [request.questions]);
+
+  // full_access 专属：后端会在 auto_answer_timeout_ms 后按推荐项自动应答。
+  // 用户一旦提交/跳过，本卡片即被撤下，倒计时随组件卸载自然停止。
+  const autoAnswerDeadline = useMemo(
+    () =>
+      typeof request.auto_answer_timeout_ms === "number"
+        ? Date.now() + request.auto_answer_timeout_ms
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 以请求 id 为准：同一 request 对象重渲染不重置倒计时
+    [request.request_id, request.auto_answer_timeout_ms],
+  );
+  const autoAnswerSeconds = useAutoAnswerCountdown(autoAnswerDeadline);
 
   const pick = useCallback((questionId: string, label: string) => {
     setAnswers((prev) => ({ ...prev, [questionId]: [label] }));
@@ -118,7 +150,11 @@ export function CodexQuestionCard({
   const toggleCollapsed = useCallback(() => setCollapsed((prev) => !prev), []);
 
   return (
-    <div className="codex-question-card" data-collapsed={collapsed || undefined}>
+    <div
+      className="codex-question-card"
+      data-collapsed={collapsed || undefined}
+      data-auto-answer={autoAnswerSeconds !== null || undefined}
+    >
       <button
         type="button"
         className="codex-question-header"
@@ -137,6 +173,13 @@ export function CodexQuestionCard({
         )}
         {collapsed ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
       </button>
+      {autoAnswerSeconds !== null && (
+        <div className="codex-question-auto-answer" data-expired={autoAnswerSeconds === 0 || undefined}>
+          {autoAnswerSeconds > 0
+            ? t("codex.question.autoAnswerCountdown", { seconds: String(autoAnswerSeconds) })
+            : t("codex.question.autoAnswerPending")}
+        </div>
+      )}
       {collapsed ? (
         <div className="codex-question-collapsed-bar">
           <button

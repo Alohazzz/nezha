@@ -9,6 +9,7 @@
 //! `run_task` 的分流入口见 `pty.rs::run_task`（structured 且非云效才进来）。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -173,6 +174,9 @@ pub fn take_session(
 /// - `ApprovalRequested` → emit `codex-approval-requested` + `task-status: input_required`；
 /// - `SessionError` → `task-status: failed` + failureReason。
 ///
+/// `auto_answer_questions`（full_access 专属）：模型提问照常弹卡片，但 30s
+/// 无人应答时自动按推荐项（首个 option）应答，turn 不无限挂起。
+///
 /// 返回 `ForwarderGuard`：启动序列（spawn → turn/start）失败时先 `cancel()`
 /// 再收口会话，保证降级重跑后迟到的通知不会污染新任务状态。
 pub fn spawn_forwarder(
@@ -181,6 +185,7 @@ pub fn spawn_forwarder(
     // agent 的 cwd（可能是 worktree）；收尾时据此收拢草稿到真实项目根。
     effective_path: String,
     unattended: bool,
+    auto_answer_questions: bool,
     on_output: Channel<String>,
     mut events: Receiver<CodexEvent>,
     mut errors: Receiver<SessionError>,
@@ -198,7 +203,7 @@ pub fn spawn_forwarder(
                     match event {
                         Ok(event) => {
                             if guard_for_loop.is_cancelled()
-                                || !handle_event(&app, &on_output, &task_id, &effective_path, unattended, event).await
+                                || !handle_event(&app, &on_output, &task_id, &effective_path, unattended, auto_answer_questions, event).await
                             {
                                 break;
                             }
@@ -250,6 +255,52 @@ pub fn spawn_forwarder(
     guard
 }
 
+/// full_access 下模型提问的自动应答等待窗口。30s 足够在场用户点掉卡片，
+/// 又不至于让无人值守任务干等——到期即按推荐项（首个 option）继续。
+const USER_INPUT_AUTO_ANSWER_MS: u64 = 30_000;
+
+/// full_access 专属：模型提问 30s 无人应答时按推荐项自动应答。
+///
+/// 取消安全：`respond_user_input_once` 先原子取走 pending 条目再应答——用户
+/// 先答（`respond_user_input` 会删条目）、任务被取消收口（forwarder 退出时
+/// `shutdown_shared`，会话表已清）都会让这里取到 None 而静默放弃，不存在
+/// 答复写到已关闭进程的路径。应答成功后广播 `codex-user-input-auto-answered`，
+/// 前端把问答卡片转成「已自动选择」态。
+fn spawn_user_input_auto_answer(
+    app: AppHandle,
+    task_id: String,
+    request_id: codex_app_server_protocol::RequestId,
+    params: codex_app_server_protocol::ToolRequestUserInputParams,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(USER_INPUT_AUTO_ANSWER_MS)).await;
+        let Some(tm) = app.try_state::<crate::TaskManager>() else {
+            return;
+        };
+        let Some(session) = take_session(&tm, &task_id) else {
+            return; // 会话已收口/降级，问题随进程终结，无需应答
+        };
+        let answers = super::recommended_answers(&params);
+        match session.respond_user_input_once(request_id.clone(), answers).await {
+            Ok(true) => {
+                let _ = app.emit(
+                    "codex-user-input-auto-answered",
+                    serde_json::json!({
+                        "task_id": task_id,
+                        "request_id": request_id,
+                    }),
+                );
+                let _ = app.emit(
+                    "task-status",
+                    serde_json::json!({ "task_id": task_id, "status": "running" }),
+                );
+            }
+            Ok(false) => {} // 用户先答了或已被应答，静默让位
+            Err(e) => eprintln!("[codex_appserver] auto answer user input: {e:?}"),
+        }
+    });
+}
+
 /// 处理单个事件。返回 false 表示会话已终结（turn 完成/失败），forwarder 应退出。
 async fn handle_event(
     app: &AppHandle,
@@ -257,6 +308,7 @@ async fn handle_event(
     task_id: &str,
     effective_path: &str,
     unattended: bool,
+    auto_answer_questions: bool,
     event: CodexEvent,
 ) -> bool {
     match event {
@@ -326,6 +378,13 @@ async fn handle_event(
                     if let Some(obj) = payload.as_object_mut() {
                         obj.insert("task_id".to_string(), serde_json::json!(task_id));
                         obj.insert("request_id".to_string(), serde_json::json!(request_id));
+                        // full_access 下卡片会倒计时自动选推荐项，前端据此渲染提示。
+                        if auto_answer_questions {
+                            obj.insert(
+                                "auto_answer_timeout_ms".to_string(),
+                                serde_json::json!(USER_INPUT_AUTO_ANSWER_MS),
+                            );
+                        }
                     }
                     let _ = app.emit("codex-user-input-requested", payload);
                 }
@@ -341,6 +400,14 @@ async fn handle_event(
                 crate::system_notify::NotifyCategory::Confirm,
                 None,
             );
+            if auto_answer_questions {
+                spawn_user_input_auto_answer(
+                    app.clone(),
+                    task_id.to_string(),
+                    request_id,
+                    params,
+                );
+            }
             true
         }
         CodexEvent::UnsupportedServerRequest { .. } => {
@@ -582,11 +649,13 @@ pub async fn resume_structured_task(
     let events = session.subscribe();
     let errors = session.subscribe_errors();
     // 继续对话默认有人值守：unattended=false 让完成通知正常发。
+    // full_access 同新建任务：提问 30s 无人应答自动选推荐项。
     let guard = spawn_forwarder(
         app.clone(),
         task_id.clone(),
         project_path.clone(),
         false,
+        permission_mode == "full_access",
         on_output,
         events,
         errors,

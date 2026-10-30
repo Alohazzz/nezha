@@ -621,6 +621,8 @@ export interface CodexUserInputRequest {
   isBlocking?: boolean;
   /** 上游自带的自动决议窗口（毫秒）；缺失表示不自动决议。 */
   autoResolutionMs?: number | null;
+  /** 后端追加：full_access 下 30s 无人应答将自动选推荐项（首个 option）。缺失表示不自动应答。 */
+  auto_answer_timeout_ms?: number;
 }
 
 export interface CodexUserInputQuestion {

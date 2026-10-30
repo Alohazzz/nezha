@@ -288,7 +288,7 @@ impl CodexAppServerSession {
             "cwd": cwd,
             "approvalPolicy": approval_policy,
             "sandbox": sandbox,
-            "config": thread_config_overrides(&approval_policy),
+            "config": thread_config_overrides(),
         });
         let result = self
             .request("thread/start", params)
@@ -346,7 +346,7 @@ impl CodexAppServerSession {
         // 不带的 feature 开关就只对新建 thread 生效，续聊会退回"不能提问"。
         let params = json!({
             "threadId": thread_id,
-            "config": thread_config_overrides(&self.core.approval_policy),
+            "config": thread_config_overrides(),
         });
         let result = self
             .request("thread/resume", params)
@@ -657,6 +657,35 @@ impl CodexAppServerSession {
         Ok(())
     }
 
+    /// 原子地"取走并应答"模型提问——超时自动应答专用。
+    ///
+    /// 与 [`Self::respond_user_input`] 的差别在条目消费时机：这里在写帧**前**就
+    /// `remove`，返回 false 表示条目已不在（用户先答了 / 已被自动应答过 / 已过期），
+    /// 调用方直接放弃。用户路径仍是先读不删（写失败可重试），竞态窗口由这条
+    /// 单向让位收窄：定时器抢答成功 → 用户提交报 expired（罕见且提示明确）；
+    /// 用户先提交 → 定时器静默放弃，不打扰。
+    pub async fn respond_user_input_once(
+        &self,
+        request_id: proto::RequestId,
+        answers: HashMap<String, Vec<String>>,
+    ) -> Result<bool, SessionError> {
+        let Some(params) = self.core.user_inputs.lock().remove(&request_id) else {
+            return Ok(false);
+        };
+        let response = build_user_input_response(&params, &answers);
+        let result = serde_json::to_value(&response)
+            .map_err(|e| SessionError::Protocol(format!("encode user input: {e}")))?;
+        let line = rpc::encode_response(&request_id, &result);
+        self.write_line(&line)
+            .await
+            .map_err(|e| SessionError::Protocol(format!("write user input response: {e}")))?;
+        let mut status = self.core.status.lock();
+        if status.phase == SessionPhase::AwaitingApproval {
+            status.phase = SessionPhase::TurnRunning;
+        }
+        Ok(true)
+    }
+
     /// 订阅事件流(delta / turn 生命周期 / 审批请求都从这里出)。
     pub fn subscribe(&self) -> broadcast::Receiver<CodexEvent> {
         self.core.events_tx.subscribe()
@@ -924,6 +953,26 @@ fn build_user_input_response(
     proto::ToolRequestUserInputResponse { answers: filtered }
 }
 
+/// 超时自动应答：每个问题选推荐项（首个 option）。
+///
+/// 推荐项约定排首位（同 ZCode/AskUserQuestion 的 "(Recommended)" 前缀约定），
+/// 无人值守时按推荐项继续是代价最小的默认。`options` 为 None（上游该字段可缺省，
+/// 属自由作答题）的问题跳过——让模型拿到部分答案自行收尾，好过硬编一个 option
+/// 列表里不存在的值。
+pub fn recommended_answers(params: &proto::ToolRequestUserInputParams) -> HashMap<String, Vec<String>> {
+    params
+        .questions
+        .iter()
+        .filter_map(|question| {
+            question
+                .options
+                .as_ref()?
+                .first()
+                .map(|first| (question.id.clone(), vec![first.label.clone()]))
+        })
+        .collect()
+}
+
 /// 每个 thread 都要带上的 config 覆盖（上游按 CLI `-c` 同一套 raw override 解析，
 /// 扁平点号键即可）。
 ///
@@ -934,12 +983,9 @@ fn build_user_input_response(
 /// 按编号回复——弹窗永远等不到反向请求。Nezha 不切 Plan 模式（那会连带换掉整套
 /// developer instructions），只开这一个 feature。
 ///
-/// full_access（`approvalPolicy: never`）例外：提问不打扰用户，不注册该工具——
-/// 模型调用直接被顶回 unavailable，turn 自行继续，不产生反向请求/卡片/通知。
-fn thread_config_overrides(approval_policy: &str) -> serde_json::Value {
-    if approval_policy == "never" {
-        return json!({});
-    }
+/// full_access 也保留提问工具：无人应答 30s 后由 task_bridge 自动选推荐项
+/// （首个 option）应答，不打断 turn 也不无限挂起。
+fn thread_config_overrides() -> serde_json::Value {
     json!({
         "features.default_mode_request_user_input": true,
     })

@@ -1406,6 +1406,7 @@ async fn run_structured_task(
         launch.task_id.clone(),
         launch.project_path.clone(),
         launch.unattended,
+        launch.permission_mode == "full_access",
         on_output,
         events,
         errors,
