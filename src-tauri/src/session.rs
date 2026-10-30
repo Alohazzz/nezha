@@ -196,6 +196,7 @@ fn watch_codex_session(
     task_id: String,
     session_path: PathBuf,
     project_path: PathBuf,
+    bypass_confirmation_heuristics: bool,
 ) {
     use notify::{RecursiveMode, Watcher};
 
@@ -221,6 +222,7 @@ fn watch_codex_session(
                     &task_id,
                     &line,
                     &project_path,
+                    bypass_confirmation_heuristics,
                     &mut waiting_for_user,
                     &mut pending_confirmation_calls,
                     &mut awaiting_user_reply,
@@ -244,6 +246,7 @@ fn process_codex_session_line(
     task_id: &str,
     line: &str,
     project_path: &Path,
+    bypass_confirmation_heuristics: bool,
     waiting_for_user: &mut bool,
     pending_confirmation_calls: &mut HashSet<String>,
     awaiting_user_reply: &mut bool,
@@ -276,9 +279,10 @@ fn process_codex_session_line(
 
                     if name == Some("request_user_input") {
                         *awaiting_user_reply = true;
-                    } else if name
-                        .map(|tool| tool_call_requires_confirmation(tool, arguments, project_path))
-                        .unwrap_or(false)
+                    } else if !bypass_confirmation_heuristics
+                        && name
+                            .map(|tool| tool_call_requires_confirmation(tool, arguments, project_path))
+                            .unwrap_or(false)
                     {
                         if let Some(call_id) = call_id {
                             pending_confirmation_calls.insert(call_id.to_string());
@@ -1298,12 +1302,16 @@ fn wait_for_session_file(session_id: &str, project_path: &str, is_codex: bool) -
 }
 
 /// 在 Session ID 确认后注册会话信息，并开始监视文件。
+///
+/// `codex_full_access` 仅对 Codex 生效：full_access 下 CLI 不会请求任何命令审批，
+/// JSONL 监视里的"命令是否需确认"启发式要整个跳过，避免把任务误标成 input_required。
 pub(crate) fn register_and_watch_session(
     app: &AppHandle,
     task_id: &str,
     session_id: &str,
     project_path: &str,
     is_codex: bool,
+    codex_full_access: bool,
 ) {
     let path = match wait_for_session_file(session_id, project_path, is_codex) {
         Some(p) => p,
@@ -1349,7 +1357,9 @@ pub(crate) fn register_and_watch_session(
     let tid = task_id.to_string();
     if is_codex {
         let pp = PathBuf::from(project_path);
-        thread::spawn(move || watch_codex_session(app_clone, tid, path, pp));
+        thread::spawn(move || {
+            watch_codex_session(app_clone, tid, path, pp, codex_full_access)
+        });
     } else {
         thread::spawn(move || watch_claude_session(app_clone, tid, path));
     }
@@ -1557,6 +1567,9 @@ fn spawn_claude_lazy_session_attach(
 ///
 /// 当 `pre_session_id` 为 `Some` 时（Claude >= 2.1.87），跳过 `/status` 发现，
 /// 直接使用预置 session id 注册会话文件。若文件在超时内未出现，自动回退到 `/status` 流程。
+///
+/// `codex_full_access` 仅对 Codex 生效，透传给 `register_and_watch_session`
+/// 控制确认启发式是否跳过（见该函数注释）。
 pub(crate) fn spawn_status_session_watcher(
     app: AppHandle,
     task_id: String,
@@ -1565,6 +1578,7 @@ pub(crate) fn spawn_status_session_watcher(
     rx: mpsc::Receiver<String>,
     pre_session_id: Option<String>,
     prompt_empty: bool,
+    codex_full_access: bool,
 ) {
     // ── Claude 空 prompt 快速路径：session id 已知，文件 lazy 等 ──
     // 空 prompt 启动时 Claude 进入 REPL，要等用户实际发出首条消息才落盘 session 文件，
@@ -1586,7 +1600,7 @@ pub(crate) fn spawn_status_session_watcher(
             let sid2 = sid.clone();
             thread::spawn(move || {
                 // 等待 Claude 创建 session 文件，最长 10 秒
-                register_and_watch_session(&app2, &tid2, &sid2, &pp2, false);
+                register_and_watch_session(&app2, &tid2, &sid2, &pp2, false, false);
 
                 // 如果 register_and_watch_session 无法找到文件（内部 wait_for_session_file 超时），
                 // 检查是否已经成功注册；若未注册则回退到旧的 /status 流程。
@@ -1603,7 +1617,7 @@ pub(crate) fn spawn_status_session_watcher(
                 }
 
                 // 回退：启动旧的 /status 流程
-                run_status_session_watcher(app2, tid2, pp2, false, rx);
+                run_status_session_watcher(app2, tid2, pp2, false, rx, false);
             });
             return;
         }
@@ -1611,7 +1625,7 @@ pub(crate) fn spawn_status_session_watcher(
 
     // ── 原始路径：Codex 或 Claude < 2.1.87 ──
     thread::spawn(move || {
-        run_status_session_watcher(app, task_id, project_path, is_codex, rx);
+        run_status_session_watcher(app, task_id, project_path, is_codex, rx, codex_full_access);
     });
 }
 
@@ -1622,6 +1636,7 @@ fn run_status_session_watcher(
     project_path: String,
     is_codex: bool,
     rx: mpsc::Receiver<String>,
+    codex_full_access: bool,
 ) {
     let start_time = Instant::now();
     let mut status_sent = false;
@@ -1693,7 +1708,14 @@ fn run_status_session_watcher(
                 };
 
                 if let Some(sid) = session_id {
-                    register_and_watch_session(&app, &task_id, &sid, &project_path, is_codex);
+                    register_and_watch_session(
+                        &app,
+                        &task_id,
+                        &sid,
+                        &project_path,
+                        is_codex,
+                        codex_full_access,
+                    );
                     // Claude Code 的 /status 以全屏面板形式展示，需发送 ESC 关闭；
                     // Codex 无此面板，无需处理
                     if !is_codex {
@@ -1720,9 +1742,17 @@ pub(crate) fn spawn_resume_session_watcher(
     project_path: String,
     session_id: String,
     is_codex: bool,
+    codex_full_access: bool,
 ) {
     thread::spawn(move || {
-        register_and_watch_session(&app, &task_id, &session_id, &project_path, is_codex);
+        register_and_watch_session(
+            &app,
+            &task_id,
+            &session_id,
+            &project_path,
+            is_codex,
+            codex_full_access,
+        );
     });
 }
 

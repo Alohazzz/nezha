@@ -1831,6 +1831,7 @@ pub async fn run_task(
             session_rx,
             pre_session_id,
             final_prompt.is_empty(),
+            permission_mode == "full_access",
         );
         Some(session_tx)
     };
@@ -2232,6 +2233,7 @@ pub async fn resume_task(
             project_path.clone(),
             session_id,
             is_codex,
+            permission_mode == "full_access",
         );
     }
     spawn_pty_reader(
@@ -2290,6 +2292,8 @@ pub async fn fork_task(
     {
         return Ok(());
     }
+    // closure 会 move permission_mode，watcher 用它的布尔结果
+    let codex_full_access = permission_mode == "full_access";
     let spawned = tokio::task::spawn_blocking(move || {
         spawn_fork_task_process(
             &launch_project_path,
@@ -2351,6 +2355,7 @@ pub async fn fork_task(
             session_rx,
             None,
             false,
+            codex_full_access,
         );
         Some(session_tx)
     };

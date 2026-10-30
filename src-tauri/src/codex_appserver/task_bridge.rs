@@ -964,6 +964,7 @@ mod tests {
             dsh_session_path: None,
             starred: None,
             failure_reason: None,
+            unread_at: None,
             worktree_path: None,
             worktree_branch: None,
             worktree_repo: None,

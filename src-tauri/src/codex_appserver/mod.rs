@@ -288,7 +288,7 @@ impl CodexAppServerSession {
             "cwd": cwd,
             "approvalPolicy": approval_policy,
             "sandbox": sandbox,
-            "config": thread_config_overrides(),
+            "config": thread_config_overrides(&approval_policy),
         });
         let result = self
             .request("thread/start", params)
@@ -346,7 +346,7 @@ impl CodexAppServerSession {
         // 不带的 feature 开关就只对新建 thread 生效，续聊会退回"不能提问"。
         let params = json!({
             "threadId": thread_id,
-            "config": thread_config_overrides(),
+            "config": thread_config_overrides(&self.core.approval_policy),
         });
         let result = self
             .request("thread/resume", params)
@@ -933,7 +933,13 @@ fn build_user_input_response(
 /// handler 顶回 "unavailable in Default mode"，只能退化成一堆纯文本选项让用户
 /// 按编号回复——弹窗永远等不到反向请求。Nezha 不切 Plan 模式（那会连带换掉整套
 /// developer instructions），只开这一个 feature。
-fn thread_config_overrides() -> serde_json::Value {
+///
+/// full_access（`approvalPolicy: never`）例外：提问不打扰用户，不注册该工具——
+/// 模型调用直接被顶回 unavailable，turn 自行继续，不产生反向请求/卡片/通知。
+fn thread_config_overrides(approval_policy: &str) -> serde_json::Value {
+    if approval_policy == "never" {
+        return json!({});
+    }
     json!({
         "features.default_mode_request_user_input": true,
     })
