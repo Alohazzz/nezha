@@ -22,6 +22,10 @@ export default defineConfig({
   test: {
     // jsdom 模拟浏览器环境，支持 DOM API 和 localStorage
     environment: "jsdom",
+    // 重组件测试（YunxiaoView 整树渲染等）在 16 线程全量并发下单用例
+    // 正常耗时可达 ~3s，默认 5000ms 在机器负载波动下偶发翻线（yunxiao-*
+    // 随机超时的根因），放宽到 20s 只兜底慢场景，不影响失败判定。
+    testTimeout: 20_000,
     // 全局注入 expect、describe、it 等，无需每个文件手动 import
     globals: true,
     // 在每个测试文件运行前执行的 setup（引入 @testing-library/jest-dom 扩展）
