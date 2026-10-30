@@ -77,6 +77,7 @@ import {
 import { parsePlanDeps, type PlanDeps } from "./utils/planDeps";
 import { planLifecycleActions } from "./utils/planBoard";
 import {
+  buildPlanStatusById,
   buildTaskBySerial,
   buildWaitingBadges,
   evaluateTaskGate,
@@ -1786,7 +1787,7 @@ function App() {
   /**
    * 该方案待办所在槽位池是否空闲（与自动接续共用同一上限）。
    * 方案待办按「项目+方案」分池：只看同方案的活跃任务，不同方案可并行；
-   * 普通任务落项目公共池，与一切互斥。
+   * 普通任务落项目公共池，与一切互斥。定稿方案的滞留讨论任务不占槽。
    */
   function hasFreeScheduledSlot(task: Task): boolean {
     return hasFreeSlot(
@@ -1795,6 +1796,7 @@ function App() {
       planMaxConcurrentRef.current[task.projectId],
       DEFAULT_PLAN_MAX_CONCURRENT,
       task.planId,
+      buildPlanStatusById(plans),
     );
   }
 
@@ -3220,6 +3222,7 @@ function App() {
       planById,
       maxConcurrentByProjectId: planMaxConcurrentRef.current,
       defaultMaxConcurrent: DEFAULT_PLAN_MAX_CONCURRENT,
+      planStatusById: buildPlanStatusById(plans),
     });
     const started = new Set(startIds);
     // 已不在候选中的 id 从在途集合里剔除，避免任务重新进入等待时被误判为「已启动」。

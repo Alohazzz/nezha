@@ -113,20 +113,57 @@ function slotPoolKey(task: Pick<Task, "projectId" | "planId">): string {
 }
 
 /**
+ * 方案 id → 方案状态（槽位统计的辅助索引；无该方案条目 = 方案已删除）。
+ */
+export type PlanStatusById = Readonly<Record<string, Plan["status"] | undefined>>;
+
+/** 从方案列表构建状态索引（调用方每次渲染现算一个，代价 O(n)）。 */
+export function buildPlanStatusById(plans: readonly Plan[]): PlanStatusById {
+  const map: Record<string, Plan["status"] | undefined> = {};
+  for (const plan of plans) map[plan.id] = plan.status;
+  return map;
+}
+
+/**
+ * 活跃任务是否占用执行槽。
+ *
+ * **方案讨论任务在方案定稿后不再占槽**：讨论任务的使命是产出 plan.md /
+ * deps.json，方案一旦离开 draft（定稿/执行中/已完成），滞留的讨论任务
+ * （awaiting_review / input_required 等 agent 已停笔、等人工收尾）继续占着
+ * 同方案唯一的并发槽，会把「执行方案」生成的待办永久卡在排队——用户不先去
+ * 点「标记完成」就永远无法开始执行（现场实证：PEIS 项目 QHDK-31150 讨论任务
+ * awaiting_review 挂起，同方案执行待办全部 waiting_deps）。定稿即视为讨论
+ * 释放槽位；draft 期间的讨论任务照常占槽（讨论本身也要串行）。
+ *
+ * 方案已删除（索引无条目）同样不占：孤儿讨论任务失去阻塞意义，且没有人工
+ * 收尾入口能让它释放。
+ */
+export function occupiesExecutionSlot(
+  task: Pick<Task, "planId" | "yunxiaoPlanDiscussion">,
+  planStatusById: PlanStatusById,
+): boolean {
+  if (!(task.planId && task.yunxiaoPlanDiscussion)) return true;
+  return planStatusById[task.planId] === "draft";
+}
+
+/**
  * 指定槽位池内占用槽位的任务数（活跃 agent 任务；等待态不占槽）。
  * `planId` 为 undefined 时统计项目公共池（含所有普通任务）；有 planId 时只统计
- * 同方案任务——不同方案彼此不占槽，可并行。
+ * 同方案任务——不同方案彼此不占槽，可并行。定稿方案的滞留讨论任务不占槽
+ * （见 `occupiesExecutionSlot`）。
  */
 export function countOccupiedSlots(
   tasks: readonly Task[],
   projectId: string,
   planId?: string,
+  planStatusById: PlanStatusById = {},
 ): number {
   let count = 0;
   const pool = planId ? `${projectId}::${planId}` : projectId;
   for (const task of tasks) {
     if (task.projectId !== projectId) continue;
     if (!isActiveTaskStatus(task.status)) continue;
+    if (!occupiesExecutionSlot(task, planStatusById)) continue;
     if (slotPoolKey(task) !== pool) continue;
     count += 1;
   }
@@ -157,41 +194,69 @@ export function hasFreeSlot(
   configured: number | undefined,
   defaultMaxConcurrent: number,
   planId?: string,
+  planStatusById: PlanStatusById = {},
 ): boolean {
   const max = resolveMaxConcurrent(configured, defaultMaxConcurrent);
   if (planId) {
     // 方案池：同方案活跃任务 + 公共池普通任务（主工作区共享，不得并行）。
-    return countOccupiedSlots(tasks, projectId, planId) + countPoolPlain(tasks, projectId) < max;
+    return (
+      countOccupiedSlots(tasks, projectId, planId, planStatusById) +
+        countPoolPlain(tasks, projectId, planStatusById) <
+      max
+    );
   }
   // 项目公共池：普通任务与全部活跃任务（含各方案）共享上限。
-  return countOccupiedSlots(tasks, projectId) + countPoolPlans(tasks, projectId) < max;
+  return (
+    countOccupiedSlots(tasks, projectId, undefined, planStatusById) +
+      countPoolPlans(tasks, projectId, planStatusById) <
+    max
+  );
 }
 
 /** 项目内活跃的普通任务（无 planId；跑主工作区，须与一切互斥）。 */
-function countPoolPlain(tasks: readonly Task[], projectId: string): number {
+function countPoolPlain(
+  tasks: readonly Task[],
+  projectId: string,
+  planStatusById: PlanStatusById,
+): number {
   let count = 0;
   for (const task of tasks) {
     if (task.projectId !== projectId) continue;
-    if (!task.planId && isActiveTaskStatus(task.status)) count += 1;
+    if (!task.planId && isActiveTaskStatus(task.status) && occupiesExecutionSlot(task, planStatusById))
+      count += 1;
   }
   return count;
 }
 
 /** 项目内活跃的方案待办（含各方案），供普通任务的公共池判定用。 */
-function countPoolPlans(tasks: readonly Task[], projectId: string): number {
+function countPoolPlans(
+  tasks: readonly Task[],
+  projectId: string,
+  planStatusById: PlanStatusById,
+): number {
   let count = 0;
   for (const task of tasks) {
     if (task.projectId !== projectId) continue;
-    if (task.planId && isActiveTaskStatus(task.status)) count += 1;
+    if (task.planId && isActiveTaskStatus(task.status) && occupiesExecutionSlot(task, planStatusById))
+      count += 1;
   }
   return count;
 }
 
 /** 列出占用同一槽位池的活跃任务（供「排队原因」展示：谁在跑）。 */
-export function activeTasksInPool(tasks: readonly Task[], projectId: string, planId?: string): Task[] {
+export function activeTasksInPool(
+  tasks: readonly Task[],
+  projectId: string,
+  planId?: string,
+  planStatusById: PlanStatusById = {},
+): Task[] {
   const pool = planId ? `${projectId}::${planId}` : projectId;
   return tasks.filter(
-    (task) => task.projectId === projectId && isActiveTaskStatus(task.status) && slotPoolKey(task) === pool,
+    (task) =>
+      task.projectId === projectId &&
+      isActiveTaskStatus(task.status) &&
+      occupiesExecutionSlot(task, planStatusById) &&
+      slotPoolKey(task) === pool,
   );
 }
 
@@ -270,6 +335,8 @@ export interface AutoStartInput {
   /** 项目级并发上限（未配置时用 defaultMaxConcurrent）。 */
   maxConcurrentByProjectId: Readonly<Record<string, number | undefined>>;
   defaultMaxConcurrent: number;
+  /** 方案 id → 状态：定稿方案的滞留讨论任务不占槽（occupiesExecutionSlot）。 */
+  planStatusById?: PlanStatusById;
 }
 
 /**
@@ -287,6 +354,7 @@ export interface AutoStartInput {
  */
 export function selectAutoStart(input: AutoStartInput): string[] {
   const { tasks, depsByPlanId, planById, maxConcurrentByProjectId, defaultMaxConcurrent } = input;
+  const planStatusById = input.planStatusById ?? buildPlanStatusById([...planById.values()]);
   const taskBySerial = buildTaskBySerial(tasks);
   // 按槽位池分桶（项目公共池 / 项目+方案池），桶间互不占槽、可并行放行。
   const waitingByPool = new Map<string, Task[]>();
@@ -310,8 +378,8 @@ export function selectAutoStart(input: AutoStartInput): string[] {
     // 方案池占用 = 同方案活跃任务 + 普通任务（主工作区共享，与方案任务互斥）；
     // 公共池占用 = 普通任务（countOccupiedSlots 无 planId 即公共池口径）。
     const occupied =
-      countOccupiedSlots(tasks, projectId, planId) +
-      (planId ? countPoolPlain(tasks, projectId) : 0);
+      countOccupiedSlots(tasks, projectId, planId, planStatusById) +
+      (planId ? countPoolPlain(tasks, projectId, planStatusById) : 0);
     const slots = Math.max(0, maxConcurrent - occupied);
     if (slots === 0) continue;
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPlanDisplayName,
   buildPlanExecutionPrompt,
+  buildPlanTaskName,
   buildUpstreamPlanContext,
   extractPlanOverviewForIssues,
   planAncestorSerials,
@@ -167,6 +169,25 @@ describe("planAncestorSerials", () => {
   it("根方案无祖先 → 空数组（等价于不放开任何外部引用）", () => {
     const plans = [makePlan("root", undefined, ["QHDK-R1"])];
     expect(planAncestorSerials("root", plans)).toEqual([]);
+  });
+});
+
+describe("方案命名：单议题不带「联合」", () => {
+  it("单议题方案名 = `<编号> 方案`（不带联合字样）", () => {
+    expect(buildPlanDisplayName(["QHDK-31150"])).toBe("QHDK-31150 方案");
+  });
+
+  it("多议题方案名保持 `<编号> 等 N 项联合方案`", () => {
+    expect(buildPlanDisplayName(["QHDK-A", "QHDK-B"])).toBe("QHDK-A 等 2 项联合方案");
+  });
+
+  it("空清单回落「方案」", () => {
+    expect(buildPlanDisplayName([])).toBe("方案");
+  });
+
+  it("讨论任务名：单议题 = `方案讨论：<编号>`，空清单回落「方案讨论」", () => {
+    expect(buildPlanTaskName(["QHDK-31150"])).toBe("方案讨论：QHDK-31150");
+    expect(buildPlanTaskName([])).toBe("方案讨论");
   });
 });
 

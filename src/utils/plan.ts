@@ -415,15 +415,22 @@ export function extractPlanOverviewForIssues(
 /** 议题编号列表 → 方案任务名（如 "QHDK-123 等 3 项联合方案"）。 */
 export function buildPlanTaskName(serialNumbers: string[]): string {
   const serials = serialNumbers.map((s) => s.trim()).filter(Boolean);
-  if (serials.length === 0) return "联合方案讨论";
+  if (serials.length === 0) return "方案讨论";
   const rest = serials.length - 1;
   return rest > 0 ? `方案讨论：${serials[0]} 等 ${serials.length} 项` : `方案讨论：${serials[0]}`;
 }
 
-/** 方案默认名（预览/确认页展示）：`QHDK-123 等 3 项联合方案`。 */
+/**
+ * 方案默认名（预览/确认页展示）：`QHDK-123 等 3 项联合方案`。
+ *
+ * 「联合方案」只用于多议题——单议题方案的讨论/执行链路与多议题完全同一套
+ * （Plan 实体），但议题数 = 1 时不存在「联合」语义，再带这仨字会让用户把
+ * 独立讨论的单议题方案误认为多议题联合分析（用户实证：QHDK-31150 独立方案
+ * 显示成「QHDK-31150 联合方案」）。单议题统一叫「N 方案」。
+ */
 export function buildPlanDisplayName(serialNumbers: string[]): string {
   const serials = serialNumbers.map((s) => s.trim()).filter(Boolean);
-  if (serials.length === 0) return "联合方案";
+  if (serials.length === 0) return "方案";
   const rest = serials.length - 1;
-  return rest > 0 ? `${serials[0]} 等 ${serials.length} 项联合方案` : `${serials[0]} 联合方案`;
+  return rest > 0 ? `${serials[0]} 等 ${serials.length} 项联合方案` : `${serials[0]} 方案`;
 }

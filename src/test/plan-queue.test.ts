@@ -9,6 +9,7 @@ import {
   hasFreeSlot,
   isDependencyAbnormal,
   isDependencySatisfied,
+  occupiesExecutionSlot,
   orderWaitingQueue,
   resolveMaxConcurrent,
   resolvePlanTodoLaunch,
@@ -144,6 +145,131 @@ describe("countOccupiedSlots", () => {
     expect(countOccupiedSlots(tasks, "p", "p2")).toBe(1);
     // 公共池：普通任务本身（方案任务在各自池里，不计入公共池计数）
     expect(countOccupiedSlots(tasks, "p")).toBe(1);
+  });
+});
+
+describe("occupiesExecutionSlot（定稿方案的滞留讨论任务不占槽）", () => {
+  const discussion = (overrides: Partial<Task> = {}): Task =>
+    makeTask({
+      id: "discuss",
+      planId: "p1",
+      yunxiaoPlanDiscussion: true,
+      status: "awaiting_review",
+      ...overrides,
+    });
+
+  it("draft 方案的讨论任务照常占槽（讨论本身也要串行）", () => {
+    expect(occupiesExecutionSlot(discussion(), { p1: "draft" })).toBe(true);
+  });
+
+  it("方案定稿/执行中/已完成后，滞留讨论任务不占槽", () => {
+    expect(occupiesExecutionSlot(discussion(), { p1: "finalized" })).toBe(false);
+    expect(occupiesExecutionSlot(discussion(), { p1: "executing" })).toBe(false);
+    expect(occupiesExecutionSlot(discussion(), { p1: "completed" })).toBe(false);
+    expect(occupiesExecutionSlot(discussion(), { p1: "cancelled" })).toBe(false);
+  });
+
+  it("方案已删除（无条目）→ 讨论任务不占槽；普通任务与执行待办一律占槽", () => {
+    expect(occupiesExecutionSlot(discussion(), {})).toBe(false);
+    expect(occupiesExecutionSlot(discussion({ yunxiaoPlanDiscussion: false }), { p1: "finalized" })).toBe(true);
+    expect(occupiesExecutionSlot(discussion({ yunxiaoPlanDiscussion: undefined }), { p1: "finalized" })).toBe(true);
+    // 无 planId 的任务不受讨论豁免影响
+    expect(
+      occupiesExecutionSlot(makeTask({ status: "running" }), {}),
+    ).toBe(true);
+  });
+
+  it("槽位统计与串行守卫接入同一口径：定稿方案的讨论任务不再阻塞执行待办", () => {
+    // 现场场景（PEIS QHDK-31150）：讨论任务 awaiting_review 挂起、方案已定稿，
+    // 同方案的执行待办不应被它卡在排队。
+    const tasks = [
+      discussion({ id: "discuss", status: "awaiting_review" }),
+      makeTask({ id: "wait", planId: "p1", yunxiaoSerialNumber: "QHDK-A", status: "waiting_deps" }),
+    ];
+    const finalized = { p1: "finalized" as const };
+    expect(countOccupiedSlots(tasks, "proj", "p1", finalized)).toBe(0);
+    expect(hasFreeSlot(tasks, "proj", undefined, 1, "p1", finalized)).toBe(true);
+
+    // draft 期间照常互斥：讨论没结束，执行待办不抢跑
+    expect(countOccupiedSlots(tasks, "proj", "p1", { p1: "draft" })).toBe(1);
+    expect(hasFreeSlot(tasks, "proj", undefined, 1, "p1", { p1: "draft" })).toBe(false);
+  });
+
+  it("selectAutoStart：定稿方案的滞留讨论任务不阻塞同方案等待任务放行", () => {
+    const planById = new Map([["p1", makePlan({ status: "finalized" })]]);
+    const startIds = selectAutoStart({
+      tasks: [
+        makeTask({
+          id: "discuss",
+          planId: "p1",
+          yunxiaoPlanDiscussion: true,
+          status: "awaiting_review",
+        }),
+        makeTask({
+          id: "ta",
+          planId: "p1",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "waiting_deps",
+        }),
+      ],
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+      planStatusById: { p1: "finalized" },
+    });
+    expect(startIds).toEqual(["ta"]);
+  });
+
+  it("selectAutoStart：draft 方案的讨论任务仍阻塞（现状不变）", () => {
+    const planById = new Map([["p1", makePlan({ status: "draft" })]]);
+    const startIds = selectAutoStart({
+      tasks: [
+        makeTask({
+          id: "discuss",
+          planId: "p1",
+          yunxiaoPlanDiscussion: true,
+          status: "input_required",
+        }),
+        makeTask({
+          id: "ta",
+          planId: "p1",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "waiting_deps",
+        }),
+      ],
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+      planStatusById: { p1: "draft" },
+    });
+    expect(startIds).toEqual([]);
+  });
+
+  it("selectAutoStart 不传 planStatusById 时从 planById 派生状态（同样豁免定稿讨论）", () => {
+    const planById = new Map([["p1", makePlan({ status: "finalized" })]]);
+    const startIds = selectAutoStart({
+      tasks: [
+        makeTask({
+          id: "discuss",
+          planId: "p1",
+          yunxiaoPlanDiscussion: true,
+          status: "awaiting_review",
+        }),
+        makeTask({
+          id: "ta",
+          planId: "p1",
+          yunxiaoSerialNumber: "QHDK-A",
+          status: "waiting_deps",
+        }),
+      ],
+      depsByPlanId: { p1: CHAIN },
+      planById,
+      maxConcurrentByProjectId: {},
+      defaultMaxConcurrent: 1,
+    });
+    expect(startIds).toEqual(["ta"]);
   });
 });
 

@@ -61,6 +61,7 @@ import { PlanPreviewPanel } from "./yunxiao/plan/PlanPreviewPanel";
 import { WaitingDepsView } from "./yunxiao/plan/WaitingDepsView";
 import {
   activeTasksInPool,
+  buildPlanStatusById,
   buildTaskBySerial,
   evaluateTaskGate,
   planIssueSubjects,
@@ -511,11 +512,15 @@ export function ProjectPage({
         selectedTaskGate,
         depsLoaded,
       ),
-      activeTasks: activeTasksInPool(projectTasks, project.id, selectedTask.planId).filter(
-        (t) => t.id !== selectedTask.id,
-      ),
+      // 与调度器同一占槽口径：定稿方案的滞留讨论任务不占槽，也不进「谁在跑」列表。
+      activeTasks: activeTasksInPool(
+        projectTasks,
+        project.id,
+        selectedTask.planId,
+        buildPlanStatusById(plans),
+      ).filter((t) => t.id !== selectedTask.id),
     };
-  }, [selectedTask, selectedTaskGate, planDeps, projectTasks, project.id]);
+  }, [selectedTask, selectedTaskGate, planDeps, projectTasks, project.id, plans]);
   /**
    * 选中任务所属方案 + 其祖先链方案（追加子方案的上游）。两个下游派生都要用，
    * 单独缓存一次，避免各自重复 `plans.find` 与上溯。
