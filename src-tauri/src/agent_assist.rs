@@ -1113,10 +1113,23 @@ const WRITEBACK_PROMPT_TEMPLATE: &str = r#"你是云效议题回写助手。基�
    - 开发向评论：<DEV_SUMMARY>...</DEV_SUMMARY>，直接回写本次修改方案：
      - 基于提交与变更统计忠实呈现方案本身：改了什么、怎么改（关键改动点与实现方式，可引用 commit 短号/文件）；
      - 不要套用其他模板结构，不要在方案之外额外扩写，事实里没有的内容不要补。
-   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，首行固定为标题 `## 影响范围与测试指引`，其后为三个固定字段；**字段名必须加粗**（与开发向评论的小标题一致），不要用列表符号：
-     - `**修改分支**`：直接使用下方给定的「修改分支」，不要改动、不要编造；
-     - `**修改文件**`：受影响的项目/工程名（.NET 仓库归并到含 .csproj 的工程目录这一级，如 Nto.His.Order.Bll；无工程的目录取一级目录名），多个用顿号分隔（该字段由系统按 git 变更确定性填充，你只需给出可执行的测试步骤）；
-     - `**测试步骤**`：给出可执行的测试步骤与回归点。
+   - 测试向评论：<TEST_SUMMARY>...</TEST_SUMMARY>，面向测试人员，按用例分块组织，每块格式固定如下（字段名不加粗、不用列表符号、不用标题，就是纯文本行——云效阅读态按段落渲染，参照黄金样本格式）：
+       ```
+       用例：<功能点名称>
+       前置：<测试前提条件>
+       步骤与预期：
+       1. <操作步骤> → 预期：<预期结果>
+       2. <操作步骤> → 预期：<预期结果>
+
+       用例：<下一个功能点名称>
+       ...
+       ```
+     用例之间以空行分隔；每条用例覆盖一个可独立验证的功能点，步骤与预期一一对应。
+     此外，全文最开头放两行元信息（同样纯文本行，不加粗）：
+       ```
+       修改分支：<直接使用下方给定的「修改分支」，不要改动、不要编造>
+       修改文件：<受影响的项目/工程名（.NET 仓库归并到含 .csproj 的工程目录这一级，如 Nto.His.Order.Bll；无工程的目录取一级目录名），多个用顿号分隔（该字段由系统按 git 变更确定性填充，你只需给出可执行的测试步骤）>
+       ```
 3. 每条评论语言与议题标题一致（中文议题输出中文），各 200-500 字，控制在 12 行以内。
 4. 某条若缺少事实支撑，就写「（无）」占位，不要编造。
 
@@ -1337,9 +1350,10 @@ fn derive_one_project_name(path: &str, repo: Option<&Path>) -> Option<String> {
     Some(name)
 }
 
-/// 把确定性工程名清单写进测试向评论的 `**修改文件**` 字段（幂等）：
+/// 把确定性工程名清单写进测试向评论的 `修改文件：` 字段（幂等）：
 /// 命中该字段行则替换其值为「A、B、C」；无该字段的评论（草稿缺失字段）不动。
 /// 确定性统计为空集时保持原文——宁缺毋错，不用空值覆盖 LLM 可能正确的归纳。
+/// 兼容旧草稿的加粗写法 `**修改文件**：`。
 fn apply_deterministic_modified_files(test_comment: &str, project_names: &[String]) -> String {
     if project_names.is_empty() || test_comment.trim().is_empty() {
         return test_comment.to_string();
@@ -1356,18 +1370,17 @@ fn apply_deterministic_modified_files(test_comment: &str, project_names: &[Strin
                 .or_else(|| trimmed.strip_prefix("+ "))
                 .map(str::trim_start)
                 .unwrap_or_else(|| trimmed.trim_start_matches('#').trim_start());
-            let body = stripped.strip_prefix("**修改文件**").map(|after| {
-                after
-                    .strip_prefix("**")
-                    .unwrap_or(after)
-                    .trim_start_matches(['：', ':'])
-            });
+            let body = stripped
+                .strip_prefix("**修改文件**")
+                .map(|after| after.strip_prefix("**").unwrap_or(after))
+                .or_else(|| stripped.strip_prefix("修改文件"))
+                .map(|after| after.trim_start_matches(['：', ':']));
             match body {
                 Some(_) => {
                     replaced = true;
                     // 保留原行的非字段前缀（列表符 `- ` 等），只替换字段内容本身。
                     let prefix_len = raw.find(stripped).unwrap_or(0);
-                    format!("{}**修改文件**：{}", &raw[..prefix_len], joined)
+                    format!("{}修改文件：{}", &raw[..prefix_len], joined)
                 }
                 None => raw.to_string(),
             }
@@ -1446,34 +1459,28 @@ pub struct YunxiaoWritebackDraft {
 const TEST_SECTION_HEADER: &str = "## 影响范围与测试";
 
 /// 测试向评论的固定字段标签——与开发向评论的小标题同位，需要加粗显示。
-const TEST_COMMENT_FIELD_LABELS: [&str; 3] = ["修改分支", "修改文件", "测试步骤"];
+const TEST_COMMENT_FIELD_LABELS: [&str; 2] = ["修改分支", "修改文件"];
 
-/// 把测试向评论的固定字段标签统一加粗（`- 修改分支：x` / `### 修改分支` / `修改分支：x`
-/// 均归一为 `**修改分支**：x`），与开发向评论的小标题一致。
+/// 把测试向评论的固定字段标签归一为纯文本行（`- 修改分支：x` / `### 修改分支` /
+/// `**修改分支**：x` 均归一为 `修改分支：x`）。
 ///
-/// 云效富文本只在普通段落内识别 `**…**`（列表项、标题行里的加粗标记会被 `strip_markdown_line`
-/// 剥掉），因此这里同时去掉行首的列表 / 标题前缀，落成「加粗标签 + 原内容」的段落。
-/// 已是 `**修改分支**：` 写法的行保持幂等，不会被重复包裹。
+/// 评论直发 MARKDOWN（见 yunxiao.rs::post_workitem_comment）后不再需要加粗——
+/// 加粗字段名反而在阅读态里显得突兀。该函数保留的原因：草稿/LLM 输出里字段行可能带
+/// 列表符、标题符、旧加粗写法，需归一成 `apply_deterministic_modified_files` 可识别的
+/// `修改文件：` 行前缀。已是 `修改分支：` 纯文本写法的行保持幂等。
 fn bolden_test_comment_fields(text: &str) -> String {
-    /// 识别单个字段标签（兼容已加粗写法），命中则返回归一后的行。
+    /// 识别单个字段标签（兼容列表/标题/加粗写法），命中则返回归一后的行。
     fn normalize_line(body: &str) -> Option<String> {
-        let (bold_wrapped, rest) = match body.strip_prefix("**") {
-            Some(rest) => (true, rest),
-            None => (false, body),
-        };
+        let body = body.strip_prefix("**").unwrap_or(body);
         for label in TEST_COMMENT_FIELD_LABELS {
-            let Some(after) = rest.strip_prefix(label) else {
+            let Some(after) = body.strip_prefix(label) else {
                 continue;
             };
-            // 已加粗时吞掉闭合的 `**`，避免生成 `**修改分支****：`。
-            let after = if bold_wrapped {
-                after.strip_prefix("**").unwrap_or(after)
-            } else {
-                after
-            };
+            // 已加粗时吞掉闭合的 `**`。
+            let after = after.strip_prefix("**").unwrap_or(after);
             // 仅当标签后紧跟分隔符或行尾时替换，避免误伤「修改分支说明」这类正文。
             if after.is_empty() || after.starts_with('：') || after.starts_with(':') {
-                return Some(format!("**{label}**{after}"));
+                return Some(format!("{label}{after}"));
             }
         }
         None
@@ -1580,7 +1587,7 @@ fn build_fallback_draft(
         dev.push(format!("```\n{diff_stat}\n```"));
     }
     let test = format!(
-        "## 影响范围与测试指引\n\n**修改分支**：{}\n**修改文件**：（无）\n**测试步骤**：请在预览中补充。",
+        "修改分支：{}\n修改文件：（无）\n\n用例：（AI 汇总生成失败，请在预览中补充）\n前置：\n步骤与预期：\n1. → 预期：",
         if branch.trim().is_empty() {
             "（无）"
         } else {
@@ -2289,16 +2296,17 @@ mod tests {
     }
 
     #[test]
-    fn bolden_test_comment_fields_bolds_list_labels_and_keeps_heading() {
-        // 真实草稿样式：三字段为无序列表项，测试步骤含多行编号内容（缩进）。
+    fn bolden_test_comment_fields_normalizes_list_labels_to_plain_text() {
+        // 真实草稿样式：字段为无序列表项 / 标题行，归一为纯文本 `修改分支：` 行
+        //（MARKDOWN 直发后不再加粗，但保留去前缀 + 归一能力，供 apply_deterministic_modified_files 识别）。
         let text = "## 影响范围与测试（测试向）\n\n- 修改分支：v2.20260901.0.0-rc\n- 修改文件：Nto.His.Order.UI（Hsp 主解决方案）\n- 测试步骤：\n  1. 打开中草药开立窗口\n  2. 点击「上次处方」";
         let out = bolden_test_comment_fields(text);
-        // 标题行不参与字段加粗，保持原样（开发向小标题同级）。
+        // 标题行不参与字段归一，保持原样。
         assert!(out.starts_with("## 影响范围与测试（测试向）"));
-        assert!(out.contains("**修改分支**：v2.20260901.0.0-rc"));
-        assert!(out.contains("**修改文件**：Nto.His.Order.UI（Hsp 主解决方案）"));
-        assert!(out.contains("**测试步骤**："));
-        // 列表前缀被去掉了（列表项里的 `**` 会被云效转换器剥掉）。
+        assert!(out.contains("\n修改分支：v2.20260901.0.0-rc"));
+        assert!(out.contains("\n修改文件：Nto.His.Order.UI（Hsp 主解决方案）"));
+        // 字段行不再加粗，列表前缀被去掉。
+        assert!(!out.contains("**修改分支**"));
         assert!(!out.contains("\n- 修改分支"));
         // 测试步骤正文不受影响。
         assert!(out.contains("1. 打开中草药开立窗口"));
@@ -2306,26 +2314,44 @@ mod tests {
 
     #[test]
     fn bolden_test_comment_fields_is_idempotent() {
-        let text = "**修改分支**：master\n**修改文件**：Nto.X\n**测试步骤**：1. 复现";
+        let text = "修改分支：master\n修改文件：Nto.X\n测试步骤：1. 复现";
         assert_eq!(bolden_test_comment_fields(text), text);
     }
 
     #[test]
-    fn bolden_test_comment_fields_handles_colon_and_bare_labels() {
-        let out = bolden_test_comment_fields("修改分支: master\n修改文件：Nto.X");
-        assert!(out.contains("**修改分支**: master"));
-        assert!(out.contains("**修改文件**：Nto.X"));
+    fn bolden_test_comment_fields_unwraps_legacy_bold_labels() {
+        // 旧格式草稿（加粗字段）迁移：归一为纯文本字段行。
+        let out = bolden_test_comment_fields("**修改分支**：master\n**修改文件**：Nto.X");
+        assert!(out.contains("修改分支：master"));
+        assert!(out.contains("修改文件：Nto.X"));
+        assert!(!out.contains("**"));
         // 非字段行不受影响。
         let other = bolden_test_comment_fields("修改分支说明：这里不是字段行");
         assert_eq!(other, "修改分支说明：这里不是字段行");
     }
 
     #[test]
-    fn fallback_draft_test_comment_uses_bold_labels() {
+    fn fallback_draft_test_comment_uses_plain_labels_and_case_blocks() {
         let draft = build_fallback_draft("HJWE-65", "标题", "master", "", "");
-        assert!(draft.test_comment.contains("**修改分支**：master"));
-        assert!(draft.test_comment.contains("**修改文件**：（无）"));
-        assert!(draft.test_comment.contains("**测试步骤**："));
+        assert!(draft.test_comment.contains("修改分支：master"));
+        assert!(draft.test_comment.contains("修改文件：（无）"));
+        assert!(draft.test_comment.contains("用例："));
+        assert!(draft.test_comment.contains("前置："));
+        assert!(draft.test_comment.contains("步骤与预期："));
+        assert!(!draft.test_comment.contains("**"));
+    }
+
+    #[test]
+    fn deterministic_modified_files_matches_plain_and_bold_labels() {
+        let plain = "修改分支：master\n修改文件：占位\n\n用例：x\n前置：y";
+        let out = apply_deterministic_modified_files(plain, &["A".into(), "B".into()]);
+        assert!(out.contains("修改文件：A、B"));
+        // 旧加粗写法同样能命中并迁移为纯文本。
+        let bold = "**修改文件**：占位";
+        let out_bold = apply_deterministic_modified_files(bold, &["A".into()]);
+        assert_eq!(out_bold, "修改文件：A");
+        // 空清单保持原文。
+        assert_eq!(apply_deterministic_modified_files(plain, &[]), plain);
     }
 
     #[test]
@@ -2829,27 +2855,29 @@ mod tests {
 
     #[test]
     fn deterministic_modified_files_replaces_field_value() {
-        let comment = "## 影响范围与测试指引\n\n**修改分支**：feat-x\n**修改文件**：Nto.Old（草稿归纳）\n**测试步骤**：回归登录";
+        let comment = "## 影响范围与测试指引\n\n修改分支：feat-x\n修改文件：Nto.Old（草稿归纳）\n测试步骤：回归登录";
         let out = apply_deterministic_modified_files(comment, &["src".to_string(), "docs".to_string()]);
-        assert!(out.contains("**修改分支**：feat-x"));
-        assert!(out.contains("**修改文件**：src、docs"));
-        assert!(out.contains("**测试步骤**：回归登录"));
+        assert!(out.contains("修改分支：feat-x"));
+        assert!(out.contains("修改文件：src、docs"));
+        assert!(out.contains("测试步骤：回归登录"));
         assert!(!out.contains("Nto.Old"));
+        // 旧加粗写法兼容：命中并迁移为纯文本字段行。
+        let bold = "**修改文件**：Nto.Old";
+        assert_eq!(
+            apply_deterministic_modified_files(bold, &["src".to_string()]),
+            "修改文件：src"
+        );
     }
 
     #[test]
     fn deterministic_modified_files_preserves_list_prefix() {
-        // 已加粗的列表行：替换字段值并保留行首列表符。
-        let listed = "- **修改文件**：Nto.X\n- **测试步骤**：1";
+        // 列表行：替换字段值并保留行首列表符（归一为纯文本，不加粗）。
+        let listed = "- 修改文件：Nto.X\n- 测试步骤：1";
         assert!(apply_deterministic_modified_files(listed, &["a".to_string()])
-            .starts_with("- **修改文件**：a"));
-        // 未加粗行不在本函数契约内——由 bolden_test_comment_fields 先行归一（调用链上
-        // headless 路径 apply 在 bolden 之前，草稿路径同样），这里只验证不误伤。
-        let plain = "修改文件：Nto.X";
-        assert_eq!(
-            apply_deterministic_modified_files(plain, &["a".to_string()]),
-            plain
-        );
+            .starts_with("- 修改文件：a"));
+        // 其余行不误伤。
+        assert!(apply_deterministic_modified_files(listed, &["a".to_string()])
+            .contains("- 测试步骤：1"));
     }
 
     #[test]

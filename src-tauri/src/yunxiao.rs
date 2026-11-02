@@ -1712,7 +1712,40 @@ fn replace_markdown_links(s: &str) -> String {
     out
 }
 
+/// 把评分小节包装成黄金参照格式（QHDK-30975 评论 23963955）的完整评分评论：
+/// 头部 `【价值评估】<编号> <标题>` 在 `## 价值评分` 小节之前。
+/// 编号/标题缺省时退化为不带头部的小节原文（兼容旧调用与解析容错——头部缺失不影响
+/// extract/parse，因为两者都从 `## 价值评分` 标题行开始切片）。
+fn decorate_score_comment(
+    score_content: &str,
+    serial_number: Option<&str>,
+    task_name: Option<&str>,
+) -> String {
+    let trimmed = score_content.trim();
+    let serial = serial_number.map(str::trim).unwrap_or("");
+    let title = task_name.map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if serial.is_empty() && title.is_empty() {
+        return trimmed.to_string();
+    }
+    // 头部拼接时标题已含编号前缀（任务名惯例 `<serial> <title>`）则不重复。
+    let head = if !serial.is_empty() && title.starts_with(serial) {
+        title.to_string()
+    } else {
+        format!("{serial} {title}").trim().to_string()
+    };
+    format!("【价值评估】{head}\n\n{trimmed}")
+}
+
 /// POST 创建评论（CreateWorkitemComment），返回评论 ID。
+///
+/// content 直接发 Markdown 原文 + `contentFormat: "MARKDOWN"`（实测 QHDK-30023 评论
+/// 23984023 创建成功，且与黄金参照评论 23963955 同构——该评论 content 即 Markdown 源，
+/// 表格/加粗/标题渲染正常）。此前发富文本 JSON（htmlValue+jsonMLValue）时
+/// `md_to_safe_jsonml` 会把表格压扁成普通段落（`|` 被替换为空格）、把列表/加粗剥掉，
+/// 评分明细表发布出去就是一串挤在一起的文字——这是回写格式「乱」的直接原因。
 async fn post_workitem_comment(
     client: &reqwest::Client,
     token: &str,
@@ -1726,7 +1759,7 @@ async fn post_workitem_comment(
         ))
         .header("x-yunxiao-token", token)
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "content": content }))
+        .json(&serde_json::json!({ "content": content, "contentFormat": "MARKDOWN" }))
         .send()
         .await
         .map_err(|e| format!("请求云效创建评论失败: {e}"))?;
@@ -1771,6 +1804,8 @@ pub async fn yunxiao_writeback_with_score(
     dev_content: String,
     test_content: String,
     score_content: Option<String>,
+    serial_number: Option<String>,
+    task_name: Option<String>,
 ) -> Result<YunxiaoWritebackResult, String> {
     let token = token.trim().to_string();
     let organization_id = organization_id.trim().to_string();
@@ -1799,16 +1834,18 @@ pub async fn yunxiao_writeback_with_score(
         .or_else(|| crate::value_score::extract_value_score_section(dev_content))
         .and_then(crate::value_score::parse_value_score_index)
         .map(|v| v.round() as i32);
-    // 发送前把 Markdown 转成云效富文本 JSON（评分解析已在原始 Markdown 上完成，转换不破坏评分链路）。
-    let dev_rich = markdown_to_yunxiao_rich_text(dev_content);
-    let test_rich = markdown_to_yunxiao_rich_text(test_content);
-    let score_rich = markdown_to_yunxiao_rich_text(score_content);
+    // 评论直接发 Markdown 原文（contentFormat=MARKDOWN，见 post_workitem_comment）；
+    // 评分解析已在原始 Markdown 上完成，无转换环节。
+    // 评分评论按黄金参照格式（QHDK-30975 评论 23963955）拼装头部：
+    // `【价值评估】<编号> <标题>`，解析约束（- 绩效指数：等标签行）不受影响——
+    // 头部行在 `## 价值评分` 标题之前，extract_value_score_section 按标题切片不包含它。
+    let score_rich = decorate_score_comment(score_content, serial_number.as_deref(), task_name.as_deref());
 
     let client = build_client()?;
     // 1) 先发布开发向评论。
     let dev_comment_id =
-        post_workitem_comment(&client, &token, &organization_id, &workitem_id, &dev_rich).await?;
-    // 2) 测试向评论非空时再发布（test_content 非空则 test_rich 必非空）。
+        post_workitem_comment(&client, &token, &organization_id, &workitem_id, dev_content).await?;
+    // 2) 测试向评论非空时再发布。
     let test_comment_id = if test_content.is_empty() {
         None
     } else {
@@ -1818,7 +1855,7 @@ pub async fn yunxiao_writeback_with_score(
                 &token,
                 &organization_id,
                 &workitem_id,
-                &test_rich,
+                test_content,
             )
             .await?,
         )
@@ -2755,6 +2792,35 @@ mod tests {
     fn plan_start_default_value_is_today_midnight() {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         assert_eq!(plan_start_default_value(), format!("{today} 00:00:00"));
+    }
+
+    #[test]
+    fn decorate_score_comment_prepends_reference_header() {
+        // 黄金参照格式（QHDK-30975 评论 23963955）：`【价值评估】编号 标题` 头部 + 小节。
+        let section = "## 价值评分（issue-value-scoring · 2026-11-02）\n\n- 优先指数：**48.0** = 3 × 5 × 4 × 0.8";
+        let out = decorate_score_comment(section, Some("QHDK-30975"), Some("【墨江县人民医院】新门诊病历"));
+        assert!(out.starts_with("【价值评估】QHDK-30975 【墨江县人民医院】新门诊病历"));
+        assert!(out.contains("## 价值评分"));
+        // 头部行在 `## 价值评分` 之前，不破坏 extract/parse 切片。
+        assert_eq!(
+            crate::value_score::parse_value_score_index(&out),
+            Some(48.0)
+        );
+    }
+
+    #[test]
+    fn decorate_score_comment_dedupes_serial_in_title() {
+        let section = "## 价值评分\n\n- 绩效指数：59.4";
+        let out = decorate_score_comment(section, Some("QHDK-1"), Some("QHDK-1 修复登录"));
+        assert!(out.starts_with("【价值评估】QHDK-1 修复登录"));
+        assert!(!out.contains("QHDK-1 QHDK-1"));
+    }
+
+    #[test]
+    fn decorate_score_comment_falls_back_without_metadata() {
+        let section = "## 价值评分\n\n- 核心指数：50";
+        assert_eq!(decorate_score_comment(section, None, None), section);
+        assert_eq!(decorate_score_comment("", Some("QHDK-1"), Some("t")), "");
     }
 
     #[test]
