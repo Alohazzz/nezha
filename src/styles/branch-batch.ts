@@ -352,6 +352,32 @@ const branchBatch = {
     borderRadius: 8,
     padding: 6,
   },
+  /// 「添加到计划」结果摘要（issue #121）：四分组的紧凑行样式。
+  bbSummaryBlock: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    marginBottom: 8,
+    fontSize: 11.5,
+    lineHeight: 1.5,
+  },
+  bbSummaryRow: {
+    display: "flex",
+    alignItems: "flex-start" as const,
+    gap: 6,
+  },
+  bbSummaryLabel: {
+    flexShrink: 0,
+    fontWeight: 700,
+  },
+  bbSummaryItems: {
+    color: "var(--text-secondary)",
+    wordBreak: "break-all" as const,
+  },
+  bbSummaryItemsDanger: {
+    color: "var(--danger-fg)",
+    wordBreak: "break-all" as const,
+  },
   bbMember: {
     display: "flex",
     alignItems: "center" as const,

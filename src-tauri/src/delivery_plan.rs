@@ -1080,22 +1080,81 @@ pub async fn get_delivery_plan_worktree_base(
     .map_err(|e| format!("Worktree base task panicked: {e}"))?
 }
 
-/// 「已是待开发」整批拒绝的报错文案（抽出纯函数留测试接缝，与校验循环同口径）。
-fn reject_pending_issues_error(serial_numbers: &[&str]) -> String {
-    format!(
-        "议题 {} 已是「{}」状态，不能重复加入计划",
-        serial_numbers.join("、"),
-        crate::yunxiao::PLAN_DEV_STATUS_NAME
-    )
+/// 单条议题的加入结果：编号 + 原因（skipped / failed 时有值）。
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PlanIssueOutcome {
+    #[serde(rename = "serialNumber")]
+    pub serial_number: String,
+    #[serde(rename = "workitemId")]
+    pub workitem_id: String,
+    /// skipped（已是待开发）或 failed（回写 / 归属拒绝）时的说明；成功条目为空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// failed 组专用：false = 归属冲突等不可重试拒绝，前端重试集要排除。
+    #[serde(default)]
+    pub retryable: bool,
+}
+
+/// 批量加入计划的结构化结果（issue #121）：部分失败不再整批报错，
+/// 逐条归入四组，前端弹结果摘要并支持只补失败/未处理条目。
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct AddPlanSummary {
+    /// 云效回写成功的议题。
+    #[serde(default)]
+    pub succeeded: Vec<PlanIssueOutcome>,
+    /// 已是「待开发」（上次已成功或人工置过）：跳过云效写，仅补本地归属。
+    #[serde(default)]
+    pub skipped: Vec<PlanIssueOutcome>,
+    /// 回写失败（带原因，可重试）或已属其它计划（不可重试）。
+    #[serde(default)]
+    pub failed: Vec<PlanIssueOutcome>,
+    /// 回写遇错即停后尚未处理的剩余议题（可重试）。
+    #[serde(default)]
+    pub pending: Vec<PlanIssueOutcome>,
+    /// true = 存在 failed / pending，前端展示结果摘要而不是直接关闭。
+    #[serde(default)]
+    pub partial: bool,
+}
+
+/// 命令返回值：更新后的计划 + 逐条结果摘要。兼容旧调用方只取 plan 的场景。
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct AddPlanResult {
+    pub plan: DeliveryPlan,
+    pub summary: AddPlanSummary,
+}
+
+fn outcome(issue: &PlanIssue, reason: &str) -> PlanIssueOutcome {
+    PlanIssueOutcome {
+        serial_number: issue.serial_number.clone(),
+        workitem_id: issue.workitem_id.clone(),
+        reason: reason.to_string(),
+        retryable: false,
+    }
+}
+
+/// 可重试的失败条目（回写失败 / 未处理）：前端「重试失败+未处理」只收这类。
+fn retryable_outcome(issue: &PlanIssue, reason: &str) -> PlanIssueOutcome {
+    PlanIssueOutcome {
+        retryable: true,
+        ..outcome(issue, reason)
+    }
+}
+
+impl AddPlanSummary {
+    fn is_partial(&self) -> bool {
+        !self.failed.is_empty() || !self.pending.is_empty()
+    }
 }
 
 /// 「添加到计划」：把云效议题加入计划成员（有序追加，重复跳过）。
-/// 单计划归属（S1）：同一议题已在**其它**计划时整体拒绝，不部分写入。
+/// 单计划归属（S1）：同一议题已在**其它**计划时拒绝该条，不部分写入。
 ///
-/// 云效同步（issue #105）：添加前逐条实时校验「已是待开发则整批拒绝」；校验通过后
-/// 先对每条议题顺序回写云效（计划开始时间 + 负责人 + 状态待开发；计划完成时间
-/// 不回写、归用户在云效侧维护），全部成功才把成员写入本地 batches.json——任一
-/// 失败本地不动，重试语义干净。
+/// 云效同步（issue #105）+ 部分失败可恢复（issue #121）：预检阶段逐条实时拉
+/// 云效状态并查本地归属，三分类——已属其它计划 → 该条拒绝（不调写 API）；
+/// 已是「待开发」→ 视为已加入，跳过云效写、仅补本地归属；正常 → 顺序回写
+/// 云效（计划开始时间 + 负责人 + 状态待开发），**遇错即停**，剩余条目进
+/// pending。跳过/成功的条目与失败时已成功的条目统一在落盘阶段补写本地
+/// batches.json，保证「云效态 = 本地态」闭合；摘要返回给前端弹结果清单。
 #[tauri::command]
 pub async fn add_delivery_plan_issues(
     project_id: String,
@@ -1103,16 +1162,55 @@ pub async fn add_delivery_plan_issues(
     issues: Vec<PlanIssue>,
     token: String,
     organization_id: String,
-) -> Result<DeliveryPlan, String> {
+) -> Result<AddPlanResult, String> {
     let token = token.trim().to_string();
     let organization_id = organization_id.trim().to_string();
     if token.is_empty() || organization_id.is_empty() {
         return Err("缺少云效令牌或组织 ID，请先在设置中配置云效连接".to_string());
     }
-    // 校验阶段（云效实时状态，不用列表缓存）：全部检查完再一次性报错，不遇错即停。
+    // 预检阶段（云效实时状态，不用列表缓存）：三分类逐条判定，不整批拒绝。
+    // 「已属其它计划」从落盘阶段前移到这里（issue #121）：在任何写 API 之前
+    // 拦下，避免云效回写成功后才发现归属冲突、留下「云效已改本地未写」的脏态。
     let client = crate::yunxiao::build_client()?;
-    let mut pending: Vec<&str> = Vec::new();
+    let mut skipped: Vec<PlanIssue> = Vec::new();
+    let mut writeback: Vec<PlanIssue> = Vec::new();
+    let mut summary = AddPlanSummary {
+        succeeded: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+        pending: Vec::new(),
+        partial: false,
+    };
+    // 本地归属快照：spawn_blocking 里同步读 batches.json，预检只读一次。
+    let owned_plan_id = plan_id.clone();
+    let owned_project_id = project_id.clone();
+    let (taken_map, target_exists) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let plans = load_project_batches_sync(owned_project_id)?;
+        let map: std::collections::HashMap<String, String> = plans
+            .iter()
+            .filter(|p| p.id != owned_plan_id)
+            .flat_map(|p| {
+                p.issues
+                    .iter()
+                    .map(move |i| (i.workitem_id.clone(), p.name.clone()))
+            })
+            .collect();
+        let target_exists = plans.iter().any(|p| p.id == owned_plan_id);
+        Ok((map, target_exists))
+    })
+    .await
+    .map_err(|e| format!("Preflight task panicked: {e}"))??;
+    if !target_exists {
+        return Err("DeliveryPlan not found".to_string());
+    }
     for issue in &issues {
+        if let Some(plan_name) = taken_map.get(&issue.workitem_id) {
+            summary.failed.push(outcome(
+                issue,
+                &format!("已属于其它计划「{plan_name}」，请先移出再添加"),
+            ));
+            continue;
+        }
         let status_name = crate::yunxiao::fetch_workitem_status_name(
             &client,
             &token,
@@ -1122,43 +1220,62 @@ pub async fn add_delivery_plan_issues(
         .await
         .map_err(|e| format!("议题 {} 状态获取失败：{e}", issue.serial_number))?;
         if status_name == crate::yunxiao::PLAN_DEV_STATUS_NAME {
-            pending.push(&issue.serial_number);
+            // 已是「待开发」＝上次已成功（或人工置过）：不再回写云效，
+            // 仅补本地归属（落盘阶段统一处理），摘要归「无需处理」。
+            summary.skipped.push(outcome(issue, "已在计划中（待开发）"));
+            skipped.push(issue.clone());
+        } else {
+            writeback.push(issue.clone());
         }
     }
-    if !pending.is_empty() {
-        return Err(reject_pending_issues_error(&pending));
-    }
-    // 回写阶段：逐条顺序执行；失败信息带议题编号与具体字段，方便在云效侧核对。
-    for issue in &issues {
-        crate::yunxiao::writeback_issue_add_to_plan(
+    // 回写阶段：逐条顺序执行，遇错即停——失败条目带原因进 failed（可重试），
+    // 剩余条目进 pending（可重试）；已成功的条目照常落盘，不再「云效已改、本地未写」。
+    // 部分失败**不走 Err**：结构化摘要照常返回（issue #121 核心契约）。
+    let mut stopped_at: Option<usize> = None;
+    for (idx, issue) in writeback.iter().enumerate() {
+        match crate::yunxiao::writeback_issue_add_to_plan(
             &client,
             &token,
             &organization_id,
             &issue.workitem_id,
         )
         .await
-        .map_err(|e| format!("议题 {} 添加回写失败：{e}", issue.serial_number))?;
-    }
-    // 落盘阶段：云效全部成功后才动本地。
-    tokio::task::spawn_blocking(move || {
-        let mut plans = load_project_batches_sync(project_id.clone())?;
-        let taken = |wid: &str| {
-            plans
-                .iter()
-                .any(|p| p.id != plan_id && p.issues.iter().any(|i| i.workitem_id == wid))
-        };
-        if let Some(wid) = issues
-            .iter()
-            .map(|i| i.workitem_id.as_str())
-            .find(|wid| taken(wid))
         {
-            return Err(format!("议题 {wid} 已属于其它计划，请先移出再添加"));
+            Ok(()) => summary.succeeded.push(outcome(issue, "")),
+            Err(e) => {
+                stopped_at = Some(idx);
+                summary
+                    .failed
+                    .push(retryable_outcome(issue, &format!("回写失败：{e}")));
+                break;
+            }
         }
+    }
+    // 遇错即停后，失败条目之后的剩余条目全部记为 pending（保持原顺序）。
+    if let Some(stop) = stopped_at {
+        for issue in writeback.iter().skip(stop + 1) {
+            summary
+                .pending
+                .push(retryable_outcome(issue, "前序议题回写失败，未处理"));
+        }
+    }
+    summary.partial = summary.is_partial();
+    // 落盘阶段：把「回写成功 + 已加入跳过」的条目写入本地计划成员；存在失败时
+    // 也照常落盘已成功部分——不再整批回退，配合摘要与重试语义（issue #121）。
+    let final_summary = summary.clone();
+    let added: Vec<PlanIssue> = writeback
+        .iter()
+        .take(stopped_at.unwrap_or(writeback.len()))
+        .cloned()
+        .chain(skipped.iter().cloned())
+        .collect();
+    let plan = tokio::task::spawn_blocking(move || -> Result<DeliveryPlan, String> {
+        let mut plans = load_project_batches_sync(project_id.clone())?;
         let plan = plans
             .iter_mut()
             .find(|p| p.id == plan_id)
             .ok_or_else(|| "DeliveryPlan not found".to_string())?;
-        for issue in issues {
+        for issue in added {
             if !plan.issues.iter().any(|i| i.workitem_id == issue.workitem_id) {
                 plan.issues.push(issue);
             }
@@ -1168,7 +1285,11 @@ pub async fn add_delivery_plan_issues(
         Ok(updated)
     })
     .await
-    .map_err(|e| format!("Add plan issues task panicked: {e}"))?
+    .map_err(|e| format!("Add plan issues task panicked: {e}"))??;
+    Ok(AddPlanResult {
+        plan,
+        summary: final_summary,
+    })
 }
 
 /// 「移出计划」：按 workitemId 移除成员（不存在时幂等返回）。
@@ -1232,6 +1353,15 @@ fn run_git_ref(cwd: &str, reference: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plan_issue(workitem_id: &str, serial_number: &str) -> PlanIssue {
+        PlanIssue {
+            workitem_id: workitem_id.to_string(),
+            serial_number: serial_number.to_string(),
+            subject: String::new(),
+            category: String::new(),
+        }
+    }
 
     #[test]
     fn mr_state_maps_to_expected_plan_outcome() {
@@ -1370,12 +1500,24 @@ mod tests {
     }
 
     #[test]
-    fn pending_issues_error_lists_every_serial_at_once() {
-        // 整批拒绝：一次报出全部不合格编号，而不是遇到第一个就停。
-        let err = reject_pending_issues_error(&["QHDK-1", "QHDK-2"]);
-        assert!(err.contains("QHDK-1"));
-        assert!(err.contains("QHDK-2"));
-        assert!(err.contains("待开发"));
+    fn summary_partial_depends_on_failed_and_pending_only() {
+        // issue #121：skipped（已是待开发）不算部分失败，只有 failed / pending 才要弹摘要。
+        let mut summary = AddPlanSummary {
+            succeeded: vec![outcome(&plan_issue("w1", "QHDK-1"), "")],
+            skipped: vec![outcome(&plan_issue("w2", "QHDK-2"), "已在计划中（待开发）")],
+            failed: Vec::new(),
+            pending: Vec::new(),
+            partial: false,
+        };
+        assert!(!summary.is_partial());
+        summary.partial = true; // 落盘前由命令统一回填，这里只验证计算逻辑不受脏值影响
+        summary.failed.push(outcome(&plan_issue("w3", "QHDK-3"), "已属于其它计划「X」，请先移出再添加"));
+        assert!(summary.is_partial());
+        summary.failed.clear();
+        summary
+            .pending
+            .push(outcome(&plan_issue("w4", "QHDK-4"), "前序议题回写失败，未处理"));
+        assert!(summary.is_partial());
     }
 
     #[test]

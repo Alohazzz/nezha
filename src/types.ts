@@ -759,6 +759,36 @@ export interface PlanIssue {
 /** 方案生命周期：讨论中 → 已定稿 → 执行中 → 已完成；cancelled = 已取消。 */
 export type PlanStatus = "draft" | "finalized" | "executing" | "completed" | "cancelled";
 
+/** 「添加到计划」单条议题的加入结果（issue #121）：partial 时带原因。 */
+export interface PlanIssueOutcome {
+  serialNumber: string;
+  workitemId: string;
+  /** skipped（已是待开发）或 failed（回写 / 归属拒绝）时的说明 */
+  reason?: string;
+  /** failed 组专用：false = 归属冲突等不可重试拒绝，「重试失败+未处理」要排除 */
+  retryable?: boolean;
+}
+
+/** 「添加到计划」批量结果摘要：四分组 + partial 标志；部分失败不再整批报错。 */
+export interface AddPlanSummary {
+  /** 云效回写成功的议题 */
+  succeeded: PlanIssueOutcome[];
+  /** 已是「待开发」（上次已成功或人工置过）：跳过云效写，仅补本地归属 */
+  skipped: PlanIssueOutcome[];
+  /** 回写失败（带原因，可重试）或已属其它计划（不可重试） */
+  failed: PlanIssueOutcome[];
+  /** 回写遇错即停后尚未处理的剩余议题（可重试） */
+  pending: PlanIssueOutcome[];
+  /** true = 存在 failed / pending，前端展示结果摘要而不是直接关闭 */
+  partial: boolean;
+}
+
+/** add_delivery_plan_issues 命令返回值：更新后的计划 + 逐条结果摘要。 */
+export interface AddPlanResult {
+  plan: DeliveryPlan;
+  summary: AddPlanSummary;
+}
+
 /** 多议题联合方案：一份方案覆盖 N 个云效议题；正文与图片在项目内
  *  `.nezha/plans/<planId>/`（plan.md + images/），元数据持久化在 plans.json。 */
 export interface Plan {
