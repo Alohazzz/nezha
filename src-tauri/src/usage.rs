@@ -186,33 +186,6 @@ impl Drop for CodexRpcClient {
     }
 }
 
-pub(crate) fn call_codex_rpc_with_client(
-    codex_rpc: Arc<Mutex<Option<CodexRpcClient>>>,
-    method: &str,
-    params: Value,
-    timeout: Duration,
-) -> Result<Value, String> {
-    let mut guard = codex_rpc.lock();
-    if guard.as_mut().is_some_and(|client| !client.is_alive()) {
-        let dead_client = guard.take();
-        drop(guard);
-        drop(dead_client);
-        guard = codex_rpc.lock();
-    }
-    if guard.is_none() {
-        *guard = Some(CodexRpcClient::spawn()?);
-    }
-
-    let result = match guard.as_mut() {
-        Some(client) => client.call(method, params, Instant::now() + timeout),
-        None => Err("Codex RPC client was not initialized.".to_string()),
-    };
-    let failed_client = result.is_err().then(|| guard.take()).flatten();
-    drop(guard);
-    drop(failed_client);
-    result
-}
-
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------

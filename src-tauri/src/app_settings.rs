@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -9,12 +8,10 @@ use std::time::Duration;
 use std::path::Path;
 
 use crate::storage::atomic_write;
-use crate::TaskManager;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
 
 fn default_send_shortcut() -> String {
     "mod_enter".to_string()
@@ -91,8 +88,6 @@ const MAX_MODEL_ID_BYTES: usize = 1024;
 const MAX_MODEL_LABEL_BYTES: usize = 256;
 const MAX_REASONING_EFFORTS: usize = 32;
 const MAX_REASONING_EFFORT_BYTES: usize = 128;
-/// Codex 模型目录自动同步的过期阈值：超过该时长后打开设置页/启动时自动重同步。
-const CODEX_MODEL_SYNC_TTL_MS: i64 = 6 * 60 * 60 * 1000;
 
 pub fn get_login_shell_env() -> &'static [(String, String)] {
     crate::platform::login_shell_env()
@@ -1185,9 +1180,9 @@ fn parse_codex_model_option(value: &Value) -> Option<AgentModelOption> {
     })
 }
 
-fn discover_codex_model_options(
-    codex_rpc: Arc<Mutex<Option<crate::usage::CodexRpcClient>>>,
-) -> Result<Vec<AgentModelOption>, String> {
+fn discover_codex_model_options() -> Result<Vec<AgentModelOption>, String> {
+    // Fresh process: account/provider configuration may have changed since usage polling.
+    let mut client = crate::usage::CodexRpcClient::spawn()?;
     let mut models = Vec::new();
     let mut cursor: Option<String> = None;
 
@@ -1196,11 +1191,10 @@ fn discover_codex_model_options(
             Some(cursor) => json!({ "limit": 100, "cursor": cursor }),
             None => json!({ "limit": 100 }),
         };
-        let result = crate::usage::call_codex_rpc_with_client(
-            Arc::clone(&codex_rpc),
+        let result = client.call(
             "model/list",
             params,
-            Duration::from_secs(10),
+            std::time::Instant::now() + Duration::from_secs(10),
         )?;
         let page = result
             .get("data")
@@ -1282,30 +1276,41 @@ fn parse_catalog_file_model(value: &Value) -> Option<AgentModelOption> {
     })
 }
 
-/// 从 codex models 配置文件读取模型列表。
-/// 路径优先取 ~/.codex/config.toml 的 model_catalog_json，缺省回退 ~/.codex/models.json。
-/// 文件不存在或解析不出模型时返回 Ok(None)，由调用方回退到 RPC。
+/// Only explicitly configured provider catalogs may be used as an offline fallback.
+/// An orphan models.json can belong to a previous provider/login.
 fn discover_codex_models_from_catalog_file() -> Result<Option<Vec<AgentModelOption>>, String> {
-    let home =
-        crate::platform::home_dir().ok_or_else(|| "Cannot find home directory".to_string())?;
-    let config_path = home.join(".codex").join("config.toml");
-    let catalog_path = if config_path.exists() {
-        let raw = fs::read_to_string(&config_path)
-            .map_err(|e| format!("Cannot read ~/.codex/config.toml: {}", e))?;
-        toml::from_str::<toml::Value>(&raw)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("model_catalog_json")
-                    .and_then(toml::Value::as_str)
-                    .map(str::trim)
-                    .filter(|path| !path.is_empty())
-                    .map(str::to_string)
-            })
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".codex").join("models.json"))
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::platform::home_dir().map(|home| home.join(".codex")))
+        .ok_or_else(|| "Cannot find Codex home directory".to_string())?;
+    discover_codex_models_from_catalog_dir(&codex_home)
+}
+
+fn discover_codex_models_from_catalog_dir(
+    codex_home: &std::path::Path,
+) -> Result<Option<Vec<AgentModelOption>>, String> {
+    let config_path = codex_home.join("config.toml");
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let raw =
+        fs::read_to_string(&config_path).map_err(|e| format!("Cannot read Codex config: {e}"))?;
+    let config: toml::Value =
+        toml::from_str(&raw).map_err(|e| format!("Cannot parse Codex config: {e}"))?;
+    let Some(path) = config
+        .get("model_catalog_json")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(None);
+    };
+    let catalog_path = PathBuf::from(path);
+    let catalog_path = if catalog_path.is_absolute() {
+        catalog_path
     } else {
-        home.join(".codex").join("models.json")
+        codex_home.join(catalog_path)
     };
 
     if !catalog_path.exists() {
@@ -1358,84 +1363,61 @@ fn merge_synced_models(
     merged
 }
 
+/// RPC is authoritative for the current login; only explicit provider files are a fallback.
+fn discover_current_codex_models(
+    rpc: impl FnOnce() -> Result<Vec<AgentModelOption>, String>,
+    file: impl FnOnce() -> Result<Option<Vec<AgentModelOption>>, String>,
+) -> Result<Vec<AgentModelOption>, String> {
+    match rpc() {
+        Ok(models) if !models.is_empty() => Ok(models),
+        result => {
+            let error = result
+                .err()
+                .unwrap_or_else(|| "Codex returned no models".to_string());
+            match file()? {
+                Some(models) if !models.is_empty() => Ok(models),
+                _ => Err(error),
+            }
+        }
+    }
+}
+
+fn refresh_codex_model_catalog() -> Result<AppSettings, String> {
+    let discovered = discover_current_codex_models(
+        discover_codex_model_options,
+        discover_codex_models_from_catalog_file,
+    )?;
+    let source_version = detect_codex_version();
+    let _guard = settings_lock().lock();
+    let mut settings = load_settings_unlocked();
+    let catalog = catalog_mut(&mut settings, "codex")?;
+    catalog.models = normalize_model_options(merge_synced_models(discovered, &catalog.models))?;
+    catalog.initialized = true;
+    catalog.initialized_at = Some(chrono::Utc::now().timestamp_millis());
+    catalog.source_version = source_version;
+    save_settings_unlocked(settings)
+}
+
 #[tauri::command]
-pub async fn refresh_agent_model_catalog(
-    agent: String,
-    task_manager: State<'_, TaskManager>,
-) -> Result<AppSettings, String> {
+pub async fn refresh_agent_model_catalog(agent: String) -> Result<AppSettings, String> {
     if agent != "codex" {
         return Err(
             "Automatic model discovery is not available for this agent; add models manually."
                 .to_string(),
         );
     }
-
-    let file_models = tokio::task::spawn_blocking(discover_codex_models_from_catalog_file)
+    tokio::task::spawn_blocking(refresh_codex_model_catalog)
         .await
-        .map_err(|e| e.to_string())?;
-    let (discovered, _source) = match file_models {
-        Ok(Some(models)) => (models, "file"),
-        _ => {
-            // 初始化应严格使用刚保存的 Codex 路径；丢弃可能由用量面板基于旧路径启动的实例。
-            // 先从锁内 take，再在锁外 drop（Drop 会 kill + wait，不能持锁做进程 I/O）。
-            let stale_rpc = task_manager.codex_rpc.lock().take();
-            drop(stale_rpc);
-            let codex_rpc = Arc::clone(&task_manager.codex_rpc);
-            let models =
-                tokio::task::spawn_blocking(move || discover_codex_model_options(codex_rpc))
-                    .await
-                    .map_err(|e| e.to_string())??;
-            (models, "rpc")
-        }
-    };
-    if discovered.is_empty() {
-        return Err("Codex returned no models; the catalog was left unchanged.".to_string());
-    }
-    let source_version = tokio::task::spawn_blocking(detect_codex_version)
-        .await
-        .unwrap_or_default();
-
-    tokio::task::spawn_blocking(move || {
-        let _guard = settings_lock().lock();
-        let mut settings = load_settings_unlocked();
-        let catalog = catalog_mut(&mut settings, "codex")?;
-        catalog.models = normalize_model_options(merge_synced_models(discovered, &catalog.models))?;
-        catalog.initialized = true;
-        catalog.initialized_at = Some(chrono::Utc::now().timestamp_millis());
-        catalog.source_version = source_version;
-        save_settings_unlocked(settings)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?
 }
 
-/// 应用启动后台调用：仅当存在 codex models 配置文件且目录未初始化/过期时，
-/// 只读文件做一次轻量同步（不 spawn codex 进程）。失败静默，设置页可重试。
-pub fn sync_codex_catalog_from_file_if_due() {
-    let Ok(Some(models)) = discover_codex_models_from_catalog_file() else {
-        return;
-    };
-    let _guard = settings_lock().lock();
-    let mut settings = load_settings_unlocked();
-    let Ok(catalog) = catalog_mut(&mut settings, "codex") else {
-        return;
-    };
-    let due = if catalog.initialized {
-        match catalog.initialized_at {
-            Some(at) => chrono::Utc::now().timestamp_millis() - at > CODEX_MODEL_SYNC_TTL_MS,
-            None => false,
-        }
-    } else {
-        true
-    };
-    if !due {
-        return;
-    }
-    if let Ok(merged) = normalize_model_options(merge_synced_models(models, &catalog.models)) {
-        catalog.models = merged;
-        catalog.initialized = true;
-        catalog.initialized_at = Some(chrono::Utc::now().timestamp_millis());
-        let _ = save_settings_unlocked(settings);
+/// Startup refresh also repairs catalogs saved before a login/provider switch.
+pub fn sync_codex_catalog_on_startup() {
+    if let Err(error) = refresh_codex_model_catalog() {
+        #[cfg(debug_assertions)]
+        eprintln!("[codex-model-catalog] startup refresh failed: {error}");
+        #[cfg(not(debug_assertions))]
+        let _ = error;
     }
 }
 
@@ -1919,6 +1901,60 @@ mod codex_structured_model_tests {
 #[cfg(test)]
 mod model_catalog_tests {
     use super::*;
+
+    #[test]
+    fn current_rpc_catalog_takes_precedence_over_old_provider_file() {
+        let model = parse_codex_model_option(&json!({"model":"gpt-example"})).unwrap();
+        let result = discover_current_codex_models(
+            || Ok(vec![model.clone()]),
+            || panic!("a live account catalog must never be replaced by a provider file"),
+        )
+        .unwrap();
+        assert_eq!(result, vec![model]);
+    }
+
+    #[test]
+    fn explicit_provider_catalog_still_works_offline() {
+        let dir =
+            std::env::temp_dir().join(format!("nezha-model-catalog-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("config.toml"),
+            "model_catalog_json = \"models.json\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("models.json"),
+            r#"{"models":[{"slug":"provider/model"}]}"#,
+        )
+        .unwrap();
+        let result = discover_current_codex_models(
+            || Err("RPC offline".into()),
+            || discover_codex_models_from_catalog_dir(&dir),
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(result.unwrap()[0].model, "provider/model");
+    }
+
+    #[test]
+    fn ignores_unconfigured_legacy_model_file_after_login_switch() {
+        let dir =
+            std::env::temp_dir().join(format!("nezha-model-catalog-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("config.toml"), "model = \"gpt-example\"\n").unwrap();
+        fs::write(
+            dir.join("models.json"),
+            r#"{"models":[{"slug":"deepseek-flash"}]}"#,
+        )
+        .unwrap();
+        let result = discover_codex_models_from_catalog_dir(&dir);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "orphan provider catalogs must not override the logged-in account"
+        );
+    }
 
     #[test]
     fn parses_codex_model_list_metadata() {

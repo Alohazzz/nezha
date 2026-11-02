@@ -2,8 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Check, ChevronLeft, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
-import s from "../../styles";
-import type { AgentModelCatalog } from "../app-settings/types";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  type AppSettings,
+  type AgentModelCatalog,
+} from "../app-settings/types";
 
 type PickerView = "models" | "efforts";
 
@@ -48,12 +52,33 @@ export function CodexModelPicker({
     setActiveView(view);
   }, [view]);
 
-  const options = useMemo(() => {
-    if (!model || catalog.models.some((option) => option.model === model)) {
-      return catalog.models;
-    }
-    return [...catalog.models, { model, reasoningEfforts: [] }];
-  }, [catalog.models, model]);
+  const [currentCatalog, setCurrentCatalog] = useState(catalog);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(undefined);
+    invoke<AppSettings>("refresh_agent_model_catalog", { agent: "codex" })
+      .then((settings) => {
+        if (cancelled) return;
+        setCurrentCatalog(settings.codex_model_catalog);
+        window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(String(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  // A saved selection from a previous provider is only a label, never a candidate.
+  const options = loading || error ? [] : currentCatalog.models;
   const selectedOption = options.find((option) => option.model === model);
   const efforts = useMemo(() => {
     if (activeView !== "efforts") return [];
@@ -64,7 +89,9 @@ export function CodexModelPicker({
       : configured;
   }, [activeView, reasoningEffort, selectedOption]);
 
-  const modelLabel = selectedOption ? optionLabel(selectedOption) : t("newTask.modelDefault");
+  const modelLabel = selectedOption
+    ? optionLabel(selectedOption)
+    : model || t("newTask.modelDefault");
 
   function close() {
     setOpen(false);
@@ -96,37 +123,43 @@ export function CodexModelPicker({
       {/* 锚满 composer 容器（宿主 wrap 是 position:relative）：浮层 side="top"
           align="end" 时贴容器右上沿弹出，与 composer 可视框对齐——Anchor 是
           0x0 空元素，不撑满就落在容器左上角。 */}
-      <Popover.Anchor
-        style={
-          {
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-          } as React.CSSProperties
-        }
-      />
+      <Popover.Anchor className="codex-model-picker-anchor" />
       <Popover.Portal>
         <Popover.Content
           side="top"
           align="end"
           sideOffset={6}
-          style={s.taskModelPopoverContent}
+          className="codex-model-picker"
           onOpenAutoFocus={(e) => e.preventDefault()}
         >
-          {activeView === "models" ? (
+          {loading ? (
+            <div role="status" className="codex-model-picker-status">
+              {t("appSettings.models.syncing")}
+            </div>
+          ) : error ? (
+            <div className="codex-model-picker-status">
+              <div role="alert">{error}</div>
+              <button
+                type="button"
+                className="branch-popover-item"
+                onClick={() => setRefreshKey((key) => key + 1)}
+              >
+                {t("appSettings.models.sync")}
+              </button>
+            </div>
+          ) : activeView === "models" ? (
             <>
-              <div style={s.taskModelSubmenuHeader}>{t("newTask.model")}</div>
-              <div style={s.taskModelPopoverSeparator} />
-              <div style={s.taskModelPopoverList}>
+              <div className="codex-model-picker-header">{t("newTask.model")}</div>
+              <div className="codex-model-picker-separator" />
+              <div className="codex-model-picker-list">
                 <button
                   type="button"
-                  className="branch-popover-item"
-                  style={!model ? s.taskModelPopoverItemSelected : s.taskModelPopoverItem}
+                  className="branch-popover-item codex-model-picker-item"
                   aria-pressed={!model}
                   onClick={() => selectModel(undefined)}
                 >
-                  <span style={s.taskModelPopoverItemBody}>
-                    <span style={s.taskModelPopoverItemName}>{t("newTask.modelDefault")}</span>
+                  <span className="codex-model-picker-body">
+                    <span className="codex-model-picker-name">{t("newTask.modelDefault")}</span>
                   </span>
                   {!model && <Check size={14} strokeWidth={2.2} />}
                 </button>
@@ -136,15 +169,14 @@ export function CodexModelPicker({
                     <button
                       key={option.model}
                       type="button"
-                      className="branch-popover-item"
-                      style={selected ? s.taskModelPopoverItemSelected : s.taskModelPopoverItem}
+                      className="branch-popover-item codex-model-picker-item"
                       aria-pressed={selected}
                       onClick={() => selectModel(option.model)}
                     >
-                      <span style={s.taskModelPopoverItemBody}>
-                        <span style={s.taskModelPopoverItemName}>{optionLabel(option)}</span>
+                      <span className="codex-model-picker-body">
+                        <span className="codex-model-picker-name">{optionLabel(option)}</span>
                         {option.label && option.label !== option.model && (
-                          <span style={s.taskModelPopoverItemMeta}>{option.model}</span>
+                          <span className="codex-model-picker-meta">{option.model}</span>
                         )}
                       </span>
                       {selected && <Check size={14} strokeWidth={2.2} />}
@@ -157,24 +189,22 @@ export function CodexModelPicker({
             <>
               <button
                 type="button"
-                className="branch-popover-item"
-                style={s.taskModelSubmenuHeader}
+                className="branch-popover-item codex-model-picker-header"
                 onClick={() => setActiveView("models")}
               >
                 <ChevronLeft size={14} strokeWidth={2} />
                 <span>{t("newTask.reasoningEffort")}</span>
               </button>
-              <div style={s.taskModelPopoverSeparator} />
-              <div style={s.taskModelPopoverList}>
+              <div className="codex-model-picker-separator" />
+              <div className="codex-model-picker-list">
                 <button
                   type="button"
-                  className="branch-popover-item"
-                  style={!reasoningEffort ? s.taskModelPopoverItemSelected : s.taskModelPopoverItem}
+                  className="branch-popover-item codex-model-picker-item"
                   aria-pressed={!reasoningEffort}
                   onClick={() => selectEffort(undefined)}
                 >
-                  <span style={s.taskModelPopoverItemBody}>
-                    <span style={s.taskModelPopoverItemName}>
+                  <span className="codex-model-picker-body">
+                    <span className="codex-model-picker-name">
                       {t("newTask.reasoningEffortAuto")}
                     </span>
                   </span>
@@ -186,20 +216,18 @@ export function CodexModelPicker({
                     <button
                       key={effort}
                       type="button"
-                      className="branch-popover-item"
-                      style={selected ? s.taskModelPopoverItemSelected : s.taskModelPopoverItem}
+                      className="branch-popover-item codex-model-picker-item"
                       aria-pressed={selected}
                       onClick={() => selectEffort(effort)}
                     >
-                      <span style={s.taskModelPopoverItemBody}>
-                        <span style={s.taskModelPopoverItemName}>
+                      <span className="codex-model-picker-body">
+                        <span className="codex-model-picker-name">
                           <Zap
                             size={12}
                             strokeWidth={2.2}
                             fill="currentColor"
-                            style={s.taskModelCompactIcon}
-                          />
-                          {" "}
+                            className="codex-model-picker-icon"
+                          />{" "}
                           {effort}
                         </span>
                       </span>
@@ -212,7 +240,7 @@ export function CodexModelPicker({
           )}
           {/* modelLabel 仅在 models 视图头部回显当前值（与 header 标签并存） */}
           {activeView === "models" && (
-            <div style={s.codexModelPickerCurrent} title={selectedOption?.model}>
+            <div className="codex-model-picker-current" title={selectedOption?.model}>
               {modelLabel}
             </div>
           )}

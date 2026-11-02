@@ -370,11 +370,10 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 crate::skills::periodic_sync_loop(periodic_handle).await;
             });
-            // 后台轻量同步 codex 模型目录（只读 model_catalog_json 配置文件，
-            // 不 spawn codex 进程；未配置文件时静默跳过）。
+            // 后台查询当前 Codex 登录的模型目录，修复切换账号/provider 后的旧缓存。
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                crate::app_settings::sync_codex_catalog_from_file_if_due();
+                crate::app_settings::sync_codex_catalog_on_startup();
             });
             // Windows: 创建系统托盘图标(关闭窗口时收起到托盘,而非退出)
             #[cfg(target_os = "windows")]

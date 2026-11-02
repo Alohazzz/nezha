@@ -2,6 +2,93 @@
  * CSS-in-JS 对象表达不了的 :hover / :focus-visible / [data-*] / @keyframes 一律放这里；
  * 静态布局在 codex-stream.ts。 */
 
+.codex-model-picker-anchor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.codex-model-picker {
+  z-index: 9999;
+  width: 240px;
+  max-width: calc(100vw - 32px);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-medium);
+  border-radius: 9px;
+  box-shadow: var(--shadow-md);
+}
+.codex-model-picker-header {
+  min-height: 32px;
+  padding: 5px 6px;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.codex-model-picker-separator {
+  height: 1px;
+  margin: 4px 3px;
+  background: var(--border-dim);
+}
+.codex-model-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.codex-model-picker-item {
+  justify-content: space-between;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 7px;
+}
+.codex-model-picker-item[aria-pressed="true"] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.codex-model-picker-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 2px;
+}
+.codex-model-picker-name,
+.codex-model-picker-meta {
+  min-width: 0;
+  max-width: 174px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codex-model-picker-meta {
+  color: var(--text-hint);
+  font-size: 10.5px;
+}
+.codex-model-picker-icon {
+  flex-shrink: 0;
+}
+.codex-model-picker-current {
+  margin-top: 4px;
+  padding: 4px 7px 2px;
+  border-top: 1px solid var(--border-dim);
+  color: var(--text-hint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codex-model-picker-status {
+  padding: 6px 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.codex-model-picker-status [role="alert"] {
+  color: var(--color-error);
+}
+
 /* ── 工具卡摘要行交互态 ─────────────────────────────────────────────────── */
 
 .codex-stream-tool-header:hover {
