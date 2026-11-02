@@ -69,6 +69,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Structured mode is unavailable: the Codex CLI was not detected or its version is below 0.156. Falling back to Terminal.",
     "appSettings.codexRunModeFloorWarning":
       "Structured mode requires Codex CLI ≥ 0.156 (or a working installation).",
+    "appSettings.codexAskInWorkspaceAutoApprove": "Codex Ask-Mode Approvals",
+    "appSettings.codexAskInWorkspaceAutoApproveToggle": "Auto-approve in-workspace actions",
+    "appSettings.codexAskInWorkspaceAutoApproveHint":
+      "For Terminal-channel Codex tasks in Ask permission mode: stop prompting for every in-workspace action (reads, edits). Out-of-workspace actions still ask. Prevents stalls where a batch of parallel commands waits on un-answered approvals. New tasks only.",
     "appSettings.attentionBadge": "Attention Badge",
     "appSettings.attentionBadgeToggle": "Show pending-confirmation count",
     "appSettings.attentionBadgeHint":
@@ -1426,6 +1430,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.codexRunModeUnsupportedHint":
       "结构化模式不可用：未检测到 Codex CLI 或版本低于 0.156，已回落为终端模式。",
     "appSettings.codexRunModeFloorWarning": "结构化模式需要 Codex CLI ≥ 0.156（或可用的安装）。",
+    "appSettings.codexAskInWorkspaceAutoApprove": "Codex ask 模式审批",
+    "appSettings.codexAskInWorkspaceAutoApproveToggle": "工作区内操作免逐条审批",
+    "appSettings.codexAskInWorkspaceAutoApproveHint":
+      "终端通道的 Codex 任务在「智能体默认（ask）」权限模式下：工作区内操作（读取、编辑等）不再逐条弹出审批，越界操作仍会询问。可避免一批并行命令因部分审批无人应答导致任务假死。仅对此后新建的任务生效。",
     "appSettings.attentionBadge": "待确认角标",
     "appSettings.attentionBadgeToggle": "显示待确认任务数量",
     "appSettings.attentionBadgeHint":

@@ -163,6 +163,45 @@ export function GeneralPanel({
 
   const systemNotificationsOn = systemNotifications === true;
 
+  // Codex ask 模式工作区内免逐条审批（issue #120）：与系统通知开关同款自包含模式。
+  const [codexAskInWorkspaceAutoApprove, setCodexAskInWorkspaceAutoApprove] = useState<boolean | null>(null);
+  const [codexAskInWorkspaceAutoApproveBusy, setCodexAskInWorkspaceAutoApproveBusy] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AppSettings>("load_app_settings")
+      .then((loaded) => {
+        if (!cancelled) setCodexAskInWorkspaceAutoApprove(loaded.codex_ask_in_workspace_auto_approve);
+      })
+      .catch(() => {
+        // 读取失败按后端默认值展示（关闭），保持开关可操作
+        if (!cancelled) setCodexAskInWorkspaceAutoApprove(false);
+      })
+      .finally(() => {
+        if (!cancelled) setCodexAskInWorkspaceAutoApproveBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleCodexAskInWorkspaceAutoApproveToggle = async () => {
+    if (codexAskInWorkspaceAutoApproveBusy || codexAskInWorkspaceAutoApprove === null) return;
+    const enabled = !codexAskInWorkspaceAutoApprove;
+    setCodexAskInWorkspaceAutoApprove(enabled);
+    setCodexAskInWorkspaceAutoApproveBusy(true);
+    try {
+      const next = await invoke<AppSettings>("save_codex_ask_in_workspace_auto_approve", { enabled });
+      setCodexAskInWorkspaceAutoApprove(next.codex_ask_in_workspace_auto_approve);
+    } catch {
+      setCodexAskInWorkspaceAutoApprove(!enabled);
+    } finally {
+      setCodexAskInWorkspaceAutoApproveBusy(false);
+    }
+  };
+
+  const codexAskInWorkspaceAutoApproveOn = codexAskInWorkspaceAutoApprove === true;
+
   // Codex 运行通道全局设置：自包含模式（面板内加载/保存，广播 CHANGED 让
   // App.tsx 的任务创建状态同步）。structured 有版本地板（codex ≥ 0.156）：
   // null = 探测中，探测失败（含未安装）视为不支持；不支持时自愈回 pty。
@@ -395,6 +434,27 @@ export function GeneralPanel({
             <span>{t("appSettings.codexRunModeFloorWarning")}</span>
           </div>
         )}
+      </div>
+
+      <div style={s.settingFieldSpaced}>
+        <label style={s.settingFieldLabel}>{t("appSettings.codexAskInWorkspaceAutoApprove")}</label>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={codexAskInWorkspaceAutoApproveOn}
+          aria-label={t("appSettings.codexAskInWorkspaceAutoApprove")}
+          disabled={codexAskInWorkspaceAutoApproveBusy}
+          data-checked={codexAskInWorkspaceAutoApproveOn}
+          data-disabled={codexAskInWorkspaceAutoApproveBusy}
+          onClick={() => void handleCodexAskInWorkspaceAutoApproveToggle()}
+          className="app-settings-toggle"
+        >
+          <span className="app-settings-toggle-label">{t("appSettings.codexAskInWorkspaceAutoApproveToggle")}</span>
+          <span className="app-settings-toggle-track">
+            <span className="app-settings-toggle-knob" />
+          </span>
+        </button>
+        <span style={s.settingFieldHint}>{t("appSettings.codexAskInWorkspaceAutoApproveHint")}</span>
       </div>
 
       <div style={s.settingFieldSpaced}>

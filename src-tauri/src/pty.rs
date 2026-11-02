@@ -731,14 +731,30 @@ fn build_claude_cmd(
 }
 
 /// 为 Codex 命令构建 CommandBuilder，并添加权限、模型与思考深度全局标志。
+///
+/// `ask` 模式下 Codex 默认 `approval_policy=untrusted`：每条命令（含只读探测）都
+/// 升级审批。Codex 一次并行发出的一批工具调用只会在 TUI 里露出一个审批位，其余
+/// 静默挂起、整批结果无法回流——用户侧表现为「跑着跑着就不动了」（issue #120，
+/// 现场：4 条并行只读命令仅 1 条获批，其余挂 19 分 58 秒后被手动中断）。
+/// `ask_auto_approve`（来自应用设置 `codex_ask_in_workspace_auto_approve`）打开时改用
+/// `on-request` + `workspace-write` 沙箱：工作区内操作不问、越界（写出工作区/网络
+/// 等）仍会升级审批询问——保持 ask 的把关语义，只是不再逐条打断。
 fn build_codex_cmd(
     agent_bin: &str,
     permission_mode: &str,
     model: Option<&str>,
     reasoning_effort: Option<&str>,
+    ask_auto_approve: bool,
 ) -> CommandBuilder {
     let mut c = CommandBuilder::new(agent_bin);
     match permission_mode {
+        "ask" if ask_auto_approve => {
+            // 沙箱仍兜底（与 auto_edit 同款旗标组合），只是免掉工作区内操作的逐条审批。
+            c.arg("--sandbox");
+            c.arg("workspace-write");
+            c.arg("-a");
+            c.arg("on-request");
+        }
         "auto_edit" => {
             // 等价于已弃用的 --full-auto（codex >= 0.128 已移除该别名）：
             // 工作区内自动写、越界命令才升级审批。
@@ -906,7 +922,13 @@ fn spawn_fork_task_process(
         // 「接到源会话上」而不是分叉，语义相反。
         build_dsh_cmd(&agent_bin, &profile, None, model, reasoning_effort, None)
     } else if is_codex {
-        let mut command = build_codex_cmd(&agent_bin, permission_mode, model, reasoning_effort);
+        let mut command = build_codex_cmd(
+            &agent_bin,
+            permission_mode,
+            model,
+            reasoning_effort,
+            crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
+        );
         if use_hooks {
             command.arg("--dangerously-bypass-hook-trust");
         }
@@ -1088,11 +1110,13 @@ graph_id = \"HIS\"
 
     #[test]
     fn builds_codex_model_and_reasoning_arguments_without_shell_parsing() {
+        // ask + 关闭自动放行（默认）：不注入任何审批旗标（CLI 默认 untrusted，逐条审批）。
         let command = build_codex_cmd(
             "codex",
             "ask",
             Some("provider/model:deployment"),
             Some("high"),
+            false,
         );
 
         assert_eq!(
@@ -1105,6 +1129,50 @@ graph_id = \"HIS\"
                 OsStr::new("model_reasoning_effort=\"high\"").to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn codex_ask_in_workspace_auto_approve_switches_to_on_request_with_sandbox() {
+        // issue #120：ask + 自动放行 → 与 auto_edit 同款旗标组合，工作区内免逐条审批。
+        let command = build_codex_cmd("codex", "ask", None, None, true);
+        assert_eq!(
+            command.get_argv(),
+            &vec![
+                OsStr::new("codex").to_owned(),
+                OsStr::new("--sandbox").to_owned(),
+                OsStr::new("workspace-write").to_owned(),
+                OsStr::new("-a").to_owned(),
+                OsStr::new("on-request").to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_ask_in_workspace_auto_approve_flag_does_not_leak_into_other_modes() {
+        // 开关只影响 ask：auto_edit / full_access 行为不变（auto_edit 本就同款旗标；
+        // full_access 是 bypass 一切；未识别模式不注入）。
+        let auto_edit = build_codex_cmd("codex", "auto_edit", None, None, true);
+        assert_eq!(
+            auto_edit.get_argv(),
+            &vec![
+                OsStr::new("codex").to_owned(),
+                OsStr::new("--sandbox").to_owned(),
+                OsStr::new("workspace-write").to_owned(),
+                OsStr::new("-a").to_owned(),
+                OsStr::new("on-request").to_owned(),
+            ]
+        );
+        let full_access = build_codex_cmd("codex", "full_access", None, None, true);
+        assert_eq!(
+            full_access.get_argv(),
+            &vec![
+                OsStr::new("codex").to_owned(),
+                OsStr::new("--dangerously-bypass-approvals-and-sandbox").to_owned(),
+            ]
+        );
+        // ask + 关闭自动放行：不注入审批旗标（默认 untrusted，逐条审批）。
+        let ask_default = build_codex_cmd("codex", "ask", None, None, false);
+        assert_eq!(ask_default.get_argv(), &vec![OsStr::new("codex").to_owned()]);
     }
 
     #[test]
@@ -1721,6 +1789,7 @@ pub async fn run_task(
             &permission_mode,
             model.as_deref(),
             reasoning_effort.as_deref(),
+            crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
         );
         // 跨仓库任务上下文：附加目录与主 workspace 一并可写（CLI 原生支持，可重复）。
         if let Some(ref dirs) = context_project_paths {
@@ -2153,6 +2222,7 @@ pub async fn resume_task(
             &permission_mode,
             model.as_deref(),
             reasoning_effort.as_deref(),
+            crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
         );
         // 跨仓库任务上下文：与 run_task 同样在 `resume` 子命令之前注入。
         if let Some(ref dirs) = context_project_paths {

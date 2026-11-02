@@ -247,6 +247,12 @@ pub struct AppSettings {
     /// Codex structured 通道的全局思考深度 override（None = 跟随模型默认）。
     #[serde(default)]
     pub codex_structured_reasoning_effort: Option<String>,
+    /// Codex PTY 任务在 ask 权限模式下的「工作区内免逐条审批」开关（issue #120）。
+    /// Codex 默认 approval_policy=untrusted：并行一批工具调用只露一个审批位，其余
+    /// 静默挂起导致任务假死。开启后 ask 模式改用 on-request + workspace-write 沙箱：
+    /// 工作区内操作不再逐条询问，越界操作仍升级审批；默认关闭，保持严格逐条审批。
+    #[serde(default)]
+    pub codex_ask_in_workspace_auto_approve: bool,
     #[serde(default = "default_agent_enabled")]
     pub dsh_enabled: bool,
     #[serde(default = "default_send_shortcut")]
@@ -307,6 +313,7 @@ impl Default for AppSettings {
             codex_run_mode: default_codex_run_mode(),
             codex_structured_model: None,
             codex_structured_reasoning_effort: None,
+            codex_ask_in_workspace_auto_approve: false,
             dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -768,6 +775,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
             )
             .unwrap_or_default(),
         ),
+        codex_ask_in_workspace_auto_approve: settings.codex_ask_in_workspace_auto_approve,
         dsh_enabled: settings.dsh_enabled,
         send_shortcut: normalize_send_shortcut(settings.send_shortcut),
         terminal_shift_enter_newline: settings.terminal_shift_enter_newline,
@@ -825,6 +833,7 @@ fn load_settings_unlocked() -> AppSettings {
             codex_run_mode: default_codex_run_mode(),
             codex_structured_model: None,
             codex_structured_reasoning_effort: None,
+            codex_ask_in_workspace_auto_approve: false,
             dsh_enabled: default_agent_enabled(),
             send_shortcut: default_send_shortcut(),
             terminal_shift_enter_newline: default_shift_enter_newline(),
@@ -1570,6 +1579,25 @@ pub async fn save_system_notifications(enabled: bool) -> Result<AppSettings, Str
         let _guard = settings_lock().lock();
         let mut settings = load_settings_unlocked();
         settings.system_notifications = enabled;
+
+        let dir = nezha_dir()?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = settings_path()?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
+        atomic_write(&path, &raw)?;
+        Ok::<AppSettings, String>(normalized)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_codex_ask_in_workspace_auto_approve(enabled: bool) -> Result<AppSettings, String> {
+    tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.codex_ask_in_workspace_auto_approve = enabled;
 
         let dir = nezha_dir()?;
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
