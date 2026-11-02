@@ -3426,8 +3426,6 @@ function App() {
       devContent,
       testContent,
       scoreContent: scoreContent ?? null,
-      serialNumber: task.yunxiaoSerialNumber ?? null,
-      taskName: task.name ?? null,
     });
     const now = Date.now();
     setTasks((prev) => {
