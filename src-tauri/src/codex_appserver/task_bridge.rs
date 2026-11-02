@@ -29,8 +29,15 @@ use crate::storage::Task;
 /// - `auto_edit`：工作区内可写，越界才审批（等价 `--sandbox workspace-write -a on-request`）；
 /// - `full_access`：无审批无沙箱（等价 `--dangerously-bypass-approvals-and-sandbox`，
 ///   计划 2.5：full_access 用 `approvalPolicy: never`）。
-pub fn permission_mode_to_policy(mode: &str) -> (&'static str, &'static str) {
+///
+/// `ask_auto_approve`（来自应用设置 `codex_ask_in_workspace_auto_approve`）打开时，
+/// `ask` 改用 `on-request` + `workspace-write`——与 PTY 侧 `build_codex_cmd` 同一
+/// 开关同一语义（issue #120）：工作区内操作不逐条审批，越界请求仍会以审批卡形式
+/// 弹出（structured 通道审批卡逐条结构化呈现，无 PTY 的批量挂起假死形态，但
+/// untrusted 档对只读探测也逐条打断，同样拖慢任务）。
+pub fn permission_mode_to_policy(mode: &str, ask_auto_approve: bool) -> (&'static str, &'static str) {
     match mode {
+        "ask" if ask_auto_approve => ("on-request", "workspace-write"),
         "auto_edit" => ("on-request", "workspace-write"),
         "full_access" => ("never", "danger-full-access"),
         // 未知取值保守落回最受限档（与 dsh_permission_mode 同策略）
@@ -113,7 +120,10 @@ pub async fn spawn_session(
     permission_mode: &str,
     extra_envs: Vec<(String, String)>,
 ) -> Result<CodexAppServerSession, SessionError> {
-    let (approval_policy, sandbox) = permission_mode_to_policy(permission_mode);
+    let (approval_policy, sandbox) = permission_mode_to_policy(
+        permission_mode,
+        crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
+    );
     let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
     request.extra_envs = extra_envs;
     let session = CodexAppServerSession::spawn(request).await?;
@@ -131,7 +141,10 @@ pub async fn spawn_session_resume(
     thread_id: &str,
     extra_envs: Vec<(String, String)>,
 ) -> Result<CodexAppServerSession, SessionError> {
-    let (approval_policy, sandbox) = permission_mode_to_policy(permission_mode);
+    let (approval_policy, sandbox) = permission_mode_to_policy(
+        permission_mode,
+        crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
+    );
     let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
     request.extra_envs = extra_envs;
     let session = CodexAppServerSession::spawn(request).await?;
@@ -990,21 +1003,43 @@ mod tests {
     #[test]
     fn permission_mode_maps_to_policy_pairs() {
         assert_eq!(
-            permission_mode_to_policy("ask"),
+            permission_mode_to_policy("ask", false),
             ("untrusted", "read-only")
         );
         assert_eq!(
-            permission_mode_to_policy("auto_edit"),
+            permission_mode_to_policy("auto_edit", false),
             ("on-request", "workspace-write")
         );
         assert_eq!(
-            permission_mode_to_policy("full_access"),
+            permission_mode_to_policy("full_access", false),
             ("never", "danger-full-access")
         );
         // 未知取值保守落回最受限档
-        assert_eq!(permission_mode_to_policy(""), ("untrusted", "read-only"));
+        assert_eq!(permission_mode_to_policy("", false), ("untrusted", "read-only"));
         assert_eq!(
-            permission_mode_to_policy("nonsense"),
+            permission_mode_to_policy("nonsense", false),
+            ("untrusted", "read-only")
+        );
+    }
+
+    #[test]
+    fn ask_auto_approve_lifts_untrusted_only_for_ask() {
+        // issue #120：ask + 开关打开 → on-request + workspace-write（与 PTY 同款语义）。
+        assert_eq!(
+            permission_mode_to_policy("ask", true),
+            ("on-request", "workspace-write")
+        );
+        // 开关对其它档位无影响（auto_edit 本就同款组合；full_access/未知档不变）。
+        assert_eq!(
+            permission_mode_to_policy("auto_edit", true),
+            ("on-request", "workspace-write")
+        );
+        assert_eq!(
+            permission_mode_to_policy("full_access", true),
+            ("never", "danger-full-access")
+        );
+        assert_eq!(
+            permission_mode_to_policy("nonsense", true),
             ("untrusted", "read-only")
         );
     }
