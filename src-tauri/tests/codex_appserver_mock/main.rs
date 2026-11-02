@@ -30,6 +30,8 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let results: Vec<(&str, bool)> = vec![
+        ("production_start_keeps_thread", run_production_start_keeps_thread(false)),
+        ("production_resume_keeps_thread", run_production_start_keeps_thread(true)),
         ("happy_path", run_happy_path()),
         ("approval_flow", run_approval_flow()),
         ("interrupt_flow", run_interrupt_flow()),
@@ -123,7 +125,7 @@ fn handle_mock_request(
             respond(out, id, &serde_json::json!({}));
             std::process::exit(101);
         }
-        (scene, "thread/start") => {
+        (scene, "thread/start" | "thread/resume") => {
             let thread_id = if scene == "approval" { "thread-approval" } else { "thread-happy" };
             emit_thread_started(out, thread_id);
             respond(
@@ -389,6 +391,56 @@ async fn spawn_mock(script: &str) -> CodexAppServerSession {
     CodexAppServerSession::spawn(request)
         .await
         .expect("mock spawn + initialize")
+}
+
+// 回归：生产入口曾在 thread/start 之后才订阅；mock 先发 thread/started
+// 再回 start 响应，稳定复现“任务完成但没有记录线程，无法继续对话”。
+fn run_production_start_keeps_thread(resume: bool) -> bool {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async {
+        let exe = std::env::current_exe().expect("current_exe");
+        let cwd = std::env::temp_dir();
+        let envs = vec![(MOCK_ENV.to_string(), "happy".to_string())];
+        let started = if resume {
+            nezha_lib::codex_appserver::task_bridge::spawn_session_resume(
+                exe.to_str().expect("mock executable path"),
+                cwd.to_str().expect("temp directory"),
+                "full_access",
+                "thread-happy",
+                envs,
+            ).await
+        } else {
+            nezha_lib::codex_appserver::task_bridge::spawn_session(
+                exe.to_str().expect("mock executable path"),
+                cwd.to_str().expect("temp directory"),
+                "full_access",
+                envs,
+            ).await
+        }.expect("production spawn + thread start/resume");
+        let nezha_lib::codex_appserver::task_bridge::StartedSession {
+            session, mut events, ..
+        } = started;
+        session.start_turn("say hi").await.expect("turn/start");
+        session.steer("continue").await.expect("steer");
+
+        let mut recorded_thread = None;
+        let mut completed = false;
+        while let Ok(Ok(event)) = tokio::time::timeout(
+            std::time::Duration::from_secs(1), events.recv(),
+        ).await {
+            match event {
+                CodexEvent::ThreadStarted { thread } => recorded_thread = Some(thread),
+                CodexEvent::TurnCompleted { .. } => { completed = true; break; }
+                _ => {}
+            }
+        }
+        session.shutdown().await;
+        assert!(completed, "task must complete successfully");
+        let thread = recorded_thread.expect("completed task has no recorded thread; follow-up would show toast.followUpNoSession");
+        assert_eq!(thread.session_id, "thread-happy");
+        assert!(thread.path.is_some(), "session replay also requires the rollout path");
+        true
+    })
 }
 
 fn run_happy_path() -> bool {

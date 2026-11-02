@@ -112,6 +112,23 @@ pub fn is_structured(task: &Task) -> bool {
     task.agent == "codex" && task.run_mode.as_deref() == Some("structured")
 }
 
+/// 会话与创建线程前建立的订阅必须一起交给 forwarder。
+/// broadcast 不回放订阅前的事件；若 thread/started 先于启动响应到达，
+/// 启动完成后才 subscribe 会丢失 task-session 所需的线程信息。
+pub struct StartedSession {
+    pub session: CodexAppServerSession,
+    pub events: Receiver<CodexEvent>,
+    pub errors: Receiver<SessionError>,
+}
+
+impl StartedSession {
+    fn subscribe(session: CodexAppServerSession) -> Self {
+        let events = session.subscribe();
+        let errors = session.subscribe_errors();
+        Self { session, events, errors }
+    }
+}
+
 /// spawn `codex app-server` 会话并完成 initialize + thread/start。
 /// 版本地板（≥0.156）与握手超时由 `CodexAppServerSession::spawn` / `initialize` 负责。
 pub async fn spawn_session(
@@ -119,16 +136,16 @@ pub async fn spawn_session(
     cwd: &str,
     permission_mode: &str,
     extra_envs: Vec<(String, String)>,
-) -> Result<CodexAppServerSession, SessionError> {
+) -> Result<StartedSession, SessionError> {
     let (approval_policy, sandbox) = permission_mode_to_policy(
         permission_mode,
         crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
     );
     let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
     request.extra_envs = extra_envs;
-    let session = CodexAppServerSession::spawn(request).await?;
-    session.start_thread().await?;
-    Ok(session)
+    let started = StartedSession::subscribe(CodexAppServerSession::spawn(request).await?);
+    started.session.start_thread().await?;
+    Ok(started)
 }
 
 /// spawn 会话并按 threadId 恢复既有 thread（done 后继续对话，阶段 4 增强）。
@@ -140,16 +157,16 @@ pub async fn spawn_session_resume(
     permission_mode: &str,
     thread_id: &str,
     extra_envs: Vec<(String, String)>,
-) -> Result<CodexAppServerSession, SessionError> {
+) -> Result<StartedSession, SessionError> {
     let (approval_policy, sandbox) = permission_mode_to_policy(
         permission_mode,
         crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
     );
     let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval_policy, sandbox);
     request.extra_envs = extra_envs;
-    let session = CodexAppServerSession::spawn(request).await?;
-    session.resume_thread(thread_id).await?;
-    Ok(session)
+    let started = StartedSession::subscribe(CodexAppServerSession::spawn(request).await?);
+    started.session.resume_thread(thread_id).await?;
+    Ok(started)
 }
 
 /// 注册会话到 TaskManager（cancel/complete/respond 命令可寻址）。
@@ -635,7 +652,7 @@ pub async fn resume_structured_task(
     let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
     // 与 run_structured_task 同一套环境变量：续跑同样要能定位草稿目录 / 图谱。
     let extra_envs = crate::pty::structured_session_envs(&task_id, &project_path);
-    let session = spawn_session_resume(
+    let StartedSession { session, events, errors } = spawn_session_resume(
         &launch_spec.program,
         &project_path,
         &permission_mode,
@@ -659,8 +676,6 @@ pub async fn resume_structured_task(
     task_manager.task_names.lock().remove(&task_id);
 
     // 先起 forwarder 拿 guard，与会话成对登记：取消/重置路径据此收口迟到通知。
-    let events = session.subscribe();
-    let errors = session.subscribe_errors();
     // 继续对话默认有人值守：unattended=false 让完成通知正常发。
     // full_access 同新建任务：提问 30s 无人应答自动选推荐项。
     let guard = spawn_forwarder(

@@ -1418,7 +1418,7 @@ async fn run_structured_task(
     // app-server 子进程同样需要 NEZHA_* 与图谱环境变量：草稿目录按
     // `$NEZHA_TASK_ID` 定位，沉淀契约按图谱 env 解析，缺了 agent 只能自造目录。
     let extra_envs = structured_session_envs(&launch.task_id, &launch.real_project_path);
-    let session = bridge::spawn_session(
+    let bridge::StartedSession { session, events, errors } = bridge::spawn_session(
         &launch_spec.program,
         &launch.project_path,
         &launch.permission_mode,
@@ -1464,8 +1464,6 @@ async fn run_structured_task(
         .lock()
         .insert(launch.task_id.clone(), launch.real_project_path.clone());
 
-    let events = session.subscribe();
-    let errors = session.subscribe_errors();
     // forwarder 通过 app.state::<TaskManager>() 自取状态（State 不是 'static），
     // 会话终结时自行清表；guard 随会话同表登记（取消/重置路径收口迟到通知），
     // 启动失败时先行 cancel 再收口会话。
