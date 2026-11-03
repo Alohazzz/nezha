@@ -215,8 +215,6 @@ fn finalize_task_exit(
         let tm = app.state::<TaskManager>();
         let mut cancelled = tm.cancelled_tasks.lock();
         let mut manually_completed = tm.manually_completed_tasks.lock();
-        // 无人值守标记也在入口消费掉：任务已到终态，不再需要为它抑制通知。
-        tm.unattended_tasks.lock().remove(task_id);
         (
             cancelled.remove(task_id),
             manually_completed.remove(task_id),
@@ -1375,7 +1373,7 @@ fn should_run_structured(agent: &str, run_mode: Option<&str>) -> bool {
 }
 
 /// structured 通道的 run_task 实现：spawn app-server 会话 + forwarder。
-/// 与 PTY 路径共享任务登记（cancelled/sediment/unattended/task_names/task_real_paths）
+/// 与 PTY 路径共享任务登记（cancelled/sediment/task_names/task_real_paths）
 /// 与提示词组装（`compose_final_prompt`），生命周期事件（task-status/task-session）
 /// 与 PTY 语义对齐。
 async fn run_structured_task(
@@ -1436,13 +1434,6 @@ async fn run_structured_task(
         );
     }
 
-    // 与 PTY 同序的登记：取消/完成标记已在 run_task 入口清过；
-    // 这里补无人值守标记（forwarder 的 done 通知要按它抑制）。
-    if launch.unattended {
-        task_manager.unattended_tasks.lock().insert(launch.task_id.clone());
-    } else {
-        task_manager.unattended_tasks.lock().remove(&launch.task_id);
-    }
     // 任务名登记：系统通知文案按它取（与 PTY 路径同语义）。
     task_manager
         .task_names
@@ -1471,7 +1462,6 @@ async fn run_structured_task(
         app.clone(),
         launch.task_id.clone(),
         launch.project_path.clone(),
-        launch.unattended,
         launch.permission_mode == "full_access",
         on_output,
         events,
@@ -1577,8 +1567,6 @@ pub async fn run_task(
     // 本次启动是否要求产出知识沉淀产物（前端按任务类型判定：云效议题的方案执行 /
     // 直接执行任务为真）。决定是否注入产出要求，以及任务收尾时是否跑沉淀。
     require_sediment: Option<bool>,
-    // 无人值守：为真时 event_watcher 抑制「需要你的确认」系统通知（一轮结束由前端自动收尾）。
-    unattended: Option<bool>,
     // 跨仓库任务上下文：附加项目目录（前端已按任务 contextProjectIds 解析为 path），
     // 注入为 CLI `--add-dir`（仅 claude/codex；DSH 忽略）。
     context_project_paths: Option<Vec<String>>,
@@ -1600,7 +1588,6 @@ pub async fn run_task(
         MAX_REASONING_EFFORT_BYTES,
     )?;
     let sediment_required = require_sediment.unwrap_or(false);
-    let unattended = unattended.unwrap_or(false);
     // 两条通道共用的启动前清理：本次启动是全新一轮，上次取消 / 手动完成的标记
     // 必须清掉，否则 structured 分支会把任务误判为已取消。
     task_manager.cancelled_tasks.lock().remove(&task_id);
@@ -1624,7 +1611,6 @@ pub async fn run_task(
                 images: images.unwrap_or_default(),
                 sediment_required,
                 permission_mode,
-                unattended,
                 model: model.clone(),
                 reasoning_effort: reasoning_effort.clone(),
             },
@@ -1662,16 +1648,7 @@ pub async fn run_task(
     } else {
         task_manager.sediment_expected.lock().remove(&task_id);
     }
-    // 无人值守标记同样无条件覆写：为真时 event_watcher 跳过「需要你的确认」通知
-    // （该通知语义是「等人确认」，而无人值守正是「没人来确认」的场景）。
-    if unattended {
-        task_manager
-            .unattended_tasks
-            .lock()
-            .insert(task_id.clone());
-    } else {
-        task_manager.unattended_tasks.lock().remove(&task_id);
-    }
+
     task_manager
         .task_names
         .lock()
@@ -1933,8 +1910,6 @@ pub async fn cancel_task(
         .manually_completed_tasks
         .lock()
         .remove(&task_id);
-    // 取消是终态：无人值守标记一并清掉，避免残留。
-    task_manager.unattended_tasks.lock().remove(&task_id);
     release_terminal_ready(&task_manager, &task_id);
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
@@ -1985,9 +1960,6 @@ pub async fn complete_task(
         .lock()
         .insert(task_id.clone());
     task_manager.cancelled_tasks.lock().remove(&task_id);
-    // 收尾即消费无人值守标记：本路径就是无人值守任务自动收尾的落点，
-    // 之后再无「需要抑制通知的等待窗口」。
-    task_manager.unattended_tasks.lock().remove(&task_id);
     release_terminal_ready(&task_manager, &task_id);
 
     let child_arc = task_manager.child_handles.lock().get(&task_id).cloned();
@@ -2106,8 +2078,6 @@ pub async fn resume_task(
     rows: Option<u16>,
     // 见 `run_task`：恢复后的任务同样会在收尾时走沉淀，故也要带着这个标记。
     require_sediment: Option<bool>,
-    // 见 `run_task`：恢复后同样抑制「需要你的确认」通知。
-    unattended: Option<bool>,
     // 见 `run_task`：恢复时同样按任务快照重放附加仓库上下文。
     context_project_paths: Option<Vec<String>>,
     on_output: Channel<String>,
@@ -2156,15 +2126,7 @@ pub async fn resume_task(
     } else {
         task_manager.sediment_expected.lock().remove(&task_id);
     }
-    // 见 `run_task`：恢复路径同样按本次标记覆写无人值守集合。
-    if unattended.unwrap_or(false) {
-        task_manager
-            .unattended_tasks
-            .lock()
-            .insert(task_id.clone());
-    } else {
-        task_manager.unattended_tasks.lock().remove(&task_id);
-    }
+
 
     let pair = pty_system()
         .openpty(PtySize {

@@ -305,3 +305,23 @@
     opacity: 1;
   }
 }
+.app-root-relative {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-root);
+  overflow: hidden;
+  position: relative;
+}
+
+.app-project-layer { position: absolute; inset: 0; overflow: hidden; }
+.app-welcome-layer { position: absolute; inset: 0; z-index: 5; }
+.app-kanban-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-app);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

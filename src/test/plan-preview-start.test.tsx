@@ -64,6 +64,7 @@ describe("PlanPreviewPanel「开始」按钮", () => {
     localStorage.setItem("nezha:language", "zh");
     invokeMock.mockImplementation((command: string) => {
       if (command === "load_app_settings") return Promise.resolve({});
+      if (command === "read_project_config") return Promise.resolve({ agent: { default_permission_mode: "ask" } });
       if (command === "read_file_content") return Promise.resolve(PLAN_MD);
       if (command === "read_dir_entries") return Promise.resolve([]);
       return Promise.resolve(null);
@@ -74,7 +75,7 @@ describe("PlanPreviewPanel「开始」按钮", () => {
     invokeMock.mockReset();
   });
 
-  it("定稿方案显示「开始」，点击即以 autoStart 生成待办（沿用议题顺序与默认 Agent/权限）", async () => {
+  it("定稿方案以 autoStart 生成待办，权限取项目设置而非上次选择", async () => {
     const user = userEvent.setup();
     localStorage.setItem("nezha:lastYunxiaoAgent:p1", "claude");
     localStorage.setItem("nezha:lastYunxiaoPermission:p1", "auto_edit");
@@ -94,7 +95,8 @@ describe("PlanPreviewPanel「开始」按钮", () => {
     expect(input.planId).toBe("plan1");
     expect(input.autoStart).toBe(true);
     expect(input.agent).toBe("claude");
-    expect(input.permissionMode).toBe("auto_edit");
+    expect(input.permissionMode).toBe("ask");
+    expect(input).not.toHaveProperty("unattended");
     // 「开始」跳过确认页，直接用方案快照的全部议题与顺序
     expect(input.issues.map((i) => i.serialNumber)).toEqual(["QHDK-A", "QHDK-B"]);
   });

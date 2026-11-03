@@ -733,14 +733,7 @@ export interface Task {
   planDepsIgnored?: boolean;
   /** 本任务是「方案讨论」临时任务（定稿后退场，不参与执行、不建 worktree） */
   yunxiaoPlanDiscussion?: boolean;
-  /**
-   * 无人值守执行：方案执行任务勾选后，agent 一轮结束（`Stop` → `awaiting_review`）
-   * 即自动走一次「标记完成」收尾（`complete_task`：杀进程 → 收拢草稿 → 跑沉淀），
-   * 使下游任务的硬依赖自动满足、整链无人接续。默认关闭（`undefined`/`false`）。
-   *
-   * 代价：agent 中途反问也会被判完成；因此生成时权限被强制为 `full_access`
-   * （`ask`/`auto_edit` 会停在 `input_required` 挂死）。见 `planQueue.resolvePlanTodoLaunch`。
-   */
+  /** @deprecated 仅保留历史数据兼容；不再创建或执行无人值守行为。 */
   unattended?: boolean;
   /** 跨仓库任务上下文：附加项目的 id 列表（不含主项目）。启动时经 CLI `--add-dir`
    *  授权 agent 读写（仅 claude/codex；DSH 忽略）。附加项目被删除时前端静默剔除。 */

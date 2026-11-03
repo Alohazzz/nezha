@@ -10,14 +10,13 @@ import type {
   Task,
 } from "../../../types";
 import { firstEnabledAgent, isAgentEnabled } from "../../../types";
-import { getLastYunxiaoAgent, getLastYunxiaoPermission } from "../../../utils/yunxiao";
+import { getLastYunxiaoAgent } from "../../../utils/yunxiao";
 import { buildPlanDisplayName, planDirPath, planMdPath } from "../../../utils/plan";
 import { MessageMarkdownBody } from "../../mermaid/MessageMarkdownBody";
 import { GeneratePlanTodosDialog } from "./GeneratePlanTodosDialog";
-import { UnattendedToggle } from "./UnattendedToggle";
+import { useProjectPermissionMode } from "../../../hooks/useProjectPermissionMode";
 import { HtmlPreviewPane } from "../../file-viewer/HtmlPreviewPane";
 import { useI18n } from "../../../i18n";
-import s from "../../../styles";
 
 const MAX_PREVIEW_IMAGES = 20;
 
@@ -54,7 +53,6 @@ export function PlanPreviewPanel({
     agent: AgentType;
     permissionMode: PermissionMode;
     autoStart?: boolean;
-    unattended?: boolean;
   }) => Promise<boolean>;
   onDeletePlan: (planId: string) => void | Promise<void>;
   onClose: () => void;
@@ -74,8 +72,7 @@ export function PlanPreviewPanel({
   const [images, setImages] = useState<PlanImage[]>([]);
   const [showGenerate, setShowGenerate] = useState(false);
   const [starting, setStarting] = useState(false);
-  /** 无人值守：整链自动接续（勾选后生成待办不再停在 todo 等人点开始）。 */
-  const [unattended, setUnattended] = useState(false);
+  const { permissionMode, ready: permissionReady } = useProjectPermissionMode(projectPath);
   const [agentSettings, setAgentSettings] = useState<AgentEnabledState | null>(null);
 
   const linkedTasks = useMemo(
@@ -90,7 +87,7 @@ export function PlanPreviewPanel({
   // 例如旧待办被取消删除后想重跑）；仅「讨论中」锁定——plan.md 仍在被会话覆盖更新。
   const canGenerate = plan.status !== "draft" && markdown.trim().length > 0;
   // 「开始」= 生成待办 + 立即执行：同样要求方案已定稿且文档就绪。
-  const canStart = canGenerate && !starting;
+  const canStart = permissionReady && canGenerate && !starting;
 
   useEffect(() => {
     invoke<AgentEnabledState>("load_app_settings")
@@ -99,9 +96,8 @@ export function PlanPreviewPanel({
   }, []);
 
   /**
-   * 「开始」不弹确认页：沿用方案议题顺序与 `deps.json` 既有依赖，Agent/权限取该项目
-   * 上次选择。任务创建后交给串行调度依前置依赖顺序放行（具体分配在 App 侧）。
-   * 勾选无人值守时：任务跑完一轮自动收尾，整链无需点击（权限被强制为 YOLO）。
+   * 「开始」不弹确认页：沿用方案议题顺序与 `deps.json` 既有依赖。
+   * Agent 沿用项目上次选择，权限取项目配置，再由串行调度按依赖放行。
    */
   const handleStart = useCallback(async () => {
     if (!canStart) return;
@@ -114,16 +110,15 @@ export function PlanPreviewPanel({
         agent: isAgentEnabled(agentSettings, preferred)
           ? preferred
           : firstEnabledAgent(agentSettings),
-        permissionMode: getLastYunxiaoPermission(plan.projectId) ?? "ask",
+        permissionMode,
         autoStart: true,
-        unattended,
       });
       // 开始后关闭预览：任务已在跑，用户应看到工作区/终端而不是方案正文。
       if (ok) onClose();
     } finally {
       setStarting(false);
     }
-  }, [canStart, plan, agentSettings, onCreateTodos, onClose, unattended]);
+  }, [canStart, plan, agentSettings, onCreateTodos, onClose, permissionMode]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -224,33 +219,32 @@ export function PlanPreviewPanel({
   }, [onDeletePlan, plan.id]);
 
   return (
-    <div style={s.bbDialogOverlay}>
-      <div style={s.planPreviewDialog}>
-        <div style={s.planLaunchHead}>
+    <div className={"plan-exec-bb-dialog-overlay"}>
+      <div className={"plan-exec-plan-preview-dialog"}>
+        <div className={"plan-exec-plan-launch-head"}>
           <div>
-            <div style={s.bbDialogTitle}>{t("plan.preview.title")}</div>
-            <div style={s.planPanelMeta}>
-              <span style={s.planPanelName}>
+            <div className={"plan-exec-bb-dialog-title"}>{t("plan.preview.title")}</div>
+            <div className={"plan-exec-plan-panel-meta"}>
+              <span className={"plan-exec-plan-panel-name"}>
                 {plan.name || buildPlanDisplayName(plan.issues.map((issue) => issue.serialNumber))}
               </span>
-              <span style={s.planPanelBadge}>{t(PLAN_STATUS_LABEL_KEY[plan.status])}</span>
+              <span className={"plan-exec-plan-panel-badge"}>{t(PLAN_STATUS_LABEL_KEY[plan.status])}</span>
               {plan.batchId && (
-                <span style={s.planPanelBadge}>{t("plan.preview.batchLinked")}</span>
+                <span className={"plan-exec-plan-panel-badge"}>{t("plan.preview.batchLinked")}</span>
               )}
             </div>
-            <div style={s.planPanelIssues}>
+            <div className={"plan-exec-plan-panel-issues"}>
               {plan.issues.map((issue) => (
-                <span key={issue.workitemId} style={s.yunxiaoMetaBadge}>
+                <span key={issue.workitemId} className={"plan-exec-yunxiao-meta-badge"}>
                   {issue.serialNumber}
                 </span>
               ))}
             </div>
           </div>
-          <div style={s.planPreviewHeadSide}>
-            <UnattendedToggle checked={unattended} disabled={starting} onChange={setUnattended} />
+          <div className={"plan-exec-plan-preview-head-side"}>
             <button
               type="button"
-              style={canStart ? s.bbBtnPrimary : s.bbBtnPrimaryDisabled}
+              className={canStart ? "plan-exec-bb-btn-primary" : "plan-exec-bb-btn-primary-disabled"}
               disabled={!canStart}
               title={t("plan.start.hint")}
               onClick={() => void handleStart()}
@@ -264,7 +258,7 @@ export function PlanPreviewPanel({
             </button>
             <button
               type="button"
-              style={canGenerate ? s.knowledgePrimaryBtn : s.knowledgePrimaryBtnDisabled}
+              className={canGenerate ? "plan-exec-knowledge-primary-btn" : "plan-exec-knowledge-primary-btn-disabled"}
               disabled={!canGenerate}
               title={plan.status === "finalized" ? undefined : t("plan.generateTodosAgain")}
               onClick={() => setShowGenerate(true)}
@@ -277,7 +271,7 @@ export function PlanPreviewPanel({
             {canDelete && (
               <button
                 type="button"
-                style={s.knowledgeSecondaryBtn}
+                className={"plan-exec-knowledge-secondary-btn"}
                 onClick={() => void handleDelete()}
               >
                 <Trash2 size={12} strokeWidth={2.2} />
@@ -286,7 +280,7 @@ export function PlanPreviewPanel({
             )}
             <button
               type="button"
-              style={s.yunxiaoIconBtn}
+              className={"plan-exec-yunxiao-icon-btn"}
               onClick={onClose}
               title={t("plan.launch.close")}
             >
@@ -295,13 +289,13 @@ export function PlanPreviewPanel({
           </div>
         </div>
 
-        <div style={s.planPreviewBody}>
+        <div className={"plan-exec-plan-preview-body"}>
           {loading ? (
-            <div style={s.yunxiaoEmpty}>
+            <div className={"plan-exec-yunxiao-empty"}>
               <Loader2 size={18} className="spin" />
             </div>
           ) : loadError && !markdown ? (
-            <div style={s.planPanelEmpty}>
+            <div className={"plan-exec-plan-panel-empty"}>
               {plan.status === "draft"
                 ? t("plan.preview.discussionRunning")
                 : t("plan.preview.mdMissing")}
@@ -309,7 +303,7 @@ export function PlanPreviewPanel({
           ) : previewHtml ? (
             // 沙箱 iframe（allow-scripts、null origin）由 HtmlPreviewPane 提供；
             // 相对 position:absolute 的 pane 需要 body 区有定位上下文。
-            <div style={s.planPreviewHtmlWrap}>
+            <div className={"plan-exec-plan-preview-html-wrap"}>
               <HtmlPreviewPane
                 html={previewHtml}
                 fileName="preview.html"
@@ -321,11 +315,11 @@ export function PlanPreviewPanel({
             <>
               <MessageMarkdownBody text={markdown} className="plan-md" />
               {images.length > 0 && (
-                <div style={s.planPanelGallery}>
+                <div className={"plan-exec-plan-panel-gallery"}>
                   {images.map((image) => (
-                    <div key={image.key} style={s.planPanelGalleryItem}>
-                      <img src={image.dataUrl} alt={image.serial} style={s.planPanelImage} />
-                      <span style={s.planPanelGalleryLabel}>{image.serial}</span>
+                    <div key={image.key} className={"plan-exec-plan-panel-gallery-item"}>
+                      <img src={image.dataUrl} alt={image.serial} className={"plan-exec-plan-panel-image"} />
+                      <span className={"plan-exec-plan-panel-gallery-label"}>{image.serial}</span>
                     </div>
                   ))}
                 </div>
@@ -338,6 +332,7 @@ export function PlanPreviewPanel({
           <GeneratePlanTodosDialog
             plan={plan}
             tasks={tasks}
+            projectPath={projectPath}
             onCreateTodos={async (input) => {
               const ok = await onCreateTodos(input);
               if (ok) setShowGenerate(false);

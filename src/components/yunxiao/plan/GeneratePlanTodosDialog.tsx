@@ -12,13 +12,10 @@ import type {
 import { isAgentEnabled, firstEnabledAgent, cycleEnabledAgent } from "../../../types";
 import {
   getLastYunxiaoAgent,
-  getLastYunxiaoPermission,
   setLastYunxiaoAgent,
-  setLastYunxiaoPermission,
 } from "../../../utils/yunxiao";
 import { useI18n } from "../../../i18n";
-import { UnattendedHint, UnattendedToggle } from "./UnattendedToggle";
-import s from "../../../styles";
+import { useProjectPermissionMode } from "../../../hooks/useProjectPermissionMode";
 
 interface RowState {
   issue: PlanIssue;
@@ -37,17 +34,18 @@ function agentLabel(agent: AgentType): string {
 export function GeneratePlanTodosDialog({
   plan,
   tasks,
+  projectPath,
   onCreateTodos,
   onClose,
 }: {
   plan: Plan;
   tasks: Task[];
+  projectPath: string;
   onCreateTodos: (input: {
     planId: string;
     issues: PlanIssue[];
     agent: AgentType;
     permissionMode: PermissionMode;
-    unattended?: boolean;
   }) => Promise<boolean>;
   onClose: () => void;
 }) {
@@ -65,12 +63,10 @@ export function GeneratePlanTodosDialog({
   const [agent, setAgent] = useState<AgentType>(
     () => getLastYunxiaoAgent(plan.projectId) ?? "codex",
   );
-  const [permission, setPermission] = useState<PermissionMode>(
-    () => getLastYunxiaoPermission(plan.projectId) ?? "ask",
-  );
+  const { permissionMode: projectPermission, ready: permissionReady } = useProjectPermissionMode(projectPath);
+  const [permissionOverride, setPermissionOverride] = useState<PermissionMode>();
+  const permission = permissionOverride ?? projectPermission;
   const [creating, setCreating] = useState(false);
-  /** 无人值守：不弹确认即刻起跑，权限强制 YOLO。 */
-  const [unattended, setUnattended] = useState(false);
 
   useEffect(() => {
     invoke<AgentEnabledState>("load_app_settings")
@@ -85,7 +81,7 @@ export function GeneratePlanTodosDialog({
 
   const activeRows = rows.filter((row) => row.excluded === "none");
   const conflictCount = rows.filter((row) => row.excluded === "conflict").length;
-  const canCreate = !creating && activeRows.length > 0;
+  const canCreate = permissionReady && !creating && activeRows.length > 0;
 
   const move = useCallback((index: number, delta: -1 | 1) => {
     setRows((prev) => {
@@ -122,13 +118,13 @@ export function GeneratePlanTodosDialog({
   }, [agentSettings, plan.projectId]);
 
   const cyclePermission = useCallback(() => {
-    setPermission((prev) => {
+    setPermissionOverride((override) => {
+      const prev = override ?? projectPermission;
       const order: PermissionMode[] = ["ask", "auto_edit", "full_access"];
       const next = order[(order.indexOf(prev) + 1) % order.length];
-      setLastYunxiaoPermission(plan.projectId, next);
       return next;
     });
-  }, [plan.projectId]);
+  }, [projectPermission]);
 
   const handleCreate = useCallback(async () => {
     if (!canCreate) return;
@@ -139,39 +135,36 @@ export function GeneratePlanTodosDialog({
         issues: activeRows.map((row) => row.issue),
         agent,
         permissionMode: permission,
-        unattended,
       });
       if (!ok) setCreating(false);
     } catch {
       setCreating(false);
     }
-  }, [canCreate, onCreateTodos, plan.id, activeRows, agent, permission, unattended]);
+  }, [canCreate, onCreateTodos, plan.id, activeRows, agent, permission]);
 
-  // 无人值守强制 full_access（生成侧 resolvePlanTodoLaunch 同样覆盖），此处仅同步显示。
-  const effectivePermission: PermissionMode = unattended ? "full_access" : permission;
   const permissionLabel =
-    effectivePermission === "full_access"
+    permission === "full_access"
       ? t("yunxiao.discussion.permYolo")
-      : effectivePermission === "auto_edit"
+      : permission === "auto_edit"
         ? t("yunxiao.discussion.permAuto")
         : t("yunxiao.discussion.permAsk");
 
   let activeIndex = -1;
 
   return (
-    <div style={s.bbDialogOverlay}>
-      <div style={s.planLaunchDialog}>
-        <div style={s.planLaunchHead}>
+    <div className={"plan-exec-bb-dialog-overlay"}>
+      <div className={"plan-exec-plan-launch-dialog"}>
+        <div className={"plan-exec-plan-launch-head"}>
           <div>
-            <div style={s.bbDialogTitle}>{t("plan.generate.title")}</div>
-            <div style={s.planLaunchMeta}>{t("plan.generate.hint")}</div>
+            <div className={"plan-exec-bb-dialog-title"}>{t("plan.generate.title")}</div>
+            <div className={"plan-exec-plan-launch-meta"}>{t("plan.generate.hint")}</div>
           </div>
-          <button type="button" style={s.yunxiaoIconBtn} onClick={onClose} title={t("plan.launch.close")}>
+          <button type="button" className={"plan-exec-yunxiao-icon-btn"} onClick={onClose} title={t("plan.launch.close")}>
             <X size={14} strokeWidth={2} />
           </button>
         </div>
 
-        <div style={s.planLaunchList}>
+        <div className={"plan-exec-plan-launch-list"}>
           {rows.map((row) => {
             if (row.excluded === "removed") return null;
             const isActive = row.excluded === "none";
@@ -180,23 +173,23 @@ export function GeneratePlanTodosDialog({
             return (
               <div
                 key={row.issue.workitemId}
-                style={isActive ? s.planLaunchItem : s.planLaunchItemExcluded}
+                className={isActive ? "plan-exec-plan-launch-item" : "plan-exec-plan-launch-item-excluded"}
               >
-                <span style={s.planLaunchOrder}>{isActive ? currentIndex + 1 : "—"}</span>
-                <div style={s.planLaunchItemBody}>
-                  <div style={s.planLaunchItemTitle}>
-                    <span style={s.yunxiaoIssueSerial}>{row.issue.serialNumber}</span>
+                <span className={"plan-exec-plan-launch-order"}>{isActive ? currentIndex + 1 : "—"}</span>
+                <div className={"plan-exec-plan-launch-item-body"}>
+                  <div className={"plan-exec-plan-launch-item-title"}>
+                    <span className={"plan-exec-yunxiao-issue-serial"}>{row.issue.serialNumber}</span>
                     {row.issue.subject}
                   </div>
                   {row.excluded === "conflict" && (
-                    <div style={s.planLaunchItemNote}>{t("plan.generate.conflict")}</div>
+                    <div className={"plan-exec-plan-launch-item-note"}>{t("plan.generate.conflict")}</div>
                   )}
                 </div>
                 {isActive && (
-                  <div style={s.planLaunchItemActions}>
+                  <div className={"plan-exec-plan-launch-item-actions"}>
                     <button
                       type="button"
-                      style={s.planLaunchMiniBtn}
+                      className={"plan-exec-plan-launch-mini-btn"}
                       disabled={currentIndex === 0}
                       onClick={() => move(currentIndex, -1)}
                       title={t("plan.generate.moveUp")}
@@ -205,7 +198,7 @@ export function GeneratePlanTodosDialog({
                     </button>
                     <button
                       type="button"
-                      style={s.planLaunchMiniBtn}
+                      className={"plan-exec-plan-launch-mini-btn"}
                       disabled={currentIndex === activeRows.length - 1}
                       onClick={() => move(currentIndex, 1)}
                       title={t("plan.generate.moveDown")}
@@ -214,7 +207,7 @@ export function GeneratePlanTodosDialog({
                     </button>
                     <button
                       type="button"
-                      style={s.planLaunchMiniBtn}
+                      className={"plan-exec-plan-launch-mini-btn"}
                       onClick={() => removeRow(row.issue.workitemId)}
                       title={t("plan.launch.remove")}
                     >
@@ -226,37 +219,34 @@ export function GeneratePlanTodosDialog({
             );
           })}
           {conflictCount > 0 && (
-            <div style={s.planLaunchItemNote}>{t("plan.generate.conflictCount", { count: conflictCount })}</div>
+            <div className={"plan-exec-plan-launch-item-note"}>{t("plan.generate.conflictCount", { count: conflictCount })}</div>
           )}
         </div>
 
-        <div style={s.planLaunchSettings}>
-          <span style={s.yunxiaoDetailSectionHint}>{t("yunxiao.discussion.agent")}</span>
-          <button type="button" style={s.yunxiaoAgentBadge} onClick={cycleAgent}>
+        <div className={"plan-exec-plan-launch-settings"}>
+          <span className={"plan-exec-yunxiao-detail-section-hint"}>{t("yunxiao.discussion.agent")}</span>
+          <button type="button" className={"plan-exec-yunxiao-agent-badge"} onClick={cycleAgent}>
             {agentLabel(agent)}
           </button>
           {agent !== "dsh" && (
             <button
               type="button"
-              style={s.yunxiaoAgentBadge}
-              disabled={unattended}
-              title={unattended ? t("plan.unattended.forcedYolo") : undefined}
+              className={"plan-exec-yunxiao-agent-badge"}
+              disabled={!permissionReady}
               onClick={cyclePermission}
             >
               {permissionLabel}
             </button>
           )}
-          <UnattendedToggle checked={unattended} onChange={setUnattended} />
-          {unattended && <UnattendedHint />}
         </div>
 
-        <div style={s.bbDialogActions}>
-          <button type="button" style={s.bbBtnGhost} onClick={onClose} disabled={creating}>
+        <div className={"plan-exec-bb-dialog-actions"}>
+          <button type="button" className={"plan-exec-bb-btn-ghost"} onClick={onClose} disabled={creating}>
             {t("plan.generate.cancel")}
           </button>
           <button
             type="button"
-            style={canCreate ? s.bbBtnPrimary : s.bbBtnPrimaryDisabled}
+            className={canCreate ? "plan-exec-bb-btn-primary" : "plan-exec-bb-btn-primary-disabled"}
             disabled={!canCreate}
             onClick={() => void handleCreate()}
           >

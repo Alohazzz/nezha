@@ -99,7 +99,6 @@ pub struct StructuredLaunch {
     /// 本任务要求产出知识沉淀产物：决定是否注入产出契约、收尾是否跑沉淀。
     pub sediment_required: bool,
     pub permission_mode: String,
-    pub unattended: bool,
     /// 任务快照携带的模型 / 推理深度（新建任务表单选择）：经 turn/start 的
     /// model/effort override 下发（与 PTY 的 `--model` 语义对齐）。
     pub model: Option<String>,
@@ -214,7 +213,6 @@ pub fn spawn_forwarder(
     task_id: String,
     // agent 的 cwd（可能是 worktree）；收尾时据此收拢草稿到真实项目根。
     effective_path: String,
-    unattended: bool,
     auto_answer_questions: bool,
     on_output: Channel<String>,
     mut events: Receiver<CodexEvent>,
@@ -233,7 +231,7 @@ pub fn spawn_forwarder(
                     match event {
                         Ok(event) => {
                             if guard_for_loop.is_cancelled()
-                                || !handle_event(&app, &on_output, &task_id, &effective_path, unattended, auto_answer_questions, event).await
+                                || !handle_event(&app, &on_output, &task_id, &effective_path, auto_answer_questions, event).await
                             {
                                 break;
                             }
@@ -334,7 +332,6 @@ async fn handle_event(
     on_output: &Channel<String>,
     task_id: &str,
     effective_path: &str,
-    unattended: bool,
     auto_answer_questions: bool,
     event: CodexEvent,
 ) -> bool {
@@ -346,7 +343,7 @@ async fn handle_event(
         CodexEvent::TurnCompleted { turn, .. } => {
             match turn.status {
                 codex_app_server_protocol::TurnStatus::Completed => {
-                    finish_done(app, task_id, effective_path, unattended).await;
+                    finish_done(app, task_id, effective_path).await;
                     false
                 }
                 codex_app_server_protocol::TurnStatus::Interrupted => {
@@ -552,10 +549,9 @@ async fn finish_done(
     app: &AppHandle,
     task_id: &str,
     effective_path: &str,
-    unattended: bool,
 ) {
     settle_task_artifacts(app, task_id, effective_path).await;
-    emit_done(app, task_id, unattended);
+    emit_done(app, task_id);
 }
 
 /// 收拢草稿并触发知识沉淀（仅当本次启动标记了 require_sediment）。
@@ -597,19 +593,17 @@ async fn settle_task_artifacts(app: &AppHandle, task_id: &str, effective_path: &
 }
 
 /// 置任务终态并发送系统通知（纯事件发射，收尾动作见 `finish_done`）。
-fn emit_done(app: &AppHandle, task_id: &str, unattended: bool) {
+fn emit_done(app: &AppHandle, task_id: &str) {
     let _ = app.emit(
         "task-status",
         serde_json::json!({ "task_id": task_id, "status": "done" }),
     );
-    if !unattended {
-        crate::system_notify::notify_task_event(
-            app,
-            task_id,
-            crate::system_notify::NotifyCategory::Complete,
-            None,
-        );
-    }
+    crate::system_notify::notify_task_event(
+        app,
+        task_id,
+        crate::system_notify::NotifyCategory::Complete,
+        None,
+    );
 }
 
 fn emit_failed(app: &AppHandle, task_id: &str, reason: &str) {
@@ -669,17 +663,14 @@ pub async fn resume_structured_task(
     // 与 run_task 同序的登记：清取消/手动完成标记（done 后继续对话是新的一轮）。
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager.manually_completed_tasks.lock().remove(&task_id);
-    task_manager.unattended_tasks.lock().remove(&task_id);
     task_manager.task_names.lock().remove(&task_id);
 
     // 先起 forwarder 拿 guard，与会话成对登记：取消/重置路径据此收口迟到通知。
-    // 继续对话默认有人值守：unattended=false 让完成通知正常发。
     // full_access 同新建任务：提问 30s 无人应答自动选推荐项。
     let guard = spawn_forwarder(
         app.clone(),
         task_id.clone(),
         project_path.clone(),
-        false,
         permission_mode == "full_access",
         on_output,
         events,

@@ -50,10 +50,6 @@ pub struct TaskManager {
         Mutex<HashMap<String, Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>>,
     pub(crate) cancelled_tasks: Mutex<HashSet<String>>,
     pub(crate) manually_completed_tasks: Mutex<HashSet<String>>,
-    /// 无人值守任务（`unattended`）：这类任务的一轮结束（hook `Stop`）由前端自动收尾，
-    /// 后端据此抑制「需要你的确认」系统通知——无人值守正是「没人来确认」的场景。
-    /// run_task / resume_task 时写入，收尾（finalize/complete/cancel）时移除。
-    pub(crate) unattended_tasks: Mutex<HashSet<String>>,
     pub(crate) codex_sessions: Mutex<HashMap<String, CodexSessionInfo>>,
     pub(crate) claude_sessions: Mutex<HashMap<String, ClaudeSessionInfo>>,
     pub(crate) dsh_sessions: Mutex<HashMap<String, DshSessionInfo>>,
@@ -104,7 +100,6 @@ impl TaskManager {
             child_handles: Mutex::new(HashMap::new()),
             cancelled_tasks: Mutex::new(HashSet::new()),
             manually_completed_tasks: Mutex::new(HashSet::new()),
-            unattended_tasks: Mutex::new(HashSet::new()),
             codex_sessions: Mutex::new(HashMap::new()),
             claude_sessions: Mutex::new(HashMap::new()),
             dsh_sessions: Mutex::new(HashMap::new()),
@@ -386,7 +381,6 @@ pub fn run() {
             child_handles: Mutex::new(HashMap::new()),
             cancelled_tasks: Mutex::new(HashSet::new()),
             manually_completed_tasks: Mutex::new(HashSet::new()),
-            unattended_tasks: Mutex::new(HashSet::new()),
             codex_sessions: Mutex::new(HashMap::new()),
             claude_sessions: Mutex::new(HashMap::new()),
             dsh_sessions: Mutex::new(HashMap::new()),
