@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useCodexApprovalQueue } from "./useCodexApprovalQueue";
 import type {
   CodexApprovalRequest,
   CodexStreamFrame,
@@ -146,36 +147,16 @@ export function useCodexStream(projectPath?: string) {
     [scheduleFlush],
   );
 
-  // 审批请求是全局 emit 事件（非 Channel），按 taskId 过滤后写进对应任务的状态
-  useEffect(() => {
-    let mounted = true;
-    const p = listen<CodexApprovalRequest>("codex-approval-requested", (e) => {
-      if (!mounted) return;
-      const taskId = e.payload?.task_id;
-      if (!taskId) return;
-      const model = modelsRef.current.get(taskId);
-      if (!model) {
-        // 审批先于任何数据帧到达（罕见）：占一个空模型，让 getStream 能寻址
-        modelsRef.current.set(taskId, createStreamModel());
-      }
-      dirtyRef.current.add(taskId);
-      setSnapshot((prev) => ({
-        ...prev,
-        [taskId]: { ...(prev[taskId] ?? emptyState()), approval: e.payload },
-      }));
-    });
-    return () => {
-      mounted = false;
-      p.then((fn) => fn());
-    };
-  }, []);
-
-  const setApprovalResolved = useCallback((taskId: string) => {
+  const updateApproval = useCallback((taskId: string, approval: CodexApprovalRequest | null) => {
+    if (approval && !modelsRef.current.has(taskId)) {
+      modelsRef.current.set(taskId, createStreamModel());
+    }
     setSnapshot((prev) => {
-      if (!prev[taskId]) return prev;
-      return { ...prev, [taskId]: { ...prev[taskId], approval: null } };
+      if ((prev[taskId]?.approval ?? null) === approval) return prev;
+      return { ...prev, [taskId]: { ...(prev[taskId] ?? emptyState()), approval } };
     });
   }, []);
+  const { resolve: setApprovalResolved, clear: clearApprovals } = useCodexApprovalQueue(updateApproval);
 
   // 模型提问与审批是两条独立的全局事件，各自入库到同一任务的快照。
   // 同时挂起时卡片区只渲染提问（提问会阻塞 turn，比审批更紧急）；
@@ -231,6 +212,7 @@ export function useCodexStream(projectPath?: string) {
   }, []);
 
   const resetTask = useCallback((taskId: string) => {
+    clearApprovals(taskId);
     modelsRef.current.delete(taskId);
     dirtyRef.current.delete(taskId);
     // 重跑任务会生成新会话路径：清掉该任务的全部回放记录，让新历史能重新回放。
@@ -246,20 +228,21 @@ export function useCodexStream(projectPath?: string) {
       delete next[taskId];
       return next;
     });
-  }, []);
+  }, [clearApprovals]);
 
   // 任务终态收口（interrupted / failed / cancelled / done）：归并层纯函数把仍在
   // 途的条目（endedAtMs 为 null）全部落终态——被终止的任务不会再有上游 completed
   // 帧，不收口的话命令聚合组永远显示「正在执行」、动态计时永远走秒。
   const finalizeTask = useCallback(
     (taskId: string) => {
+      clearApprovals(taskId);
       const model = modelsRef.current.get(taskId);
       if (!model) return;
       finalizeInterruptedEntries(model, Date.now());
       dirtyRef.current.add(taskId);
       scheduleFlush();
     },
-    [scheduleFlush],
+    [scheduleFlush, clearApprovals],
   );
 
   // done 后继续对话（resume 通道）的开轮动作：清上一轮 usage/审批残留，但**保留
@@ -267,6 +250,7 @@ export function useCodexStream(projectPath?: string) {
   // resume 之后才 subscribe），前端内存流是历史的唯一载体，reset 会让整个会话
   // 视图清空只剩新一轮内容。新一轮 item id 由上游新生成，追加归并不冲突。
   const beginFollowUpRound = useCallback((taskId: string) => {
+    clearApprovals(taskId);
     const model = modelsRef.current.get(taskId);
     if (model) {
       model.usage = null;
@@ -277,7 +261,7 @@ export function useCodexStream(projectPath?: string) {
       if (!prev[taskId]) return prev;
       return { ...prev, [taskId]: { ...prev[taskId], approval: null, userInput: null } };
     });
-  }, [scheduleFlush]);
+  }, [scheduleFlush, clearApprovals]);
 
   // 乐观用户气泡（Paseo 式 composer 的本地回显）：composer 提交后立即插入，
   // 不等上游 item/userMessage 帧——resume 通道重放时上游帧会带来权威条目，

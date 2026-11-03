@@ -24,6 +24,8 @@ const MOCK_ENV: &str = "NEZHA_MOCK_APPSERVER_SCRIPT";
 /// 父进程断言 input 数组形状(localImage 条目 + 路径存在性)。
 const IMAGE_CAPTURE_ENV: &str = "NEZHA_MOCK_APPSERVER_IMAGE_CAPTURE";
 
+mod concurrent_approvals;
+
 fn main() -> ExitCode {
     if let Ok(script) = std::env::var(MOCK_ENV) {
         mock_server_main(&script);
@@ -34,6 +36,7 @@ fn main() -> ExitCode {
         ("production_resume_keeps_thread", run_production_start_keeps_thread(true)),
         ("happy_path", run_happy_path()),
         ("approval_flow", run_approval_flow()),
+        ("concurrent_approvals", concurrent_approvals::run()),
         ("interrupt_flow", run_interrupt_flow()),
         ("crash_exit_code", run_crash()),
         ("image_input", run_image_input()),
@@ -221,6 +224,15 @@ fn handle_mock_request(
                 })
                 .to_string(),
             );
+        }
+        ("concurrent" | "concurrent_question", "turn/start") => concurrent_approvals::serve(script, id, reader, out),
+        ("concurrent" | "concurrent_question", "turn/steer") => {
+            respond(out, id, &serde_json::json!({}));
+            emit(out, &serde_json::json!({
+                "method": "turn/completed", "params": { "threadId": "thread-happy",
+                    "turn": { "id": "turn-batch", "status": "completed", "items": [] },
+                },
+            }).to_string());
         }
         ("approval", "turn/start") => {
             respond(

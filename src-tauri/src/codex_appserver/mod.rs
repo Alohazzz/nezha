@@ -101,6 +101,8 @@ struct SessionCore {
     approvals: parking_lot::Mutex<HashMap<proto::RequestId, PendingApproval>>,
     /// 待应答的模型提问（`item/tool/requestUserInput`）：request_id → 原始 params。
     user_inputs: parking_lot::Mutex<HashMap<proto::RequestId, proto::ToolRequestUserInputParams>>,
+    /// Serialize manual/automatic responses without holding a synchronous lock over I/O.
+    interaction_response_lock: AsyncMutex<()>,
     cwd: String,
     approval_policy: String,
     sandbox: String,
@@ -118,6 +120,20 @@ struct SessionStatusInternal {
     current_turn_id: Option<String>,
     /// 会话级模型 override（`/model` `/effort` 内置命令写入）；新 turn/start 带。
     model_override: ModelOverride,
+}
+
+impl SessionCore {
+    /// Pending command approvals and questions both block the current turn.
+    fn refresh_interaction_phase(&self) {
+        let mut status = self.status.lock();
+        if matches!(status.phase, SessionPhase::TurnRunning | SessionPhase::AwaitingApproval) {
+            status.phase = if !self.approvals.lock().is_empty() || !self.user_inputs.lock().is_empty() {
+                SessionPhase::AwaitingApproval
+            } else {
+                SessionPhase::TurnRunning
+            };
+        }
+    }
 }
 
 impl Default for SessionStatusInternal {
@@ -226,6 +242,7 @@ impl CodexAppServerSession {
             status: parking_lot::Mutex::new(SessionStatusInternal::default()),
             approvals: parking_lot::Mutex::new(HashMap::new()),
             user_inputs: parking_lot::Mutex::new(HashMap::new()),
+            interaction_response_lock: AsyncMutex::new(()),
             cwd: request.cwd.clone(),
             approval_policy: request.approval_policy.clone(),
             sandbox: request.sandbox.clone(),
@@ -439,6 +456,7 @@ impl CodexAppServerSession {
             status.phase = SessionPhase::TurnRunning;
             status.current_turn_id = Some(turn_id.clone());
         }
+        self.core.refresh_interaction_phase();
         Ok(turn_id)
     }
 
@@ -597,6 +615,7 @@ impl CodexAppServerSession {
         request_id: proto::RequestId,
         action: approval::ApprovalAction,
     ) -> Result<(), SessionError> {
+        let _response_guard = self.core.interaction_response_lock.lock().await;
         let params = {
             let approvals = self.core.approvals.lock();
             approvals
@@ -617,11 +636,9 @@ impl CodexAppServerSession {
         self.write_line(&line)
             .await
             .map_err(|e| SessionError::Protocol(format!("write approval response: {e}")))?;
-        // 审批应答后回到 turn 运行态;后续通知会继续修正
-        let mut status = self.core.status.lock();
-        if status.phase == SessionPhase::AwaitingApproval {
-            status.phase = SessionPhase::TurnRunning;
-        }
+        // Keep failed writes retryable, and only consume the request we actually answered.
+        self.core.approvals.lock().remove(&request_id);
+        self.core.refresh_interaction_phase();
         Ok(())
     }
 
@@ -635,41 +652,22 @@ impl CodexAppServerSession {
         request_id: proto::RequestId,
         answers: HashMap<String, Vec<String>>,
     ) -> Result<(), SessionError> {
-        // 先读不删：写失败时条目要留着让用户重试——删掉的话卡片没了、turn 还在等。
-        let params = {
-            let inputs = self.core.user_inputs.lock();
-            inputs.get(&request_id).cloned().ok_or_else(|| {
-                SessionError::Protocol("user input request not found/expired".to_string())
-            })?
-        };
-        let response = build_user_input_response(&params, &answers);
-        let result = serde_json::to_value(&response)
-            .map_err(|e| SessionError::Protocol(format!("encode user input: {e}")))?;
-        let line = rpc::encode_response(&request_id, &result);
-        self.write_line(&line)
-            .await
-            .map_err(|e| SessionError::Protocol(format!("write user input response: {e}")))?;
-        self.core.user_inputs.lock().remove(&request_id);
-        let mut status = self.core.status.lock();
-        if status.phase == SessionPhase::AwaitingApproval {
-            status.phase = SessionPhase::TurnRunning;
+        if !self.respond_user_input_once(request_id, answers).await? {
+            return Err(SessionError::Protocol("user input request not found/expired".to_string()));
         }
         Ok(())
     }
 
-    /// 原子地"取走并应答"模型提问——超时自动应答专用。
+    /// 只应答一次模型提问；手动与超时自动应答共用。
     ///
-    /// 与 [`Self::respond_user_input`] 的差别在条目消费时机：这里在写帧**前**就
-    /// `remove`，返回 false 表示条目已不在（用户先答了 / 已被自动应答过 / 已过期），
-    /// 调用方直接放弃。用户路径仍是先读不删（写失败可重试），竞态窗口由这条
-    /// 单向让位收窄：定时器抢答成功 → 用户提交报 expired（罕见且提示明确）；
-    /// 用户先提交 → 定时器静默放弃，不打扰。
+    /// 手动与自动路径共用异步响应锁；已消费时返回 false，写失败则保留供重试。
     pub async fn respond_user_input_once(
         &self,
         request_id: proto::RequestId,
         answers: HashMap<String, Vec<String>>,
     ) -> Result<bool, SessionError> {
-        let Some(params) = self.core.user_inputs.lock().remove(&request_id) else {
+        let _response_guard = self.core.interaction_response_lock.lock().await;
+        let Some(params) = self.core.user_inputs.lock().get(&request_id).cloned() else {
             return Ok(false);
         };
         let response = build_user_input_response(&params, &answers);
@@ -679,10 +677,8 @@ impl CodexAppServerSession {
         self.write_line(&line)
             .await
             .map_err(|e| SessionError::Protocol(format!("write user input response: {e}")))?;
-        let mut status = self.core.status.lock();
-        if status.phase == SessionPhase::AwaitingApproval {
-            status.phase = SessionPhase::TurnRunning;
-        }
+        self.core.user_inputs.lock().remove(&request_id);
+        self.core.refresh_interaction_phase();
         Ok(true)
     }
 
@@ -842,15 +838,10 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
             match events::parse_event(IncomingFrame::ServerRequest { id, method, params }) {
                 Ok(CodexEvent::ApprovalRequested { request_id, params }) => {
                     // 置状态 + 入审批表 + 广播,三步都不做 I/O
-                    {
-                        let mut status = core.status.lock();
-                        if status.phase == SessionPhase::TurnRunning {
-                            status.phase = SessionPhase::AwaitingApproval;
-                        }
-                    }
                     core.approvals
                         .lock()
                         .insert(request_id.clone(), PendingApproval { params: params.clone() });
+                    core.refresh_interaction_phase();
                     let _ = core.events_tx.send(CodexEvent::ApprovalRequested {
                         request_id,
                         params,
@@ -860,15 +851,10 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
                     // 与审批同款：置状态 + 入等待表 + 广播,三步都不做 I/O。
                     // 与审批分开存表——两者的应答形状完全不同（决策对象 vs answers map），
                     // 混在一张表里 respond_* 无法判断该序列化成哪一种。
-                    {
-                        let mut status = core.status.lock();
-                        if status.phase == SessionPhase::TurnRunning {
-                            status.phase = SessionPhase::AwaitingApproval;
-                        }
-                    }
                     core.user_inputs
                         .lock()
                         .insert(request_id.clone(), params.clone());
+                    core.refresh_interaction_phase();
                     let _ = core.events_tx.send(CodexEvent::UserInputRequested {
                         request_id,
                         params,
@@ -906,11 +892,15 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
                             let mut status = core.status.lock();
                             status.phase = SessionPhase::TurnRunning;
                             status.current_turn_id = Some(turn_id.clone());
+                            drop(status);
+                            core.refresh_interaction_phase();
                         }
                         CodexEvent::TurnCompleted { .. } => {
                             let mut status = core.status.lock();
                             status.phase = SessionPhase::Idle;
                             status.current_turn_id = None;
+                            core.approvals.lock().clear();
+                            core.user_inputs.lock().clear();
                         }
                         _ => {}
                     }
@@ -1057,6 +1047,7 @@ impl SessionCore {
             status: parking_lot::Mutex::new(SessionStatusInternal::default()),
             approvals: parking_lot::Mutex::new(HashMap::new()),
             user_inputs: parking_lot::Mutex::new(HashMap::new()),
+            interaction_response_lock: AsyncMutex::new(()),
             cwd: ".".to_string(),
             approval_policy: "untrusted".to_string(),
             sandbox: "read-only".to_string(),

@@ -307,7 +307,7 @@ fn spawn_user_input_auto_answer(
         let Some(tm) = app.try_state::<crate::TaskManager>() else {
             return;
         };
-        let Some(session) = take_session(&tm, &task_id) else {
+        let Some(session) = take_session_impl(&tm, &task_id) else {
             return; // 会话已收口/降级，问题随进程终结，无需应答
         };
         let answers = super::recommended_answers(&params);
@@ -320,10 +320,7 @@ fn spawn_user_input_auto_answer(
                         "request_id": request_id,
                     }),
                 );
-                let _ = app.emit(
-                    "task-status",
-                    serde_json::json!({ "task_id": task_id, "status": "running" }),
-                );
+                emit_interaction_phase(&app, &task_id, session.status().phase);
             }
             Ok(false) => {} // 用户先答了或已被应答，静默让位
             Err(e) => eprintln!("[codex_appserver] auto answer user input: {e:?}"),
@@ -851,13 +848,25 @@ pub async fn respond_approval(
     task_id: &str,
     request_id: i64,
     action: ApprovalAction,
-) -> Result<(), String> {
+) -> Result<SessionPhase, String> {
     let session = take_session_impl(task_manager, task_id)
         .ok_or_else(|| "structured session not found for task".to_string())?;
     session
         .respond_approval(codex_app_server_protocol::RequestId::Integer(request_id), action)
         .await
-        .map_err(|e| format!("{e:?}"))
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(session.status().phase)
+}
+
+/// Do not announce "running" until every blocking interaction has been answered.
+fn emit_interaction_phase(app: &AppHandle, task_id: &str, phase: SessionPhase) {
+    let status = match phase {
+        SessionPhase::AwaitingApproval => "input_required",
+        SessionPhase::TurnRunning => "running",
+        // Terminal notifications are authoritative; a late response must not reopen a task.
+        _ => return,
+    };
+    let _ = app.emit("task-status", serde_json::json!({ "task_id": task_id, "status": status }));
 }
 
 /// 只读借用（不移除）：审批应答不应终结会话。
@@ -875,7 +884,7 @@ fn take_session_impl(
 /// 应答 structured 任务的命令执行审批（计划 2.5）。
 /// `action` 取 `approve` / `decline` / `cancel`；决策不在服务端
 /// `availableDecisions` 建议子集内时返回错误（不静默替换）。
-/// 成功后回 `running` 状态——forwarder 的后续通知会继续修正。
+/// 尚有审批或提问时保持 `input_required`，全部应答后才恢复 `running`。
 #[tauri::command]
 pub async fn respond_codex_approval(
     app: AppHandle,
@@ -890,11 +899,8 @@ pub async fn respond_codex_approval(
         "cancel" => ApprovalAction::Cancel,
         other => return Err(format!("unknown approval action: {other}")),
     };
-    respond_approval(&task_manager, &task_id, request_id, action).await?;
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
+    let phase = respond_approval(&task_manager, &task_id, request_id, action).await?;
+    emit_interaction_phase(&app, &task_id, phase);
     Ok(())
 }
 
@@ -902,7 +908,7 @@ pub async fn respond_codex_approval(
 ///
 /// `answers` 是 question id → 用户选中的答案数组（多选即多条）。空 map 表示
 /// 用户放弃作答——**必须回**，否则 core 侧 `rx_response.await` 让 turn 永挂。
-/// 成功后回 `running` 状态，与审批应答同语义。
+/// 与命令审批共用等待状态，仍有其他阻塞请求时不提前恢复 `running`。
 #[tauri::command]
 pub async fn respond_codex_user_input(
     app: AppHandle,
@@ -920,10 +926,7 @@ pub async fn respond_codex_user_input(
         )
         .await
         .map_err(|e| format!("{e:?}"))?;
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
+    emit_interaction_phase(&app, &task_id, session.status().phase);
     Ok(())
 }
 

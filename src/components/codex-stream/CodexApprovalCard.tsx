@@ -1,9 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, ShieldAlert, X } from "lucide-react";
 import type { CodexApprovalRequest } from "../../types";
 import { useI18n } from "../../i18n";
-import s from "../../styles";
 
 type ApprovalAction = "approve" | "decline" | "cancel";
 
@@ -22,10 +21,12 @@ export function CodexApprovalCard({
 }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   const respond = useCallback(
     async (action: ApprovalAction) => {
-      if (busy) return;
+      if (busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       try {
         await invoke("respond_codex_approval", {
@@ -36,11 +37,12 @@ export function CodexApprovalCard({
         onResolved();
       } catch (err) {
         console.error("respond_codex_approval failed", err);
+        busyRef.current = false;
         setBusy(false);
         return;
       }
     },
-    [busy, request.task_id, request.request_id, onResolved],
+    [request.task_id, request.request_id, onResolved],
   );
 
   // availableDecisions 是服务端建议的合法子集（小写驼峰决策名）；缺省全部可用。
@@ -49,26 +51,25 @@ export function CodexApprovalCard({
   const allowed = (decision: string) => !available || available.includes(decision);
 
   return (
-    <div style={s.codexApprovalCard}>
-      <div style={s.codexApprovalHeader}>
+    <div className="codex-approval-card">
+      <div className="codex-approval-header">
         <ShieldAlert size={13} />
         <span>{t("codex.approval.title")}</span>
         {typeof request.reason === "string" && request.reason && (
-          <span style={s.codexApprovalReason}>{request.reason}</span>
+          <span className="codex-approval-reason">{request.reason}</span>
         )}
       </div>
       {typeof request.command === "string" && request.command && (
-        <pre style={s.codexApprovalCommand}>{request.command}</pre>
+        <pre className="codex-approval-command">{request.command}</pre>
       )}
       {typeof request.cwd === "string" && request.cwd && (
-        <div style={s.codexApprovalMeta}>cwd: {request.cwd}</div>
+        <div className="codex-approval-meta">cwd: {request.cwd}</div>
       )}
-      <div style={s.codexApprovalActions} className="codex-stream-approval-actions">
+      <div className="codex-stream-approval-actions">
         <button
           type="button"
           className="approve"
           disabled={busy || !allowed("accept")}
-          style={s.codexApprovalApproveBtn}
           onClick={() => respond("approve")}
         >
           <Check size={12} strokeWidth={2.5} />
@@ -78,7 +79,6 @@ export function CodexApprovalCard({
           type="button"
           className="decline"
           disabled={busy || !allowed("decline")}
-          style={s.codexApprovalDeclineBtn}
           onClick={() => respond("decline")}
         >
           <X size={12} strokeWidth={2.5} />
@@ -86,8 +86,8 @@ export function CodexApprovalCard({
         </button>
         <button
           type="button"
+          className="cancel"
           disabled={busy || !allowed("cancel")}
-          style={s.codexApprovalCancelBtn}
           onClick={() => respond("cancel")}
         >
           <X size={12} strokeWidth={2.5} />

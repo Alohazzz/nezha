@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useI18n } from "../../i18n";
-import s from "../../styles";
 import type { CodexHistoryStatus, CodexStreamEntry } from "../../hooks/useCodexStream";
 import type { CodexTokenUsage, CodexUserInputRequest } from "../../types";
 import type { AgentModelCatalog } from "../app-settings/types";
@@ -43,13 +42,13 @@ const UsageBar = memo(function UsageBar({ usage }: { usage: CodexTokenUsage | nu
   };
 
   return (
-    <div style={s.codexUsageBar}>
+    <div className="codex-stream-usage-bar">
       <span>
         {t("running.tokens")} {fmt(total.totalTokens)}
       </span>
       {ctxPercent !== null && (
         <>
-          <div style={s.codexUsageMeter}>
+          <div className="codex-stream-usage-meter">
             <div ref={writeFillWidth} className="codex-stream-usage-fill" data-warn={ctxPercent > 80 || undefined} />
           </div>
           <span>
@@ -238,7 +237,7 @@ export function CodexStreamView({
   return (
     <CodexStreamProjectContext.Provider value={projectPath ?? null}>
       <CodexStreamTurnActiveContext.Provider value={running}>
-        <div style={s.codexStreamViewRoot}>
+        <div className="codex-stream-view">
           {/* 终端态横幅在滚动区之上且不随内容滚动——失败原因必须常驻可见。 */}
           {bannerText && (
             <div className="codex-stream-banner" role="status" data-tone={statusTone}>
@@ -246,9 +245,9 @@ export function CodexStreamView({
               <span className="codex-stream-banner-text">{bannerText}</span>
             </div>
           )}
-          <div ref={scrollRef} style={s.codexStreamRoot} onScroll={handleScroll}>
+          <div ref={scrollRef} className="codex-stream-root" onScroll={handleScroll}>
             {showEmptyHint && (
-              <div style={s.codexStreamEmpty}>
+              <div className="codex-stream-empty">
                 {historyLoading
                   ? t("codex.stream.historyLoading")
                   : historyFailureReason !== null
@@ -296,7 +295,11 @@ export function CodexStreamView({
                 onError={(message) => onImageToast?.(message, "error")}
               />
             ) : (
-              approval && <CodexApprovalCard request={approval} onResolved={onApprovalResolved} />
+              approval && <CodexApprovalCard
+                key={`${approval.task_id}:${approval.threadId}:${approval.turnId}:${approval.request_id}`}
+                request={approval}
+                onResolved={onApprovalResolved}
+              />
             )}
           </div>
           {onComposerSubmit && (

@@ -1,28 +1,7 @@
 import type React from "react";
 
 /** codex structured 流视图（issue #116 阶段 3）：条目流 / 审批卡片 / usage 条。 */
-export const codexStream = {  codexStreamRoot: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "16px 28px 32px",
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-  },
-
-  codexStreamViewRoot: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-    minHeight: 0,
-  },
-
-  codexStreamEmpty: {
-    color: "var(--codex-row-meta)",
-    fontSize: 13,
-    padding: "12px 0",
-  },
+export const codexStream = {
 
   // 流视图级「工作中 N 秒」活性指示器：布局壳与 spinner 全部走 codex-stream.css
   // 的 .codex-stream-working*（曾在这里留有一份从未被引用的副本，已删——
@@ -235,104 +214,6 @@ export const codexStream = {  codexStreamRoot: {
     background: "var(--bg-root)",
   },
 
-  // ── 审批卡片 ──────────────────────────────────────────────────────────────
-
-  codexApprovalCard: {
-    border: "1px solid var(--color-warning)",
-    borderRadius: 8,
-    overflow: "hidden",
-    fontSize: 12.5,
-    flexShrink: 0,
-    position: "sticky",
-    bottom: 0,
-    background: "var(--bg-root)",
-    boxShadow: "0 -4px 16px rgba(0,0,0,0.15)",
-  },
-
-  codexApprovalHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: 7,
-    padding: "8px 12px",
-    color: "var(--color-warning)",
-    fontWeight: 600,
-    fontSize: 12.5,
-    background: "var(--bg-input)",
-    borderBottom: "1px solid var(--border-dim)",
-  },
-
-  codexApprovalCommand: {
-    margin: 0,
-    padding: "8px 12px",
-    fontSize: 12,
-    fontFamily: "var(--font-mono)",
-    color: "var(--text-primary)",
-    background: "var(--bg-root)",
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-    maxHeight: 180,
-    overflowY: "auto",
-  },
-
-  codexApprovalMeta: {
-    padding: "4px 12px 0",
-    fontSize: 11,
-    color: "var(--text-hint)",
-    fontFamily: "var(--font-mono)",
-    wordBreak: "break-all",
-  },
-
-  codexApprovalActions: {
-    display: "flex",
-    gap: 8,
-    padding: "10px 12px",
-  },
-
-  codexApprovalApproveBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "5px 14px",
-    borderRadius: 6,
-    border: "1px solid var(--color-success)",
-    background: "transparent",
-    color: "var(--color-success)",
-    fontSize: 12.5,
-    cursor: "pointer",
-  },
-
-  codexApprovalReason: {
-    fontWeight: 400,
-    fontSize: 11.5,
-    color: "var(--text-muted)",
-  },
-
-  codexApprovalDeclineBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "5px 14px",
-    borderRadius: 6,
-    border: "1px solid var(--border-strong)",
-    background: "transparent",
-    color: "var(--text-secondary)",
-    fontSize: 12.5,
-    cursor: "pointer",
-  },
-
-  codexApprovalCancelBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "5px 14px",
-    borderRadius: 6,
-    border: "1px solid var(--color-error)",
-    background: "transparent",
-    color: "var(--color-error)",
-    fontSize: 12.5,
-    cursor: "pointer",
-  },
-
   // ── 文件变更 diff ─────────────────────────────────────────────────────────
   // review fix：孤儿键 codexDiffFileHeader 已删（多文件子卡头用的是 codexDiffFileHead）。
 
@@ -346,29 +227,6 @@ export const codexStream = {  codexStreamRoot: {
     whiteSpace: "pre",
     maxHeight: 320,
     overflowY: "auto",
-  },
-
-  // ── usage 条 ──────────────────────────────────────────────────────────────
-
-  codexUsageBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: "6px 12px",
-    borderTop: "1px solid var(--border-dim)",
-    fontSize: 11,
-    color: "var(--text-hint)",
-    fontFamily: "var(--font-mono)",
-    flexShrink: 0,
-  },
-
-  codexUsageMeter: {
-    flex: 1,
-    maxWidth: 220,
-    height: 4,
-    borderRadius: 2,
-    background: "var(--bg-input)",
-    overflow: "hidden",
   },
 
   codexUsageMeterFill: {
