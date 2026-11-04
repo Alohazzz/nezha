@@ -369,29 +369,22 @@ async fn handle_event(
             }
         }
         CodexEvent::ApprovalRequested { request_id, params } => {
-            // 反向请求已在 mod.rs 入审批表；这里广播 UI 事件 + 状态。
-            // params 是上游类型（Serialize），直接序列化给前端展示命令/cwd/建议决策；
-            // request_id 必须随事件下发——前端审批卡片回传 respond_codex_approval 全靠它。
-            match serde_json::to_value(&params) {
-                Ok(mut payload) => {
-                    if let Some(obj) = payload.as_object_mut() {
-                        obj.insert("task_id".to_string(), serde_json::json!(task_id));
-                        obj.insert("request_id".to_string(), serde_json::json!(request_id));
-                    }
-                    let _ = app.emit("codex-approval-requested", payload);
+            emit_approval_request(app, task_id, request_id, "command", &params);
+            true
+        }
+        CodexEvent::FileChangeApprovalRequested { request_id, params } => {
+            emit_approval_request(app, task_id, request_id, "fileChange", &params);
+            true
+        }
+        CodexEvent::ServerRequestResolved { thread_id, request_id } => {
+            let _ = app.emit("codex-server-request-resolved", serde_json::json!({
+                "task_id": task_id, "threadId": thread_id, "requestId": request_id,
+            }));
+            if let Some(manager) = app.try_state::<crate::TaskManager>() {
+                if let Some(phase) = session_phase(&manager, task_id) {
+                    emit_interaction_phase(app, task_id, phase);
                 }
-                Err(e) => eprintln!("[codex_appserver] serialize approval: {e}"),
             }
-            let _ = app.emit(
-                "task-status",
-                serde_json::json!({ "task_id": task_id, "status": "input_required" }),
-            );
-            crate::system_notify::notify_task_event(
-                app,
-                task_id,
-                crate::system_notify::NotifyCategory::Confirm,
-                None,
-            );
             true
         }
         CodexEvent::UserInputRequested { request_id, params } => {
@@ -476,6 +469,32 @@ async fn handle_event(
             true
         }
     }
+}
+
+fn emit_approval_request(
+    app: &AppHandle,
+    task_id: &str,
+    request_id: codex_app_server_protocol::RequestId,
+    kind: &str,
+    params: &impl serde::Serialize,
+) {
+    match serde_json::to_value(params) {
+        Ok(mut payload) => {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("task_id".to_string(), serde_json::json!(task_id));
+                obj.insert("request_id".to_string(), serde_json::json!(request_id));
+                obj.insert("kind".to_string(), serde_json::json!(kind));
+            }
+            let _ = app.emit("codex-approval-requested", payload);
+        }
+        Err(e) => eprintln!("[codex_appserver] serialize approval: {e}"),
+    }
+    let _ = app.emit("task-status", serde_json::json!({
+        "task_id": task_id, "status": "input_required",
+    }));
+    crate::system_notify::notify_task_event(
+        app, task_id, crate::system_notify::NotifyCategory::Confirm, None,
+    );
 }
 
 /// 数据面事件 → Channel 结构化 JSON（前端 `useCodexStream` 消费）。

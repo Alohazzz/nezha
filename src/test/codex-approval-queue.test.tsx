@@ -50,6 +50,20 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.localStorage.clear(); });
 
 describe("concurrent Codex approvals", () => {
+  it("lets the user approve file changes with their target shown", async () => {
+    render(<Host />);
+    act(() => handlers.get("codex-approval-requested")!({ payload: {
+      ...request(9), kind: "fileChange", command: undefined, cwd: undefined,
+      grantRoot: "C:/fixture", reason: "Create fixture.txt",
+    } }));
+    expect(await screen.findByText("File changes require approval")).toBeInTheDocument();
+    expect(screen.getByText("C:/fixture")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("respond_codex_approval", {
+      taskId: "task-1", requestId: 9, action: "approve",
+    }));
+  });
+
   it("shows all three approvals in order and enables each next card", async () => {
     render(<Host />);
     act(() => { emit(0); emit(1); emit(2); });
@@ -74,6 +88,22 @@ describe("concurrent Codex approvals", () => {
     expect(result.current.getStream("task-1").approval?.request_id).toBe(1);
     // Duplicate/late completion of the old request must not clear the next one.
     act(() => finishFirst("task-1"));
+    expect(result.current.getStream("task-1").approval?.request_id).toBe(1);
+  });
+
+  it("removes server-resolved approvals without losing the next request or another task", () => {
+    const { result } = renderHook(() => useCodexStream());
+    act(() => { emit(0); emit(1); emit(0, "task-2"); });
+    const finishOldRequest = result.current.setApprovalResolved;
+    const resolved = { task_id: "task-1", threadId: "thread-1", requestId: 0 };
+    act(() => handlers.get("codex-server-request-resolved")?.({ payload: {
+      ...resolved, threadId: "old-thread",
+    } }));
+    expect(result.current.getStream("task-1").approval?.request_id).toBe(0);
+    act(() => handlers.get("codex-server-request-resolved")?.({ payload: resolved }));
+    expect(result.current.getStream("task-1").approval?.request_id).toBe(1);
+    expect(result.current.getStream("task-2").approval?.request_id).toBe(0);
+    act(() => finishOldRequest("task-1"));
     expect(result.current.getStream("task-1").approval?.request_id).toBe(1);
   });
 

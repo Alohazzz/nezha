@@ -62,6 +62,11 @@ pub enum CodexEvent {
         request_id: proto::RequestId,
         params: proto::CommandExecutionRequestApprovalParams,
     },
+    FileChangeApprovalRequested {
+        request_id: proto::RequestId,
+        params: proto::FileChangeRequestApprovalParams,
+    },
+    ServerRequestResolved { thread_id: String, request_id: proto::RequestId },
     /// 模型主动提问(`item/tool/requestUserInput`):`request_user_input` 工具调用
     /// 触发的反向请求。`request_id` 必须原样带回 `respond_user_input`——
     /// 不回的话 core 侧 `rx_response.await` 永挂,turn 卡死在等待态。
@@ -69,7 +74,7 @@ pub enum CodexEvent {
         request_id: proto::RequestId,
         params: proto::ToolRequestUserInputParams,
     },
-    /// 当前不支持的反向请求(MCP elicitation / fileChange / dynamic tool 等),
+    /// 当前不支持的反向请求(MCP elicitation / dynamic tool 等),
     /// 上层必须自动应答拒绝防 turn 卡死。
     UnsupportedServerRequest { request_id: proto::RequestId, method: String },
     /// 已知形状但当前不消费的通知(rate limits、MCP 启动状态等)——解析成功后丢弃。
@@ -160,6 +165,11 @@ fn parse_server_request(
             let input: proto::ToolRequestUserInputParams = serde_json::from_value(params)
                 .map_err(|e| format!("item/tool/requestUserInput: {e}"))?;
             Ok(CodexEvent::UserInputRequested { request_id, params: input })
+        }
+        "item/fileChange/requestApproval" => {
+            let approval = serde_json::from_value(params.unwrap_or(Value::Null))
+                .map_err(|e| format!("item/fileChange/requestApproval: {e}"))?;
+            Ok(CodexEvent::FileChangeApprovalRequested { request_id, params: approval })
         }
         // 其余反向请求当前不支持:保留 id 供上层自动拒绝,防 turn 卡死
         other => Ok(CodexEvent::UnsupportedServerRequest {
@@ -296,7 +306,11 @@ fn parse_notification(method: &str, params: Option<Value>) -> Result<CodexEvent,
         "item/reasoning/summaryPartAdded" => {
             CodexEvent::Ignored { method: "item/reasoning/summaryPartAdded" }
         }
-        "serverRequest/resolved" => CodexEvent::Ignored { method: "serverRequest/resolved" },
+        "serverRequest/resolved" => {
+            let wire: proto::ServerRequestResolvedNotification = serde_json::from_value(params)
+                .map_err(|e| format!("serverRequest/resolved: {e}"))?;
+            CodexEvent::ServerRequestResolved { thread_id: wire.thread_id, request_id: wire.request_id }
+        }
         "configWarning" | "warning" => CodexEvent::Ignored { method: "configWarning" },
         "remoteControl/status/changed" => {
             CodexEvent::Ignored { method: "remoteControl/status/changed" }
@@ -464,7 +478,6 @@ mod tests {
     fn ignored_methods_do_not_blow_up() {
         for line in [
             r#"{"method":"account/rateLimits/updated","params":{}}"#,
-            r#"{"method":"serverRequest/resolved","params":{"threadId":"t","requestId":0}}"#,
             r#"{"method":"configWarning","params":{"message":"deprecated key"}}"#,
         ] {
             let event = parse_from_line(line).unwrap();

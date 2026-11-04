@@ -25,15 +25,26 @@ const MOCK_ENV: &str = "NEZHA_MOCK_APPSERVER_SCRIPT";
 const IMAGE_CAPTURE_ENV: &str = "NEZHA_MOCK_APPSERVER_IMAGE_CAPTURE";
 
 mod concurrent_approvals;
+mod resume_policy;
+mod file_approval;
+mod resolved_requests;
+mod real_codex;
 
 fn main() -> ExitCode {
     if let Ok(script) = std::env::var(MOCK_ENV) {
         mock_server_main(&script);
         return ExitCode::SUCCESS;
     }
+    // Opt-in smoke test: uses the installed CLI/account and an isolated temp directory.
+    if let Ok(program) = std::env::var("NEZHA_REAL_CODEX") {
+        return if real_codex::run(&program) { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
     let results: Vec<(&str, bool)> = vec![
         ("production_start_keeps_thread", run_production_start_keeps_thread(false)),
         ("production_resume_keeps_thread", run_production_start_keeps_thread(true)),
+        ("resume_policy", resume_policy::run()),
+        ("file_approval", file_approval::run()),
+        ("resolved_requests", resolved_requests::run()),
         ("happy_path", run_happy_path()),
         ("approval_flow", run_approval_flow()),
         ("concurrent_approvals", concurrent_approvals::run()),
@@ -128,6 +139,7 @@ fn handle_mock_request(
             respond(out, id, &serde_json::json!({}));
             std::process::exit(101);
         }
+        ("resume_policy", "thread/resume") => resume_policy::serve(id, params, out),
         (scene, "thread/start" | "thread/resume") => {
             let thread_id = if scene == "approval" { "thread-approval" } else { "thread-happy" };
             emit_thread_started(out, thread_id);
@@ -226,6 +238,8 @@ fn handle_mock_request(
             );
         }
         ("concurrent" | "concurrent_question", "turn/start") => concurrent_approvals::serve(script, id, reader, out),
+        (scene, "turn/start") if scene.starts_with("file_approval_") => file_approval::serve(scene, id, reader, out),
+        ("resolved_requests", "turn/start" | "turn/steer") => resolved_requests::serve(method, id, out),
         ("concurrent" | "concurrent_question", "turn/steer") => {
             respond(out, id, &serde_json::json!({}));
             emit(out, &serde_json::json!({

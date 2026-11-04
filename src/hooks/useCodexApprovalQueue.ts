@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { CodexApprovalRequest } from "../types";
+import type { CodexApprovalRequest, CodexServerRequestResolved } from "../types";
 
 /** Keep every unanswered request; the UI displays the oldest one per task. */
 export function useCodexApprovalQueue(
@@ -53,5 +53,16 @@ export function useCodexApprovalQueue(
     publish(taskId, []);
   }, [publish]);
 
-  return { resolve, clear };
+  const resolveFromServer = useCallback((event: CodexServerRequestResolved) => {
+    const queue = queues.current.get(event.task_id);
+    if (!queue) return;
+    const next = queue.filter((request) => request.threadId !== event.threadId
+      || request.request_id !== event.requestId);
+    if (next.length === queue.length) return;
+    if (next.length) queues.current.set(event.task_id, next);
+    else queues.current.delete(event.task_id);
+    publish(event.task_id, next);
+  }, [publish]);
+
+  return { resolve, clear, resolveFromServer };
 }

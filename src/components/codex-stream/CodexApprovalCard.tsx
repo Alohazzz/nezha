@@ -1,13 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, ShieldAlert, X } from "lucide-react";
-import type { CodexApprovalRequest } from "../../types";
+import type { CodexApprovalRequest, CodexFileChangeItem } from "../../types";
 import { useI18n } from "../../i18n";
 
 type ApprovalAction = "approve" | "decline" | "cancel";
 
 /**
- * 命令执行审批卡片：sticky 底部展示，三按钮决策。
+ * 命令执行 / 文件修改审批卡片：sticky 底部展示，三按钮决策。
  * `request_id` 原样回传 `respond_codex_approval`（服务端反向请求 id 空间）；
  * 决策不在服务端 `availableDecisions` 建议子集内时后端报错，前端 toast 由调用方处理。
  * hover / disabled 视觉走 codex-stream.css 的伪类（#117 T3 迁出 inline style）。
@@ -15,9 +15,11 @@ type ApprovalAction = "approve" | "decline" | "cancel";
 export function CodexApprovalCard({
   request,
   onResolved,
+  changes,
 }: {
   request: CodexApprovalRequest;
   onResolved: () => void;
+  changes?: CodexFileChangeItem["changes"];
 }) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
@@ -54,7 +56,7 @@ export function CodexApprovalCard({
     <div className="codex-approval-card">
       <div className="codex-approval-header">
         <ShieldAlert size={13} />
-        <span>{t("codex.approval.title")}</span>
+        <span>{t(request.kind === "fileChange" ? "codex.approval.fileTitle" : "codex.approval.title")}</span>
         {typeof request.reason === "string" && request.reason && (
           <span className="codex-approval-reason">{request.reason}</span>
         )}
@@ -64,6 +66,12 @@ export function CodexApprovalCard({
       )}
       {typeof request.cwd === "string" && request.cwd && (
         <div className="codex-approval-meta">cwd: {request.cwd}</div>
+      )}
+      {request.kind === "fileChange" && request.grantRoot && (
+        <pre className="codex-approval-command">{request.grantRoot}</pre>
+      )}
+      {request.kind === "fileChange" && changes && changes.length > 0 && (
+        <pre className="codex-approval-command">{changes.map((change) => change.path).join("\n")}</pre>
       )}
       <div className="codex-stream-approval-actions">
         <button

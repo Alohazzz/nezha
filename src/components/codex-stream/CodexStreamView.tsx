@@ -198,6 +198,9 @@ export function CodexStreamView({
     [entries, running, interrupted],
   );
   const summary = useMemo(() => summarizeCodexStream(entries, segments), [entries, segments]);
+  const proposedChange = approval?.kind === "fileChange"
+    ? entries.find((entry) => entry.kind === "fileChange" && entry.item.id === approval.itemId)
+    : undefined;
   // 运行中的段若有过程，折叠头的「正在工作 · N 秒」就是活性信号；只有在还没
   // 攒出任何过程（刚发指令、模型还在想）时才需要流尾兜底指示。
   const activeSegment = segments[segments.length - 1];
@@ -298,6 +301,7 @@ export function CodexStreamView({
               approval && <CodexApprovalCard
                 key={`${approval.task_id}:${approval.threadId}:${approval.turnId}:${approval.request_id}`}
                 request={approval}
+                changes={proposedChange?.kind === "fileChange" ? proposedChange.item.changes : undefined}
                 onResolved={onApprovalResolved}
               />
             )}

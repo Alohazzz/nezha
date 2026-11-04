@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useCodexApprovalQueue } from "./useCodexApprovalQueue";
 import type {
   CodexApprovalRequest,
+  CodexServerRequestResolved,
   CodexStreamFrame,
   CodexTokenUsage,
   CodexUserInputRequest,
@@ -156,7 +157,22 @@ export function useCodexStream(projectPath?: string) {
       return { ...prev, [taskId]: { ...(prev[taskId] ?? emptyState()), approval } };
     });
   }, []);
-  const { resolve: setApprovalResolved, clear: clearApprovals } = useCodexApprovalQueue(updateApproval);
+  const { resolve: setApprovalResolved, clear: clearApprovals, resolveFromServer } = useCodexApprovalQueue(updateApproval);
+
+  useEffect(() => {
+    let mounted = true;
+    const listener = listen<CodexServerRequestResolved>("codex-server-request-resolved", ({ payload }) => {
+      if (!mounted || !payload?.task_id) return;
+      resolveFromServer(payload);
+      setSnapshot((prev) => {
+        const state = prev[payload.task_id];
+        if (!state?.userInput || state.userInput.threadId !== payload.threadId
+          || state.userInput.request_id !== payload.requestId) return prev;
+        return { ...prev, [payload.task_id]: { ...state, userInput: null } };
+      });
+    });
+    return () => { mounted = false; void listener.then((unlisten) => unlisten()); };
+  }, [resolveFromServer]);
 
   // 模型提问与审批是两条独立的全局事件，各自入库到同一任务的快照。
   // 同时挂起时卡片区只渲染提问（提问会阻塞 turn，比审批更紧急）；
@@ -182,11 +198,12 @@ export function useCodexStream(projectPath?: string) {
   }, []);
 
   const setUserInputResolved = useCallback((taskId: string) => {
+    const request = snapshot[taskId]?.userInput;
     setSnapshot((prev) => {
-      if (!prev[taskId]) return prev;
+      if (!request || prev[taskId]?.userInput !== request) return prev;
       return { ...prev, [taskId]: { ...prev[taskId], userInput: null } };
     });
-  }, []);
+  }, [snapshot]);
 
   // full_access 下 30s 无人应答，后端已按推荐项自动应答：撤掉问答卡片，恢复
   // composer。request_id 比对防止误清新提问（auto-answered 只可能对应旧请求）。
@@ -236,6 +253,11 @@ export function useCodexStream(projectPath?: string) {
   const finalizeTask = useCallback(
     (taskId: string) => {
       clearApprovals(taskId);
+      setSnapshot((prev) => {
+        const state = prev[taskId];
+        if (!state?.userInput) return prev;
+        return { ...prev, [taskId]: { ...state, userInput: null } };
+      });
       const model = modelsRef.current.get(taskId);
       if (!model) return;
       finalizeInterruptedEntries(model, Date.now());

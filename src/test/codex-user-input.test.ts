@@ -100,4 +100,32 @@ describe("useCodexStream 模型提问", () => {
     act(() => result.current.beginFollowUpRound("task-1"));
     await waitFor(() => expect(result.current.getStream("task-1").userInput).toBeNull());
   });
+
+  it("clears withdrawn questions and ignores late completion of an older question", () => {
+    const { result } = renderHook(() => useCodexStream());
+    act(() => emit("codex-user-input-requested", QUESTION_EVENT));
+    const finishOldQuestion = result.current.setUserInputResolved;
+    act(() => emit("codex-server-request-resolved", {
+      task_id: "task-1", threadId: "old-thread", requestId: 7,
+    }));
+    expect(result.current.getStream("task-1").userInput?.request_id).toBe(7);
+    act(() => emit("codex-server-request-resolved", {
+      task_id: "task-1", threadId: "thread-1", requestId: 7,
+    }));
+    expect(result.current.getStream("task-1").userInput).toBeNull();
+    act(() => emit("codex-user-input-requested", { ...QUESTION_EVENT, request_id: 8 }));
+    act(() => finishOldQuestion("task-1"));
+    expect(result.current.getStream("task-1").userInput?.request_id).toBe(8);
+  });
+
+  it("clears a task's question on termination even if no server resolution arrives", () => {
+    const { result } = renderHook(() => useCodexStream());
+    act(() => {
+      emit("codex-user-input-requested", QUESTION_EVENT);
+      emit("codex-user-input-requested", { ...QUESTION_EVENT, task_id: "task-2" });
+    });
+    act(() => result.current.finalizeTask("task-1"));
+    expect(result.current.getStream("task-1").userInput).toBeNull();
+    expect(result.current.getStream("task-2").userInput?.request_id).toBe(7);
+  });
 });

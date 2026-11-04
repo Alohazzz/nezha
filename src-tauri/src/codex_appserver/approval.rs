@@ -24,6 +24,14 @@ pub enum ApprovalAction {
 }
 
 impl ApprovalAction {
+    pub fn to_file_decision(self) -> proto::FileChangeApprovalDecision {
+        match self {
+            Self::Approve => proto::FileChangeApprovalDecision::Accept,
+            Self::Decline => proto::FileChangeApprovalDecision::Decline,
+            Self::Cancel => proto::FileChangeApprovalDecision::Cancel,
+        }
+    }
+
     /// 映射到 0.163 协议决策枚举(D1)。
     pub fn to_decision(self) -> proto::CommandExecutionApprovalDecision {
         match self {

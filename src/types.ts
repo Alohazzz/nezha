@@ -644,7 +644,14 @@ export interface CodexUserInputOption {
   description: string;
 }
 
-/** structured 任务命令执行审批事件（`codex-approval-requested`，阶段 3 渲染审批卡片）。 */
+/** 服务端确认请求已应答或撤销，按线程和请求 ID 清理本地等待状态。 */
+export interface CodexServerRequestResolved {
+  task_id: string;
+  threadId: string;
+  requestId: number;
+}
+
+/** structured 任务命令执行 / 文件修改审批事件（`codex-approval-requested`）。 */
 export interface CodexApprovalRequest {
   /** 后端追加：审批所属任务。 */
   task_id: string;
@@ -654,8 +661,10 @@ export interface CodexApprovalRequest {
   threadId: string;
   turnId: string;
   itemId: string;
-  command: string;
-  cwd: string;
+  kind?: "command" | "fileChange";
+  command?: string;
+  cwd?: string;
+  grantRoot?: string | null;
   /** 服务端建议的合法决策子集；缺省视为全部可用。 */
   availableDecisions?: string[];
   [key: string]: unknown;

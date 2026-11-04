@@ -79,8 +79,10 @@ pub enum SessionError {
 }
 
 /// 审批等待表条目:反向请求到达后暂存,等待 `respond_approval`。
-pub struct PendingApproval {
-    pub params: proto::CommandExecutionRequestApprovalParams,
+#[derive(Clone)]
+pub enum PendingApproval {
+    Command(proto::CommandExecutionRequestApprovalParams),
+    FileChange(proto::FileChangeRequestApprovalParams),
 }
 
 /// `/model` `/effort` 内置命令的会话级模型 override:写入后每个新 turn/start
@@ -363,6 +365,9 @@ impl CodexAppServerSession {
         // 不带的 feature 开关就只对新建 thread 生效，续聊会退回"不能提问"。
         let params = json!({
             "threadId": thread_id,
+            "cwd": self.core.cwd,
+            "approvalPolicy": self.core.approval_policy,
+            "sandbox": self.core.sandbox,
             "config": thread_config_overrides(),
         });
         let result = self
@@ -620,17 +625,24 @@ impl CodexAppServerSession {
             let approvals = self.core.approvals.lock();
             approvals
                 .get(&request_id)
-                .map(|p| p.params.clone())
+                .cloned()
                 .ok_or_else(|| {
                     SessionError::Protocol("approval request not found/expired".to_string())
                 })?
         };
-        if !approval::is_action_available(&params, action) {
-            return Err(SessionError::Protocol(format!(
-                "decision {action:?} not in availableDecisions"
-            )));
+        let result = match params {
+            PendingApproval::Command(params) => {
+                if !approval::is_action_available(&params, action) {
+                    return Err(SessionError::Protocol(format!(
+                        "decision {action:?} not in availableDecisions"
+                    )));
+                }
+                approval::encode_decision_result(action)
+            }
+            PendingApproval::FileChange(_) => serde_json::to_value(
+                proto::FileChangeRequestApprovalResponse { decision: action.to_file_decision() },
+            ),
         }
-        let result = approval::encode_decision_result(action)
             .map_err(|e| SessionError::Protocol(format!("encode decision: {e}")))?;
         let line = rpc::encode_response(&request_id, &result);
         self.write_line(&line)
@@ -840,11 +852,20 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
                     // 置状态 + 入审批表 + 广播,三步都不做 I/O
                     core.approvals
                         .lock()
-                        .insert(request_id.clone(), PendingApproval { params: params.clone() });
+                        .insert(request_id.clone(), PendingApproval::Command(params.clone()));
                     core.refresh_interaction_phase();
                     let _ = core.events_tx.send(CodexEvent::ApprovalRequested {
                         request_id,
                         params,
+                    });
+                }
+                Ok(CodexEvent::FileChangeApprovalRequested { request_id, params }) => {
+                    core.approvals.lock().insert(
+                        request_id.clone(), PendingApproval::FileChange(params.clone()),
+                    );
+                    core.refresh_interaction_phase();
+                    let _ = core.events_tx.send(CodexEvent::FileChangeApprovalRequested {
+                        request_id, params,
                     });
                 }
                 Ok(CodexEvent::UserInputRequested { request_id, params }) => {
@@ -901,6 +922,27 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
                             status.current_turn_id = None;
                             core.approvals.lock().clear();
                             core.user_inputs.lock().clear();
+                        }
+                        CodexEvent::ServerRequestResolved { thread_id, request_id } => {
+                            let _response_guard = core.interaction_response_lock.lock().await;
+                            {
+                                let mut approvals = core.approvals.lock();
+                                let matches_thread = approvals.get(request_id).is_some_and(|pending| {
+                                    let pending_thread = match pending {
+                                        PendingApproval::Command(params) => &params.thread_id,
+                                        PendingApproval::FileChange(params) => &params.thread_id,
+                                    };
+                                    pending_thread == thread_id
+                                });
+                                if matches_thread { approvals.remove(request_id); }
+                            }
+                            {
+                                let mut questions = core.user_inputs.lock();
+                                if questions.get(request_id).is_some_and(|params| &params.thread_id == thread_id) {
+                                    questions.remove(request_id);
+                                }
+                            }
+                            core.refresh_interaction_phase();
                         }
                         _ => {}
                     }
