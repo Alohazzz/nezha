@@ -2296,6 +2296,7 @@ pub async fn fork_task(
     permission_mode: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    run_mode: Option<String>,
     cols: Option<u16>,
     rows: Option<u16>,
     on_output: Channel<String>,
@@ -2306,6 +2307,15 @@ pub async fn fork_task(
         "Reasoning effort",
         MAX_REASONING_EFFORT_BYTES,
     )?;
+    if should_run_structured(&agent, run_mode.as_deref()) {
+        let path_for_validation = project_path.clone();
+        tokio::task::spawn_blocking(move || validate_task_project_path(&path_for_validation))
+            .await
+            .map_err(|e| format!("fork path validation failed: {e}"))??;
+        return crate::codex_appserver::task_bridge::fork_structured_task(
+            app, &task_manager, task_id, project_path, permission_mode, source_session_id,
+        ).await;
+    }
     let launch_project_path = project_path.clone();
     // fork_task 收到的 project_path 已是主项目路径（前端传 project.path，不含 worktree），
     // 故直接作为图谱解析来源。

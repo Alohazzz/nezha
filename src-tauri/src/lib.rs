@@ -564,6 +564,7 @@ pub fn run() {
             codeup::codeup_export_review_report,
             codeup::codeup_create_mr_comment,
             codeup::codeup_cleanup_mr,
+            codeup::codeup_check_merge_completion,
             codeup::codeup_resolve_conflicts,
             pending_mr::list_branch_pr_repos,
             pending_mr::list_branch_pr_candidates,

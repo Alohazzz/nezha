@@ -76,6 +76,9 @@ import {
 import { parsePlanDeps, type PlanDeps } from "./utils/planDeps";
 import { planLifecycleActions } from "./utils/planBoard";
 import { readProjectPermissionMode } from "./hooks/useProjectPermissionMode";
+import { buildCodeupTaskPrompt } from "./components/codeup/taskPrompt";
+import { codeupMergeRecoveryPrompt, type CodeupTaskCleanup } from "./components/codeup/taskCompletion";
+import { resolveTaskRunMode } from "./utils/taskRunMode";
 import {
   buildPlanStatusById,
   buildTaskBySerial,
@@ -445,6 +448,10 @@ function App() {
   const backfillHandlerRef = useRef<(() => Promise<void>) | null>(null);
   const backfillProcessingRef = useRef<Set<string>>(new Set());
   tasksRef.current = tasks;
+  const structuredTaskIds = useMemo(
+    () => new Set(tasks.filter((task) => task.agent === "codex" && task.runMode === "structured").map((task) => task.id)),
+    [tasks],
+  );
   // 合并中心的任务回调里要按分支反查计划 / 项目：事件监听只建一次，必须读 ref 拿最新值。
   const deliveryPlansRef = useRef<DeliveryPlan[]>([]);
   const projectsRef = useRef<Project[]>([]);
@@ -476,12 +483,9 @@ function App() {
   const pendingResumeInputRef = useRef<Record<string, string>>({});
   // 由「合并审核」发起的 codeup 审查/冲突/合并任务，任务结束后需清理临时 worktree。
   // sourceBranch 用于合并成功后反查交付计划（一个计划一条分支）并收敛其状态。
-  const codeupTaskCleanupRef = useRef<
-    Record<
-      string,
-      { repository: string; mrId: number; repositoryId?: string; kind?: string; sourceBranch?: string }
-    >
-  >({});
+  const codeupTaskCleanupRef = useRef<Record<string, CodeupTaskCleanup>>({});
+  const codeupMergeStoppedRef = useRef(new Set<string>());
+  const continueCodeupMergeRef = useRef<(taskId: string, prompt: string, live: boolean) => boolean>(() => false);
 
   const formatSaveProjectsError = useCallback(
     (error: string) => t("toast.saveProjectsFailed", { error }),
@@ -948,6 +952,10 @@ function App() {
       "task-status",
       (e) => {
         const { task_id, status, failure_reason } = e.payload;
+        if (status === "running") codeupMergeStoppedRef.current.delete(task_id);
+        else if (status === "cancelled" || status === "interrupted" || status === "failed") {
+          codeupMergeStoppedRef.current.add(task_id);
+        }
         // 前台豁免：置未读前先看该任务是否正被用户打开（任一项目的选中任务）。
         const viewingTaskId =
           Object.values(projectViewsRef.current).find(
@@ -961,22 +969,40 @@ function App() {
           // 未收到完成帧的残留条目。
           codexStream.finalizeTask(task_id);
           tm.removeTaskBuffers([task_id]);
-          // 合并审核发起的任务：结束后清理该 MR 的临时 worktree。
-          const codeupCleanup = codeupTaskCleanupRef.current[task_id];
-          if (codeupCleanup) {
-            delete codeupTaskCleanupRef.current[task_id];
-            if (codeupCleanup.kind === "merge" && status === "done") {
-              // 分支合并任务：已由 Agent 用 git 将合并结果推送到目标分支完成合并，无需再调 Codeup 接口。
-              showToast("MR 已通过 git 推送合并到目标分支", "success");
-              // 合并动作发生在 Codeup 之外（直接 push），计划不会自己收敛：
-              // 按源分支反查交付计划，让后端核对 MR / git 状态后写 merged。
+        }
+        // PTY Stop means awaiting_review, while app-server ends a turn with done.
+        // An idle PTY must only be inspected; its checkout and process are still in use.
+        const codeupCleanup = codeupTaskCleanupRef.current[task_id];
+        if (codeupCleanup && (status === "done" || (status === "awaiting_review" && codeupCleanup.kind !== "review"))) {
+          const cleanup = status === "done";
+          delete codeupTaskCleanupRef.current[task_id];
+          invoke<void>(cleanup ? "codeup_cleanup_mr" : "codeup_check_merge_completion", {
+            repository: codeupCleanup.repository,
+            mrId: String(codeupCleanup.mrId),
+          }).then(() => {
+            if (!cleanup) {
+              codeupTaskCleanupRef.current[task_id] = codeupCleanup;
+              return;
+            }
+            if (codeupCleanup.kind === "merge") {
+              showToast("合并任务已结束，正在核对远端合并状态", "success");
               void syncDeliveryPlanAfterMerge(codeupCleanup.sourceBranch);
             }
-            invoke("codeup_cleanup_mr", {
-              repository: codeupCleanup.repository,
-              mrId: String(codeupCleanup.mrId),
-            }).catch(() => {});
-          }
+          }).catch((error: unknown) => {
+            // A completed agent turn can still leave an unresolved Git merge. Preserve it.
+            codeupTaskCleanupRef.current[task_id] = codeupCleanup;
+            if (codeupMergeStoppedRef.current.has(task_id)) return;
+            const prompt = codeupMergeRecoveryPrompt(codeupCleanup, error);
+            if (prompt && continueCodeupMergeRef.current(task_id, prompt, !cleanup)) {
+              codeupCleanup.recoveryAttempts = (codeupCleanup.recoveryAttempts ?? 0) + 1;
+              showToast("合并尚未完成，正在接续 Agent 处理冲突", "warning");
+              return;
+            }
+            updateTaskStatus(task_id, cleanup ? "interrupted" : "awaiting_review", undefined, String(error));
+            showToast(prompt === null && String(error).includes("CODEUP_MERGE_INCOMPLETE:")
+              ? "Agent 接续后合并仍未完成，已保留现场，请查看具体冲突后继续处理"
+              : String(error), "warning");
+          });
         }
         if (status === "done") scheduleForDoneTask(task_id);
       },
@@ -1160,7 +1186,7 @@ function App() {
     async (task: Task, text: string, images: string[] = []) => {
       if (followUpBusyTaskId) return;
       const projectPath =
-        projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "";
+        task.worktreePath ?? projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "";
 
       const steerLive =
         task.status === "running" ||
@@ -1429,7 +1455,7 @@ function App() {
       model,
       reasoningEffort,
       // 运行通道由应用级全局设置决定（仅 codex 有意义），云效与普通任务同判据。
-      runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
+      runMode: resolveTaskRunMode(agent, codexRunMode),
       status: immediate ? "pending" : "todo",
       createdAt: now,
       updatedAt: now,
@@ -1544,36 +1570,7 @@ function App() {
     }
 
     // 2) 组装任务 prompt。
-    let prompt: string;
-    if (kind === "review") {
-      prompt =
-        `──── 代码审查（规则与输出由 \`merge-code-review\` 技能统一管理）────\n` +
-        `请读取并遵循 \`merge-code-review\` 技能：\`~/.codex/skills/merge-code-review/SKILL.md\`（审查规范在 \`references/csharp-dev-manual.md\`）。对 \`git diff origin/${mr.targetBranch}...origin/${mr.sourceBranch}\` 的改动按技能规则逐项审查；读文件内容用 \`git show origin/${mr.sourceBranch}:<path>\`。\n` +
-        `不要输出结构化 <REVIEW> JSON 数组。请汇总本次改动发现的全部问题，写出一份**对人可读的整体审查总结报告**：按规则分组、标注严重程度（warn/fail）、文件路径与行号、问题说明与修改建议，并在报告末尾给出「是否可合并」结论。\n` +
-        `完成后把该 Markdown 报告写入当前工作区 \`.nezha/review-report-${mr.localId}.md\`（用相对工作区根路径，不要写绝对路径）。\n` +
-        `同时把逐项判定写成 JSON 数组，写入当前工作区 \`.nezha/review-${mr.localId}.json\`（同样用相对路径）：每项形如 {"rule":"规则名","status":"pass|warn|fail","path":"文件相对路径","startLine":行号,"endLine":行号,"message":"原因/建议"}；每条审查规则至少一条判定，无问题的规则给 status=pass；status 只能取 pass/warn/fail。`;
-    } else if (kind === "merge") {
-      prompt =
-        `你是 MR 合并助手。只使用 git 命令，不得调用平台/接口合并。\n` +
-        `把 S = origin/${mr.sourceBranch} 落地到 T = origin/${mr.targetBranch}，工作分支 codeup-mr-${mr.localId}，落地形式：允许 fast-forward。\n` +
-        `1. 分别运行 \`git fetch origin ${mr.sourceBranch}\` 与 \`git fetch origin ${mr.targetBranch}\`，记录并报告两个 SHA。\n` +
-        `2. 运行 \`git checkout -f -B codeup-mr-${mr.localId} origin/${mr.sourceBranch}\`。\n` +
-        `3. 若 T 不是 S 的祖先（\`git merge-base --is-ancestor origin/${mr.targetBranch} origin/${mr.sourceBranch}\` 返回非 0）：运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`，有冲突就改代码解决，禁止 \`git merge --abort\`，然后运行 \`git add -A && git commit -m "merge ${mr.targetBranch} into ${mr.sourceBranch}"\`。若 T 已是 S 的祖先，跳过本步。\n` +
-        `4. 判定 MR 有无净贡献，方向是 S→T，不得拿 merge 的输出当依据（Already up to date 也算有内容）：运行 \`git diff --stat origin/${mr.targetBranch} HEAD\`，为空才报告「无新增内容，无需合并」并停止；不为空则继续。\n` +
-        `5. 运行 \`git ls-remote origin refs/heads/${mr.targetBranch}\` 确认远端未变，再运行 \`git push origin HEAD:${mr.targetBranch}\`。默认走 fast-forward；仅当任务明确要求保留合并提交时才改用 \`git checkout -B tmp origin/${mr.targetBranch} && git merge --no-ff codeup-mr-${mr.localId}\` 后 \`git push origin HEAD:${mr.targetBranch}\`。\n` +
-        `6. 报告落地形式、前后 SHA、解决冲突的文件。\n` +
-        `禁止平台合并、force push、merge --abort；任何一步失败即停下报告。\n` +
-        `完成后简要说明结果。`;
-    } else {
-      prompt =
-        `你是合并冲突解决助手。请在当前工作区按步骤完成并把结果推回源分支：\n` +
-        `1. 运行 \`git fetch origin ${mr.targetBranch}\`\n` +
-        `2. 运行 \`git merge --no-commit --no-ff origin/${mr.targetBranch}\`\n` +
-        `3. 若存在冲突，修改代码解决冲突；若无冲突，执行 \`git merge --abort\` 并告知无冲突\n` +
-        `4. 解决后运行 \`git add -A\` 与 \`git commit -m "resolve merge conflicts"\`\n` +
-        `5. 运行 \`git push origin HEAD:${mr.sourceBranch}\`\n` +
-        `完成后简要说明结果。`;
-    }
+    const prompt = buildCodeupTaskPrompt(mr, kind);
 
     // 3) 先建任务并立即切换到该项目 RunningView（不等 worktree，避免点下去长时间无跳转）。
     const taskId = `${Date.now()}`;
@@ -1589,6 +1586,7 @@ function App() {
             : `处理冲突 ${mr.title}`,
       prompt,
       agent: "codex",
+      runMode: resolveTaskRunMode("codex", codexRunMode),
       permissionMode: "full_access", // YOLO
       status: "pending",
       createdAt: now,
@@ -1610,6 +1608,7 @@ function App() {
       repositoryId: mr.repositoryId,
       kind,
       sourceBranch: mr.sourceBranch,
+      targetBranch: mr.targetBranch,
     };
 
     // 4) 后台创建该 MR 的代码文件夹（fetch 源/目标分支 + checkout 源分支）。
@@ -1703,7 +1702,7 @@ function App() {
    *  计划内议题的待办在此强制绑定计划分支/worktree（S10：生成待办/存量导入启动时）。
    *  返回 false = 被分支断言拦下（未启动），自动接续据此释放在途标记以便修好后重试。 */
   async function beginTaskRun(task: Task, project: Project): Promise<boolean> {
-    const bound = bindTaskToDeliveryPlan(task, deliveryPlans);
+    const bound = bindTaskToDeliveryPlan({ ...task, runMode: resolveTaskRunMode(task.agent, codexRunMode) }, deliveryPlans);
     if (!(await planBranchAllowsStart(bound, project))) return false;
     setTasks((prev) => {
       const next = prev.map((t) =>
@@ -1901,6 +1900,7 @@ function App() {
   }
 
   function handleCancelTask(taskId: string) {
+    codeupMergeStoppedRef.current.add(taskId);
     delete pendingResumeStartsRef.current[taskId];
     const task = tasks.find((t) => t.id === taskId);
     const project = projects.find((p) => p.id === task?.projectId);
@@ -2008,13 +2008,38 @@ function App() {
 
   /** 任务已结束时的「恢复会话再发」：resume 启动后自动把评论消息写入 PTY */
   function handleResumeTaskAndSend(taskId: string, input: string) {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (task?.agent === "codex" && task.runMode === "structured") {
+      void handleFollowUpStructured(task, input.replace(/\r$/, ""));
+      return;
+    }
     queueResumeTask(taskId, () => {
       pendingResumeInputRef.current[taskId] = input;
     });
   }
 
+  continueCodeupMergeRef.current = (taskId, prompt, live) => {
+    const task = tasksRef.current.find((candidate) => candidate.id === taskId);
+    if (!task || (!live && !task.codexSessionId)) return false;
+    if (live && task.runMode !== "structured") {
+      updateTaskStatus(taskId, "running");
+      invoke("send_input", { taskId, data: `${prompt}\r` }).catch((error: unknown) => {
+        updateTaskStatus(taskId, "interrupted", undefined, String(error));
+        showToast(String(error), "warning");
+      });
+    } else if (task.runMode === "structured") {
+      if (followUpBusyTaskId) return false;
+      updateTaskStatus(taskId, "pending");
+      void handleFollowUpStructured({ ...task, status: "interrupted" }, prompt);
+    } else {
+      queueResumeTask(taskId, () => { pendingResumeInputRef.current[taskId] = `${prompt}\r`; });
+    }
+    return true;
+  };
+
   async function invokeForkTask(task: Task, project: Project, sourceSessionId: string) {
-    await armTerminalReady(task.id);
+    const structured = task.agent === "codex" && task.runMode === "structured";
+    if (!structured) await armTerminalReady(task.id);
     invoke("fork_task", {
       taskId: task.id,
       projectPath: project.path,
@@ -2023,11 +2048,23 @@ function App() {
       permissionMode: task.permissionMode,
       model: task.model,
       reasoningEffort: task.reasoningEffort,
+      runMode: task.runMode,
       cols: tm.terminalSizeRef.current.cols,
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
+      if (structured) {
+        setTasks((prev) => {
+          const next = prev.map((t) => t.id === task.id
+            ? { ...t, runMode: "pty" as const, failureReason: msg, updatedAt: Date.now() } : t);
+          persistProjectTasks(task.projectId, next, showToast, formatSaveTasksError);
+          return next;
+        });
+        showToast(t("toast.codexStructuredFallback", { error: msg }), "warning");
+        void invokeForkTask({ ...task, runMode: "pty" }, project, sourceSessionId);
+        return;
+      }
       tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
       updateTaskStatus(task.id, "failed", undefined, msg);
     });
@@ -2066,6 +2103,7 @@ function App() {
       permissionMode: sourceTask.permissionMode,
       model: sourceTask.model,
       reasoningEffort: sourceTask.reasoningEffort,
+      runMode: resolveTaskRunMode(sourceTask.agent, codexRunMode),
       status: "pending",
       createdAt: now,
       updatedAt: now,
@@ -2126,6 +2164,7 @@ function App() {
   }
 
   function handleMarkTaskDone(taskId: string) {
+    codeupMergeStoppedRef.current.add(taskId);
     delete pendingResumeStartsRef.current[taskId];
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
@@ -2297,7 +2336,7 @@ function App() {
         updatedAt: now,
         planId,
         yunxiaoPlanDiscussion: true,
-        runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
+        runMode: resolveTaskRunMode(agent, codexRunMode),
       },
       deliveryPlans,
       plan.issues.map((i) => i.workitemId),
@@ -2621,7 +2660,7 @@ function App() {
           reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
           planId: plan.id,
           yunxiaoPlanDiscussion: true,
-          runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
+          runMode: resolveTaskRunMode(agent, codexRunMode),
           status: "pending",
           updatedAt: Date.now(),
           attentionRequestedAt: undefined,
@@ -2699,7 +2738,7 @@ function App() {
           yunxiaoWorkitemId: issue.id,
           yunxiaoSerialNumber: issue.serialNumber,
           // 运行通道跟随应用级设置：直接开始与讨论 / 方案执行同一套语义。
-          runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
+          runMode: resolveTaskRunMode(agent, codexRunMode),
         },
         deliveryPlans,
       );
@@ -2864,7 +2903,7 @@ function App() {
           reasoningEffort: agent === task.agent ? task.reasoningEffort : undefined,
           yunxiaoSerialNumber: detail.serialNumber,
           // 运行通道跟随应用级设置：与直接开始 / 讨论同一套语义。
-          runMode: agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
+          runMode: resolveTaskRunMode(agent, codexRunMode),
           status: "pending",
           updatedAt: Date.now(),
           attentionRequestedAt: undefined,
@@ -3039,8 +3078,7 @@ function App() {
         permissionMode,
         // 运行通道跟随应用级设置：与其它所有入口一致，structured 时后端走
         // app-server 通道。
-        runMode:
-          input.agent === "codex" && codexRunMode === "structured" ? "structured" : undefined,
+        runMode: resolveTaskRunMode(input.agent, codexRunMode),
         status: initialStatus,
         createdAt: stamp,
         updatedAt: stamp,
@@ -3314,6 +3352,7 @@ function App() {
           ? {
               ...t,
               ...updates,
+              runMode: resolveTaskRunMode(updates.agent, codexRunMode),
               model: updates.agent === t.agent ? t.model : undefined,
               reasoningEffort: updates.agent === t.agent ? t.reasoningEffort : undefined,
             }
@@ -3455,6 +3494,7 @@ function App() {
       prompt,
       agent: sourceTask.agent,
       permissionMode: sourceTask.permissionMode,
+      runMode: resolveTaskRunMode(sourceTask.agent, codexRunMode),
       status: "todo",
       createdAt: now,
       updatedAt: now,
@@ -3974,7 +4014,10 @@ function App() {
               onDiscardWorktree={handleDiscardWorktree}
               onReconnectTask={handleReconnectTask}
               onMarkTaskDone={handleMarkTaskDone}
-              onInput={tm.handleInput}
+              onInput={(taskId, data) => {
+                if (structuredTaskIds.has(taskId)) handleResumeTaskAndSend(taskId, data);
+                else tm.handleInput(taskId, data);
+              }}
               onResize={tm.handleResize}
               onRegisterTerminal={tm.handleRegisterTerminal}
               onTerminalReady={handleTerminalReady}

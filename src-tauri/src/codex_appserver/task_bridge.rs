@@ -168,6 +168,44 @@ pub async fn spawn_session_resume(
     Ok(started)
 }
 
+/// Fork history without starting an unsolicited turn. The composer resumes the new thread.
+pub async fn fork_structured_task(
+    app: AppHandle,
+    task_manager: &crate::TaskManager,
+    task_id: String,
+    project_path: String,
+    permission_mode: String,
+    source_thread_id: String,
+) -> Result<(), String> {
+    let launch_task_id = task_id.clone();
+    let request = tokio::task::spawn_blocking(move || {
+        let (approval, sandbox) = permission_mode_to_policy(
+            &permission_mode,
+            crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve,
+        );
+        let spec = crate::app_settings::get_agent_launch_spec("codex");
+        let mut request = SpawnRequest::codex_app_server(&spec.program, &project_path, approval, sandbox);
+        request.extra_envs = crate::pty::structured_session_envs(&launch_task_id, &project_path);
+        request
+    })
+    .await
+    .map_err(|e| format!("fork launch preparation failed: {e}"))?;
+    let session = CodexAppServerSession::spawn(request)
+        .await.map_err(|e| format!("codex app-server fork spawn failed: {e:?}"))?;
+    let result = session.fork_thread(&source_thread_id).await;
+    session.shutdown().await;
+    let thread = result.map_err(|e| format!("thread/fork failed: {e:?}"))?;
+    if task_manager.cancelled_tasks.lock().contains(&task_id)
+        || task_manager.manually_completed_tasks.lock().contains(&task_id)
+    {
+        return Ok(());
+    }
+    // Send identity before status so the persisted fork can immediately accept follow-ups.
+    emit_task_session(&app, &task_id, &thread);
+    let _ = app.emit("task-status", serde_json::json!({ "task_id": task_id, "status": "done" }));
+    Ok(())
+}
+
 /// 注册会话到 TaskManager（cancel/complete/respond 命令可寻址）。
 /// guard 与会话同表登记，取消/重置路径据此收口 forwarder 的迟到通知。
 pub fn register_session(

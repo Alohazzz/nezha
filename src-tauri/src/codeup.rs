@@ -2516,13 +2516,47 @@ pub async fn codeup_cleanup_mr(repository: String, mr_id: String) -> Result<(), 
     // 合并/审查成功后自动清理该 MR 的临时 checkout：先脱离 `codeup-mr-<id>` 分支，
     // 再删除该分支，让共享文件夹不再残留该 MR 的工作区。保留 .git 克隆与 pulled 标记，
     // 避免下次对同一仓库重克隆。全程 best-effort，失败不影响主流程（如分支已被删除）。
-    let cleanup_root = root.clone();
-    let temp_branch = format!("codeup-mr-{mr_id}");
-    let _ = tokio::task::spawn_blocking(move || {
-        let _ = crate::git::run_git(&cleanup_root, &["checkout", "-f", "--detach", "HEAD"]);
-        let _ = crate::git::run_git(&cleanup_root, &["branch", "-D", temp_branch.as_str()]);
-    })
-    .await;
+    tokio::task::spawn_blocking(move || cleanup_mr_checkout(&root, &mr_id))
+        .await.map_err(|e| format!("MR cleanup task failed: {e}"))?
+}
+
+/// A PTY turn has stopped but its process still owns the checkout: inspect without modifying it.
+#[tauri::command]
+pub async fn codeup_check_merge_completion(repository: String, mr_id: String) -> Result<(), String> {
+    let root = codeup_repo_dir(&repository, false).await?;
+    tokio::task::spawn_blocking(move || check_mr_merge_completion(&root, &mr_id))
+        .await.map_err(|e| format!("MR merge check task failed: {e}"))?
+}
+
+fn check_mr_merge_completion(root: &str, mr_id: &str) -> Result<(), String> {
+    let status = crate::git::run_git(root, &["status", "--porcelain", "--untracked-files=no"])?;
+    if !status.status.success() {
+        return Err(String::from_utf8_lossy(&status.stderr).trim().to_string());
+    }
+    let merge = crate::git::run_git(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])?;
+    if merge.status.success() || !crate::git::parse_conflicted_files(&status.stdout).is_empty() {
+        let branch = crate::git::run_git(root, &["symbolic-ref", "--short", "HEAD"])?;
+        if !branch.status.success()
+            || String::from_utf8_lossy(&branch.stdout).trim() != format!("codeup-mr-{mr_id}")
+        {
+            return Err("代码文件夹已切换到其他分支，已保留现场，不能自动接续本次合并".to_string());
+        }
+        return Err("CODEUP_MERGE_INCOMPLETE: 合并尚未完成，已保留代码现场".to_string());
+    }
+    if !status.stdout.is_empty() {
+        return Err("合并尚未完成或仍有未提交修改，已保留代码现场，请继续任务完成冲突处理".to_string());
+    }
+    Ok(())
+}
+
+fn cleanup_mr_checkout(root: &str, mr_id: &str) -> Result<(), String> {
+    check_mr_merge_completion(root, mr_id)?;
+    // No force checkout: a concurrent edit must also prevent cleanup from discarding work.
+    let checkout = crate::git::run_git(root, &["checkout", "--detach", "HEAD"])?;
+    if !checkout.status.success() {
+        return Err(String::from_utf8_lossy(&checkout.stderr).trim().to_string());
+    }
+    let _ = crate::git::run_git(root, &["branch", "-D", &format!("codeup-mr-{mr_id}")]);
     Ok(())
 }
 
@@ -2832,6 +2866,43 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn cleanup_preserves_merge_conflicts_and_staged_resolution() {
+        let repo = TempRepo::new();
+        repo.commit_file("a.txt", 1, "base");
+        repo.git(&["checkout", "-b", "codeup-mr-7"]);
+        repo.commit_file("a.txt", 2, "source");
+        repo.git(&["checkout", "master"]);
+        repo.commit_file("a.txt", 3, "target");
+        repo.git(&["checkout", "codeup-mr-7"]);
+        let merge = crate::git::run_git(&repo.dir(), &["merge", "--no-commit", "--no-ff", "master"]).unwrap();
+        assert_eq!(merge.status.code(), Some(1));
+        let before = std::fs::read(repo.path.join("a.txt")).unwrap();
+        assert!(cleanup_mr_checkout(&repo.dir(), "7").unwrap_err().starts_with("CODEUP_MERGE_INCOMPLETE:"));
+        assert!(!check_mr_merge_completion(&repo.dir(), "8").unwrap_err().starts_with("CODEUP_MERGE_INCOMPLETE:"));
+        assert_eq!(std::fs::read(repo.path.join("a.txt")).unwrap(), before);
+        assert!(crate::git::run_git(&repo.dir(), &["rev-parse", "--verify", "MERGE_HEAD"]).unwrap().status.success());
+        std::fs::write(repo.path.join("a.txt"), "resolved\n").unwrap();
+        repo.git(&["add", "a.txt"]);
+        assert!(cleanup_mr_checkout(&repo.dir(), "7").unwrap_err().starts_with("CODEUP_MERGE_INCOMPLETE:"));
+        repo.git(&["commit", "-m", "resolve"]);
+        check_mr_merge_completion(&repo.dir(), "7").unwrap();
+        let branch = crate::git::run_git(&repo.dir(), &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "codeup-mr-7");
+        cleanup_mr_checkout(&repo.dir(), "7").unwrap();
+        assert!(!crate::git::run_git(&repo.dir(), &["show-ref", "--verify", "refs/heads/codeup-mr-7"]).unwrap().status.success());
+    }
+
+    #[test]
+    fn cleanup_does_not_treat_unrelated_edits_as_retryable_merge_conflicts() {
+        let repo = TempRepo::new();
+        repo.commit_file("a.txt", 1, "base");
+        std::fs::write(repo.path.join("a.txt"), "uncommitted change").unwrap();
+        let error = cleanup_mr_checkout(&repo.dir(), "7").unwrap_err();
+        assert!(!error.starts_with("CODEUP_MERGE_INCOMPLETE:"));
+        assert_eq!(std::fs::read_to_string(repo.path.join("a.txt")).unwrap(), "uncommitted change");
     }
 
     /// 源分支相对目标分支有改动 → 计数 > 0（放行）。

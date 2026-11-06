@@ -43,6 +43,7 @@ fn main() -> ExitCode {
         ("production_start_keeps_thread", run_production_start_keeps_thread(false)),
         ("production_resume_keeps_thread", run_production_start_keeps_thread(true)),
         ("resume_policy", resume_policy::run()),
+        ("fork_policy", resume_policy::run_fork()),
         ("file_approval", file_approval::run()),
         ("resolved_requests", resolved_requests::run()),
         ("happy_path", run_happy_path()),
@@ -140,6 +141,7 @@ fn handle_mock_request(
             std::process::exit(101);
         }
         ("resume_policy", "thread/resume") => resume_policy::serve(id, params, out),
+        ("fork_policy", "thread/fork") => resume_policy::serve_fork(id, params, out),
         (scene, "thread/start" | "thread/resume") => {
             let thread_id = if scene == "approval" { "thread-approval" } else { "thread-happy" };
             emit_thread_started(out, thread_id);

@@ -361,6 +361,15 @@ impl CodexAppServerSession {
     /// 按 threadId 恢复已有 thread（done 后继续对话，阶段 4 增强）。
     /// rollout 文件从磁盘加载回上下文；path 仅作一致性校验传回。
     pub async fn resume_thread(&self, thread_id: &str) -> Result<ThreadInfo, SessionError> {
+        self.restore_thread("thread/resume", thread_id).await
+    }
+
+    /// Create an independent persisted thread from an existing conversation.
+    pub async fn fork_thread(&self, thread_id: &str) -> Result<ThreadInfo, SessionError> {
+        self.restore_thread("thread/fork", thread_id).await
+    }
+
+    async fn restore_thread(&self, method: &'static str, thread_id: &str) -> Result<ThreadInfo, SessionError> {
         // config 覆盖要跟着 resume 一起下发：thread 是按 threadId 从 rollout 重建的，
         // 不带的 feature 开关就只对新建 thread 生效，续聊会退回"不能提问"。
         let params = json!({
@@ -371,9 +380,9 @@ impl CodexAppServerSession {
             "config": thread_config_overrides(),
         });
         let result = self
-            .request("thread/resume", params)
+            .request(method, params)
             .await
-            .map_err(|e| SessionError::Protocol(format!("thread/resume: {e}")))?;
+            .map_err(|e| SessionError::Protocol(format!("{method}: {e}")))?;
         // 与 start_thread 同款宽松解析（上游 Thread Serialize-only / 键位膨胀）
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -396,7 +405,7 @@ impl CodexAppServerSession {
             thread: ThreadWire,
         }
         let response: ResumeResultWire = serde_json::from_value(result)
-            .map_err(|e| SessionError::Protocol(format!("parse thread/resume: {e}")))?;
+            .map_err(|e| SessionError::Protocol(format!("parse {method}: {e}")))?;
         let info = ThreadInfo {
             id: response.thread.id.clone(),
             session_id: {
