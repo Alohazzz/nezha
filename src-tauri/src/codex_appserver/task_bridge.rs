@@ -56,11 +56,12 @@ pub struct StructuredTaskEntry {
     pub guard: ForwarderGuard,
     pub lifecycle: Lifecycle,
     pub retain_on_success: bool,
+    pub attachments: Vec<Arc<super::turn_attachments::TurnAttachments>>,
 }
 
 impl StructuredTaskEntry {
     pub(crate) fn new(session: Arc<CodexAppServerSession>, guard: ForwarderGuard) -> Self {
-        Self { lifecycle: Lifecycle::running_for(guard.generation()), session, guard, retain_on_success: false }
+        Self { lifecycle: Lifecycle::running_for(guard.generation()), session, guard, retain_on_success: false, attachments: Vec::new() }
     }
 }
 
@@ -102,7 +103,7 @@ impl ForwarderGuard {
         }
     }
 
-    fn is_cancelled(&self) -> bool {
+    pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
@@ -194,6 +195,40 @@ pub async fn spawn_session_resume(
     Ok(started)
 }
 
+pub async fn spawn_session_cancellable(
+    agent_bin: &str, cwd: &str, permission_mode: &str, thread: Option<&str>,
+    extra_envs: Vec<(String, String)>, cancel: &ForwarderGuard,
+) -> Result<StartedSession, SessionError> {
+    let ask_auto = tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve)
+        .await.map_err(|error| SessionError::Protocol(error.to_string()))?;
+    if cancel.is_cancelled() { return Err(SessionError::Protocol("start cancelled".into())); }
+    let (approval, sandbox) = permission_mode_to_policy(permission_mode, ask_auto);
+    let mut request = SpawnRequest::codex_app_server(agent_bin, cwd, approval, sandbox);
+    request.extra_envs = extra_envs;
+    let started = StartedSession::subscribe(CodexAppServerSession::spawn_cancellable(request, cancel).await?);
+    let restored = tokio::select! {
+        _ = cancel.cancelled() => Err(SessionError::Protocol("start cancelled".into())),
+        result = async {
+            match thread {
+                Some(thread) => started.session.resume_thread(thread).await,
+                None => started.session.start_thread().await,
+            }
+        } => result,
+    };
+    if let Err(error) = restored {
+        let _ = started.session.shutdown_confirmed().await;
+        return Err(error);
+    }
+    Ok(started)
+}
+
+async fn spawn_session_resume_cancellable(
+    agent_bin: &str, cwd: &str, permission_mode: &str, thread: &str,
+    extra_envs: Vec<(String, String)>, cancel: &ForwarderGuard,
+) -> Result<StartedSession, SessionError> {
+    spawn_session_cancellable(agent_bin, cwd, permission_mode, Some(thread), extra_envs, cancel).await
+}
+
 /// Fork history without starting an unsolicited turn. The composer resumes the new thread.
 pub async fn fork_structured_task(
     app: AppHandle,
@@ -249,6 +284,8 @@ pub async fn fork_structured_task(
 pub async fn spawn_forwarder(
     app: AppHandle,
     task_manager: &crate::TaskManager,
+    reservation: &retained_session::StartReservation,
+    attachments: Arc<super::turn_attachments::TurnAttachments>,
     session: Arc<CodexAppServerSession>,
     existing_guard: Option<ForwarderGuard>,
     task_id: String,
@@ -260,9 +297,12 @@ pub async fn spawn_forwarder(
 ) -> Result<ForwarderGuard, String> {
     let guard = existing_guard.unwrap_or_else(|| ForwarderGuard::new(Lifecycle::running().generation()));
     // Register before spawning: even an already-queued EOF has an owner to close.
-    if let Err(error) = retained_session::activate(task_manager, &task_id, &guard, session.clone()) {
+    if let Err(error) = reservation.activate(task_manager, &guard, session.clone()) {
         session.shutdown_confirmed().await?;
         return Err(error);
+    }
+    if let Some(entry) = task_manager.codex_appserver_sessions.lock().get_mut(&task_id).filter(|entry| entry.lifecycle.is_owner(guard.generation())) {
+        entry.attachments.push(attachments);
     }
     let worker_guard = guard.clone();
     tokio::spawn(async move {
@@ -275,15 +315,15 @@ pub async fn spawn_forwarder(
                         Ok(event) => {
                             let completed_at = std::time::Instant::now();
                             let Some(manager) = app.try_state::<crate::TaskManager>() else { break; };
-                            let _operation = retained_session::operation(&task_id).await;
                             if worker_guard.is_cancelled() || !retained_session::owns(&manager, &task_id, worker_guard.generation()) { break; }
                             if let CodexEvent::TurnCompleted { ref turn, .. } = event {
                                 if turn.status == codex_app_server_protocol::TurnStatus::Completed {
-                                    // Cleanup completes before publishing done, while resume is excluded.
                                     settle_task_artifacts(&app, &task_id, &effective_path).await;
-                                    cleanup_turn(&task_id, &effective_path).await;
+                                    if worker_guard.is_cancelled() || !retained_session::owns(&manager, &task_id, worker_guard.generation()) { return; }
+                                    let old_attachments = take_turn_attachments(&manager, &task_id, worker_guard.generation());
                                     let deadline = retained_session::completed(&manager, &task_id, worker_guard.generation(), &turn.id, completed_at);
                                     emit_done(&app, &task_id);
+                                    drop(old_attachments); // schedules deletion after done; each directory belongs to this turn
                                     if let Some(deadline) = deadline {
                                         retained_session::spawn_expiry(app.clone(), task_id.clone(), worker_guard.clone(), deadline);
                                     } else if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
@@ -291,7 +331,7 @@ pub async fn spawn_forwarder(
                                     }
                                     return;
                                 } else if turn.status != codex_app_server_protocol::TurnStatus::InProgress {
-                                    cleanup_turn(&task_id, &effective_path).await;
+                                    drop(take_turn_attachments(&manager, &task_id, worker_guard.generation()));
                                     handle_event(&app, &on_output, &task_id, &effective_path, auto_answer_questions, event).await;
                                     if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
                                         eprintln!("[codex_appserver] terminal turn close failed: {error}");
@@ -309,9 +349,8 @@ pub async fn spawn_forwarder(
                     match error {
                         Ok(error) => {
                             let Some(manager) = app.try_state::<crate::TaskManager>() else { break; };
-                            let _operation = retained_session::operation(&task_id).await;
                             if !worker_guard.is_cancelled() && retained_session::owns(&manager, &task_id, worker_guard.generation()) {
-                                cleanup_turn(&task_id, &effective_path).await;
+                                drop(take_turn_attachments(&manager, &task_id, worker_guard.generation()));
                                 emit_failed(&app, &task_id, &format!("{error:?}"));
                                 if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
                                     eprintln!("[codex_appserver] failed session close failed: {error}");
@@ -325,10 +364,9 @@ pub async fn spawn_forwarder(
                 }
             }
         }
-        let _operation = retained_session::operation(&task_id).await;
         if let Some(manager) = app.try_state::<crate::TaskManager>() {
             if retained_session::owns(&manager, &task_id, worker_guard.generation()) {
-                cleanup_turn(&task_id, &effective_path).await;
+                drop(take_turn_attachments(&manager, &task_id, worker_guard.generation()));
                 if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
                     eprintln!("[codex_appserver] forwarder close failed: {error}");
                 }
@@ -338,13 +376,10 @@ pub async fn spawn_forwarder(
     Ok(guard)
 }
 
-async fn cleanup_turn(task_id: &str, effective_path: &str) {
-    let task_id = task_id.to_owned();
-    let directory = crate::attachments::task_attachments_dir(effective_path, &task_id);
-    let _ = tokio::task::spawn_blocking(move || {
-        crate::event_watcher::cleanup_task_events(&task_id);
-        let _ = std::fs::remove_dir_all(directory);
-    }).await;
+fn take_turn_attachments(manager: &crate::TaskManager, task: &str, generation: u64) -> Vec<Arc<super::turn_attachments::TurnAttachments>> {
+    manager.codex_appserver_sessions.lock().get_mut(task)
+        .filter(|entry| entry.lifecycle.is_owner(generation))
+        .map(|entry| std::mem::take(&mut entry.attachments)).unwrap_or_default()
 }
 
 /// full_access 下模型提问的自动应答等待窗口。30s 足够在场用户点掉卡片，
@@ -367,7 +402,6 @@ fn spawn_user_input_auto_answer(
     let generation = app.try_state::<crate::TaskManager>().and_then(|manager| retained_session::generation(&manager, &task_id));
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(USER_INPUT_AUTO_ANSWER_MS)).await;
-        let _operation = retained_session::operation(&task_id).await;
         let Some(tm) = app.try_state::<crate::TaskManager>() else {
             return;
         };
@@ -713,13 +747,14 @@ pub async fn resume_structured_task(
     effort: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
-    let _operation = retained_session::operation(&task_id).await;
+    let reservation = retained_session::begin_start(&task_id)?;
     let ask_auto = tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve)
         .await.map_err(|error| error.to_string())?;
     let (approval, sandbox) = permission_mode_to_policy(&permission_mode, ask_auto);
     // Claim before attachment I/O. Old callbacks/timers cannot touch the new turn.
-    let retained = retained_session::claim_resume(task_manager, &task_id, &thread_id, &project_path, approval, sandbox).await?;
-    let image_paths = match save_structured_images(&project_path, &task_id, images).await {
+    let retained = retained_session::claim_resume(task_manager, &task_id, &thread_id, &project_path, approval, sandbox, &reservation).await?;
+    let attachments = super::turn_attachments::TurnAttachments::new(&project_path, &task_id)?;
+    let image_paths = match attachments.save_images(&project_path, images).await {
         Ok(paths) => paths,
         Err(error) => {
             if let Some(generation) = retained_session::generation(task_manager, &task_id) {
@@ -738,8 +773,9 @@ pub async fn resume_structured_task(
         let (launch_spec, extra_envs) = tokio::task::spawn_blocking(move || {
             (crate::app_settings::get_agent_launch_spec("codex"), crate::pty::structured_session_envs(&prep_task, &prep_path))
         }).await.map_err(|error| error.to_string())?;
-        let StartedSession { session, events, errors } = spawn_session_resume(
-            &launch_spec.program, &project_path, &permission_mode, &thread_id, extra_envs,
+        reservation.check()?;
+        let StartedSession { session, events, errors } = spawn_session_resume_cancellable(
+            &launch_spec.program, &project_path, &permission_mode, &thread_id, extra_envs, reservation.token(),
         ).await.map_err(|error| format!("codex app-server resume failed: {error:?}"))?;
         (Arc::new(session), events, errors, None)
     };
@@ -749,11 +785,16 @@ pub async fn resume_structured_task(
     task_manager.manually_completed_tasks.lock().remove(&task_id);
     task_manager.task_names.lock().remove(&task_id);
     let guard = spawn_forwarder(
-        app.clone(), task_manager, session.clone(), existing_guard,
+        app.clone(), task_manager, &reservation, attachments, session.clone(), existing_guard,
         task_id.clone(), project_path, permission_mode == "full_access", on_output, events, errors,
     ).await?;
     let _ = app.emit("task-status", serde_json::json!({ "task_id": task_id, "status": "running" }));
-    if let Err(error) = session.start_turn_with_input(&build_turn_input(prompt, image_paths)).await {
+    let input = build_turn_input(prompt, image_paths);
+    let result = tokio::select! {
+        _ = reservation.cancelled() => Err(SessionError::Protocol("start cancelled".into())),
+        result = session.start_turn_with_input(&input) => result,
+    };
+    if let Err(error) = result {
         guard.cancel();
         // Ambiguous start failures are never retried/replayed automatically.
         retained_session::close_owned(task_manager, &task_id, guard.generation()).await?;
@@ -817,10 +858,21 @@ pub async fn steer_codex_structured(
     if prompt.trim().is_empty() && images.is_empty() {
         return Err("prompt and images are both empty".to_string());
     }
-    let image_paths = save_structured_images(&project_path, &task_id, images).await?;
+    let (session, generation) = {
+        let sessions = task_manager.codex_appserver_sessions.lock();
+        let entry = sessions.get(&task_id).filter(|entry| retained_session::is_running(entry))
+            .ok_or_else(|| "structured session not active for task".to_string())?;
+        (entry.session.clone(), entry.lifecycle.generation())
+    };
+    let attachments = super::turn_attachments::TurnAttachments::new(&project_path, &task_id)?;
+    let image_paths = attachments.save_images(&project_path, images).await?;
+    {
+        let mut sessions = task_manager.codex_appserver_sessions.lock();
+        let entry = sessions.get_mut(&task_id).filter(|entry| entry.lifecycle.is_owner(generation) && retained_session::is_running(entry))
+            .ok_or_else(|| "structured turn changed while preparing input".to_string())?;
+        entry.attachments.push(attachments);
+    }
     let input = build_turn_input(prompt, image_paths);
-    let session = take_session_impl(&task_manager, &task_id)
-        .ok_or_else(|| "structured session not active for task".to_string())?;
     session
         .steer_with_input(&input)
         .await
@@ -835,29 +887,6 @@ pub(crate) fn build_turn_input(prompt: String, image_paths: Vec<String>) -> Vec<
     }
     input.extend(image_paths.into_iter().map(|path| TurnInputItem::LocalImage { path }));
     input
-}
-
-/// structured 链路的图片落盘：dataUrl → `.nezha/attachments/<taskId>/`，
-/// 与 PTY 链路同一目录同一清理时点。路径校验与 PTY 命令同等级
-/// （AGENTS.md 安全规范）；同步 I/O 走 spawn_blocking。
-pub(crate) async fn save_structured_images(
-    project_path: &str,
-    task_id: &str,
-    images: Vec<String>,
-) -> Result<Vec<String>, String> {
-    if images.is_empty() {
-        return Ok(vec![]);
-    }
-    crate::pty::validate_task_project_path(project_path)?;
-    // task_id 会拼进附件目录名：拒绝路径分隔符，防目录穿越。
-    if task_id.is_empty() || task_id.contains('/') || task_id.contains('\\') || task_id.contains("..") {
-        return Err("Invalid task id".to_string());
-    }
-    let project_path = project_path.to_string();
-    let task_id = task_id.to_string();
-    tokio::task::spawn_blocking(move || crate::attachments::save_task_images(&project_path, &task_id, &images))
-        .await
-        .map_err(|e| format!("image save task failed: {e}"))?
 }
 
 /// structured 任务的取消：中断运行中的 turn 后优雅关闭会话。

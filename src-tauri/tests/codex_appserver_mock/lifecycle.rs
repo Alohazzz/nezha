@@ -66,6 +66,40 @@ pub(super) fn run() -> bool {
                 "readiness waited for normal 30s RPC timeout"
             );
             assert!(stalled.shutdown_confirmed().await.is_ok());
+
+            // The real transport is waiting for turn/start; cancellation must not
+            // queue behind the normal 30 second RPC deadline.
+            use nezha_lib::codex_appserver::retained_session::{begin_start, cancel_start};
+            let session = Arc::new(spawn_mock("lifecycle_start_stall").await);
+            session.start_thread().await.unwrap();
+            let mut events = session.subscribe();
+            let reservation = begin_start("mock-stalled-start").unwrap();
+            let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+            let worker = tokio::spawn(async move {
+                let cancelled = tokio::select! {
+                    _ = reservation.cancelled() => true,
+                    _ = session.start_turn("stalled") => false,
+                };
+                let _ = cancelled_tx.send(cancelled);
+                session.shutdown_confirmed().await.unwrap();
+                cancelled
+            });
+            tokio::time::timeout(Duration::from_secs(1), events.recv()).await.unwrap().unwrap();
+            let started = Instant::now();
+            cancel_start("mock-stalled-start");
+            assert!(tokio::time::timeout(Duration::from_millis(250), cancelled_rx).await.unwrap().unwrap());
+            assert!(started.elapsed() < Duration::from_millis(250));
+            assert!(tokio::time::timeout(Duration::from_secs(5), worker).await.unwrap().unwrap());
+
+            let reservation = begin_start("mock-stalled-initialize").unwrap();
+            let mut request = SpawnRequest::codex_app_server(std::env::current_exe().unwrap().to_str().unwrap(), &cwd, "never", "read-only");
+            request.extra_envs.push((MOCK_ENV.into(), "lifecycle_initialize_stall".into()));
+            let worker = tokio::spawn(async move {
+                CodexAppServerSession::spawn_cancellable(request, reservation.token()).await.is_err()
+            });
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_start("mock-stalled-initialize");
+            assert!(tokio::time::timeout(Duration::from_secs(5), worker).await.unwrap().unwrap());
             true
         })
 }

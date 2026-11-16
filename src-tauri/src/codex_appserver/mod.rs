@@ -32,6 +32,8 @@ pub mod rpc;
 pub mod task_bridge;
 pub mod session_lifecycle;
 pub mod retained_session;
+pub mod turn_attachments;
+mod shutdown_confirmation;
 
 pub use events::{CodexEvent, ThreadInfo};
 pub use task_bridge::StructuredTaskEntry;
@@ -109,6 +111,7 @@ struct SessionCore {
     /// Serialize manual/automatic responses without holding a synchronous lock over I/O.
     interaction_response_lock: AsyncMutex<()>,
     shutdown_result: AsyncMutex<Option<Result<(), String>>>,
+    event_directory: Option<std::path::PathBuf>,
     cwd: String,
     approval_policy: String,
     sandbox: String,
@@ -213,6 +216,21 @@ impl TurnInputItem {
 impl CodexAppServerSession {
     /// spawn `codex app-server` 并完成 initialize 握手。
     pub async fn spawn(request: SpawnRequest) -> Result<Self, SessionError> {
+        Self::spawn_inner(request, None).await
+    }
+
+    pub async fn spawn_cancellable(request: SpawnRequest, cancel: &task_bridge::ForwarderGuard) -> Result<Self, SessionError> {
+        Self::spawn_inner(request, Some(cancel)).await
+    }
+
+    async fn spawn_inner(mut request: SpawnRequest, cancel: Option<&task_bridge::ForwarderGuard>) -> Result<Self, SessionError> {
+        // Hooks keep the real task ID in their payload, but every process owns a
+        // separate directory so a late old-process cleanup cannot erase new events.
+        let event_directory = request.extra_envs.iter_mut().find(|(key, _)| key == "NEZHA_EVENT_DIR")
+            .and_then(|(_, value)| crate::hooks::events_dir_for(&format!("structured-{}", uuid::Uuid::new_v4())).ok().map(|directory| {
+                *value = directory.to_string_lossy().into_owned();
+                directory
+            }));
         let mut command = Command::new(&request.program);
         command
             .args(&request.args)
@@ -254,6 +272,7 @@ impl CodexAppServerSession {
             user_inputs: parking_lot::Mutex::new(HashMap::new()),
             interaction_response_lock: AsyncMutex::new(()),
             shutdown_result: AsyncMutex::new(None),
+            event_directory,
             cwd: request.cwd.clone(),
             approval_policy: request.approval_policy.clone(),
             sandbox: request.sandbox.clone(),
@@ -264,7 +283,16 @@ impl CodexAppServerSession {
         spawn_reader(core.clone(), stdout);
 
         let session = Self { core };
-        session.initialize().await?;
+        let initialized = if let Some(cancel) = cancel {
+            tokio::select! {
+                _ = cancel.cancelled() => Err(SessionError::Protocol("start cancelled".into())),
+                result = session.initialize() => result,
+            }
+        } else { session.initialize().await };
+        if let Err(error) = initialized {
+            let _ = session.shutdown_confirmed().await;
+            return Err(error);
+        }
         Ok(session)
     }
 
@@ -750,8 +778,7 @@ impl CodexAppServerSession {
 
     /// Serialized, idempotent shutdown. A replacement writer may only spawn after Ok.
     pub async fn shutdown_confirmed(&self) -> Result<(), String> {
-        let mut previous = self.core.shutdown_result.lock().await;
-        if let Some(result) = previous.as_ref() { return result.clone(); }
+        shutdown_confirmation::confirm(&self.core.shutdown_result, async {
         // 关 stdin 触发对端 EOF;锁内只做 shutdown 调用,不持锁做别的 I/O
         {
             let _ = timeout(SHUTDOWN_FORCE, async {
@@ -774,8 +801,15 @@ impl CodexAppServerSession {
                 }
             }
         };
-        *previous = Some(result.clone());
+        // A failed reap is not terminal: a later reset/resume must be able to
+        // observe the process exiting and recover. Only confirmed exit is cached.
+        if result.is_ok() {
+            if let Some(directory) = self.core.event_directory.clone() {
+                tokio::task::spawn_blocking(move || { let _ = std::fs::remove_dir_all(directory); });
+            }
+        }
         result
+        }).await
     }
 
     /// Bounds the readiness handshake independently of prediction completion.
@@ -1161,6 +1195,7 @@ impl SessionCore {
             user_inputs: parking_lot::Mutex::new(HashMap::new()),
             interaction_response_lock: AsyncMutex::new(()),
             shutdown_result: AsyncMutex::new(None),
+            event_directory: None,
             cwd: ".".to_string(),
             approval_policy: "untrusted".to_string(),
             sandbox: "read-only".to_string(),

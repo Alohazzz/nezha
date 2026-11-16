@@ -5,30 +5,46 @@ use std::time::Instant;
 
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use super::session_lifecycle::LifecyclePhase;
 use super::task_bridge::{ForwarderGuard, StructuredTaskEntry};
 use super::CodexAppServerSession;
 
-// Only serialization locks, never session ownership. Weak entries are pruned on access.
-static OPERATIONS: Lazy<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+// Start reservations contain only cancellation tokens, never an async mutex.
+// They prevent duplicate launches while allowing cancel/reset to preempt any await.
+static STARTS: Lazy<Mutex<HashMap<String, Weak<ForwarderGuard>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-pub async fn operation(task: &str) -> OwnedMutexGuard<()> {
-    let gate = {
-        let mut gates = OPERATIONS.lock();
-        gates.retain(|_, gate| gate.strong_count() > 0);
-        match gates.get(task).and_then(Weak::upgrade) {
-            Some(gate) => gate,
-            None => {
-                let gate = Arc::new(AsyncMutex::new(()));
-                gates.insert(task.to_owned(), Arc::downgrade(&gate));
-                gate
-            }
-        }
-    };
-    gate.lock_owned().await
+pub struct StartReservation {
+    task: String,
+    token: Arc<ForwarderGuard>,
+}
+
+pub fn begin_start(task: &str) -> Result<StartReservation, String> {
+    let mut starts = STARTS.lock();
+    starts.retain(|_, token| token.strong_count() > 0);
+    if starts.get(task).and_then(Weak::upgrade).is_some() {
+        return Err("structured task is already starting or stopping".into());
+    }
+    let token = Arc::new(ForwarderGuard::new(super::session_lifecycle::Lifecycle::running().generation()));
+    starts.insert(task.to_owned(), Arc::downgrade(&token));
+    Ok(StartReservation { task: task.to_owned(), token })
+}
+
+impl StartReservation {
+    pub fn token(&self) -> &ForwarderGuard { &self.token }
+    pub fn check(&self) -> Result<(), String> {
+        if self.token.is_cancelled() { Err("structured start was cancelled".into()) } else { Ok(()) }
+    }
+    pub async fn cancelled(&self) { self.token.cancelled().await }
+    pub fn activate(&self, manager: &crate::TaskManager, guard: &ForwarderGuard, session: Arc<CodexAppServerSession>) -> Result<(), String> {
+        let _starts = STARTS.lock();
+        self.check()?;
+        activate(manager, &self.task, guard, session)
+    }
+}
+
+pub fn cancel_start(task: &str) {
+    if let Some(token) = STARTS.lock().get(task).and_then(Weak::upgrade) { token.cancel(); }
 }
 
 pub fn owns(manager: &crate::TaskManager, task: &str, generation: u64) -> bool {
@@ -90,7 +106,7 @@ pub fn completed(
         .flatten()
 }
 
-/// Caller holds operation(task). Keep Closing entry registered until reap is confirmed.
+/// Keep Closing entry registered until reap is confirmed; never hold a table lock while waiting.
 pub async fn close_owned(
     manager: &crate::TaskManager,
     task: &str,
@@ -121,7 +137,7 @@ pub async fn close_owned(
 }
 
 pub async fn close_task(manager: &crate::TaskManager, task: &str) -> Result<(), String> {
-    let _operation = operation(task).await;
+    cancel_start(task);
     let generation = manager
         .codex_appserver_sessions
         .lock()
@@ -133,7 +149,7 @@ pub async fn close_task(manager: &crate::TaskManager, task: &str) -> Result<(), 
     Ok(())
 }
 
-/// Caller holds operation(task), so only one submission may claim or cold-start.
+/// A short reservation prevents duplicate submissions; cancellation can preempt readiness.
 pub async fn claim_resume(
     manager: &crate::TaskManager,
     task: &str,
@@ -141,7 +157,9 @@ pub async fn claim_resume(
     cwd: &str,
     approval: &str,
     sandbox: &str,
+    reservation: &StartReservation,
 ) -> Result<Option<(Arc<CodexAppServerSession>, ForwarderGuard)>, String> {
+    reservation.check()?;
     let candidate = {
         let mut sessions = manager.codex_appserver_sessions.lock();
         if let Some(entry) = sessions.get_mut(task) {
@@ -161,12 +179,14 @@ pub async fn claim_resume(
         }
     };
     if let Some((session, guard)) = candidate {
-        if session
-            .ready_to_resume(thread, cwd, approval, sandbox)
-            .await
-        {
-            return Ok(Some((session, guard)));
-        }
+        let ready = tokio::select! {
+            _ = reservation.cancelled() => false,
+            ready = session.ready_to_resume(thread, cwd, approval, sandbox) => ready,
+        };
+        if ready && reservation.check().is_ok() { return Ok(Some((session, guard))); }
+        close_owned(manager, task, guard.generation()).await?;
+        reservation.check()?;
+        return Ok(None);
     }
     let generation = manager
         .codex_appserver_sessions
@@ -223,7 +243,6 @@ pub fn spawn_expiry(app: tauri::AppHandle, task: String, guard: ForwarderGuard, 
             _ = errors.recv() => { transport_failed = true; },
             _ = guard.cancelled() => return,
         }
-        let _operation = operation(&task).await;
         let Some(manager) = app.try_state::<crate::TaskManager>() else {
             return;
         };
@@ -337,25 +356,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_task_operations_are_exclusive_and_cancellation_wakes_waiters() {
-        let held = operation("exclusive-test").await;
-        assert!(tokio::time::timeout(
-            std::time::Duration::from_millis(10),
-            operation("exclusive-test")
-        )
-        .await
-        .is_err());
-        drop(held);
-        let _next = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            operation("exclusive-test"),
-        )
-        .await
-        .unwrap();
-        let guard = ForwarderGuard::new(Lifecycle::running().generation());
-        guard.cancel();
-        tokio::time::timeout(std::time::Duration::from_millis(50), guard.cancelled())
-            .await
-            .unwrap();
+    async fn cancel_preempts_a_stalled_start_without_waiting_for_rpc() {
+        let reservation = begin_start("stalled-start-test").unwrap();
+        assert!(begin_start("stalled-start-test").is_err());
+        let (started, received) = tokio::sync::oneshot::channel();
+        let worker = tokio::spawn(async move {
+            let _ = started.send(());
+            tokio::select! {
+                _ = std::future::pending::<()>() => panic!("stalled RPC unexpectedly completed"),
+                _ = reservation.cancelled() => reservation.check(),
+            }
+        });
+        received.await.unwrap();
+        cancel_start("stalled-start-test");
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), worker).await.unwrap().unwrap().is_err());
+        assert!(begin_start("stalled-start-test").is_ok());
     }
 }
