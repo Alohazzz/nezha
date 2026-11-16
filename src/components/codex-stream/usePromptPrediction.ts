@@ -61,6 +61,7 @@ export function usePromptPrediction(taskId: string | undefined, threadId: string
       acceptedEpoch.current = subscriptionEpoch;
       if (suppressBeforeRead.current === JSON.stringify([taskId, threadId])) {
         suppressed.add(roundKey(next));
+        if (suppressed.size > 100) suppressed.delete(suppressed.values().next().value!);
         suppressBeforeRead.current = null;
       }
       setState(next);
