@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import { CornerDownLeft, ImagePlus, Square, Zap } from "lucide-react";
 import { useI18n } from "../../i18n";
 import {
@@ -19,6 +19,7 @@ import {
   MAX_IMAGE_DATA_URL_LENGTH,
   type ComposerImage,
 } from "./composerImages";
+import { acceptPrediction, PredictionGhost } from "./PredictionGhost";
 import { usePromptPrediction } from "./usePromptPrediction";
 
 /** IME 组合中的按键（含 keyCode 229 的 legacy 报法）一律不当作提交/中断指令。 */
@@ -70,6 +71,8 @@ export const CodexComposer = memo(function CodexComposer({
 }) {
   const { t } = useI18n();
   const prediction = usePromptPrediction(taskId, threadId, predictionEligible === true, predictionFingerprint);
+  const suppressPrediction = prediction.suppress;
+  const descriptionId = useId();
   const [composing, setComposing] = useState(false);
   const [text, setText] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
@@ -110,8 +113,9 @@ export const CodexComposer = memo(function CodexComposer({
     inputRef,
     textRef,
     useCallback((next: string) => {
+      suppressPrediction();
       setText(next);
-    }, []),
+    }, [suppressPrediction]),
     projectPath ?? null,
     builtin,
   );
@@ -170,6 +174,7 @@ export const CodexComposer = memo(function CodexComposer({
       // busy/disabled 期间显式忽略（spec：审批挂起等场景粘贴与选择均不生效）；
       // textarea disabled 只挡粘贴，文件选择对话框是独立入口。
       if (inputsLocked || files.length === 0) return;
+      suppressPrediction();
       for (const file of files) {
         void fileToDataUrl(file).then((dataUrl) => {
           if (!dataUrl) return;
@@ -181,7 +186,7 @@ export const CodexComposer = memo(function CodexComposer({
         });
       }
     },
-    [inputsLocked, onToast, t],
+    [inputsLocked, onToast, t, suppressPrediction],
   );
 
   /** 粘贴：图片 items 归附件（不进文本框）；其余保持 textarea 默认行为。 */
@@ -220,6 +225,8 @@ export const CodexComposer = memo(function CodexComposer({
         : t("codex.composer.placeholderRunning")
       : t("codex.composer.placeholderDone");
 
+  const visiblePrediction = !text && !images.length && !inputsLocked && !composing && !mention.active && !slashPicker ? prediction.suggestion : null;
+
   return (
     <div className="nz-codexComposerWrap">
       <ComposerMentionPopover
@@ -248,23 +255,22 @@ export const CodexComposer = memo(function CodexComposer({
       )}
       <div className="nz-codexComposerBox" data-focused={focused}>
         <div className="codex-prediction-input-wrap">
-        {prediction.suggestion && !text && !images.length && !inputsLocked && !composing && !mention.active && !slashPicker && (
-          <span className="codex-prediction-ghost" aria-hidden="true">{prediction.suggestion}</span>
-        )}
+        <PredictionGhost suggestion={visiblePrediction} focused={focused} descriptionId={descriptionId} />
         <textarea
           ref={inputRef}
           rows={1}
           value={text}
           aria-label={placeholder}
-          placeholder={prediction.suggestion && !text && !images.length && !inputsLocked && !composing && !mention.active && !slashPicker ? "" : placeholder}
-          onCompositionStart={() => { setComposing(true); prediction.suppress(); }}
+          aria-describedby={visiblePrediction ? descriptionId : undefined}
+          placeholder={visiblePrediction ? "" : placeholder}
+          onCompositionStart={() => { setComposing(true); suppressPrediction(); }}
           onCompositionEnd={() => setComposing(false)}
           disabled={inputsLocked}
           className="nz-codexComposerInput"
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onChange={(e) => {
-            prediction.suppress();
+            suppressPrediction();
             setText(e.target.value);
             mention.syncFromCaret(e.target.selectionStart);
             // 高度自适应交给 useEffect([text])：autoResize 是强制 reflow
@@ -272,12 +278,17 @@ export const CodexComposer = memo(function CodexComposer({
             // 按键双倍 layout，快打时与回显争抢主线程。
           }}
           onClick={(e) => mention.syncFromCaret(e.currentTarget.selectionStart)}
-          onPaste={(event) => { prediction.suppress(); handlePaste(event); }}
+          onPaste={(event) => { suppressPrediction(); handlePaste(event); }}
           onKeyDown={(e) => {
+            // IME takes priority over both predictions and mention navigation.
+            if (composing || isImeComposing(e)) return;
+            if (acceptPrediction(e, visiblePrediction)) {
+              suppressPrediction();
+              setText(e.currentTarget.value);
+              return;
+            }
             // 快捷召唤弹层的键盘导航优先于提交
             if (mention.handleKeyDown(e)) return;
-            // IME 组合中（含 keyCode 229）不受理中断：ESC 是取消拼音组合的标准键
-            if (isImeComposing(e)) return;
             // ESC 中断当前 turn（PTY 终端按 ESC 打断的同款直觉）：仅运行中且
             // 无弹层受理时生效；斜杠/提及弹层开着时 ESC 归弹层关闭。
             if (e.key === "Escape" && canStop && !mention.active) {
@@ -346,7 +357,7 @@ export const CodexComposer = memo(function CodexComposer({
             accept="image/*"
             hidden
             onChange={(e) => {
-              prediction.suppress();
+              suppressPrediction();
               addImageFiles(Array.from(e.target.files ?? []));
               e.target.value = "";
             }}

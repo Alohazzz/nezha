@@ -71,3 +71,30 @@ test("typing while pending suppresses a late result and the same round after rem
   await waitFor(() => expect(second.result.current.state?.revision).toBe(31));
   expect(second.result.current.suggestion).toBeNull();
 });
+
+test("an edit before cache read remains suppressed across an immediate remount", async () => {
+  bridge.invoke.mockImplementation(() => new Promise(() => {}));
+  const first = renderHook(() => usePromptPrediction("early-edit", "thread", true));
+  act(() => first.result.current.suppress());
+  first.unmount();
+  bridge.invoke.mockResolvedValue({ ...state(1), taskId: "early-edit" });
+  const second = renderHook(() => usePromptPrediction("early-edit", "thread", true));
+  await waitFor(() => expect(second.result.current.state).not.toBeNull());
+  expect(second.result.current.suggestion).toBeNull();
+});
+
+test("suppression survives more than a cache capacity of unrelated task edits", async () => {
+  const retained = { ...state(1), taskId: "retained" };
+  bridge.invoke.mockImplementation(async (_command, args) => ({ ...retained, taskId: args.taskId }));
+  const first = renderHook(({ task }) => usePromptPrediction(task, "thread", true), { initialProps: { task: "retained" } });
+  await waitFor(() => expect(first.result.current.suggestion).not.toBeNull());
+  act(() => first.result.current.suppress());
+  for (let index = 0; index < 101; index++) {
+    await act(async () => { first.rerender({ task: `churn-${index}` }); });
+    act(() => first.result.current.suppress());
+  }
+  first.unmount();
+  const remounted = renderHook(() => usePromptPrediction("retained", "thread", true));
+  await waitFor(() => expect(remounted.result.current.state?.taskId).toBe("retained"));
+  expect(remounted.result.current.suggestion).toBeNull();
+});
