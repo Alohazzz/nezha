@@ -1383,6 +1383,10 @@ async fn run_structured_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     use crate::codex_appserver::task_bridge as bridge;
+    let _operation = crate::codex_appserver::retained_session::operation(&launch.task_id).await;
+    if crate::codex_appserver::retained_session::generation(task_manager, &launch.task_id).is_some() {
+        return Err("structured task already owns a session".into());
+    }
 
     let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
     // 真实项目根必须是合法绝对目录（与 PTY 路径同等级校验）：草稿收拢、图谱环境
@@ -1460,14 +1464,16 @@ async fn run_structured_task(
     // 启动失败时先行 cancel 再收口会话。
     let forwarder = bridge::spawn_forwarder(
         app.clone(),
+        task_manager,
+        session.clone(),
+        None,
         launch.task_id.clone(),
         launch.project_path.clone(),
         launch.permission_mode == "full_access",
         on_output,
         events,
         errors,
-    );
-    bridge::register_session(task_manager, &launch.task_id, session.clone(), forwarder.clone());
+    ).await?;
 
     let _ = app.emit(
         "task-status",
@@ -1481,9 +1487,7 @@ async fn run_structured_task(
     let turn_input = bridge::build_turn_input(final_prompt, image_paths);
     if let Err(e) = session.start_turn_with_input(&turn_input).await {
         forwarder.cancel();
-        if let Some(session) = bridge::take_session(task_manager, &launch.task_id) {
-            session.shutdown_shared().await;
-        }
+        crate::codex_appserver::retained_session::close_owned(task_manager, &launch.task_id, forwarder.generation()).await?;
         return Err(format!("turn/start failed: {e:?}"));
     }
 
@@ -1905,6 +1909,8 @@ pub async fn cancel_task(
     task_id: String,
     project_path: String,
 ) -> Result<(), String> {
+    // Serialize structured close and artifact cleanup with a following resume.
+    let _structured_operation = crate::codex_appserver::retained_session::operation(&task_id).await;
     task_manager.cancelled_tasks.lock().insert(task_id.clone());
     task_manager
         .manually_completed_tasks
@@ -1921,7 +1927,9 @@ pub async fn cancel_task(
         .contains_key(&task_id)
     {
         // structured 任务：无 PTY 子进程句柄，走 app-server 会话的中断+关闭。
-        crate::codex_appserver::task_bridge::cancel_structured_task(&task_id, &task_manager).await;
+        if let Some(generation) = crate::codex_appserver::retained_session::generation(&task_manager, &task_id) {
+            crate::codex_appserver::retained_session::close_owned(&task_manager, &task_id, generation).await?;
+        }
     } else {
         // Orphaned/interrupted tasks have no live child in this app process.
         // Avoid leaving a stale cancellation marker that would affect a later manual resume.
@@ -1952,6 +1960,8 @@ pub async fn complete_task(
     // 任务自身的 agent（前端传 `task.agent`），供收尾时跑知识沉淀的 L3 语义门。
     agent: String,
 ) -> Result<(), String> {
+    // Serialize structured close and artifact cleanup with a following resume.
+    let _structured_operation = crate::codex_appserver::retained_session::operation(&task_id).await;
     // 与 `finalize_task_exit` 入口同样「取走并移除」：本路径负责沉淀，
     // 后续 exit monitor 醒来的 `finalize_task_exit` 取到 false 便不会重复跑。
     let sediment_expected = task_manager.take_sediment_marker(&task_id);
@@ -1973,7 +1983,9 @@ pub async fn complete_task(
         .contains_key(&task_id)
     {
         // structured 任务：直接关停会话（手动完成不需要等 turn 自然结束）。
-        crate::codex_appserver::task_bridge::cancel_structured_task(&task_id, &task_manager).await;
+        if let Some(generation) = crate::codex_appserver::retained_session::generation(&task_manager, &task_id) {
+            crate::codex_appserver::retained_session::close_owned(&task_manager, &task_id, generation).await?;
+        }
     } else {
         // No live child means no exit monitor will consume this marker.
         task_manager
@@ -2023,7 +2035,7 @@ pub async fn get_active_task_ids(
 ) -> Result<Vec<String>, String> {
     let mut ids = task_manager.child_handles.lock().keys().cloned().collect::<Vec<_>>();
     // structured（codex app-server）任务没有 PTY 子进程句柄，单独并入
-    ids.extend(task_manager.codex_appserver_sessions.lock().keys().cloned());
+    ids.extend(crate::codex_appserver::retained_session::active_ids(&task_manager));
     Ok(ids)
 }
 
@@ -2052,10 +2064,7 @@ pub async fn reset_task_process(
 
     // structured 任务的重置：先收口 forwarder（进程被 kill 后的 EOF 错误广播
     // 不得再 emit failed 打翻状态），再移除会话（kill_on_drop 随句柄移除兜底）。
-    if let Some(entry) = task_manager.codex_appserver_sessions.lock().remove(&task_id) {
-        entry.guard.cancel();
-        entry.session.shutdown_shared().await;
-    }
+    crate::codex_appserver::retained_session::close_task(&task_manager, &task_id).await?;
 
     Ok(())
 }

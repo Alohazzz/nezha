@@ -30,6 +30,8 @@ pub mod approval;
 pub mod events;
 pub mod rpc;
 pub mod task_bridge;
+pub mod session_lifecycle;
+pub mod retained_session;
 
 pub use events::{CodexEvent, ThreadInfo};
 pub use task_bridge::StructuredTaskEntry;
@@ -68,6 +70,7 @@ pub struct SessionStatus {
     pub thread: Option<ThreadInfo>,
     /// 当前运行中的 turn id(TurnRunning 时非空)。
     pub current_turn_id: Option<String>,
+    pub last_completed_turn_id: Option<String>,
 }
 
 /// 会话级致命错误(进程退出 / 协议失步)。经错误流通知上层。
@@ -105,6 +108,7 @@ struct SessionCore {
     user_inputs: parking_lot::Mutex<HashMap<proto::RequestId, proto::ToolRequestUserInputParams>>,
     /// Serialize manual/automatic responses without holding a synchronous lock over I/O.
     interaction_response_lock: AsyncMutex<()>,
+    shutdown_result: AsyncMutex<Option<Result<(), String>>>,
     cwd: String,
     approval_policy: String,
     sandbox: String,
@@ -120,6 +124,8 @@ struct SessionStatusInternal {
     phase: SessionPhase,
     thread: Option<ThreadInfo>,
     current_turn_id: Option<String>,
+    last_completed_turn_id: Option<String>,
+    last_finished_turn_id: Option<String>,
     /// 会话级模型 override（`/model` `/effort` 内置命令写入）；新 turn/start 带。
     model_override: ModelOverride,
 }
@@ -144,6 +150,8 @@ impl Default for SessionStatusInternal {
             phase: SessionPhase::Starting,
             thread: None,
             current_turn_id: None,
+            last_completed_turn_id: None,
+            last_finished_turn_id: None,
             model_override: ModelOverride::default(),
         }
     }
@@ -245,6 +253,7 @@ impl CodexAppServerSession {
             approvals: parking_lot::Mutex::new(HashMap::new()),
             user_inputs: parking_lot::Mutex::new(HashMap::new()),
             interaction_response_lock: AsyncMutex::new(()),
+            shutdown_result: AsyncMutex::new(None),
             cwd: request.cwd.clone(),
             approval_policy: request.approval_policy.clone(),
             sandbox: request.sandbox.clone(),
@@ -467,8 +476,11 @@ impl CodexAppServerSession {
         let turn_id = response.turn.id;
         {
             let mut status = self.core.status.lock();
-            status.phase = SessionPhase::TurnRunning;
-            status.current_turn_id = Some(turn_id.clone());
+            // A terminal notification can precede the start response for a fast turn.
+            if status.last_finished_turn_id.as_ref() != Some(&turn_id) {
+                status.phase = SessionPhase::TurnRunning;
+                status.current_turn_id = Some(turn_id.clone());
+            }
         }
         self.core.refresh_interaction_phase();
         Ok(turn_id)
@@ -719,6 +731,7 @@ impl CodexAppServerSession {
             phase: internal.phase,
             thread: internal.thread,
             current_turn_id: internal.current_turn_id,
+            last_completed_turn_id: internal.last_completed_turn_id,
         }
     }
 
@@ -730,19 +743,49 @@ impl CodexAppServerSession {
     /// `Arc` 持有者专用的关闭入口：会话表里的句柄是 `Arc`，取消/完成路径
     /// 取走后直接调用，不必拆 Arc。
     pub async fn shutdown_shared(self: Arc<Self>) {
+        if let Err(error) = self.shutdown_confirmed().await {
+            eprintln!("[codex_appserver] shutdown not confirmed: {error}");
+        }
+    }
+
+    /// Serialized, idempotent shutdown. A replacement writer may only spawn after Ok.
+    pub async fn shutdown_confirmed(&self) -> Result<(), String> {
+        let mut previous = self.core.shutdown_result.lock().await;
+        if let Some(result) = previous.as_ref() { return result.clone(); }
         // 关 stdin 触发对端 EOF;锁内只做 shutdown 调用,不持锁做别的 I/O
         {
-            let mut stdin = self.core.stdin.lock().await;
-            let _ = stdin.shutdown().await;
+            let _ = timeout(SHUTDOWN_FORCE, async {
+                let mut stdin = self.core.stdin.lock().await;
+                stdin.shutdown().await
+            }).await;
         }
         let mut child = self.core.child.lock().await;
-        match timeout(SHUTDOWN_GRACE, child.wait()).await {
-            Ok(_) => {}
+        let result = match timeout(SHUTDOWN_GRACE, child.wait()).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(error.to_string()),
             Err(_) => {
-                let _ = child.start_kill();
-                let _ = timeout(SHUTDOWN_FORCE, child.wait()).await;
+                match child.start_kill() {
+                    Err(error) => Err(error.to_string()),
+                    Ok(()) => match timeout(SHUTDOWN_FORCE, child.wait()).await {
+                        Ok(Ok(_)) => Ok(()),
+                        Ok(Err(error)) => Err(error.to_string()),
+                        Err(_) => Err("app-server did not exit after kill".into()),
+                    },
+                }
             }
+        };
+        *previous = Some(result.clone());
+        result
+    }
+
+    /// Bounds the readiness handshake independently of prediction completion.
+    pub async fn ready_to_resume(&self, thread: &str, cwd: &str, approval: &str, sandbox: &str) -> bool {
+        let status = self.status();
+        if status.phase != SessionPhase::Idle || status.thread.as_ref().map(|t| t.id.as_str()) != Some(thread)
+            || self.core.cwd != cwd || self.core.approval_policy != approval || self.core.sandbox != sandbox {
+            return false;
         }
+        self.request_with_timeout("thread/read", json!({"threadId": thread, "includeTurns": false}), Duration::from_millis(250)).await.is_ok()
     }
 
     // ---- 内部 ----
@@ -753,30 +796,25 @@ impl CodexAppServerSession {
         method: &'static str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, RpcError> {
+        self.request_with_timeout(method, params, REQUEST_TIMEOUT).await
+    }
+
+    async fn request_with_timeout(&self, method: &'static str, params: serde_json::Value, limit: Duration) -> Result<serde_json::Value, RpcError> {
         let id = self.core.ids.allocate();
         let (tx, rx) = oneshot::channel();
         assert!(
             self.core.pending.insert(id.clone(), method, tx),
             "duplicate request id {id}"
         );
+        struct PendingRemoval<'a> { table: &'a PendingTable, id: proto::RequestId }
+        impl Drop for PendingRemoval<'_> { fn drop(&mut self) { self.table.remove(&self.id); } }
+        let _pending = PendingRemoval { table: &self.core.pending, id: id.clone() };
         let line = rpc::encode_request(&id, method, &params);
-        self.write_line(&line).await.map_err(|e| RpcError {
-            code: -1,
-            message: format!("write failed: {e}"),
-            data: None,
-        })?;
-        match timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_recv)) => Err(RpcError {
-                code: -1,
-                message: format!("{method}: reader dropped (process exited?)"),
-                data: None,
-            }),
-            Err(_) => {
-                self.core.pending.remove(&id);
-                Err(RpcError { code: -2, message: format!("{method}: timed out"), data: None })
-            }
-        }
+        let response = async {
+            self.write_line(&line).await.map_err(|error| RpcError { code: -1, message: format!("write failed: {error}"), data: None })?;
+            rx.await.map_err(|_| RpcError { code: -1, message: format!("{method}: reader dropped (process exited?)"), data: None })?
+        };
+        timeout(limit, response).await.unwrap_or_else(|_| Err(RpcError { code: -2, message: format!("{method}: timed out"), data: None }))
     }
 
     async fn send_notification(
@@ -822,7 +860,10 @@ fn spawn_reader(core: Arc<SessionCore>, stdout: tokio::process::ChildStdout) {
                     core.status.lock().phase = SessionPhase::Failed;
                     let code = {
                         let mut child = core.child.lock().await;
-                        child.wait().await.ok().and_then(|s| s.code())
+                        // Preserve normal exit codes without letting an EOF-only process
+                        // monopolize the child handle and prevent bounded shutdown/kill.
+                        timeout(Duration::from_millis(50), child.wait()).await
+                            .ok().and_then(Result::ok).and_then(|status| status.code())
                     };
                     let _ = core
                         .errors_tx
@@ -840,6 +881,22 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
         eprintln!("[codex_appserver] unparsable line: {line:.200}");
         return;
     };
+    // Child sampling traffic must never enter the parent's state machine or UI.
+    let event_thread = match &frame {
+        IncomingFrame::Notification { params, .. } | IncomingFrame::ServerRequest { params, .. } =>
+            params.as_ref().and_then(|params| params.get("threadId").or_else(|| params.get("thread").and_then(|thread| thread.get("id")))).and_then(|id| id.as_str()),
+        _ => None,
+    };
+    let foreign_thread = event_thread.is_some_and(|id| core.status.lock().thread.as_ref().is_some_and(|parent| parent.id != id));
+    if foreign_thread {
+        if let IncomingFrame::ServerRequest { id, .. } = &frame {
+            let line = serde_json::json!({"id": id, "error": {"code": -32600, "message": "Request is not for the active parent thread"}}).to_string() + "\n";
+            let mut stdin = core.stdin.lock().await;
+            let _ = stdin.write_all(line.as_bytes()).await;
+            let _ = stdin.flush().await;
+        }
+        return;
+    }
     match frame {
         IncomingFrame::Response { id, result, error } => {
             let outcome = match (result, error) {
@@ -925,10 +982,14 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
                             drop(status);
                             core.refresh_interaction_phase();
                         }
-                        CodexEvent::TurnCompleted { .. } => {
+                        CodexEvent::TurnCompleted { turn, .. } => {
                             let mut status = core.status.lock();
                             status.phase = SessionPhase::Idle;
                             status.current_turn_id = None;
+                            status.last_finished_turn_id = Some(turn.id.clone());
+                            if turn.status == proto::TurnStatus::Completed {
+                                status.last_completed_turn_id = Some(turn.id.clone());
+                            }
                             core.approvals.lock().clear();
                             core.user_inputs.lock().clear();
                         }
@@ -1099,6 +1160,7 @@ impl SessionCore {
             approvals: parking_lot::Mutex::new(HashMap::new()),
             user_inputs: parking_lot::Mutex::new(HashMap::new()),
             interaction_response_lock: AsyncMutex::new(()),
+            shutdown_result: AsyncMutex::new(None),
             cwd: ".".to_string(),
             approval_policy: "untrusted".to_string(),
             sandbox: "read-only".to_string(),

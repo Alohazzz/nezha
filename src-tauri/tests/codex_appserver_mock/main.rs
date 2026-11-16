@@ -29,6 +29,7 @@ mod resume_policy;
 mod file_approval;
 mod resolved_requests;
 mod real_codex;
+mod lifecycle;
 
 fn main() -> ExitCode {
     if let Ok(script) = std::env::var(MOCK_ENV) {
@@ -40,6 +41,7 @@ fn main() -> ExitCode {
         return if real_codex::run(&program) { ExitCode::SUCCESS } else { ExitCode::FAILURE };
     }
     let results: Vec<(&str, bool)> = vec![
+        ("retained_session_lifecycle", lifecycle::run()),
         ("production_start_keeps_thread", run_production_start_keeps_thread(false)),
         ("production_resume_keeps_thread", run_production_start_keeps_thread(true)),
         ("resume_policy", resume_policy::run()),
@@ -134,6 +136,24 @@ fn handle_mock_request(
             }),
         ),
         (_, "initialized") => {}
+        ("lifecycle", "thread/read") => {
+            // A sampling child must neither retarget the parent nor leak events.
+            emit_thread_started(out, "sample-child");
+            emit(out, &serde_json::json!({"method": "turn/completed", "params": {
+                "threadId": "sample-child", "turn": {"id": "sample-turn", "status": "completed", "items": []}
+            }}).to_string());
+            respond(out, id, &serde_json::json!({"thread": thread_obj("thread-happy")}));
+        }
+        ("lifecycle_timeout", "thread/read") => {} // keep pipe healthy but never answer
+        ("lifecycle", "turn/start") => {
+            emit(out, &serde_json::json!({"method": "turn/started", "params": {
+                "threadId": "thread-happy", "turn": {"id": "fast-turn", "status": "inProgress", "items": []}
+            }}).to_string());
+            emit(out, &serde_json::json!({"method": "turn/completed", "params": {
+                "threadId": "thread-happy", "turn": {"id": "fast-turn", "status": "completed", "items": []}
+            }}).to_string());
+            respond(out, id, &serde_json::json!({"turn": {"id": "fast-turn"}}));
+        }
         // crash 场景:握手完成后的第一个请求触发 exit(101)
         ("crash", "thread/start") => {
             // 先把应答写出去再退,模拟"处理中崩溃"

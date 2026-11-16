@@ -47,13 +47,30 @@ pub(super) fn run(program: &str) -> bool {
         let directory = std::env::temp_dir().join(format!("nezha-real-codex-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).expect("isolated fixture directory");
         let cwd = directory.to_str().expect("fixture path");
+        let lifecycle_only = std::env::var_os("NEZHA_REAL_CODEX_LIFECYCLE_ONLY").is_some();
+        let sandbox = if lifecycle_only { "read-only" } else { "danger-full-access" };
         let session = CodexAppServerSession::spawn(SpawnRequest::codex_app_server(
-            program, cwd, "never", "danger-full-access",
+            program, cwd, "never", sandbox,
         )).await.expect("real app-server");
         let mut events = session.subscribe();
         let thread = session.start_thread().await.expect("real thread/start");
         session.start_turn("Reply exactly READY. Do not use any tools.").await.expect("persist real thread");
         finish_turn(&session, &mut events).await;
+        if lifecycle_only {
+            let started = std::time::Instant::now();
+            assert!(session.ready_to_resume(&thread.id, cwd, "never", sandbox).await);
+            let readiness_ms = started.elapsed().as_millis();
+            assert!(readiness_ms < 250);
+            let mut rebound = session.subscribe();
+            assert!(rebound.try_recv().is_err(), "rebound output replayed the old turn");
+            let previous_turn = session.status().last_completed_turn_id.expect("successful first turn");
+            session.start_turn("Reply exactly RESUMED. Do not use any tools.").await.expect("warm parent turn");
+            finish_turn(&session, &mut rebound).await;
+            assert_ne!(session.status().last_completed_turn_id.as_deref(), Some(previous_turn.as_str()));
+            session.shutdown_confirmed().await.expect("confirmed real app-server exit");
+            println!("real_codex lifecycle: reused parent with fresh output subscription; readiness={readiness_ms}ms; confirmed exit");
+            return true;
+        }
         session.shutdown().await;
 
         let session = CodexAppServerSession::spawn(SpawnRequest::codex_app_server(

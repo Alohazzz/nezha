@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast::Receiver;
 
 use super::approval::ApprovalAction;
+use super::{retained_session, session_lifecycle::Lifecycle};
 use super::{
     CodexAppServerSession, CodexEvent, SessionError, SessionPhase, SpawnRequest, ThreadInfo,
     TurnInputItem,
@@ -53,6 +54,14 @@ pub fn permission_mode_to_policy(mode: &str, ask_auto_approve: bool) -> (&'stati
 pub struct StructuredTaskEntry {
     pub session: Arc<CodexAppServerSession>,
     pub guard: ForwarderGuard,
+    pub lifecycle: Lifecycle,
+    pub retain_on_success: bool,
+}
+
+impl StructuredTaskEntry {
+    pub(crate) fn new(session: Arc<CodexAppServerSession>, guard: ForwarderGuard) -> Self {
+        Self { lifecycle: Lifecycle::running_for(guard.generation()), session, guard, retain_on_success: false }
+    }
 }
 
 /// forwarder 取消句柄（启动失败收口用）。置位后 forwarder 对后续到达的事件/
@@ -62,18 +71,35 @@ pub struct StructuredTaskEntry {
 #[derive(Clone)]
 pub struct ForwarderGuard {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
+    wake: Arc<tokio::sync::Notify>,
+    generation: u64,
 }
 
 impl ForwarderGuard {
-    fn new() -> Self {
+    pub(crate) fn new(generation: u64) -> Self {
         Self {
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            wake: Arc::new(tokio::sync::Notify::new()),
+            generation,
         }
     }
 
     pub fn cancel(&self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.wake.notify_waiters();
+    }
+
+    pub fn generation(&self) -> u64 { self.generation }
+
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() { return; }
+            notified.await;
+        }
     }
 
     fn is_cancelled(&self) -> bool {
@@ -206,32 +232,6 @@ pub async fn fork_structured_task(
     Ok(())
 }
 
-/// 注册会话到 TaskManager（cancel/complete/respond 命令可寻址）。
-/// guard 与会话同表登记，取消/重置路径据此收口 forwarder 的迟到通知。
-pub fn register_session(
-    task_manager: &crate::TaskManager,
-    task_id: &str,
-    session: Arc<CodexAppServerSession>,
-    guard: ForwarderGuard,
-) {
-    task_manager.codex_appserver_sessions.lock().insert(
-        task_id.to_string(),
-        StructuredTaskEntry { session, guard },
-    );
-}
-
-/// 取走并移除会话（收尾路径）。返回 None 表示任务不是 structured 或已收尾。
-pub fn take_session(
-    task_manager: &crate::TaskManager,
-    task_id: &str,
-) -> Option<Arc<CodexAppServerSession>> {
-    task_manager
-        .codex_appserver_sessions
-        .lock()
-        .remove(task_id)
-        .map(|e| e.session)
-}
-
 /// structured 任务的 forwarder：唯一消费会话事件的地方。
 ///
 /// 事件映射（计划 2.3/2.4/2.5）：
@@ -246,79 +246,105 @@ pub fn take_session(
 ///
 /// 返回 `ForwarderGuard`：启动序列（spawn → turn/start）失败时先 `cancel()`
 /// 再收口会话，保证降级重跑后迟到的通知不会污染新任务状态。
-pub fn spawn_forwarder(
+pub async fn spawn_forwarder(
     app: AppHandle,
+    task_manager: &crate::TaskManager,
+    session: Arc<CodexAppServerSession>,
+    existing_guard: Option<ForwarderGuard>,
     task_id: String,
-    // agent 的 cwd（可能是 worktree）；收尾时据此收拢草稿到真实项目根。
     effective_path: String,
     auto_answer_questions: bool,
     on_output: Channel<String>,
     mut events: Receiver<CodexEvent>,
     mut errors: Receiver<SessionError>,
-) -> ForwarderGuard {
-    let guard = ForwarderGuard::new();
-    let guard_for_loop = guard.clone();
+) -> Result<ForwarderGuard, String> {
+    let guard = existing_guard.unwrap_or_else(|| ForwarderGuard::new(Lifecycle::running().generation()));
+    // Register before spawning: even an already-queued EOF has an owner to close.
+    if let Err(error) = retained_session::activate(task_manager, &task_id, &guard, session.clone()) {
+        session.shutdown_confirmed().await?;
+        return Err(error);
+    }
+    let worker_guard = guard.clone();
     tokio::spawn(async move {
-        // 先挂错误流再进事件循环：进程秒退时 EOF 错误可能先于残留事件到达
         loop {
-            if guard_for_loop.is_cancelled() {
-                break;
-            }
             tokio::select! {
+                biased;
+                _ = worker_guard.cancelled() => break,
                 event = events.recv() => {
                     match event {
                         Ok(event) => {
-                            if guard_for_loop.is_cancelled()
-                                || !handle_event(&app, &on_output, &task_id, &effective_path, auto_answer_questions, event).await
-                            {
-                                break;
+                            let completed_at = std::time::Instant::now();
+                            let Some(manager) = app.try_state::<crate::TaskManager>() else { break; };
+                            let _operation = retained_session::operation(&task_id).await;
+                            if worker_guard.is_cancelled() || !retained_session::owns(&manager, &task_id, worker_guard.generation()) { break; }
+                            if let CodexEvent::TurnCompleted { ref turn, .. } = event {
+                                if turn.status == codex_app_server_protocol::TurnStatus::Completed {
+                                    // Cleanup completes before publishing done, while resume is excluded.
+                                    settle_task_artifacts(&app, &task_id, &effective_path).await;
+                                    cleanup_turn(&task_id, &effective_path).await;
+                                    let deadline = retained_session::completed(&manager, &task_id, worker_guard.generation(), &turn.id, completed_at);
+                                    emit_done(&app, &task_id);
+                                    if let Some(deadline) = deadline {
+                                        retained_session::spawn_expiry(app.clone(), task_id.clone(), worker_guard.clone(), deadline);
+                                    } else if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
+                                        eprintln!("[codex_appserver] completion close failed: {error}");
+                                    }
+                                    return;
+                                } else if turn.status != codex_app_server_protocol::TurnStatus::InProgress {
+                                    cleanup_turn(&task_id, &effective_path).await;
+                                    handle_event(&app, &on_output, &task_id, &effective_path, auto_answer_questions, event).await;
+                                    if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
+                                        eprintln!("[codex_appserver] terminal turn close failed: {error}");
+                                    }
+                                    return;
+                                }
                             }
+                            if !handle_event(&app, &on_output, &task_id, &effective_path, auto_answer_questions, event).await { break; }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            eprintln!("[codex_appserver] forwarder lagged, dropped {n} events");
-                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => eprintln!("[codex_appserver] forwarder lagged, dropped {n} events"),
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
                 error = errors.recv() => {
                     match error {
-                        Ok(err) => {
-                            if guard_for_loop.is_cancelled() {
-                                break;
+                        Ok(error) => {
+                            let Some(manager) = app.try_state::<crate::TaskManager>() else { break; };
+                            let _operation = retained_session::operation(&task_id).await;
+                            if !worker_guard.is_cancelled() && retained_session::owns(&manager, &task_id, worker_guard.generation()) {
+                                cleanup_turn(&task_id, &effective_path).await;
+                                emit_failed(&app, &task_id, &format!("{error:?}"));
+                                if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
+                                    eprintln!("[codex_appserver] failed session close failed: {error}");
+                                }
                             }
-                            emit_failed(&app, &task_id, &format!("{err:?}"));
-                            break;
+                            return;
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            eprintln!("[codex_appserver] error stream lagged, dropped {n}");
-                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
             }
         }
-        // forwarder 退出即会话终结：清表 + 显式关闭子进程（与 PTY 的 cancel 收尾对齐）。
-        // 不能指望 kill_on_drop 兜底：child 句柄活在 SessionCore 里，reader task
-        // 持有 Arc<SessionCore> 直到进程退出——不显式 shutdown 的话引用计数永不
-        // 归零，app-server 进程泄漏后占住 thread 写锁，resume 会撞
-        // "already has an active writer"。forwarder 是唯一消费方，状态经
-        // app.state 自取（State 不是 'static，无法捕获）。
-        if let Some(tm) = app.try_state::<crate::TaskManager>() {
-            if let Some(session) = take_session(&tm, &task_id) {
-                session.shutdown_shared().await;
+        let _operation = retained_session::operation(&task_id).await;
+        if let Some(manager) = app.try_state::<crate::TaskManager>() {
+            if retained_session::owns(&manager, &task_id, worker_guard.generation()) {
+                cleanup_turn(&task_id, &effective_path).await;
+                if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
+                    eprintln!("[codex_appserver] forwarder close failed: {error}");
+                }
             }
         }
-        crate::event_watcher::cleanup_task_events(&task_id);
-        // 任务附件（首轮 / steer / resume 带图的落盘产物）随任务收尾清理：
-        // 落盘用的是 agent cwd（可能是 worktree），清理也必须按同一个路径，
-        // 不能用 task_real_paths（主检出）。cancel_task / complete_task 仍会
-        // 按前端传入的 project_path 再清一次。
-        {
-            let dir = crate::attachments::task_attachments_dir(&effective_path, &task_id);
-            let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
-        }
     });
-    guard
+    Ok(guard)
+}
+
+async fn cleanup_turn(task_id: &str, effective_path: &str) {
+    let task_id = task_id.to_owned();
+    let directory = crate::attachments::task_attachments_dir(effective_path, &task_id);
+    let _ = tokio::task::spawn_blocking(move || {
+        crate::event_watcher::cleanup_task_events(&task_id);
+        let _ = std::fs::remove_dir_all(directory);
+    }).await;
 }
 
 /// full_access 下模型提问的自动应答等待窗口。30s 足够在场用户点掉卡片，
@@ -338,11 +364,14 @@ fn spawn_user_input_auto_answer(
     request_id: codex_app_server_protocol::RequestId,
     params: codex_app_server_protocol::ToolRequestUserInputParams,
 ) {
+    let generation = app.try_state::<crate::TaskManager>().and_then(|manager| retained_session::generation(&manager, &task_id));
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(USER_INPUT_AUTO_ANSWER_MS)).await;
+        let _operation = retained_session::operation(&task_id).await;
         let Some(tm) = app.try_state::<crate::TaskManager>() else {
             return;
         };
+        if !generation.is_some_and(|generation| retained_session::owns(&tm, &task_id, generation)) { return; }
         let Some(session) = take_session_impl(&tm, &task_id) else {
             return; // 会话已收口/降级，问题随进程终结，无需应答
         };
@@ -369,7 +398,7 @@ async fn handle_event(
     app: &AppHandle,
     on_output: &Channel<String>,
     task_id: &str,
-    effective_path: &str,
+    _effective_path: &str,
     auto_answer_questions: bool,
     event: CodexEvent,
 ) -> bool {
@@ -380,10 +409,8 @@ async fn handle_event(
         }
         CodexEvent::TurnCompleted { turn, .. } => {
             match turn.status {
-                codex_app_server_protocol::TurnStatus::Completed => {
-                    finish_done(app, task_id, effective_path).await;
-                    false
-                }
+                // Successful completion is owned by spawn_forwarder under the task gate.
+                codex_app_server_protocol::TurnStatus::Completed => false,
                 codex_app_server_protocol::TurnStatus::Interrupted => {
                     // 用户主动中断（/stop 内置命令 / composer 停止按钮 / ESC →
                     // `interrupt_codex_structured`）：置 interrupted，与 PTY 模式
@@ -602,15 +629,6 @@ fn emit_task_session(app: &AppHandle, task_id: &str, thread: &ThreadInfo) {
 /// **收尾前先把草稿与沉淀补齐**（与 PTY `finalize_task_exit` 同序）：Agent 可能
 /// 把 `knowledge.json` / 回写产物写在 worktree 里，不先收拢到项目根，沉淀与云效
 /// 回写都会读不到。structured 是「一个 turn 一个终态」，所以这里是它唯一的收尾点。
-async fn finish_done(
-    app: &AppHandle,
-    task_id: &str,
-    effective_path: &str,
-) {
-    settle_task_artifacts(app, task_id, effective_path).await;
-    emit_done(app, task_id);
-}
-
 /// 收拢草稿并触发知识沉淀（仅当本次启动标记了 require_sediment）。
 /// 与 PTY 路径共用同一套集合（`task_real_paths` / `sediment_expected`），
 /// 标记「取走即消费」，重复收尾不会双跑。
@@ -649,7 +667,7 @@ async fn settle_task_artifacts(app: &AppHandle, task_id: &str, effective_path: &
     }
 }
 
-/// 置任务终态并发送系统通知（纯事件发射，收尾动作见 `finish_done`）。
+/// 置任务终态并发送系统通知（纯事件发射，收尾动作由 forwarder 的 owner 分支执行）。
 fn emit_done(app: &AppHandle, task_id: &str) {
     let _ = app.emit(
         "task-status",
@@ -695,61 +713,51 @@ pub async fn resume_structured_task(
     effort: Option<String>,
     on_output: Channel<String>,
 ) -> Result<(), String> {
-    // 图片落盘先于会话拉起：落盘失败直接 Err，不留下半启动的会话。
-    let image_paths = save_structured_images(&project_path, &task_id, images).await?;
-    let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
-    // 与 run_structured_task 同一套环境变量：续跑同样要能定位草稿目录 / 图谱。
-    let extra_envs = crate::pty::structured_session_envs(&task_id, &project_path);
-    let StartedSession { session, events, errors } = spawn_session_resume(
-        &launch_spec.program,
-        &project_path,
-        &permission_mode,
-        &thread_id,
-        extra_envs,
-    )
-    .await
-    .map_err(|e| format!("codex app-server resume failed: {e:?}"))?;
-    let session = Arc::new(session);
-    // 任务快照携带的模型 / 推理深度设为会话级 override（新进程新状态机，
-    // 与 run_structured_task 同款写入；turn/start 携带，thread/resume 的
-    // override 缺省时沿用 rollout 里的 thread 设置，这里以显式 override 为准）。
-    if model.is_some() || effort.is_some() {
-        session.set_model_override(model.as_deref().map(Some), effort.as_deref().map(Some));
-    }
-
-    // 与 run_task 同序的登记：清取消/手动完成标记（done 后继续对话是新的一轮）。
+    let _operation = retained_session::operation(&task_id).await;
+    let ask_auto = tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve)
+        .await.map_err(|error| error.to_string())?;
+    let (approval, sandbox) = permission_mode_to_policy(&permission_mode, ask_auto);
+    // Claim before attachment I/O. Old callbacks/timers cannot touch the new turn.
+    let retained = retained_session::claim_resume(task_manager, &task_id, &thread_id, &project_path, approval, sandbox).await?;
+    let image_paths = match save_structured_images(&project_path, &task_id, images).await {
+        Ok(paths) => paths,
+        Err(error) => {
+            if let Some(generation) = retained_session::generation(task_manager, &task_id) {
+                let _ = retained_session::close_owned(task_manager, &task_id, generation).await;
+            }
+            return Err(error);
+        }
+    };
+    let (session, events, errors, existing_guard) = if let Some((session, guard)) = retained {
+        let events = session.subscribe();
+        let errors = session.subscribe_errors();
+        (session, events, errors, Some(guard))
+    } else {
+        let prep_task = task_id.clone();
+        let prep_path = project_path.clone();
+        let (launch_spec, extra_envs) = tokio::task::spawn_blocking(move || {
+            (crate::app_settings::get_agent_launch_spec("codex"), crate::pty::structured_session_envs(&prep_task, &prep_path))
+        }).await.map_err(|error| error.to_string())?;
+        let StartedSession { session, events, errors } = spawn_session_resume(
+            &launch_spec.program, &project_path, &permission_mode, &thread_id, extra_envs,
+        ).await.map_err(|error| format!("codex app-server resume failed: {error:?}"))?;
+        (Arc::new(session), events, errors, None)
+    };
+    // Explicit None clears a stale warm-session override, matching cold resume semantics.
+    session.set_model_override(Some(model.as_deref()), Some(effort.as_deref()));
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager.manually_completed_tasks.lock().remove(&task_id);
     task_manager.task_names.lock().remove(&task_id);
-
-    // 先起 forwarder 拿 guard，与会话成对登记：取消/重置路径据此收口迟到通知。
-    // full_access 同新建任务：提问 30s 无人应答自动选推荐项。
     let guard = spawn_forwarder(
-        app.clone(),
-        task_id.clone(),
-        project_path.clone(),
-        permission_mode == "full_access",
-        on_output,
-        events,
-        errors,
-    );
-    register_session(task_manager, &task_id, session.clone(), guard.clone());
-
-    let _ = app.emit(
-        "task-status",
-        serde_json::json!({ "task_id": task_id, "status": "running" }),
-    );
-
-    // turn/start 失败：先取消 forwarder（迟到通知不得污染任务状态），
-    // 再收口会话子进程，最后把错误交回前端 toast。
-    if let Err(e) = session.start_turn_with_input(&build_turn_input(prompt, image_paths)).await {
+        app.clone(), task_manager, session.clone(), existing_guard,
+        task_id.clone(), project_path, permission_mode == "full_access", on_output, events, errors,
+    ).await?;
+    let _ = app.emit("task-status", serde_json::json!({ "task_id": task_id, "status": "running" }));
+    if let Err(error) = session.start_turn_with_input(&build_turn_input(prompt, image_paths)).await {
         guard.cancel();
-        if let Some(tm) = app.try_state::<crate::TaskManager>() {
-            if let Some(session) = take_session(&tm, &task_id) {
-                session.shutdown_shared().await;
-            }
-        }
-        return Err(format!("turn/start failed: {e:?}"));
+        // Ambiguous start failures are never retried/replayed automatically.
+        retained_session::close_owned(task_manager, &task_id, guard.generation()).await?;
+        return Err(format!("turn/start failed: {error:?}"));
     }
     Ok(())
 }
@@ -855,20 +863,9 @@ pub(crate) async fn save_structured_images(
 /// structured 任务的取消：中断运行中的 turn 后优雅关闭会话。
 /// 幂等：会话不存在（未启动/已收尾）时直接返回。
 pub async fn cancel_structured_task(task_id: &str, task_manager: &crate::TaskManager) {
-    let Some(entry) = task_manager
-        .codex_appserver_sessions
-        .lock()
-        .remove(task_id)
-    else {
-        return;
-    };
-    // 先收口 forwarder：turn/interrupt 会回 `turn/completed{interrupted}`，
-    // 不 cancel 的话这个迟到事件会把取消误报成 failed（还带系统通知）。
-    entry.guard.cancel();
-    // turn 运行中先 interrupt（实测干净返回 turn/completed{interrupted}）；
-    // 失败也无妨——shutdown 的 kill 路径兜底。
-    let _ = entry.session.interrupt().await;
-    entry.session.shutdown_shared().await;
+    if let Err(error) = retained_session::close_task(task_manager, task_id).await {
+        eprintln!("[codex_appserver] cancel close failed: {error}");
+    }
 }
 
 /// structured 任务的中断当前 turn（/stop 内置命令 / composer 停止按钮 / ESC）：
@@ -926,6 +923,7 @@ fn take_session_impl(
         .codex_appserver_sessions
         .lock()
         .get(task_id)
+        .filter(|entry| retained_session::is_running(entry))
         .map(|e| e.session.clone())
 }
 
@@ -980,11 +978,8 @@ pub async fn respond_codex_user_input(
 
 /// 检查状态机当前是否在等审批（`get_active_task_ids` 等上层判断用不上时忽略）。
 pub fn session_phase(task_manager: &crate::TaskManager, task_id: &str) -> Option<SessionPhase> {
-    task_manager
-        .codex_appserver_sessions
-        .lock()
-        .get(task_id)
-        .map(|e| e.session.status().phase)
+    let session = take_session_impl(task_manager, task_id)?;
+    Some(session.status().phase)
 }
 
 /// structured 任务的模型切换（composer `/model` `/effort` 内置命令，对齐 Codex
