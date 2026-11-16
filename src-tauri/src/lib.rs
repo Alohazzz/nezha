@@ -124,13 +124,8 @@ impl TaskManager {
         self.sediment_expected.lock().remove(task_id)
     }
 
-    /// 退出前终止所有仍在运行的任务/Shell 子进程。
-    /// 托盘「退出」走 `app.exit(0)`(即 `std::process::exit`,不跑 Drop),
-    /// 没有这一步会把正在跑的 claude/codex 子进程留成孤儿,继续占用 CPU / API 额度。
-    /// 先 clone 出 Arc 再逐个 kill,避免持有 `child_handles` 锁期间做阻塞调用。
-    /// 唯一调用方是 Windows 托盘的「退出」菜单(setup_tray),与其保持同一 cfg,
-    /// 避免非 Windows 构建报 dead_code。
-    #[cfg(target_os = "windows")]
+    /// Kill only owned PTY children. Exit runs this off-thread with a deadline;
+    /// clone handles before doing I/O so task ownership locks remain short.
     pub(crate) fn kill_all_children(&self) {
         let children: Vec<_> = self.child_handles.lock().values().cloned().collect();
         for arc in children {
@@ -272,13 +267,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
-            "quit" => {
-                // 关闭按钮只隐藏窗口,「退出」是关到托盘后的主要退出路径。
-                // app.exit(0) 走 std::process::exit 不跑 Drop,先显式杀掉任务子进程,
-                // 否则正在跑的 claude/codex 会变孤儿。
-                app.state::<TaskManager>().kill_all_children();
-                app.exit(0);
-            }
+            "quit" => codex_appserver::shutdown::request_exit(app, 0),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -680,6 +669,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|_app_handle, _event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &_event {
+                if !codex_appserver::shutdown::ready_to_exit() {
+                    api.prevent_exit();
+                    codex_appserver::shutdown::request_exit(_app_handle, code.unwrap_or(0));
+                }
+            }
             // macOS: 当窗口被 Cmd+W 隐藏（hide）后，点击 Dock 图标会触发 Reopen，
             // 此时没有可见窗口，需要手动把主窗口重新显示并聚焦。
             // 复用 show_main_window(与托盘唤回同一实现),避免两处唤回逻辑分叉。

@@ -38,6 +38,8 @@ pub mod prediction_policy;
 pub mod prediction_rpc;
 pub mod turn_attachments;
 mod shutdown_confirmation;
+pub mod shutdown;
+mod exit_gate;
 
 pub use events::{CodexEvent, ThreadInfo};
 pub use task_bridge::StructuredTaskEntry;
@@ -302,6 +304,7 @@ impl CodexAppServerSession {
             stdin: AsyncMutex::new(stdin),
         });
 
+        if let Some(cancel) = cancel { cancel.register_startup_core(&core); }
         spawn_reader(core.clone(), stdout);
 
         let session = Self { core };
@@ -1212,17 +1215,22 @@ impl SessionCore {
     /// 测试用内核:child 是立即退出的占位子进程(仅满足类型,断言不触碰它)。
     fn test_core() -> Arc<Self> {
         #[cfg(windows)]
-        let mut cmd = {
+        let cmd = {
             let mut c = tokio::process::Command::new("cmd");
             c.args(["/c", "exit"]);
             c
         };
         #[cfg(not(windows))]
-        let mut cmd = {
+        let cmd = {
             let mut c = tokio::process::Command::new("true");
             c
         };
+        Self::test_core_with_command(cmd)
+    }
+
+    fn test_core_with_command(mut cmd: tokio::process::Command) -> Arc<Self> {
         let mut child = cmd
+            .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()

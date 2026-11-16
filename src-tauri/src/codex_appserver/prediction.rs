@@ -193,6 +193,14 @@ pub fn get_codex_prompt_prediction(task_id: String, thread_id: String) -> Option
     CACHE.lock().get(&task_id, &thread_id)
 }
 
+/// Exit revokes auxiliary work before waiting for any owned process.
+pub fn invalidate_all_for_exit(app: &tauri::AppHandle) {
+    prediction_policy::set_enabled(false);
+    POLICY.send_modify(|revision| *revision += 1);
+    let states = CACHE.lock().invalidate_all();
+    for state in states { emit(app, Some(state)); }
+}
+
 pub async fn change_enabled(app: &tauri::AppHandle, manager: &crate::TaskManager, enabled: bool) {
     prediction_policy::set_enabled(enabled);
     POLICY.send_modify(|revision| *revision += 1);

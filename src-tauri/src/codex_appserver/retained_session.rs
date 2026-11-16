@@ -12,22 +12,60 @@ use super::CodexAppServerSession;
 
 // Start reservations contain only cancellation tokens, never an async mutex.
 // They prevent duplicate launches while allowing cancel/reset to preempt any await.
-static STARTS: Lazy<Mutex<HashMap<String, Weak<ForwarderGuard>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static STARTS: Lazy<Arc<StartRegistry>> = Lazy::new(|| Arc::new(StartRegistry::default()));
+
+#[derive(Default)]
+pub struct StartRegistry {
+    state: Mutex<StartState>,
+}
+#[derive(Default)]
+struct StartState {
+    closing: bool,
+    tokens: HashMap<String, Weak<ForwarderGuard>>,
+}
 
 pub struct StartReservation {
     task: String,
     token: Arc<ForwarderGuard>,
+    registry: Arc<StartRegistry>,
 }
 
-pub fn begin_start(task: &str) -> Result<StartReservation, String> {
-    let mut starts = STARTS.lock();
-    starts.retain(|_, token| token.strong_count() > 0);
-    if starts.get(task).and_then(Weak::upgrade).is_some() {
-        return Err("structured task is already starting or stopping".into());
+pub fn start_registry() -> Arc<StartRegistry> { STARTS.clone() }
+
+pub fn begin_start(task: &str) -> Result<StartReservation, String> { STARTS.begin(task) }
+
+impl StartRegistry {
+    pub fn begin(self: &Arc<Self>, task: &str) -> Result<StartReservation, String> {
+        let mut state = self.state.lock();
+        if state.closing { return Err("application is shutting down".into()); }
+        state.tokens.retain(|_, token| token.strong_count() > 0);
+        if state.tokens.get(task).and_then(Weak::upgrade).is_some() {
+            return Err("structured task is already starting or stopping".into());
+        }
+        let token = Arc::new(ForwarderGuard::new(super::session_lifecycle::Lifecycle::running().generation()));
+        state.tokens.insert(task.to_owned(), Arc::downgrade(&token));
+        Ok(StartReservation { task: task.to_owned(), token, registry: self.clone() })
     }
-    let token = Arc::new(ForwarderGuard::new(super::session_lifecycle::Lifecycle::running().generation()));
-    starts.insert(task.to_owned(), Arc::downgrade(&token));
-    Ok(StartReservation { task: task.to_owned(), token })
+
+    /// Latch and cancellation share the activation lock: after this returns no
+    /// reservation can install a session, even if its handshake just completed.
+    pub fn begin_shutdown(&self) -> Vec<ForwarderGuard> {
+        let mut state = self.state.lock();
+        state.closing = true;
+        state.tokens.values().filter_map(Weak::upgrade).map(|token| {
+            token.cancel();
+            // Clone the guard metadata, not its reservation Arc: drain still
+            // observes when the actual startup future relinquishes ownership.
+            (*token).clone()
+        }).collect()
+    }
+
+    pub async fn drained(&self) {
+        loop {
+            if self.state.lock().tokens.values().all(|token| token.strong_count() == 0) { return; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
 }
 
 impl StartReservation {
@@ -37,7 +75,7 @@ impl StartReservation {
     }
     pub async fn cancelled(&self) { self.token.cancelled().await }
     pub fn activate(&self, manager: &crate::TaskManager, guard: &ForwarderGuard, session: Arc<CodexAppServerSession>) -> Result<(), String> {
-        let _starts = STARTS.lock();
+        let _starts = self.registry.state.lock();
         self.check()?;
         activate(manager, &self.task, guard, session)
     }
@@ -46,7 +84,7 @@ impl StartReservation {
 /// Reports structured ownership even before the session enters the task table.
 /// Callers must retain this classification through any delayed cleanup.
 pub fn cancel_start(task: &str) -> bool {
-    if let Some(token) = STARTS.lock().get(task).and_then(Weak::upgrade) {
+    if let Some(token) = STARTS.state.lock().tokens.get(task).and_then(Weak::upgrade) {
         token.cancel();
         true
     } else {
@@ -292,6 +330,22 @@ pub fn is_running(entry: &StructuredTaskEntry) -> bool {
 mod tests {
     use super::super::{session_lifecycle::Lifecycle, SessionCore};
     use super::*;
+
+    #[tokio::test]
+    async fn exit_revokes_pending_start_and_rejects_late_activation() {
+        let registry = Arc::new(StartRegistry::default());
+        let reservation = registry.begin("pending").unwrap();
+        registry.begin_shutdown();
+        assert!(reservation.check().is_err(), "exit must cancel uninstalled startup");
+        assert!(registry.begin("late").is_err());
+        let manager = crate::TaskManager::empty_for_test();
+        let session = Arc::new(CodexAppServerSession { core: SessionCore::test_core() });
+        let guard = ForwarderGuard::new(Lifecycle::running().generation());
+        assert!(reservation.activate(&manager, &guard, session.clone()).is_err());
+        session.shutdown_confirmed().await.unwrap();
+        drop(reservation);
+        tokio::time::timeout(std::time::Duration::from_millis(100), registry.drained()).await.unwrap();
+    }
 
     #[tokio::test]
     async fn global_warm_budget_excludes_retained_sessions_from_running_tasks() {

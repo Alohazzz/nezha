@@ -73,6 +73,7 @@ impl StructuredTaskEntry {
 pub struct ForwarderGuard {
     cancelled: Arc<std::sync::atomic::AtomicBool>,
     wake: Arc<tokio::sync::Notify>,
+    startup_core: Arc<parking_lot::Mutex<Option<std::sync::Weak<super::SessionCore>>>>,
     generation: u64,
 }
 
@@ -81,6 +82,7 @@ impl ForwarderGuard {
         Self {
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             wake: Arc::new(tokio::sync::Notify::new()),
+            startup_core: Arc::new(parking_lot::Mutex::new(None)),
             generation,
         }
     }
@@ -89,6 +91,15 @@ impl ForwarderGuard {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);
         self.wake.notify_waiters();
+    }
+
+    pub(super) fn register_startup_core(&self, core: &Arc<super::SessionCore>) {
+        *self.startup_core.lock() = Some(Arc::downgrade(core));
+    }
+
+    pub(super) fn startup_session(&self) -> Option<CodexAppServerSession> {
+        self.startup_core.lock().as_ref().and_then(std::sync::Weak::upgrade)
+            .map(|core| CodexAppServerSession { core })
     }
 
     pub fn generation(&self) -> u64 { self.generation }
