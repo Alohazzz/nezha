@@ -544,6 +544,7 @@ pub fn run() {
             codeup::codeup_list_pending_mrs,
             codeup::codeup_get_mr,
             codeup::codeup_approve_mr,
+            codeup::codeup_close_mr,
             codeup::codeup_merge_mr,
             codeup::codeup_review_mr,
             codeup::codeup_pull_code,

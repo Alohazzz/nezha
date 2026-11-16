@@ -12,6 +12,9 @@
 //!   `sourceProjectId` / `targetProjectId`（仓库数字 id）与 `createFrom`。
 //! - MR 详情/动作路径段收 `localId`，传 `mrBizId` 报 `Invalid param value`。
 
+mod close;
+pub use close::*;
+
 use crate::git::{path_to_string, resolve_repo_path, run_git, validate_project_path};
 use crate::storage::{load_project_batches_sync, load_projects, save_project_batches_sync, DeliveryPlan};
 use crate::yunxiao::{build_client, read_json_body, API_BASE};
@@ -1748,20 +1751,21 @@ pub(crate) fn resolve_codeup_repository_id_blocking(
     Ok(find_codeup_repository(&repository, known).map(|r| (repository, r.id.clone())))
 }
 
-/// 跨仓库聚合「已开启/评审中」的 MR；可选按仓库 id 过滤。
+/// 跨仓库聚合待处理或最近已关闭的 MR；默认 opened，支持按仓库筛选。
 #[tauri::command]
 pub async fn codeup_list_pending_mrs(
     repository_id: Option<String>,
+    state: Option<String>,
 ) -> Result<Vec<CodeupMr>, String> {
-    let (token, _) = load_creds().await?;
+    let state = state.as_deref().unwrap_or("opened");
+    if !matches!(state, "opened" | "closed") {
+        return Err("仅支持待处理或已关闭的合并请求".into());
+    }
+    let (token, org) = load_creds().await?;
     let client = build_client()?;
     let url_base = format!(
         "{API_BASE}/{CODUP_PREFIX}/organizations/{}/changeRequests",
-        crate::app_settings::load_app_settings()
-            .await?
-            .yunxiao
-            .organization_id
-            .trim()
+        org
     );
     let mut out: Vec<CodeupMr> = Vec::new();
     // 一次性解析所有已注册项目的 Codeup 仓库映射，供下方逐条 MR 查表（避免 O(MR × 项目数) 的 git 调用）。
@@ -1769,15 +1773,25 @@ pub async fn codeup_list_pending_mrs(
     // 每仓库只算一次「基路径固定文件夹」与「确定性兜底路径」，避免对重复仓库反复读应用设置。
     let mut root_cache: HashMap<String, String> = HashMap::new();
     let mut dir_path_cache: HashMap<String, String> = HashMap::new();
-    // 记录首页实际返回条数（用于识别真正末页），并对每一页统计「开放状态 MR 数量」用于早停。
+    // 状态由服务端筛选，不再按「整页没有开放 MR」推断后续页内容。
     let mut expected_page_len: Option<usize> = None;
     for page in 1..=MAX_CHANGE_PAGES {
-        let url = format!("{url_base}?page={page}&perPage={CHANGE_PAGE_SIZE}");
+        let mut url = reqwest::Url::parse(&url_base).map_err(|e| e.to_string())?;
+        url.query_pairs_mut()
+            .append_pair("page", &page.to_string())
+            .append_pair("perPage", &CHANGE_PAGE_SIZE.to_string())
+            .append_pair("state", state)
+            .append_pair("orderBy", "updated_at")
+            .append_pair("sort", "desc");
+        if let Some(id) = repository_id.as_deref().filter(|id| !id.is_empty()) {
+            url.query_pairs_mut().append_pair("projectIds", id);
+        }
+        let url = url.to_string();
         let bytes = match crate::yunxiao::get_yunxiao_json(&client, &token, url).await {
             Ok(b) => b,
             // 第一页失败直接暴露给前端，避免把「请求/凭据失败」误显示成「无可审核 MR」。
             Err(e) if page == 1 => return Err(format!("拉取待审核合并请求失败: {e}")),
-            Err(_) => break,
+            Err(e) => return Err(format!("读取合并请求第 {page} 页失败: {e}")),
         };
         let json: serde_json::Value = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
@@ -1787,7 +1801,7 @@ pub async fn codeup_list_pending_mrs(
                     String::from_utf8_lossy(&bytes)
                 ))
             }
-            Err(_) => break,
+            Err(e) => return Err(format!("读取合并请求第 {page} 页失败: {e}")),
         };
         let arr = json
             .as_array()
@@ -1799,7 +1813,7 @@ pub async fn codeup_list_pending_mrs(
         }
         let page_len = arr.len();
         expected_page_len.get_or_insert(page_len);
-        let mut open_on_page = 0usize;
+        let closed = state == "closed";
         for item in arr {
             let state = item
                 .get("state")
@@ -1808,10 +1822,13 @@ pub async fn codeup_list_pending_mrs(
                 .to_string();
             // 与云效「已开启」口径对齐：评审中 + 已通过(待合并) 都展示。
             // 是否冲突/有冲突 是独立标记（hasConflict），不在此处过滤 —— 有/无冲突都显示。
-            if !is_open_mr_state(&state) {
+            if !(if closed {
+                state == "CLOSED"
+            } else {
+                is_open_mr_state(&state)
+            }) {
                 continue;
             }
-            open_on_page += 1;
             let project_id = item
                 .get("projectId")
                 .and_then(|v| v.as_i64().map(|i| i.to_string()))
@@ -1932,11 +1949,6 @@ pub async fn codeup_list_pending_mrs(
                 pulled,
                 worktree_path: if pulled { root.clone() } else { String::new() },
             });
-        }
-        // 云效按近期活跃排序，评审中/待合并的 MR 集中在前部；一旦某一页（非首页）没有开放状态 MR，
-        // 说明已扫完开放集群，可提前结束，避免为几千条历史 MR 一路翻满 10 页。
-        if open_on_page == 0 && page > 1 {
-            break;
         }
         // 兜底：到达真实末页（某页返回条数少于首页）也停止。
         if page_len < expected_page_len.unwrap_or(page_len) || page_len < MIN_CHANGE_PAGE_SIZE {
