@@ -1471,9 +1471,12 @@ pub async fn save_codex_run_mode(run_mode: String) -> Result<AppSettings, String
 /// 对此后启动/续跑的所有 structured 任务生效。
 #[tauri::command]
 pub async fn save_codex_structured_model(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, crate::TaskManager>,
     model: Option<String>,
     effort: Option<String>,
 ) -> Result<AppSettings, String> {
+    crate::codex_appserver::prediction::invalidate_configuration(&app, &manager).await;
     tokio::task::spawn_blocking(move || {
         let normalized = |value: Option<String>| match value {
             Some(v) => {
