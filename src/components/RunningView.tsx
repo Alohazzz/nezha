@@ -19,11 +19,11 @@ import { CodexStreamView } from "./codex-stream/CodexStreamView";
 import { buildDefaultForkTaskName, SessionActionsMenu } from "./running-view/SessionActionsMenu";
 import { useToast } from "./Toast";
 import { writeClipboardText } from "./file-explorer/clipboard";
-import { getUsageColor } from "../utils";
+
 import { useUsageSnapshot } from "../hooks/useUsageSnapshot";
 import { ENABLE_USAGE_INSIGHTS } from "../platform";
 import { useI18n } from "../i18n";
-import s from "../styles";
+
 import {
   X,
   RotateCcw,
@@ -79,9 +79,9 @@ function formatFileSize(bytes: number): string {
 
 function InlineWindow({ label, window }: { label: string; window: UsageWindow }) {
   return (
-    <span style={s.usageInlineWindow}>
-      <span style={s.usageInlineWindowLabel}>{label}</span>
-      <span style={{ ...s.usageInlineWindowValue, color: getUsageColor(window.remainingPercent) }}>
+    <span className="nz-usageInlineWindow">
+      <span className="nz-usageInlineWindowLabel">{label}</span>
+      <span className="running-view-usage-value" data-usage={window.remainingPercent > 70 ? "good" : window.remainingPercent >= 20 ? "warn" : "danger"}>
         {window.remainingPercent}%
       </span>
     </span>
@@ -419,41 +419,20 @@ export function RunningView({
 
   return (
     <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        visibility: visible ? "visible" : "hidden",
-        pointerEvents: visible ? "auto" : "none",
-        zIndex: visible ? 1 : 0,
-      }}
+      className="running-view-root" data-visible={visible}
     >
       {/* Header */}
       <div
-        style={s.runHeader}
+        className="nz-runHeader"
         onMouseEnter={() => setHoverHeader(true)}
         onMouseLeave={() => setHoverHeader(false)}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+        <div className="running-view-title-row">
           <StatusIcon status={task.status} />
           {editingTitle ? (
             <input
               ref={titleInputRef}
-              style={{
-                maxWidth: 420,
-                width: "100%",
-                fontSize: 14,
-                fontWeight: 600,
-                color: "var(--text-primary)",
-                background: "transparent",
-                border: "none",
-                borderBottom: "2px solid var(--border-strong)",
-                borderRadius: 0,
-                padding: "0 2px",
-                outline: "none",
-              }}
+              className="running-view-title-input"
               value={editValue}
               placeholder={compactSkillMentions(task.prompt).slice(0, 60)}
               onChange={(e) => setEditValue(e.target.value)}
@@ -474,14 +453,7 @@ export function RunningView({
             />
           ) : (
             <span
-              style={{
-                fontSize: 14,
-                fontWeight: 600,
-                color: "var(--text-primary)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
+              className="running-view-title"
             >
               {(() => {
                 const t = task.name ?? compactSkillMentions(task.prompt);
@@ -493,14 +465,7 @@ export function RunningView({
             <button
               type="button"
               title={t("task.renameTask")}
-              style={{
-                ...s.taskRenameBtn,
-                flexShrink: 0,
-                color: "var(--text-secondary)",
-                opacity: hoverHeader ? 1 : 0.65,
-                background: hoverHeader ? "var(--bg-input)" : "transparent",
-                transition: "opacity 0.15s ease, background 0.15s ease",
-              }}
+              className="running-view-rename" data-hover={hoverHeader}
               onClick={() => {
                 setEditValue(task.name ?? "");
                 setEditingTitle(true);
@@ -515,18 +480,7 @@ export function RunningView({
               type="button"
               title={generateTooltip}
               disabled={generatingName || isActive}
-              style={{
-                ...s.taskRenameBtn,
-                flexShrink: 0,
-                color: isActive ? "var(--text-hint)" : "var(--text-secondary)",
-                opacity: generatingName ? 1 : isActive ? 0.4 : hoverHeader ? 1 : 0.65,
-                background:
-                  hoverHeader && !isActive && !generatingName
-                    ? "var(--bg-input)"
-                    : "transparent",
-                cursor: generatingName || isActive ? "not-allowed" : "pointer",
-                transition: "opacity 0.15s ease, background 0.15s ease, color 0.15s ease",
-              }}
+              className="running-view-generate-name" data-hover={hoverHeader} data-active={isActive} data-generating={generatingName}
               onClick={handleGenerateClick}
             >
               <Sparkles
@@ -538,7 +492,7 @@ export function RunningView({
           )}
         </div>
         {task.planId && onOpenPlanPreview && (
-          <button type="button" style={s.cancelBtn} onClick={onOpenPlanPreview}>
+          <button type="button" className="nz-cancelBtn" onClick={onOpenPlanPreview}>
             <BookOpenText size={12} strokeWidth={2.5} />
             <span>{t("plan.previewButton")}</span>
           </button>
@@ -546,16 +500,16 @@ export function RunningView({
         {isActive && (
           <>
             {task.worktreePath && !task.worktreeDiscarded && onOpenWorktreeTerminal && (
-              <button style={s.cancelBtn} onClick={onOpenWorktreeTerminal}>
+              <button className="nz-cancelBtn" onClick={onOpenWorktreeTerminal}>
                 <TerminalIcon size={12} strokeWidth={2.5} />
                 <span>{t("running.worktreeTerminal")}</span>
               </button>
             )}
-            <button style={s.doneBtn} onClick={onMarkDone}>
+            <button className="nz-doneBtn" onClick={onMarkDone}>
               <CheckCircle2 size={12} strokeWidth={2.5} />
               <span>{t("running.markDone")}</span>
             </button>
-            <button style={s.cancelBtn} onClick={onCancel}>
+            <button className="nz-cancelBtn" onClick={onCancel}>
               <X size={12} strokeWidth={2.5} />
               <span>{t("running.cancel")}</span>
             </button>
@@ -567,7 +521,7 @@ export function RunningView({
           onResume &&
           resumeAvailable &&
           !task.worktreeDiscarded && (
-            <button style={s.resumeBtn} onClick={onResume}>
+            <button className="nz-resumeBtn" onClick={onResume}>
               <RotateCcw size={12} strokeWidth={2.5} />
               <span>{t("running.resume")}</span>
             </button>
@@ -581,11 +535,7 @@ export function RunningView({
           !isCodeupMrTask &&
           onMergeWorktree && (
             <button
-              style={{
-                ...s.resumeBtn,
-                opacity: worktreeBusy ? 0.6 : 1,
-                cursor: worktreeBusy ? "not-allowed" : "pointer",
-              }}
+              className="running-view-merge" data-busy={worktreeBusy}
               disabled={!!worktreeBusy}
               onClick={async () => {
                 setWorktreeBusy("merge");
@@ -611,11 +561,7 @@ export function RunningView({
           !task.deliveryPlanId &&
           onDiscardWorktree && (
           <button
-            style={{
-              ...s.cancelBtn,
-              opacity: worktreeBusy ? 0.6 : 1,
-              cursor: worktreeBusy ? "not-allowed" : "pointer",
-            }}
+            className="running-view-discard" data-busy={worktreeBusy}
             disabled={!!worktreeBusy}
             onClick={async () => {
               setWorktreeBusy("discard");
@@ -637,12 +583,12 @@ export function RunningView({
           task.yunxiaoWorkitemId &&
           onOpenWriteback &&
           (task.yunxiaoWrittenBackAt ? (
-            <button type="button" style={s.yunxiaoWritebackBtnDisabled} title={t("yunxiao.writeback.done")}>
+            <button type="button" className="nz-yunxiaoWritebackBtnDisabled" title={t("yunxiao.writeback.done")}>
               <CheckCircle2 size={12} strokeWidth={2.5} />
               <span>{t("yunxiao.writeback.done")}</span>
             </button>
           ) : (
-            <button type="button" style={s.yunxiaoWritebackBtn} onClick={onOpenWriteback}>
+            <button type="button" className="nz-yunxiaoWritebackBtn" onClick={onOpenWriteback}>
               <Send size={12} strokeWidth={2.5} />
               <span>{t("yunxiao.writeback.button")}</span>
             </button>
@@ -659,14 +605,10 @@ export function RunningView({
         )}
       </div>
       <div
-        style={{
-          padding: "4px 20px 12px",
-          borderBottom: "1px solid var(--border-dim)",
-          flexShrink: 0,
-        }}
+        className="running-view-meta"
       >
-        <div style={s.runMetaRow}>
-          <span style={s.runMetaFixed}>
+        <div className="nz-runMetaRow">
+          <span className="nz-runMetaFixed">
             {task.agent === "claude"
               ? "✦ Claude Code"
               : task.agent === "dsh"
@@ -700,16 +642,16 @@ export function RunningView({
           )}
           {task.worktreePath && task.worktreeBranch && task.baseBranch && (
             <>
-              <span style={s.runMetaFixed}>·</span>
+              <span className="nz-runMetaFixed">·</span>
               <span
                 title={t("running.worktreeBranchTitle", {
                   branch: task.worktreeBranch,
                   base: task.baseBranch,
                 })}
-                style={s.runMetaBranchInline}
+                className="nz-runMetaBranchInline"
               >
                 <GitBranch size={11} strokeWidth={2.2} />
-                <span style={s.runMetaBranchText}>
+                <span className="nz-runMetaBranchText">
                   {t("running.worktreeBranchInfo", {
                     branch: task.worktreeBranch,
                     base: task.baseBranch,
@@ -720,7 +662,7 @@ export function RunningView({
           )}
         </div>
         {(metrics || sessionPath) && (
-          <div style={s.runMetricsRow}>
+          <div className="nz-runMetricsRow">
             {metrics && (
               <>
                 <MetricPill label={t("running.duration")} value={formatDuration(metrics.duration_secs)} />
@@ -767,6 +709,9 @@ export function RunningView({
       {isDetached || isInterrupted ? (
         codexStream ? (
           <CodexStreamView
+            taskId={task.id} threadId={task.codexSessionId}
+            predictionEligible={task.status === "done" && task.agent === "codex" && task.runMode === "structured"}
+            predictionFingerprint={JSON.stringify([codexStructuredModel, codexStructuredEffort, task.permissionMode])}
             entries={codexStream.entries}
             usage={codexStream.usage}
             history={codexStream.history}
@@ -797,25 +742,21 @@ export function RunningView({
             onBuiltinAction={onCodexBuiltinAction}
           />
         ) : (
-        <div style={s.interruptedSessionWrap}>
-          <div ref={interruptedBannerRef} style={s.interruptedBanner}>
-            <div style={s.interruptedBannerIcon}>
+        <div className="nz-interruptedSessionWrap">
+          <div ref={interruptedBannerRef} className="nz-interruptedBanner">
+            <div className="nz-interruptedBannerIcon">
               <AlertTriangle size={14} strokeWidth={2.1} />
             </div>
-            <div style={s.interruptedBannerBody}>
-              <div style={s.interruptedBannerTitle}>
+            <div className="nz-interruptedBannerBody">
+              <div className="nz-interruptedBannerTitle">
                 {t(isDetached ? "running.detachedTitle" : "running.interruptedTitle")}
               </div>
             </div>
-            <div style={s.interruptedBannerActions}>
+            <div className="nz-interruptedBannerActions">
               <button
                 type="button"
                 title={!resumeAvailable ? t("running.resumeUnavailable") : undefined}
-                style={{
-                  ...s.interruptedPrimaryBtn,
-                  opacity: resumeAvailable ? 1 : 0.45,
-                  cursor: resumeAvailable ? "pointer" : "not-allowed",
-                }}
+                className="running-view-resume" data-available={resumeAvailable}
                 disabled={!resumeAvailable}
                 onClick={isDetached ? onReconnect : onResume}
               >
@@ -831,12 +772,12 @@ export function RunningView({
                 </span>
               </button>
               {isInterrupted && (
-                <button type="button" style={s.interruptedSecondaryBtn} onClick={onMarkDone}>
+                <button type="button" className="nz-interruptedSecondaryBtn" onClick={onMarkDone}>
                   <CheckCircle2 size={12} strokeWidth={2.1} />
                   <span>{bannerCompact ? t("status.done") : t("running.markDone")}</span>
                 </button>
               )}
-              <button type="button" style={s.interruptedDangerBtn} onClick={onCancel}>
+              <button type="button" className="nz-interruptedDangerBtn" onClick={onCancel}>
                 <X size={12} strokeWidth={2.1} />
                 <span>{bannerCompact ? t("running.cancel") : t("running.cancelTask")}</span>
               </button>
@@ -845,7 +786,7 @@ export function RunningView({
           {sessionPath ? (
             <SessionView sessionPath={sessionPath} />
           ) : (
-            <div style={s.interruptedNoSessionPane}>
+            <div className="nz-interruptedNoSessionPane">
               {t(isDetached ? "running.detachedNoSession" : "running.interruptedNoSession")}
             </div>
           )}
@@ -854,6 +795,9 @@ export function RunningView({
       ) : isActive || !sessionPath ? (
         codexStream ? (
           <CodexStreamView
+            taskId={task.id} threadId={task.codexSessionId}
+            predictionEligible={task.status === "done" && task.agent === "codex" && task.runMode === "structured"}
+            predictionFingerprint={JSON.stringify([codexStructuredModel, codexStructuredEffort, task.permissionMode])}
             entries={codexStream.entries}
             usage={codexStream.usage}
             history={codexStream.history}
@@ -886,7 +830,7 @@ export function RunningView({
             onBuiltinAction={onCodexBuiltinAction}
           />
         ) : (
-        <div style={s.terminalContainer}>
+        <div className="nz-terminalContainer">
           <TerminalView
             key={`${task.id}-${runCount}`}
             onInput={onInput}
@@ -919,6 +863,9 @@ export function RunningView({
         // 失败 / 取消态必须把原因交回横幅——这条分支早先没传 statusText，
         // 失败任务连一句提示都没有，看流尾像正常结束。
         <CodexStreamView
+            taskId={task.id} threadId={task.codexSessionId}
+            predictionEligible={task.status === "done" && task.agent === "codex" && task.runMode === "structured"}
+            predictionFingerprint={JSON.stringify([codexStructuredModel, codexStructuredEffort, task.permissionMode])}
           entries={codexStream.entries}
           usage={codexStream.usage}
           history={codexStream.history}
@@ -953,17 +900,10 @@ export function RunningView({
       {/* Status bar when task is done and no session path (terminal fallback) */}
       {!isActive && !isDetached && !isInterrupted && !sessionPath && (
         <div
-          style={{
-            padding: "10px 20px",
-            borderTop: "1px solid var(--border-dim)",
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-          }}
+          className="running-view-footer"
         >
           <StatusIcon status={task.status} />
-          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          <span className="running-view-footer-hint">
             {task.status === "done"
               ? t("task.completed")
               : task.status === "failed"
@@ -978,20 +918,15 @@ export function RunningView({
 
 function MetricPill({ label, value }: { label: string; value: string }) {
   return (
-    <div style={s.runMetricPill}>
-      <span style={s.runMetricPillLabel}>{label}</span>
-      <span style={s.runMetricPillValue}>{value}</span>
+    <div className="nz-runMetricPill">
+      <span className="nz-runMetricPillLabel">{label}</span>
+      <span className="nz-runMetricPillValue">{value}</span>
     </div>
   );
 }
 
 type SessionFilePillTone = "success" | "warning" | "error";
 
-const sessionFilePillToneColor: Record<SessionFilePillTone, string> = {
-  success: "var(--color-success)",
-  warning: "var(--color-warning)",
-  error: "var(--color-error)",
-};
 
 function SessionFilePill({
   label,
@@ -1033,28 +968,23 @@ function SessionFilePill({
 
   return (
     <span
-      style={s.runSessionFilePillWrap}
+      className="nz-runSessionFilePillWrap"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       <button
         type="button"
-        style={{ ...s.runMetricPill, ...s.runMetricPillButton }}
+        className="running-view-session-file"
         onClick={handleClick}
       >
         <span
           aria-hidden="true"
-          style={{
-            ...s.railStatusDot,
-            background: sessionFilePillToneColor[tone],
-            borderColor: "var(--bg-input)",
-            ...s.runSessionStatusDot,
-          }}
+          className="running-view-session-dot" data-tone={tone}
         />
-        <span style={s.runMetricPillLabel}>{label}</span>
-        <span style={s.runMetricPillValue}>{value}</span>
+        <span className="nz-runMetricPillLabel">{label}</span>
+        <span className="nz-runMetricPillValue">{value}</span>
       </button>
-      {copied && hovered && <span style={s.runSessionCopyTooltip}>{copiedLabel}</span>}
+      {copied && hovered && <span className="nz-runSessionCopyTooltip">{copiedLabel}</span>}
     </span>
   );
 }

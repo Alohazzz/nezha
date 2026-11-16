@@ -15,7 +15,7 @@ import {
   type TerminalScrollback,
 } from "../../types";
 import { APP_PLATFORM } from "../../platform";
-import s from "../../styles";
+import { PromptPredictionSetting } from "./PromptPredictionSetting";
 import { APP_SETTINGS_CHANGED_EVENT, type AppSettings } from "./types";
 
 export function GeneralPanel({
@@ -301,13 +301,13 @@ export function GeneralPanel({
   };
 
   return (
-    <div style={s.settingsBodyColumn}>
-      <div style={s.settingField}>
-        <label style={s.settingFieldLabel}>{t("appSettings.appLanguage")}</label>
+    <div className="nz-settingsBodyColumn">
+      <div className="nz-settingField">
+        <label className="nz-settingFieldLabel">{t("appSettings.appLanguage")}</label>
         <Select.Root value={language} onValueChange={(value) => setLanguage(value as AppLanguage)}>
           <Select.Trigger
             aria-label={t("appSettings.appLanguage")}
-            style={s.settingsSelectTriggerCompact}
+            className="nz-settingsSelectTriggerCompact"
           >
             <Select.Value>{selectedLanguageLabel}</Select.Value>
             <Select.Icon>
@@ -315,8 +315,8 @@ export function GeneralPanel({
             </Select.Icon>
           </Select.Trigger>
           <Select.Portal>
-            <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
-              <Select.Viewport style={s.settingsSelectViewport}>
+            <Select.Content position="popper" sideOffset={4} className="nz-settingsSelectContent">
+              <Select.Viewport className="nz-settingsSelectViewport">
                 {languageOptions.map((option) => {
                   const selected = option.value === language;
 
@@ -324,12 +324,12 @@ export function GeneralPanel({
                     <Select.Item
                       key={option.value}
                       value={option.value}
-                      className="radix-select-item"
-                      style={selected ? s.settingsSelectOptionSelected : s.settingsSelectOption}
+                      className={selected ? "radix-select-item nz-settingsSelectOptionSelected" : "radix-select-item nz-settingsSelectOption"}
+
                     >
                       <Select.ItemText>{option.label}</Select.ItemText>
-                      <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                        <Check size={13} style={s.settingsSelectCheck} />
+                      <Select.ItemIndicator className="nz-settingsSelectIndicator">
+                        <Check size={13} className="nz-settingsSelectCheck" />
                       </Select.ItemIndicator>
                     </Select.Item>
                   );
@@ -338,18 +338,18 @@ export function GeneralPanel({
             </Select.Content>
           </Select.Portal>
         </Select.Root>
-        <span style={s.settingFieldHint}>{t("appSettings.languageHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.languageHint")}</span>
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.taskDisplayWindow")}</label>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.taskDisplayWindow")}</label>
         <Select.Root
           value={String(taskDisplayWindow)}
           onValueChange={(value) => onTaskDisplayWindowChange(normalizeTaskDisplayWindow(value))}
         >
           <Select.Trigger
             aria-label={t("appSettings.taskDisplayWindow")}
-            style={s.settingsSelectTriggerCompact}
+            className="nz-settingsSelectTriggerCompact"
           >
             <Select.Value>{selectedTaskDisplayWindowLabel}</Select.Value>
             <Select.Icon>
@@ -357,8 +357,8 @@ export function GeneralPanel({
             </Select.Icon>
           </Select.Trigger>
           <Select.Portal>
-            <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
-              <Select.Viewport style={s.settingsSelectViewport}>
+            <Select.Content position="popper" sideOffset={4} className="nz-settingsSelectContent">
+              <Select.Viewport className="nz-settingsSelectViewport">
                 {taskDisplayWindowOptions.map((option) => {
                   const optionValue = String(option.value);
                   const selected = option.value === taskDisplayWindow;
@@ -367,12 +367,12 @@ export function GeneralPanel({
                     <Select.Item
                       key={optionValue}
                       value={optionValue}
-                      className="radix-select-item"
-                      style={selected ? s.settingsSelectOptionSelected : s.settingsSelectOption}
+                      className={selected ? "radix-select-item nz-settingsSelectOptionSelected" : "radix-select-item nz-settingsSelectOption"}
+
                     >
                       <Select.ItemText>{option.label}</Select.ItemText>
-                      <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                        <Check size={13} style={s.settingsSelectCheck} />
+                      <Select.ItemIndicator className="nz-settingsSelectIndicator">
+                        <Check size={13} className="nz-settingsSelectCheck" />
                       </Select.ItemIndicator>
                     </Select.Item>
                   );
@@ -381,11 +381,11 @@ export function GeneralPanel({
             </Select.Content>
           </Select.Portal>
         </Select.Root>
-        <span style={s.settingFieldHint}>{t("appSettings.taskDisplayWindowHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.taskDisplayWindowHint")}</span>
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("codex.runMode")}</label>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("codex.runMode")}</label>
         <Select.Root
           value={codexRunMode ?? "pty"}
           onValueChange={(value) => void handleCodexRunModeChange(value as TaskRunMode)}
@@ -393,7 +393,7 @@ export function GeneralPanel({
         >
           <Select.Trigger
             aria-label={t("codex.runMode")}
-            style={s.settingsSelectTriggerCompact}
+            className="nz-settingsSelectTriggerCompact"
             data-disabled={codexRunModeBusy || codexRunMode === null}
           >
             <Select.Value>{selectedCodexRunModeLabel}</Select.Value>
@@ -402,8 +402,8 @@ export function GeneralPanel({
             </Select.Icon>
           </Select.Trigger>
           <Select.Portal>
-            <Select.Content position="popper" sideOffset={4} style={s.settingsSelectContent}>
-              <Select.Viewport style={s.settingsSelectViewport}>
+            <Select.Content position="popper" sideOffset={4} className="nz-settingsSelectContent">
+              <Select.Viewport className="nz-settingsSelectViewport">
                 {codexRunModeOptions.map((option) => {
                   const optionDisabled = option.value === "structured" && structuredDisabled;
                   const selected = option.value === codexRunMode;
@@ -412,13 +412,13 @@ export function GeneralPanel({
                     <Select.Item
                       key={option.value}
                       value={option.value}
-                      className="radix-select-item"
+                      className={selected ? "radix-select-item nz-settingsSelectOptionSelected" : "radix-select-item nz-settingsSelectOption"}
                       disabled={optionDisabled}
-                      style={selected ? s.settingsSelectOptionSelected : s.settingsSelectOption}
+
                     >
                       <Select.ItemText>{option.label}</Select.ItemText>
-                      <Select.ItemIndicator style={s.settingsSelectIndicator}>
-                        <Check size={13} style={s.settingsSelectCheck} />
+                      <Select.ItemIndicator className="nz-settingsSelectIndicator">
+                        <Check size={13} className="nz-settingsSelectCheck" />
                       </Select.ItemIndicator>
                     </Select.Item>
                   );
@@ -427,17 +427,18 @@ export function GeneralPanel({
             </Select.Content>
           </Select.Portal>
         </Select.Root>
-        <span style={s.settingFieldHint}>{codexRunModeHint}</span>
+        <span className="nz-settingFieldHint">{codexRunModeHint}</span>
         {structuredDisabled && (
-          <div style={s.settingsFieldWarning} role="alert">
-            <AlertTriangle size={13} strokeWidth={2} style={s.settingsFieldWarningIcon} />
+          <div className="nz-settingsFieldWarning" role="alert">
+            <AlertTriangle size={13} strokeWidth={2} className="nz-settingsFieldWarningIcon" />
             <span>{t("appSettings.codexRunModeFloorWarning")}</span>
           </div>
         )}
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.codexAskInWorkspaceAutoApprove")}</label>
+      <PromptPredictionSetting />
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.codexAskInWorkspaceAutoApprove")}</label>
         <button
           type="button"
           role="switch"
@@ -454,30 +455,30 @@ export function GeneralPanel({
             <span className="app-settings-toggle-knob" />
           </span>
         </button>
-        <span style={s.settingFieldHint}>{t("appSettings.codexAskInWorkspaceAutoApproveHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.codexAskInWorkspaceAutoApproveHint")}</span>
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.attentionBadge")}</label>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.attentionBadge")}</label>
         <button
           type="button"
           role="switch"
           aria-checked={attentionBadge}
           aria-label={t("appSettings.attentionBadge")}
           onClick={() => onAttentionBadgeChange(!attentionBadge)}
-          style={s.settingToggle}
+          className="nz-settingToggle"
         >
-          <span style={s.settingToggleLabel}>{t("appSettings.attentionBadgeToggle")}</span>
-          <span style={attentionBadge ? s.settingToggleTrackOn : s.settingToggleTrack}>
-            <span style={attentionBadge ? s.settingToggleKnobOn : s.settingToggleKnob} />
+          <span className="nz-settingToggleLabel">{t("appSettings.attentionBadgeToggle")}</span>
+          <span className={attentionBadge ? "nz-settingToggleTrackOn" : "nz-settingToggleTrack"}>
+            <span className={attentionBadge ? "nz-settingToggleKnobOn" : "nz-settingToggleKnob"} />
           </span>
         </button>
-        <span style={s.settingFieldHint}>{t("appSettings.attentionBadgeHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.attentionBadgeHint")}</span>
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.terminalScrollback")}</label>
-        <div style={s.fontSizeControls}>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.terminalScrollback")}</label>
+        <div className="nz-fontSizeControls">
           <input
             type="number"
             inputMode="numeric"
@@ -508,21 +509,21 @@ export function GeneralPanel({
             }}
             onPaste={(e) => e.preventDefault()}
             aria-label={t("appSettings.terminalScrollback")}
-            style={s.settingsNumberInput}
+            className="nz-settingsNumberInput"
           />
-          <span style={s.fontSizeUnit}>{t("appSettings.terminalScrollbackUnit")}</span>
+          <span className="nz-fontSizeUnit">{t("appSettings.terminalScrollbackUnit")}</span>
         </div>
-        <span style={s.settingFieldHint}>{t("appSettings.terminalScrollbackHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.terminalScrollbackHint")}</span>
         {terminalScrollback > 3000 && (
-          <div style={s.settingsFieldWarning} role="alert">
-            <AlertTriangle size={13} strokeWidth={2} style={s.settingsFieldWarningIcon} />
+          <div className="nz-settingsFieldWarning" role="alert">
+            <AlertTriangle size={13} strokeWidth={2} className="nz-settingsFieldWarningIcon" />
             <span>{t("appSettings.terminalScrollbackWarning")}</span>
           </div>
         )}
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.copyOnSelect")}</label>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.copyOnSelect")}</label>
         <button
           type="button"
           role="switch"
@@ -539,11 +540,11 @@ export function GeneralPanel({
             <span className="app-settings-toggle-knob" />
           </span>
         </button>
-        <span style={s.settingFieldHint}>{t("appSettings.copyOnSelectHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.copyOnSelectHint")}</span>
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.systemNotifications")}</label>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.systemNotifications")}</label>
         <button
           type="button"
           role="switch"
@@ -562,11 +563,11 @@ export function GeneralPanel({
             <span className="app-settings-toggle-knob" />
           </span>
         </button>
-        <span style={s.settingFieldHint}>{t("appSettings.systemNotificationsHint")}</span>
+        <span className="nz-settingFieldHint">{t("appSettings.systemNotificationsHint")}</span>
       </div>
 
-      <div style={s.settingFieldSpaced}>
-        <label style={s.settingFieldLabel}>{t("appSettings.sideloadedConpty")}</label>
+      <div className="nz-settingFieldSpaced">
+        <label className="nz-settingFieldLabel">{t("appSettings.sideloadedConpty")}</label>
         <button
           type="button"
           role="switch"
@@ -574,14 +575,14 @@ export function GeneralPanel({
           aria-label={t("appSettings.sideloadedConpty")}
           disabled={conptyDisabled}
           onClick={() => void handleSideloadedConptyToggle()}
-          style={conptyDisabled ? s.settingToggleDisabled : s.settingToggle}
+          className={conptyDisabled ? "nz-settingToggleDisabled" : "nz-settingToggle"}
         >
-          <span style={s.settingToggleLabel}>{t("appSettings.sideloadedConptyToggle")}</span>
-          <span style={conptyOn ? s.settingToggleTrackOn : s.settingToggleTrack}>
-            <span style={conptyOn ? s.settingToggleKnobOn : s.settingToggleKnob} />
+          <span className="nz-settingToggleLabel">{t("appSettings.sideloadedConptyToggle")}</span>
+          <span className={conptyOn ? "nz-settingToggleTrackOn" : "nz-settingToggleTrack"}>
+            <span className={conptyOn ? "nz-settingToggleKnobOn" : "nz-settingToggleKnob"} />
           </span>
         </button>
-        <span style={s.settingFieldHint}>{conptyHint}</span>
+        <span className="nz-settingFieldHint">{conptyHint}</span>
       </div>
     </div>
   );

@@ -76,7 +76,7 @@ pub struct ForwarderGuard {
 }
 
 impl ForwarderGuard {
-    pub(crate) fn new(generation: u64) -> Self {
+    pub fn new(generation: u64) -> Self {
         Self {
             cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             wake: Arc::new(tokio::sync::Notify::new()),
@@ -264,6 +264,7 @@ pub async fn spawn_forwarder(
         session.shutdown_confirmed().await?;
         return Err(error);
     }
+    super::prediction::invalidate(&app, &task_id);
     let worker_guard = guard.clone();
     tokio::spawn(async move {
         loop {
@@ -282,9 +283,11 @@ pub async fn spawn_forwarder(
                                     // Cleanup completes before publishing done, while resume is excluded.
                                     settle_task_artifacts(&app, &task_id, &effective_path).await;
                                     cleanup_turn(&task_id, &effective_path).await;
+                                    super::prediction::allow_retention(&manager, &task_id, worker_guard.generation());
                                     let deadline = retained_session::completed(&manager, &task_id, worker_guard.generation(), &turn.id, completed_at);
                                     emit_done(&app, &task_id);
                                     if let Some(deadline) = deadline {
+                                        super::prediction::schedule(app.clone(), task_id.clone(), worker_guard.clone(), completed_at);
                                         retained_session::spawn_expiry(app.clone(), task_id.clone(), worker_guard.clone(), deadline);
                                     } else if let Err(error) = retained_session::close_owned(&manager, &task_id, worker_guard.generation()).await {
                                         eprintln!("[codex_appserver] completion close failed: {error}");

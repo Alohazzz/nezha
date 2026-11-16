@@ -112,6 +112,7 @@ export interface AppSettings {
   codex_enabled: boolean;
   /** Codex 新任务的运行通道（应用级全局设置，任务级选择器已移除；云效直发任务始终 PTY） */
   codex_run_mode: TaskRunMode;
+  codex_prompt_predictions_enabled: boolean;
   /** Codex structured 通道的全局模型 override；null = 跟随 Codex 默认模型 */
   codex_structured_model: string | null;
   /** Codex structured 通道的全局思考深度 override；null = 跟随模型默认 */
@@ -154,6 +155,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   claude_enabled: true,
   codex_enabled: true,
   codex_run_mode: "pty",
+  codex_prompt_predictions_enabled: false,
   codex_structured_model: null,
   codex_structured_reasoning_effort: null,
   codex_ask_in_workspace_auto_approve: false,

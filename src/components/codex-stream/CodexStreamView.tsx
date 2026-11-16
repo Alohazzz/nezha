@@ -108,6 +108,7 @@ export function CodexStreamView({
   followUpBusy,
   composerDisabled,
   projectPath,
+  taskId, threadId, predictionEligible, predictionFingerprint,
   onComposerSubmit,
   onImageToast,
   onOpenGitChanges,
@@ -134,6 +135,10 @@ export function CodexStreamView({
   turnStartedAtMs?: number | null;
   /** composer 提交回调：running 态走 steer、其余走 resume（App 层分发）。
    *  images 为 dataUrl 数组（issue #118：粘贴/选择图片随消息发送）。 */
+  taskId?: string;
+  threadId?: string;
+  predictionEligible?: boolean;
+  predictionFingerprint?: string;
   onComposerSubmit?: (text: string, images: string[]) => void;
   followUpBusy?: boolean;
   /** 审批挂起等 composer 不该受理输入的场景置真（Paseo 同款：审批卡优先）。 */
@@ -308,6 +313,7 @@ export function CodexStreamView({
           </div>
           {onComposerSubmit && (
             <CodexComposer
+              taskId={taskId} threadId={threadId} predictionEligible={predictionEligible} predictionFingerprint={predictionFingerprint}
               mode={running ? "steer" : "resume"}
               busy={followUpBusy}
               disabled={composerDisabled}

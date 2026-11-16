@@ -1056,3 +1056,146 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+
+/* Composer styles migrated without changing layout. */
+.nz-codexComposerWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 28px 0;
+  flex-shrink: 0;
+}
+.nz-codexComposerBox {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-input);
+  padding: 8px 10px 6px;
+}
+.nz-codexComposerBox[data-focused="true"] {
+  border-color: var(--accent);
+}
+.nz-codexComposerInput {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  min-height: 20px;
+  max-height: 160px;
+  font-family: inherit;
+  overflow-y: auto;
+}
+.nz-codexComposerFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+}
+.nz-codexComposerHint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-hint);
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nz-codexComposerFocusHint {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-hint);
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+.nz-codexComposerModelBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-dim);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.nz-codexComposerModelBadgeName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nz-codexComposerSendBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.nz-codexComposerSendBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.nz-codexComposerStopBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--danger-border);
+  background: transparent;
+  color: var(--danger-fg);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.nz-codexComposerAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 6px;
+}
+.nz-codexComposerAddImageBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-hint);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.nz-codexComposerAddImageBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nz-codexComposerWrap { position: relative; }
+.codex-prediction-input-wrap { position: relative; display: flex; }
+.nz-codexComposerInput { width: 100%; box-sizing: border-box; }
+.codex-prediction-ghost { position: absolute; inset: 0; pointer-events: none; color: var(--text-hint); font-family: inherit; font-size: 13px; line-height: 1.5; padding: 2px; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+.nz-taskModelCompactIcon { flex-shrink: 0; }

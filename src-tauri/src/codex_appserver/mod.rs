@@ -32,6 +32,10 @@ pub mod rpc;
 pub mod task_bridge;
 pub mod session_lifecycle;
 pub mod retained_session;
+pub mod prediction;
+pub mod prediction_cache;
+pub mod prediction_policy;
+pub mod prediction_rpc;
 
 pub use events::{CodexEvent, ThreadInfo};
 pub use task_bridge::StructuredTaskEntry;
@@ -98,6 +102,8 @@ pub struct ModelOverride {
 
 /// 共享内核:reader task 与对外句柄共同持有。
 struct SessionCore {
+    prediction: parking_lot::Mutex<prediction_policy::PredictionContext>,
+    prediction_changed: tokio::sync::Notify,
     pending: PendingTable,
     ids: RequestIdAllocator,
     events_tx: broadcast::Sender<CodexEvent>,
@@ -213,6 +219,12 @@ impl TurnInputItem {
 impl CodexAppServerSession {
     /// spawn `codex app-server` 并完成 initialize 握手。
     pub async fn spawn(request: SpawnRequest) -> Result<Self, SessionError> {
+        let program = request.program.clone();
+        let (build, enabled) = tokio::task::spawn_blocking(move || {
+            let enabled = crate::app_settings::load_settings_internal().codex_prompt_predictions_enabled;
+            (if enabled { prediction_policy::verified_build(&program) } else { None }, enabled)
+        }).await.map_err(|error| SessionError::SpawnFailed(error.to_string()))?;
+        prediction_policy::initialize_enabled(enabled);
         let mut command = Command::new(&request.program);
         command
             .args(&request.args)
@@ -245,6 +257,8 @@ impl CodexAppServerSession {
         let (errors_tx, _) = broadcast::channel(16);
 
         let core = Arc::new(SessionCore {
+            prediction: parking_lot::Mutex::new(prediction_policy::PredictionContext { build, ..Default::default() }),
+            prediction_changed: tokio::sync::Notify::new(),
             pending: PendingTable::new(),
             ids: RequestIdAllocator::new(),
             events_tx,
@@ -344,6 +358,7 @@ impl CodexAppServerSession {
         struct StartResultWire {
             thread: ThreadWire,
         }
+        self.core.prediction.lock().apply_thread_response(&result, true);
         let response: StartResultWire = serde_json::from_value(result)
             .map_err(|e| SessionError::Protocol(format!("parse thread/start: {e}")))?;
         let info = ThreadInfo {
@@ -413,6 +428,7 @@ impl CodexAppServerSession {
         struct ResumeResultWire {
             thread: ThreadWire,
         }
+        self.core.prediction.lock().apply_thread_response(&result, false);
         let response: ResumeResultWire = serde_json::from_value(result)
             .map_err(|e| SessionError::Protocol(format!("parse {method}: {e}")))?;
         let info = ThreadInfo {
@@ -473,6 +489,13 @@ impl CodexAppServerSession {
         }
         let response: TurnStartResultWire = serde_json::from_value(result)
             .map_err(|e| SessionError::Protocol(format!("parse turn/start: {e}")))?;
+        {
+            let mut prediction = self.core.prediction.lock();
+            if let Some(model) = override_snapshot.model { prediction.model = Some(model); }
+            if let Some(effort) = override_snapshot.effort { prediction.effort = Some(effort); }
+            prediction.pending_input_ids.clear();
+            prediction.revision += 1;
+        }
         let turn_id = response.turn.id;
         {
             let mut status = self.core.status.lock();
@@ -524,14 +547,13 @@ impl CodexAppServerSession {
             return Err(SessionError::Protocol("no running turn to steer".to_string()));
         };
         let wire_input: Vec<serde_json::Value> = input.iter().map(|i| i.to_wire()).collect();
-        let params = json!({
-            "threadId": thread_id,
-            "expectedTurnId": turn_id,
-            "input": wire_input,
-        });
-        self.request("turn/steer", params)
-            .await
-            .map_err(|e| SessionError::Protocol(format!("turn/steer: {e}")))?;
+        let client_id = uuid::Uuid::new_v4().to_string();
+        self.core.prediction.lock().pending_input_ids.insert(client_id.clone());
+        let mut params = json!({ "threadId": thread_id, "expectedTurnId": turn_id, "input": wire_input });
+        if self.core.prediction.lock().build.is_some() { params["clientUserMessageId"] = json!(client_id); }
+        let response = self.request("turn/steer", params).await;
+        if response.is_err() { self.core.prediction.lock().pending_input_ids.remove(&client_id); }
+        response.map_err(|e| SessionError::Protocol(format!("turn/steer: {e}")))?;
         Ok(())
     }
 
@@ -897,6 +919,19 @@ async fn handle_wire_line(core: &SessionCore, line: &str) {
         }
         return;
     }
+    if let IncomingFrame::Notification { method, params: Some(params) } = &frame {
+        if method == "thread/settings/updated" {
+            if let Some(settings) = params.get("threadSettings") {
+                core.prediction.lock().apply_settings(settings);
+                core.prediction_changed.notify_waiters();
+            }
+        }
+        if matches!(method.as_str(), "item/started" | "item/completed") && params.pointer("/item/type").and_then(serde_json::Value::as_str) == Some("userMessage") {
+            if let Some(id) = params.pointer("/item/id").and_then(serde_json::Value::as_str) {
+                core.prediction.lock().pending_input_ids.remove(id);
+            }
+        }
+    }
     match frame {
         IncomingFrame::Response { id, result, error } => {
             let outcome = match (result, error) {
@@ -1152,6 +1187,8 @@ impl SessionCore {
             .expect("spawn dummy child");
         let stdin = child.stdin.take().expect("dummy stdin");
         Arc::new(Self {
+            prediction: parking_lot::Mutex::new(prediction_policy::PredictionContext::default()),
+            prediction_changed: tokio::sync::Notify::new(),
             pending: PendingTable::new(),
             ids: RequestIdAllocator::new(),
             events_tx: broadcast::channel(16).0,

@@ -76,3 +76,122 @@
 .app-settings-toggle[data-checked="true"] .app-settings-toggle-knob {
   transform: translateX(16px);
 }
+
+/* General settings: migrated static styles; all values retain project theme variables. */
+.nz-settingsBodyColumn {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 20px;
+}
+.nz-settingsSelectTriggerCompact {
+  width: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 28px 8px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  text-align: left;
+  outline: none;
+}
+.nz-settingsSelectContent {
+  z-index: 2000;
+  background: var(--bg-card);
+  border: 1px solid var(--border-medium);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  min-width: var(--radix-select-trigger-width);
+  overflow: hidden;
+}
+.nz-settingsSelectViewport {
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.nz-settingsSelectOptionSelected {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  position: relative;
+  transition: background 0.12s ease;
+}
+.nz-settingsSelectOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  position: relative;
+  transition: background 0.12s ease;
+}
+.nz-settingsSelectIndicator {
+  position: absolute;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-primary);
+}
+.nz-settingsSelectCheck {
+  flex-shrink: 0;
+}
+.nz-settingsFieldWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--warning);
+  line-height: 1.5;
+}
+.nz-settingsFieldWarningIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--warning);
+}
+.nz-fontSizeControls {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.nz-settingsNumberInput {
+  width: 86px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-medium);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  text-align: center;
+  outline: none;
+}
+.nz-fontSizeUnit {
+  color: var(--text-hint);
+}

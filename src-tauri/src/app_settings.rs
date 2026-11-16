@@ -234,6 +234,9 @@ pub struct AppSettings {
     /// 创建的 Codex 任务一律跟随此值；云效直发任务在后端强制 PTY，不受影响。
     #[serde(default = "default_codex_run_mode")]
     pub codex_run_mode: String,
+    /// Development rollout defaults off until the final end-to-end acceptance gate.
+    #[serde(default)]
+    pub codex_prompt_predictions_enabled: bool,
     /// Codex structured 通道的全局模型 override（None = 跟随 Codex 默认模型）。
     /// composer `/model` 的写入落点，对此后启动/续跑的所有 structured 任务生效；
     /// 旧的会话级热更（turn/settings/update）仍走 set_codex_structured_model。
@@ -306,6 +309,7 @@ impl Default for AppSettings {
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
             codex_run_mode: default_codex_run_mode(),
+            codex_prompt_predictions_enabled: false,
             codex_structured_model: None,
             codex_structured_reasoning_effort: None,
             codex_ask_in_workspace_auto_approve: false,
@@ -754,6 +758,7 @@ fn normalize_settings(settings: AppSettings) -> AppSettings {
         claude_enabled: settings.claude_enabled,
         codex_enabled: settings.codex_enabled,
         codex_run_mode: normalize_codex_run_mode(settings.codex_run_mode),
+        codex_prompt_predictions_enabled: settings.codex_prompt_predictions_enabled,
         codex_structured_model: normalize_structured_override(
             normalize_optional_catalog_value(
                 settings.codex_structured_model,
@@ -826,6 +831,7 @@ fn load_settings_unlocked() -> AppSettings {
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
             codex_run_mode: default_codex_run_mode(),
+            codex_prompt_predictions_enabled: false,
             codex_structured_model: None,
             codex_structured_reasoning_effort: None,
             codex_ask_in_workspace_auto_approve: false,
@@ -2165,4 +2171,30 @@ mod model_catalog_tests {
         assert!(absent.knowledge.enabled, "总开关默认应为开");
         assert!(AppSettings::default().knowledge.enabled);
     }
+    #[test]
+    fn prediction_setting_migrates_conservatively_and_preserves_explicit_opt_in() {
+        let absent: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!absent.codex_prompt_predictions_enabled);
+        let enabled: AppSettings = serde_json::from_str(r#"{"codex_prompt_predictions_enabled":true}"#).unwrap();
+        assert!(normalize_settings(enabled).codex_prompt_predictions_enabled);
+        let disabled: AppSettings = serde_json::from_str(r#"{"codex_prompt_predictions_enabled":false}"#).unwrap();
+        assert!(!normalize_settings(disabled).codex_prompt_predictions_enabled);
+    }
+
+}
+
+#[tauri::command]
+pub async fn save_codex_prompt_predictions_enabled(app: tauri::AppHandle, manager: tauri::State<'_, crate::TaskManager>, enabled: bool) -> Result<AppSettings, String> {
+    let settings = tokio::task::spawn_blocking(move || {
+        let _guard = settings_lock().lock();
+        let mut settings = load_settings_unlocked();
+        settings.codex_prompt_predictions_enabled = enabled;
+        fs::create_dir_all(nezha_dir()?).map_err(|error| error.to_string())?;
+        let normalized = normalize_settings(settings);
+        let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
+        atomic_write(&settings_path()?, &raw)?;
+        Ok::<_, String>(normalized)
+    }).await.map_err(|error| error.to_string())??;
+    crate::codex_appserver::prediction::change_enabled(&app, &manager, enabled).await;
+    Ok(settings)
 }

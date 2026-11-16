@@ -19,25 +19,14 @@ import {
   MAX_IMAGE_DATA_URL_LENGTH,
   type ComposerImage,
 } from "./composerImages";
-import s from "../../styles";
+import { usePromptPrediction } from "./usePromptPrediction";
 
 /** IME 组合中的按键（含 keyCode 229 的 legacy 报法）一律不当作提交/中断指令。 */
 const isImeComposing = (e: React.KeyboardEvent) =>
   e.nativeEvent.isComposing || e.keyCode === 229;
 
-/**
- * structured 任务的常驻底部 composer（Paseo 式会话框的核心形态）：
- * - 任何状态都渲染——运行中提交 = `steer_codex_structured`（turn/steer 追加指令，
- *   当前 turn 不中断）；done 态提交 = `resume_codex_structured`（thread/resume 新 turn）。
- * - Enter 发送 / Shift+Enter 换行；Ctrl+L 聚焦（focus hint 同 Paseo）。
- * - 快捷召唤：`$` 技能 / `/` 命令（含内置 /model /effort）/ `@` 项目文件。
- *   内置命令选中不开选择器浮层（CodexModelPicker），写入经 onSetModel/onSetEffort
- *   上抛（App 层调 set_codex_structured_model + 持久化任务快照）。
- * - 图片附件（issue #118）：粘贴 / 文件选择 → 缩略图预览可移除；纯图片可发送
- *   （交互对齐 ZCode 与 NewTaskView）。dataUrl 随提交上抛，落盘在后端。
- * - 提交后本地乐观用户气泡由调用方（App 层）负责插入。
- */
 export const CodexComposer = memo(function CodexComposer({
+  taskId, threadId, predictionEligible, predictionFingerprint,
   mode,
   busy,
   disabled,
@@ -53,6 +42,10 @@ export const CodexComposer = memo(function CodexComposer({
   onToast,
 }: {
   /** running = steer 语义（追加进当前 turn）；其余 = resume 语义（新 turn）。 */
+  taskId?: string;
+  threadId?: string;
+  predictionEligible?: boolean;
+  predictionFingerprint?: string;
   mode: "steer" | "resume";
   busy?: boolean;
   disabled?: boolean;
@@ -76,6 +69,8 @@ export const CodexComposer = memo(function CodexComposer({
   onToast?: (message: string, kind: "warning" | "error") => void;
 }) {
   const { t } = useI18n();
+  const prediction = usePromptPrediction(taskId, threadId, predictionEligible === true, predictionFingerprint);
+  const [composing, setComposing] = useState(false);
   const [text, setText] = useState("");
   const [images, setImages] = useState<ComposerImage[]>([]);
   const [focused, setFocused] = useState(false);
@@ -226,7 +221,7 @@ export const CodexComposer = memo(function CodexComposer({
       : t("codex.composer.placeholderDone");
 
   return (
-    <div style={{ ...s.codexComposerWrap, position: "relative" } as React.CSSProperties}>
+    <div className="nz-codexComposerWrap">
       <ComposerMentionPopover
         visible={mention.active}
         trigger={mention.trigger}
@@ -251,17 +246,25 @@ export const CodexComposer = memo(function CodexComposer({
           onSetEffort={onSetEffort ?? (() => {})}
         />
       )}
-      <div style={{ ...s.codexComposerBox, ...(focused ? s.codexComposerBoxFocused : {}) }}>
+      <div className="nz-codexComposerBox" data-focused={focused}>
+        <div className="codex-prediction-input-wrap">
+        {prediction.suggestion && !text && !images.length && !inputsLocked && !composing && !mention.active && !slashPicker && (
+          <span className="codex-prediction-ghost" aria-hidden="true">{prediction.suggestion}</span>
+        )}
         <textarea
           ref={inputRef}
           rows={1}
           value={text}
-          placeholder={placeholder}
+          aria-label={placeholder}
+          placeholder={prediction.suggestion && !text && !images.length && !inputsLocked && !composing && !mention.active && !slashPicker ? "" : placeholder}
+          onCompositionStart={() => { setComposing(true); prediction.suppress(); }}
+          onCompositionEnd={() => setComposing(false)}
           disabled={inputsLocked}
-          style={s.codexComposerInput}
+          className="nz-codexComposerInput"
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onChange={(e) => {
+            prediction.suppress();
             setText(e.target.value);
             mention.syncFromCaret(e.target.selectionStart);
             // 高度自适应交给 useEffect([text])：autoResize 是强制 reflow
@@ -269,7 +272,7 @@ export const CodexComposer = memo(function CodexComposer({
             // 按键双倍 layout，快打时与回显争抢主线程。
           }}
           onClick={(e) => mention.syncFromCaret(e.currentTarget.selectionStart)}
-          onPaste={handlePaste}
+          onPaste={(event) => { prediction.suppress(); handlePaste(event); }}
           onKeyDown={(e) => {
             // 快捷召唤弹层的键盘导航优先于提交
             if (mention.handleKeyDown(e)) return;
@@ -289,38 +292,39 @@ export const CodexComposer = memo(function CodexComposer({
             }
           }}
         />
+        </div>
         {images.length > 0 && (
-          <div style={s.codexComposerAttachments}>
+          <div className="nz-codexComposerAttachments">
             <ImageAttachments
               images={images}
               onRemove={(id) => setImages((prev) => prev.filter((img) => img.id !== id))}
             />
           </div>
         )}
-        <div style={s.codexComposerFooter}>
-          <span style={s.codexComposerHint}>
+        <div className="nz-codexComposerFooter">
+          <span className="nz-codexComposerHint">
             {mode === "steer" ? t("codex.composer.hintSteer") : t("codex.composer.hintResume")}
           </span>
           {showModelBadge && onSetModel && (
             <>
               <button
                 type="button"
-                style={s.codexComposerModelBadge}
+                className="nz-codexComposerModelBadge"
                 title={t("newTask.model")}
                 onClick={() => setSlashPicker("models")}
               >
-                <Zap size={11} strokeWidth={2.2} fill="currentColor" style={s.taskModelCompactIcon} />
-                <span style={s.codexComposerModelBadgeName}>
+                <Zap size={11} strokeWidth={2.2} fill="currentColor" className="nz-taskModelCompactIcon" />
+                <span className="nz-codexComposerModelBadgeName">
                   {model ?? t("newTask.modelDefault")}
                 </span>
               </button>
               <button
                 type="button"
-                style={s.codexComposerModelBadge}
+                className="nz-codexComposerModelBadge"
                 title={t("newTask.reasoningEffort")}
                 onClick={() => setSlashPicker("efforts")}
               >
-                <span style={s.codexComposerModelBadgeName}>
+                <span className="nz-codexComposerModelBadgeName">
                   {reasoningEffort ?? t("newTask.reasoningEffortAuto")}
                 </span>
               </button>
@@ -329,10 +333,7 @@ export const CodexComposer = memo(function CodexComposer({
           <button
             type="button"
             disabled={inputsLocked}
-            style={{
-              ...s.codexComposerAddImageBtn,
-              ...(inputsLocked ? s.codexComposerAddImageBtnDisabled : {}),
-            }}
+            className="nz-codexComposerAddImageBtn"
             onClick={() => fileInputRef.current?.click()}
             title={t("codex.composer.addImage")}
           >
@@ -345,18 +346,18 @@ export const CodexComposer = memo(function CodexComposer({
             accept="image/*"
             hidden
             onChange={(e) => {
+              prediction.suppress();
               addImageFiles(Array.from(e.target.files ?? []));
               e.target.value = "";
             }}
           />
-          <span style={s.codexComposerFocusHint}>
+          <span className="nz-codexComposerFocusHint">
             {canStop ? t("codex.composer.stopHint") : "Ctrl+L"}
           </span>
           {canStop && (
             <button
               type="button"
-              className="codex-stream-stop-btn"
-              style={s.codexComposerStopBtn}
+              className="codex-stream-stop-btn nz-codexComposerStopBtn"
               onClick={stopTurn}
               title={t("codex.composer.stop")}
             >
@@ -367,10 +368,7 @@ export const CodexComposer = memo(function CodexComposer({
           <button
             type="button"
             disabled={!canSend}
-            style={{
-              ...s.codexComposerSendBtn,
-              ...(!canSend ? s.codexComposerSendBtnDisabled : {}),
-            }}
+            className="nz-codexComposerSendBtn"
             onClick={submit}
             title={t("codex.followUp.send")}
           >

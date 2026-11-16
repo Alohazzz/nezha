@@ -23,6 +23,10 @@ const LANGUAGE_STORAGE_KEY = "nezha:language";
 
 const translations: Record<AppLanguage, Record<string, string>> = {
   en: {
+    "codex.prediction.title": "Next-message suggestions",
+    "codex.prediction.hint": "Generate the next message from the current conversation in the background. Uses additional model usage.",
+    "codex.prediction.suggestion": "Suggested next message",
+    "codex.prediction.tab": "Tab to accept",
     "appSettings.title": "App Settings",
     "appSettings.section.application": "Application",
     "appSettings.section.agents": "Agents",
@@ -1380,6 +1384,10 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Failed to load tasks for project {name}: {error}. Saving for this project is disabled until restart to protect on-disk data.",
   },
   zh: {
+    "codex.prediction.title": "下一条消息建议",
+    "codex.prediction.hint": "根据当前对话后台生成下一条建议，会产生额外模型用量。",
+    "codex.prediction.suggestion": "建议的下一条消息",
+    "codex.prediction.tab": "Tab 接受",
     "appSettings.title": "应用设置",
     "appSettings.section.application": "应用",
     "appSettings.section.agents": "Agents",

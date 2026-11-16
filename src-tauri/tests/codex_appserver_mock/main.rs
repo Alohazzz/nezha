@@ -30,6 +30,7 @@ mod file_approval;
 mod resolved_requests;
 mod real_codex;
 mod lifecycle;
+mod prediction;
 
 fn main() -> ExitCode {
     if let Ok(script) = std::env::var(MOCK_ENV) {
@@ -42,6 +43,7 @@ fn main() -> ExitCode {
     }
     let results: Vec<(&str, bool)> = vec![
         ("retained_session_lifecycle", lifecycle::run()),
+        ("prediction_rpc", prediction::run()),
         ("production_start_keeps_thread", run_production_start_keeps_thread(false)),
         ("production_resume_keeps_thread", run_production_start_keeps_thread(true)),
         ("resume_policy", resume_policy::run()),
@@ -123,6 +125,7 @@ fn handle_mock_request(
             }
         }
     }
+    if script.starts_with("prediction") && prediction::serve(script, method, id.clone(), &params, out) { return; }
     match (script, method) {
         // initialize / initialized 三个场景一致(实测应答形状)
         (_, "initialize") => respond(
