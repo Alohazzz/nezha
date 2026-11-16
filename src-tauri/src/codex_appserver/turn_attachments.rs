@@ -41,6 +41,28 @@ impl Drop for TurnAttachments {
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn cancelled_unregistered_start_cannot_clean_restarted_turn_directory() {
+        use super::super::retained_session::{begin_start, cancel_start};
+        let project = std::env::temp_dir().join(format!("nezha-start-cleanup-{}", uuid::Uuid::new_v4()));
+        let task = "cancel-before-registration";
+        let old_start = begin_start(task).unwrap();
+        let old = TurnAttachments::new(project.to_str().unwrap(), task).unwrap();
+        let was_structured = cancel_start(task);
+        assert!(old_start.check().is_err());
+        drop(old_start);
+        let _restart = begin_start(task).unwrap();
+        let resumed = TurnAttachments::new(project.to_str().unwrap(), task).unwrap();
+        std::fs::create_dir_all(&resumed.directory).unwrap();
+        std::fs::write(resumed.directory.join("0.png"), b"new").unwrap();
+        // The old cancel/complete command reaches cleanup only after restart.
+        // Structured starts must never take its generic task-directory branch.
+        if !was_structured {
+            std::fs::remove_dir_all(resumed.directory.parent().unwrap()).unwrap();
+        }
+        drop(old);
+        assert_eq!(std::fs::read(resumed.directory.join("0.png")).unwrap(), b"new");
+    }
+    #[tokio::test]
     async fn delayed_old_turn_cleanup_cannot_delete_immediately_resumed_attachments() {
         let project = std::env::temp_dir().join(format!("nezha-artifacts-{}", uuid::Uuid::new_v4()));
         let old = TurnAttachments::new(project.to_str().unwrap(), "task").unwrap();
@@ -66,4 +88,3 @@ mod tests {
         drop(resumed);
     }
 }
-

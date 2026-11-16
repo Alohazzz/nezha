@@ -35,5 +35,3 @@ mod tests {
         assert!(confirm(&confirmation, async { panic!("reaped a confirmed process twice") }).await.is_ok());
     }
 }
-
-

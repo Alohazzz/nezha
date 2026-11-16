@@ -43,8 +43,15 @@ impl StartReservation {
     }
 }
 
-pub fn cancel_start(task: &str) {
-    if let Some(token) = STARTS.lock().get(task).and_then(Weak::upgrade) { token.cancel(); }
+/// Reports structured ownership even before the session enters the task table.
+/// Callers must retain this classification through any delayed cleanup.
+pub fn cancel_start(task: &str) -> bool {
+    if let Some(token) = STARTS.lock().get(task).and_then(Weak::upgrade) {
+        token.cancel();
+        true
+    } else {
+        false
+    }
 }
 
 pub fn owns(manager: &crate::TaskManager, task: &str, generation: u64) -> bool {
