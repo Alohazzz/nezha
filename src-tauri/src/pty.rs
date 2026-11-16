@@ -1922,6 +1922,7 @@ pub async fn cancel_task(
     task_id: String,
     project_path: String,
 ) -> Result<(), String> {
+    crate::codex_appserver::prediction::invalidate_context(&app, &task_manager, &task_id);
     let was_starting = crate::codex_appserver::retained_session::cancel_start(&task_id);
     let was_structured = was_starting || crate::codex_appserver::retained_session::generation(&task_manager, &task_id).is_some();
     task_manager.cancelled_tasks.lock().insert(task_id.clone());
@@ -1975,6 +1976,7 @@ pub async fn complete_task(
     // 任务自身的 agent（前端传 `task.agent`），供收尾时跑知识沉淀的 L3 语义门。
     agent: String,
 ) -> Result<(), String> {
+    crate::codex_appserver::prediction::invalidate_context(&app, &task_manager, &task_id);
     let was_starting = crate::codex_appserver::retained_session::cancel_start(&task_id);
     let was_structured = was_starting || crate::codex_appserver::retained_session::generation(&task_manager, &task_id).is_some();
     // 与 `finalize_task_exit` 入口同样「取走并移除」：本路径负责沉淀，
@@ -2058,9 +2060,11 @@ pub async fn get_active_task_ids(
 
 #[tauri::command]
 pub async fn reset_task_process(
+    app: AppHandle,
     task_manager: State<'_, TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
+    crate::codex_appserver::prediction::invalidate_context(&app, &task_manager, &task_id);
     task_manager.cancelled_tasks.lock().remove(&task_id);
     task_manager
         .manually_completed_tasks

@@ -33,6 +33,7 @@ mod pty;
 mod session;
 mod skills;
 mod storage;
+mod prediction_persistence;
 mod subprocess;
 mod system_notify;
 mod update;
@@ -257,7 +258,6 @@ fn update_tray_menu(app: tauri::AppHandle, show_label: String, quit_label: Strin
 #[cfg(target_os = "windows")]
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    use tauri::Manager;
 
     let menu = build_tray_menu(app, TRAY_FALLBACK_LABELS.0, TRAY_FALLBACK_LABELS.1)?;
 
@@ -512,10 +512,10 @@ pub fn run() {
             config::get_agent_config_file_path,
             config::read_agent_config_file,
             config::write_agent_config_file,
-            storage::load_projects,
-            storage::save_projects,
-            storage::load_project_tasks,
-            storage::save_project_tasks,
+            prediction_persistence::load_projects,
+            prediction_persistence::save_projects,
+            prediction_persistence::load_project_tasks,
+            prediction_persistence::save_project_tasks,
             storage::load_project_batches,
             storage::save_project_batches,
             storage::load_project_plans,

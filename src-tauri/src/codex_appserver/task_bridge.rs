@@ -249,6 +249,7 @@ pub async fn fork_structured_task(
     permission_mode: String,
     source_thread_id: String,
 ) -> Result<(), String> {
+    let reservation = retained_session::begin_start(&task_id)?;
     let launch_task_id = task_id.clone();
     let request = tokio::task::spawn_blocking(move || {
         let (approval, sandbox) = permission_mode_to_policy(
@@ -262,10 +263,14 @@ pub async fn fork_structured_task(
     })
     .await
     .map_err(|e| format!("fork launch preparation failed: {e}"))?;
-    let session = CodexAppServerSession::spawn(request)
+    let session = CodexAppServerSession::spawn_cancellable(request, reservation.token())
         .await.map_err(|e| format!("codex app-server fork spawn failed: {e:?}"))?;
-    let result = session.fork_thread(&source_thread_id).await;
-    session.shutdown().await;
+    let result = tokio::select! {
+        _ = reservation.cancelled() => Err(SessionError::Protocol("fork cancelled".into())),
+        result = session.fork_thread(&source_thread_id) => result,
+    };
+    session.shutdown_confirmed().await?;
+    reservation.check()?;
     let thread = result.map_err(|e| format!("thread/fork failed: {e:?}"))?;
     if task_manager.cancelled_tasks.lock().contains(&task_id)
         || task_manager.manually_completed_tasks.lock().contains(&task_id)
@@ -762,6 +767,7 @@ pub async fn resume_structured_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let reservation = retained_session::begin_start(&task_id)?;
+    super::prediction::invalidate(&app, &task_id);
     let ask_auto = tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve)
         .await.map_err(|error| error.to_string())?;
     let (approval, sandbox) = permission_mode_to_policy(&permission_mode, ask_auto);
@@ -862,6 +868,7 @@ pub async fn resume_codex_structured(
 /// （issue #118）；纯图片发送时 prompt 可为空。
 #[tauri::command]
 pub async fn steer_codex_structured(
+    app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
     project_path: String,
@@ -878,6 +885,7 @@ pub async fn steer_codex_structured(
             .ok_or_else(|| "structured session not active for task".to_string())?;
         (entry.session.clone(), entry.lifecycle.generation())
     };
+    super::prediction::invalidate_context(&app, &task_manager, &task_id);
     let attachments = super::turn_attachments::TurnAttachments::new(&project_path, &task_id)?;
     let image_paths = attachments.save_images(&project_path, images).await?;
     {
@@ -918,9 +926,11 @@ pub async fn cancel_structured_task(task_id: &str, task_manager: &crate::TaskMan
 /// 无运行中 turn 时 `interrupt` 幂等成功，无副作用。
 #[tauri::command]
 pub async fn interrupt_codex_structured(
+    app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
+    super::prediction::invalidate_context(&app, &task_manager, &task_id);
     let session = take_session_impl(&task_manager, &task_id)
         .ok_or_else(|| "structured session not active for task".to_string())?;
     session
@@ -1034,11 +1044,15 @@ pub fn session_phase(task_manager: &crate::TaskManager, task_id: &str) -> Option
 /// 由前端持久化，resume 拉起新会话时经 turn/start override 生效。
 #[tauri::command]
 pub async fn set_codex_structured_model(
+    app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
     model: Option<String>,
     effort: Option<String>,
 ) -> Result<(), String> {
+    super::prediction::invalidate_context(&app, &task_manager, &task_id);
+    let closing = super::prediction_retirement::prepare(&task_manager, &task_id, false);
+    super::prediction_retirement::finish(&task_manager, &task_id, closing).await?;
     let normalized = |value: Option<String>| match value {
         Some(v) => {
             let trimmed = v.trim();
@@ -1050,6 +1064,8 @@ pub async fn set_codex_structured_model(
         }
         None => None,
     };
+    let model_changed = model.is_some();
+    let effort_changed = effort.is_some();
     let model = normalized(model);
     let effort = normalized(effort);
     // done 态（无活会话）直接成功——切换结果落任务快照，下次 resume 生效。
@@ -1058,8 +1074,8 @@ pub async fn set_codex_structured_model(
     };
     // 会话级 override 是权威落点：无论当前是否有 turn，后续 turn/start 都带上。
     session.set_model_override(
-        model.as_deref().map(Some),
-        effort.as_deref().map(Some),
+        model_changed.then_some(model.as_deref()),
+        effort_changed.then_some(effort.as_deref()),
     );
     // 运行中的 turn 尝试热更；无 turn / turn 恰好结束都属良性（下一 turn 生效）。
     if session.status().phase == SessionPhase::TurnRunning {
@@ -1074,9 +1090,11 @@ pub async fn set_codex_structured_model(
 /// done 态（无活会话）返回 Err——压缩需要活线程，前端 toast 提示。
 #[tauri::command]
 pub async fn compact_codex_structured(
+    app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
+    super::prediction::invalidate_context(&app, &task_manager, &task_id);
     let session = take_session_impl(&task_manager, &task_id)
         .ok_or_else(|| "structured session not active for task".to_string())?;
     session
@@ -1089,9 +1107,11 @@ pub async fn compact_codex_structured(
 /// `review/start`，inline 跑在当前 thread，结果作为普通 item 流回前端。
 #[tauri::command]
 pub async fn review_codex_structured(
+    app: AppHandle,
     task_manager: State<'_, crate::TaskManager>,
     task_id: String,
 ) -> Result<(), String> {
+    super::prediction::invalidate_context(&app, &task_manager, &task_id);
     let session = take_session_impl(&task_manager, &task_id)
         .ok_or_else(|| "structured session not active for task".to_string())?;
     session
