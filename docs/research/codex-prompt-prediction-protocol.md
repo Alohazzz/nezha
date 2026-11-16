@@ -11,6 +11,32 @@ Validated 2026-11-16 for issue #122. This is a maintained compatibility record a
 
 These are exact tested builds, not a claim that every intermediate or newer version is safe. The public source commit below is a semantic reference; its identity with either executable has not been established. No CLI was installed or updated.
 
+### Follow-up: stable CLI with gpt-6.1-sol
+
+The initial product allowlist accidentally paired stable 0.165.0 only with
+`gpt-6-astra`, so the user's configured `gpt-6.1-sol` silently skipped scheduling
+even with predictions enabled. The same stable executable hash is now also
+verified for OpenAI `gpt-6.1-sol`:
+
+- Live model smoke: high sample returned valid suggestion JSON in 4372.93 ms;
+  parent history was unchanged and no server requests occurred.
+- Six controlled real-binary tests passed, including the existing advertised
+  `exec_command` interception/writer-release test and additional Sol-name
+  effort-update and cancellation fixtures. The latter use synthetic model
+  metadata; they do not replace the separate live model check.
+- Sol fixture: parent → sample → parent request efforts remain medium, with
+  configuration updates `[medium]` → `[medium, high]` → `[medium]`;
+  cancel acknowledgement / parent start measured 0.61 / 4.95 ms (single sample).
+- The product eligibility regression failed before adding the missing pair and
+  passed afterward. Unknown models remain excluded. No CLI or user model was changed.
+- A subsequent live check through the running Nezha public `run_task` command,
+  TaskManager, scheduler and cache also passed with Sol/high: completed status
+  and a nonempty suggestion were observed 4473 ms after business completion.
+  Only a synthetic temporary task was used; its session was closed and archived.
+
+Reproduce the live check with `live.py --codex <verified-0.165-executable> --model gpt-6.1-sol`,
+and run `test_controlled.py` with `CODEX_PROBE_EXE` set to that executable.
+
 ## Observed contract
 
 - Enable experimental API in `initialize`. Sample accepts `threadId`, `expectedTurnId`, `prompt`, `effort`, `disableMcp`, `interruptOnCancel`, `threadSource`, and `turnTrigger`. The latter two accept the string `composer_predictions` on the tested live path.

@@ -119,6 +119,7 @@ impl PredictionContext {
             && matches!(
                 (self.build.as_deref(), self.model.as_deref()),
                 (Some(STABLE_BUILD), Some("gpt-6-astra"))
+                    | (Some(STABLE_BUILD), Some("gpt-6.1-sol"))
                     | (Some(ALPHA_BUILD), Some("gpt-6.1-sol"))
             )
     }
@@ -136,6 +137,20 @@ pub fn incompatible(error: &super::rpc::RpcError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stable_build_supports_verified_sol_model() {
+        let mut context = PredictionContext {
+            build: Some(STABLE_BUILD.into()),
+            ..Default::default()
+        };
+        context.apply_thread_response(&serde_json::json!({
+            "model": "gpt-6.1-sol", "modelProvider": "openai", "reasoningEffort": "high"
+        }), true);
+        assert!(context.eligible(), "the verified stable CLI and Sol model must schedule predictions");
+        context.model = Some("unverified-model".into());
+        assert!(!context.eligible());
+    }
+
     #[test]
     fn only_verified_build_model_and_runtime_mode_are_eligible() {
         let mut context = PredictionContext {

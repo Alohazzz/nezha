@@ -76,17 +76,22 @@ def completed(rpc):
     raise TimeoutError('Parent turn did not complete')
 
 
-def run_controlled(executable, cancel=False, compact=False, effort=False):
+def run_controlled(executable, cancel=False, compact=False, effort=False, model_name=None):
     model = Model()
     try:
         with tempfile.TemporaryDirectory(prefix='nezha-sample-model-') as directory:
             root = Path(directory)
             (root / 'home').mkdir()
             (root / 'home' / 'config.toml').write_text('model = "gpt-5.1-codex"\nmodel_provider = "fixture"\n[model_providers.fixture]\nname = "Loopback fixture"\nwire_api = "responses"\nbase_url = "http://127.0.0.1:'+str(model.http.server_port)+'/v1"\n', encoding='utf-8')
-            if effort:
+            if effort or model_name:
                 catalog_path = root / 'catalog.json'
-                catalog_path.write_text(json.dumps({'models': [json.loads(Path(__file__).with_name('model.json').read_text(encoding='utf-8-sig'))]}), encoding='utf-8')
+                catalog = json.loads(Path(__file__).with_name('model.json').read_text(encoding='utf-8-sig'))
+                if model_name:
+                    catalog['slug'] = model_name
+                catalog_path.write_text(json.dumps({'models': [catalog]}), encoding='utf-8')
                 config = 'model = "prediction-fixture"\nmodel_provider = "fixture"\nmodel_reasoning_effort = "medium"\nfeatures.reasoning_effort_override = true\nmodel_catalog_json = '+json.dumps(str(catalog_path))+'\n[model_providers.fixture]\nname = "OpenAI"\nwire_api = "responses"\nbase_url = "http://127.0.0.1:'+str(model.http.server_port)+'/v1"\n'
+                if model_name:
+                    config = config.replace('model = "prediction-fixture"', 'model = '+json.dumps(model_name))
                 (root / 'home' / 'config.toml').write_text(config, encoding='utf-8')
             rpc = Rpc(executable, root)
             try:

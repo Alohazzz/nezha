@@ -32,5 +32,18 @@ class ControlledTests(unittest.TestCase):
         self.assertEqual(report['config_updates'][1][-1], {'type': 'configuration_update', 'reasoning': {'effort': 'high'}})
         self.assertEqual(report['config_updates'][0], report['config_updates'][2])
 
+    def test_sol_effort_override_preserves_parent(self):
+        report = run_controlled(os.environ['CODEX_PROBE_EXE'], effort=True, model_name='gpt-6.1-sol')
+        self.assertEqual(report['request_efforts'], ['medium', 'medium', 'medium'])
+        self.assertEqual(report['config_updates'][1][-1], {'type': 'configuration_update', 'reasoning': {'effort': 'high'}})
+        self.assertEqual(report['config_updates'][0], report['config_updates'][2])
+
+    def test_sol_cancellation_preserves_parent_resume(self):
+        report = run_controlled(os.environ['CODEX_PROBE_EXE'], cancel=True, model_name='gpt-6.1-sol')
+        self.assertTrue(report['cancel_acknowledged'])
+        self.assertTrue(report['parent_started'])
+        self.assertTrue(report['cancelled_sample_rejected'])
+        self.assertLess(report['parent_start_ms'], 250)
+
 if __name__ == '__main__':
     unittest.main()
