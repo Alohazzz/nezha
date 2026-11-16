@@ -69,6 +69,14 @@ test("composition suppresses suggestions before the first committed character", 
   expect(document.querySelector(".codex-prediction-ghost")).toBeNull();
   expect(onSubmit).not.toHaveBeenCalled();
 });
+test("legacy IME keyCode 229 hides the ghost without requiring compositionStart", async () => {
+  const { input, onSubmit } = await mount();
+  act(() => input.focus());
+  fireEvent.keyDown(input, { key: "Process", keyCode: 229 });
+  expect(document.querySelector(".codex-prediction-ghost")).toBeNull();
+  expect(input).toHaveValue("");
+  expect(onSubmit).not.toHaveBeenCalled();
+});
 test("pasting an image suppresses immediately and removing it does not restore prediction", async () => {
   const { input } = await mount();
   fireEvent.paste(input, { clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => new File(["image"], "test.png", { type: "image/png" }) }] } });

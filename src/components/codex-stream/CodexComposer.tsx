@@ -281,7 +281,10 @@ export const CodexComposer = memo(function CodexComposer({
           onPaste={(event) => { suppressPrediction(); handlePaste(event); }}
           onKeyDown={(e) => {
             // IME takes priority over both predictions and mention navigation.
-            if (composing || isImeComposing(e)) return;
+            if (composing || isImeComposing(e)) {
+              suppressPrediction();
+              return;
+            }
             if (acceptPrediction(e, visiblePrediction)) {
               suppressPrediction();
               setText(e.currentTarget.value);

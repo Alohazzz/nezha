@@ -71,6 +71,8 @@ impl CodexAppServerSession {
         guard: &ForwarderGuard,
         revision: u64,
     ) -> Result<Value, RpcError> {
+        #[cfg(debug_assertions)]
+        let timing_started = std::time::Instant::now();
         let id = self.core.ids.allocate();
         let (tx, rx) = oneshot::channel();
         self.core.pending.insert(id.clone(), "thread/sample", tx);
@@ -124,6 +126,8 @@ impl CodexAppServerSession {
             )
             .await;
         }
+        #[cfg(debug_assertions)]
+        super::prediction_diagnostics::rpc("thread/sample", Some(thread), timing_started.elapsed(), result.is_ok());
         self.record_prediction_protocol_result(&result);
         result
     }

@@ -36,6 +36,7 @@ pub mod prediction;
 pub mod prediction_cache;
 pub mod prediction_policy;
 pub mod prediction_rpc;
+mod prediction_diagnostics;
 pub mod prediction_retirement;
 pub mod prediction_registry;
 pub mod turn_attachments;
@@ -870,6 +871,8 @@ impl CodexAppServerSession {
     }
 
     async fn request_with_timeout(&self, method: &'static str, params: serde_json::Value, limit: Duration) -> Result<serde_json::Value, RpcError> {
+        #[cfg(debug_assertions)]
+        let timing_started = std::time::Instant::now();
         let id = self.core.ids.allocate();
         let (tx, rx) = oneshot::channel();
         assert!(
@@ -884,7 +887,10 @@ impl CodexAppServerSession {
             self.write_line(&line).await.map_err(|error| RpcError { code: -1, message: format!("write failed: {error}"), data: None })?;
             rx.await.map_err(|_| RpcError { code: -1, message: format!("{method}: reader dropped (process exited?)"), data: None })?
         };
-        timeout(limit, response).await.unwrap_or_else(|_| Err(RpcError { code: -2, message: format!("{method}: timed out"), data: None }))
+        let result = timeout(limit, response).await.unwrap_or_else(|_| Err(RpcError { code: -2, message: format!("{method}: timed out"), data: None }));
+        #[cfg(debug_assertions)]
+        prediction_diagnostics::rpc(method, self.status().thread.as_ref().map(|thread| thread.id.as_str()), timing_started.elapsed(), result.is_ok());
+        result
     }
 
     async fn send_notification(
