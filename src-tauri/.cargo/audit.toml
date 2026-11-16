@@ -10,6 +10,36 @@
 # upgrade path exists yet. Remove these once plist migrates to quick-xml
 # >= 0.41 and tauri picks it up.
 ignore = [
+    # Reviewed 2026-11-16: codex-app-server-protocol at 83086188 pulls
+    # codex-protocol -> codex-network-proxy -> rama-dns -> hickory 0.25.2.
+    # Nezha only uses protocol DTOs/serde and runs Codex as a separate process
+    # (src/codex_appserver/{mod,events,approval,rpc}.rs). It does not construct
+    # the upstream NetworkProxy/resolver or parse DNS packets/zone files.
+    # rama-dns 0.3.0-alpha.4 requires hickory-resolver ^0.25: the fixed 0.26.2
+    # line cannot be selected by a lockfile update. This exception does NOT
+    # cover the separately installed Codex executable's dependency security.
+    # Remove when the pinned upstream graph adopts hickory >=0.26.2; re-review
+    # before using any upstream proxy/resolver or DNS parsing API in Nezha.
+    "RUSTSEC-2026-0487",
+    "RUSTSEC-2026-0489",
+    "RUSTSEC-2026-0490",
+    "RUSTSEC-2026-0491",
+    "RUSTSEC-2026-0504",
+    "RUSTSEC-2026-0505",
+    "RUSTSEC-2026-0511",
+    "RUSTSEC-2026-0512",
+    "RUSTSEC-2026-0530",
+    "RUSTSEC-2026-0531",
+    "RUSTSEC-2026-0532",
+    "RUSTSEC-2026-0514",
+    # Same protocol-only boundary: codex-rollout -> codex-state ->
+    # libsqlite3-sys ^0.37 / sqlx-sqlite =0.9.0. Nezha does not instantiate
+    # codex-state or open SQLite databases; its persistence/session readers
+    # use JSON/JSONL files (storage.rs, session.rs, codex_history.rs).
+    # RUSTSEC-2026-0459 requires opening a crafted database + sibling WAL.
+    # Remove when upstream permits libsqlite3-sys >=0.39; re-review before
+    # adding database/rollout runtime calls. No exception for Nezha SQL use.
+    "RUSTSEC-2026-0459",
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
     # crypto-bigint 0.5.x timing variability (RUSTSEC-2026-0387, fixed in >=0.7.6).
