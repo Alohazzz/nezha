@@ -17,7 +17,14 @@ export interface PromptPredictionState {
   createdAt: number;
 }
 
-const suppressed = new Set<string>();
+const suppressed = new Map<string, string>();
+const sessionKey = (state: PromptPredictionState) => JSON.stringify([state.taskId, state.threadId]);
+const suppressRound = (state: PromptPredictionState) => suppressed.set(sessionKey(state), roundKey(state));
+// Preserve edits during cache-read latency even if the composer is remounted.
+const awaitingRound = new Set<string>();
+function rememberPending(key: string) {
+  awaitingRound.add(key);
+}
 const roundKey = (state: PromptPredictionState) => JSON.stringify([state.taskId, state.threadId, state.sourceTurnId, state.sessionGeneration]);
 const validSuggestion = (text: unknown): text is string => typeof text === "string"
   && text.trim().length > 0 && !/[\r\n\u0085\u2028\u2029]/u.test(text) && Array.from(text).length <= 240;
@@ -43,11 +50,13 @@ export function usePromptPrediction(taskId: string | undefined, threadId: string
     if (previous.taskId === taskId && previous.threadId === threadId && previous.fingerprint !== fingerprint) {
       const snapshot = stateRef.current;
       if (snapshot && snapshot.taskId === taskId && snapshot.threadId === threadId) {
-        suppressed.add(roundKey(snapshot));
-        if (suppressed.size > 100) suppressed.delete(suppressed.values().next().value!);
+        suppressRound(snapshot);
       } else suppressBeforeRead.current = JSON.stringify([taskId, threadId]);
     }
-    if (!taskId || !threadId || !eligible) { suppressBeforeRead.current = null; return; }
+    if (!taskId || !threadId || !eligible) {
+      awaitingRound.delete(JSON.stringify([taskId, threadId]));
+      suppressBeforeRead.current = null; return;
+    }
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     let revision = -1;
@@ -59,9 +68,9 @@ export function usePromptPrediction(taskId: string | undefined, threadId: string
         || next.revision <= revision) return;
       revision = next.revision;
       acceptedEpoch.current = subscriptionEpoch;
-      if (suppressBeforeRead.current === JSON.stringify([taskId, threadId])) {
-        suppressed.add(roundKey(next));
-        if (suppressed.size > 100) suppressed.delete(suppressed.values().next().value!);
+      if (suppressBeforeRead.current === JSON.stringify([taskId, threadId]) || awaitingRound.has(JSON.stringify([taskId, threadId]))) {
+        awaitingRound.delete(JSON.stringify([taskId, threadId]));
+        suppressRound(next);
         suppressBeforeRead.current = null;
       }
       setState(next);
@@ -80,17 +89,17 @@ export function usePromptPrediction(taskId: string | undefined, threadId: string
     const snapshot = stateRef.current;
     if (acceptedEpoch.current === epoch.current.value && snapshot && snapshot.taskId === current.current.taskId && snapshot.threadId === current.current.threadId) {
       const key = roundKey(snapshot);
-      suppressed.add(key);
+      suppressRound(snapshot);
       setSuppressedRound(key);
-      if (suppressed.size > 100) suppressed.delete(suppressed.values().next().value!);
     } else {
       suppressBeforeRead.current = JSON.stringify([current.current.taskId, current.current.threadId]);
+      if (current.current.eligible) rememberPending(suppressBeforeRead.current);
     }
   }, []);
 
   const key = state ? roundKey(state) : null;
   const suggestion = acceptedEpoch.current === epoch.current.value && eligible && state !== null && state.taskId === taskId && state.threadId === threadId
-    && state.status === "complete" && key !== suppressedRound && !suppressed.has(key!)
+    && state.status === "complete" && key !== suppressedRound && suppressed.get(sessionKey(state)) !== key
     && validSuggestion(state.suggestion) ? state.suggestion : null;
   return { suggestion, state, suppress };
 }
