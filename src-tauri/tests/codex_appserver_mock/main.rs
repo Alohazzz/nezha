@@ -128,6 +128,7 @@ fn handle_mock_request(
     if script.starts_with("prediction") && prediction::serve(script, method, id.clone(), &params, out) { return; }
     match (script, method) {
         // initialize / initialized 三个场景一致(实测应答形状)
+        ("lifecycle_initialize_stall", "initialize") => {},
         (_, "initialize") => respond(
             out,
             id,
@@ -148,6 +149,11 @@ fn handle_mock_request(
             respond(out, id, &serde_json::json!({"thread": thread_obj("thread-happy")}));
         }
         ("lifecycle_timeout", "thread/read") => {} // keep pipe healthy but never answer
+        ("lifecycle_start_stall", "turn/start") => {
+            emit(out, &serde_json::json!({"method": "turn/started", "params": {
+                "threadId": "thread-happy", "turn": {"id": "stalled-turn", "status": "inProgress", "items": []}
+            }}).to_string());
+        }
         ("lifecycle", "turn/start") => {
             emit(out, &serde_json::json!({"method": "turn/started", "params": {
                 "threadId": "thread-happy", "turn": {"id": "fast-turn", "status": "inProgress", "items": []}

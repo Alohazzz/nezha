@@ -1383,12 +1383,13 @@ async fn run_structured_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     use crate::codex_appserver::task_bridge as bridge;
-    let _operation = crate::codex_appserver::retained_session::operation(&launch.task_id).await;
+    let reservation = crate::codex_appserver::retained_session::begin_start(&launch.task_id)?;
     if crate::codex_appserver::retained_session::generation(task_manager, &launch.task_id).is_some() {
         return Err("structured task already owns a session".into());
     }
 
-    let launch_spec = crate::app_settings::get_agent_launch_spec("codex");
+    let launch_spec = tokio::task::spawn_blocking(|| crate::app_settings::get_agent_launch_spec("codex"))
+        .await.map_err(|error| error.to_string())?;
     // 真实项目根必须是合法绝对目录（与 PTY 路径同等级校验）：草稿收拢、图谱环境
     // 变量、项目配置都按它定位，非法路径会让后续全部静默降级。
     let real_for_validation = launch.real_project_path.clone();
@@ -1396,13 +1397,14 @@ async fn run_structured_task(
         .await
         .map_err(|e| format!("real_project_path 校验线程错误: {e}"))??;
     // 首轮图片落盘先于会话拉起：失败直接 Err（前端降级 PTY 重跑时同图重落）。
+    let attachments = crate::codex_appserver::turn_attachments::TurnAttachments::new(&launch.project_path, &launch.task_id)?;
     let image_paths =
-        bridge::save_structured_images(&launch.project_path, &launch.task_id, launch.images)
+        attachments.save_images(&launch.project_path, launch.images)
             .await?;
     // 文本附件与图片同目录落盘（与 PTY 路径同一位置、同一清理时点）。
     let text_paths = {
         let project_path = launch.project_path.clone();
-        let task_id = launch.task_id.clone();
+        let task_id = attachments.id().to_owned();
         let texts = launch.texts.clone();
         tokio::task::spawn_blocking(move || save_task_texts(&project_path, &task_id, &texts))
             .await
@@ -1410,21 +1412,26 @@ async fn run_structured_task(
     };
     // 提示词组装与 PTY 共用同一 helper：prompt_prefix / 禁自动提交 / 附件路径 /
     // 沉淀契约一个都不能少——云效执行类任务靠它拿项目约束与产出要求。
-    let final_prompt = compose_final_prompt(
-        &launch.real_project_path,
-        &launch.prompt,
-        &image_paths,
-        &text_paths,
-        launch.sediment_required,
-    );
+    let prompt_project = launch.real_project_path.clone();
+    let prompt_text = launch.prompt.clone();
+    let sediment_required = launch.sediment_required;
+    let prompt_images = image_paths.clone();
+    let final_prompt = tokio::task::spawn_blocking(move || compose_final_prompt(
+        &prompt_project, &prompt_text, &prompt_images, &text_paths, sediment_required,
+    )).await.map_err(|error| error.to_string())?;
     // app-server 子进程同样需要 NEZHA_* 与图谱环境变量：草稿目录按
     // `$NEZHA_TASK_ID` 定位，沉淀契约按图谱 env 解析，缺了 agent 只能自造目录。
-    let extra_envs = structured_session_envs(&launch.task_id, &launch.real_project_path);
-    let bridge::StartedSession { session, events, errors } = bridge::spawn_session(
+    let env_task = launch.task_id.clone();
+    let env_project = launch.real_project_path.clone();
+    let extra_envs = tokio::task::spawn_blocking(move || structured_session_envs(&env_task, &env_project))
+        .await.map_err(|error| error.to_string())?;
+    let bridge::StartedSession { session, events, errors } = bridge::spawn_session_cancellable(
         &launch_spec.program,
         &launch.project_path,
         &launch.permission_mode,
+        None,
         extra_envs,
+        reservation.token(),
     )
     .await
     .map_err(|e| format!("codex app-server spawn failed: {e:?}"))?;
@@ -1465,6 +1472,8 @@ async fn run_structured_task(
     let forwarder = bridge::spawn_forwarder(
         app.clone(),
         task_manager,
+        &reservation,
+        attachments,
         session.clone(),
         None,
         launch.task_id.clone(),
@@ -1485,7 +1494,11 @@ async fn run_structured_task(
     // 失败时（spawn/握手成功但 turn 起不来，如版本门控/线程启动错误）先取消
     // forwarder 再收口会话，错误交回前端自动降级 PTY 重跑（4.1 回退降级）。
     let turn_input = bridge::build_turn_input(final_prompt, image_paths);
-    if let Err(e) = session.start_turn_with_input(&turn_input).await {
+    let started = tokio::select! {
+        _ = reservation.cancelled() => Err(crate::codex_appserver::SessionError::Protocol("start cancelled".into())),
+        result = session.start_turn_with_input(&turn_input) => result,
+    };
+    if let Err(e) = started {
         forwarder.cancel();
         crate::codex_appserver::retained_session::close_owned(task_manager, &launch.task_id, forwarder.generation()).await?;
         return Err(format!("turn/start failed: {e:?}"));
@@ -1909,8 +1922,8 @@ pub async fn cancel_task(
     task_id: String,
     project_path: String,
 ) -> Result<(), String> {
-    // Serialize structured close and artifact cleanup with a following resume.
-    let _structured_operation = crate::codex_appserver::retained_session::operation(&task_id).await;
+    crate::codex_appserver::retained_session::cancel_start(&task_id);
+    let was_structured = crate::codex_appserver::retained_session::generation(&task_manager, &task_id).is_some();
     task_manager.cancelled_tasks.lock().insert(task_id.clone());
     task_manager
         .manually_completed_tasks
@@ -1945,8 +1958,10 @@ pub async fn cancel_task(
     );
 
     // 清理任务附件
-    let _ = fs::remove_dir_all(task_attachments_dir(&project_path, &task_id));
-    crate::event_watcher::cleanup_task_events(&task_id);
+    if !was_structured {
+        let _ = fs::remove_dir_all(task_attachments_dir(&project_path, &task_id));
+        crate::event_watcher::cleanup_task_events(&task_id);
+    }
 
     Ok(())
 }
@@ -1960,8 +1975,8 @@ pub async fn complete_task(
     // 任务自身的 agent（前端传 `task.agent`），供收尾时跑知识沉淀的 L3 语义门。
     agent: String,
 ) -> Result<(), String> {
-    // Serialize structured close and artifact cleanup with a following resume.
-    let _structured_operation = crate::codex_appserver::retained_session::operation(&task_id).await;
+    crate::codex_appserver::retained_session::cancel_start(&task_id);
+    let was_structured = crate::codex_appserver::retained_session::generation(&task_manager, &task_id).is_some();
     // 与 `finalize_task_exit` 入口同样「取走并移除」：本路径负责沉淀，
     // 后续 exit monitor 醒来的 `finalize_task_exit` 取到 false 便不会重复跑。
     let sediment_expected = task_manager.take_sediment_marker(&task_id);
@@ -2023,8 +2038,10 @@ pub async fn complete_task(
     );
 
     // 清理任务附件
-    let _ = fs::remove_dir_all(task_attachments_dir(&project_path, &task_id));
-    crate::event_watcher::cleanup_task_events(&task_id);
+    if !was_structured {
+        let _ = fs::remove_dir_all(task_attachments_dir(&project_path, &task_id));
+        crate::event_watcher::cleanup_task_events(&task_id);
+    }
 
     Ok(())
 }

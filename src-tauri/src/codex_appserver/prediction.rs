@@ -52,7 +52,7 @@ pub fn schedule(app: tauri::AppHandle, task: String, guard: ForwarderGuard, comp
         let Ok(_slot) = slot else {
             let state = CACHE.lock().finish(&key, None);
             emit(&app, state);
-            let _operation = retained_session::operation(&task).await;
+
             if let Some(manager) = app.try_state::<crate::TaskManager>() {
                 let _ = retained_session::close_owned(&manager, &task, guard.generation()).await;
             }
@@ -77,7 +77,7 @@ pub fn schedule(app: tauri::AppHandle, task: String, guard: ForwarderGuard, comp
             let state = CACHE.lock().finish(&key, None);
             emit(&app, state);
             if let Some(manager) = app.try_state::<crate::TaskManager>() {
-                let _operation = retained_session::operation(&task).await;
+
                 let _ = retained_session::close_owned(&manager, &task, key.session_generation).await;
             }
             return;
@@ -124,7 +124,7 @@ pub async fn change_enabled(app: &tauri::AppHandle, manager: &crate::TaskManager
     let tasks: Vec<_> = manager.codex_appserver_sessions.lock().iter()
         .filter(|(_, entry)| entry.lifecycle.is_retained()).map(|(id, _)| id.clone()).collect();
     for task in tasks {
-        let _operation = retained_session::operation(&task).await;
+
         let generation = manager.codex_appserver_sessions.lock().get(&task)
             .filter(|entry| entry.lifecycle.is_retained()).map(|entry| entry.lifecycle.generation());
         if let Some(generation) = generation { let _ = retained_session::close_owned(manager, &task, generation).await; }
