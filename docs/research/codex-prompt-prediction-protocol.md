@@ -63,3 +63,7 @@ No product capability allowlist, settings default, session retention or prompt d
 ## Source references
 
 The permanent upstream [sample implementation](https://github.com/openai/codex/blob/c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee/codex-rs/app-server/src/thread_sample.rs) and [integration tests](https://github.com/openai/codex/blob/c0cc9fc820f62e4dbdde68214dd6d792d6c8a7ee/codex-rs/app-server/tests/suite/v2/thread_sample.rs) explain the ephemeral child, tool-response interception and cache-preserving effort update. The local real-binary results above, rather than a version inequality, establish the tested compatibility boundary.
+
+### Runtime eligibility verification (#124)
+
+On 2026-11-16, both exact executables in the compatibility table were also checked with a fresh isolated `CODEX_HOME`, experimental API enabled, and no goal feature override. Each accepted a persistent `thread/start`, returned `{ "data": [], "nextCursor": null }` from `thread/queue/list`, and `{ "goal": null }` from `thread/goal/get`. These checks did not start a model turn or access account credentials. Thus the normal fresh-thread eligibility path does not require the optional goal feature to be enabled.
