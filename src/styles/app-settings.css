@@ -86,6 +86,68 @@
   gap: 0;
   padding: 20px;
 }
+.nz-generalSettings {
+  gap: 24px;
+  min-height: 0;
+  font-weight: 400;
+}
+.nz-generalSection {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 20px;
+  padding: 16px;
+  border: 1px solid var(--border-dim);
+  border-radius: 12px;
+  min-width: 0;
+}
+.nz-generalSectionTitle {
+  margin: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-dim);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+.nz-settingField,
+.nz-settingFieldSpaced {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.nz-settingFieldLabel {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.nz-settingFieldHint {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.nz-generalSettings .nz-fontSizeControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nz-generalSettings .nz-fontSizeUnit {
+  color: var(--text-hint);
+  font-size: 12px;
+}
+.nz-generalSettings .nz-settingsSelectTriggerCompact {
+  max-width: 100%;
+}
+.nz-generalSettings button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .nz-settingsSelectTriggerCompact {
   width: 220px;
   display: flex;

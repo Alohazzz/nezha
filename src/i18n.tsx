@@ -23,8 +23,12 @@ const LANGUAGE_STORAGE_KEY = "nezha:language";
 
 const translations: Record<AppLanguage, Record<string, string>> = {
   en: {
-    "codex.prediction.title": "Next-message suggestions",
-    "codex.prediction.hint": "Generate the next message from the current conversation in the background. Uses additional model usage.",
+    "appSettings.group.basics": "Language & tasks",
+    "appSettings.group.codex": "Codex conversations",
+    "appSettings.group.notifications": "Notifications & attention",
+    "appSettings.group.terminal": "Terminal",
+    "codex.prediction.title": "Next prompt suggestions",
+    "codex.prediction.hint": "After a structured turn completes, suggest the next prompt in the empty composer. Press Tab to accept, then send manually. Requires a verified Codex build and model; uses additional model usage.",
     "codex.prediction.suggestion": "Suggested next message",
     "codex.prediction.tab": "Tab to accept",
     "appSettings.title": "App Settings",
@@ -68,7 +72,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.taskDisplayRecentDays": "Recent {days} days",
     "appSettings.taskDisplayAll": "All tasks",
     "appSettings.codexRunModeHint":
-      "Run channel for new Codex tasks. Terminal shows the classic TUI; Structured uses the codex app-server card view. Applies to newly created tasks only. Yunxiao direct-launch tasks always use the Terminal channel, and Structured does not support resuming an existing session yet.",
+      "Applies to new Codex tasks. Terminal mode uses the command-line interface; structured mode uses conversation cards and supports next prompt suggestions.",
     "appSettings.codexRunModeUnsupportedHint":
       "Structured mode is unavailable: the Codex CLI was not detected or its version is below 0.156. Falling back to Terminal.",
     "appSettings.codexRunModeFloorWarning":
@@ -76,7 +80,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.codexAskInWorkspaceAutoApprove": "Codex Ask-Mode Approvals",
     "appSettings.codexAskInWorkspaceAutoApproveToggle": "Auto-approve in-workspace actions",
     "appSettings.codexAskInWorkspaceAutoApproveHint":
-      "For Codex tasks in Ask permission mode (both Terminal and Structured channels): stop prompting for every in-workspace action (reads, edits). Out-of-workspace actions still ask. Prevents stalls where a batch of parallel commands waits on un-answered approvals. New tasks only.",
+      "Applies to new tasks. In ask mode, reads and edits within the workspace proceed without individual prompts; operations outside the workspace still require confirmation.",
     "appSettings.attentionBadge": "Attention Badge",
     "appSettings.attentionBadgeToggle": "Show pending-confirmation count",
     "appSettings.attentionBadgeHint":
@@ -106,7 +110,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.sideloadedConpty": "Bundled ConPTY (Windows)",
     "appSettings.sideloadedConptyToggle": "Use the newer ConPTY bundled with Nezha",
     "appSettings.sideloadedConptyHint":
-      "On some Windows builds the system ConPTY does not feed fullscreen TUI (Claude/Codex) output into scrollback, so the mouse wheel cannot scroll back. When on, terminals run on the newer ConPTY shipped with Nezha; turn off to fall back to the system ConPTY. Takes effect after restarting Nezha.",
+      "Use the bundled terminal component to improve output scrolling in Claude Code and Codex. When off, use the system version. Restart the app to apply.",
     "appSettings.sideloadedConptyWindowsOnly": "Only applies on Windows. ",
     "appSettings.agentPaths": "Agent Installation Paths",
     "appSettings.installation": "Installation",
@@ -1384,8 +1388,12 @@ const translations: Record<AppLanguage, Record<string, string>> = {
       "Failed to load tasks for project {name}: {error}. Saving for this project is disabled until restart to protect on-disk data.",
   },
   zh: {
-    "codex.prediction.title": "下一条消息建议",
-    "codex.prediction.hint": "根据当前对话后台生成下一条建议，会产生额外模型用量。",
+    "appSettings.group.basics": "语言与任务列表",
+    "appSettings.group.codex": "Codex 对话",
+    "appSettings.group.notifications": "通知与提醒",
+    "appSettings.group.terminal": "终端",
+    "codex.prediction.title": "下一条 Prompt 建议",
+    "codex.prediction.hint": "结构化对话完成后，在空输入框中显示建议；按 Tab 接受，再手动发送。仅支持已验证的 Codex 版本与模型，会产生额外模型用量。",
     "codex.prediction.suggestion": "建议的下一条消息",
     "codex.prediction.tab": "Tab 接受",
     "appSettings.title": "应用设置",
@@ -1429,14 +1437,14 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.taskDisplayRecentDays": "最近 {days} 天",
     "appSettings.taskDisplayAll": "所有任务",
     "appSettings.codexRunModeHint":
-      "Codex 新任务的运行通道。终端为经典 TUI 界面；结构化走 codex app-server 卡片视图。仅对新建任务生效。云效直发任务始终使用终端通道；结构化模式暂不支持恢复已有会话。",
+      "仅影响新建的 Codex 任务。终端模式使用命令行界面；结构化模式使用对话卡片，并支持下一条 Prompt 建议。",
     "appSettings.codexRunModeUnsupportedHint":
       "结构化模式不可用：未检测到 Codex CLI 或版本低于 0.156，已回落为终端模式。",
     "appSettings.codexRunModeFloorWarning": "结构化模式需要 Codex CLI ≥ 0.156（或可用的安装）。",
     "appSettings.codexAskInWorkspaceAutoApprove": "Codex ask 模式审批",
     "appSettings.codexAskInWorkspaceAutoApproveToggle": "工作区内操作免逐条审批",
     "appSettings.codexAskInWorkspaceAutoApproveHint":
-      "Codex 任务在「智能体默认（ask）」权限模式下（终端与结构化通道均生效）：工作区内操作（读取、编辑等）不再逐条弹出审批，越界操作仍会询问。可避免一批并行命令因部分审批无人应答导致任务假死。仅对此后新建的任务生效。",
+      "仅对新任务生效。开启后，ask 模式下工作区内的读取和编辑不再逐条询问；越界操作仍需确认。",
     "appSettings.attentionBadge": "待确认角标",
     "appSettings.attentionBadgeToggle": "显示待确认任务数量",
     "appSettings.attentionBadgeHint":
@@ -1465,7 +1473,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "appSettings.sideloadedConpty": "内置 ConPTY(Windows)",
     "appSettings.sideloadedConptyToggle": "使用 Nezha 内置的新版 ConPTY",
     "appSettings.sideloadedConptyHint":
-      "部分 Windows 上系统 ConPTY 不把全屏 TUI(Claude/Codex)的输出送入回滚缓冲,导致滚轮无法回滚。开启后终端改用 Nezha 内置的新版 ConPTY;关闭则回到系统内置版本。重启应用后生效。",
+      "使用内置终端组件，改善 Claude Code 和 Codex 的输出回滚。关闭后使用系统版本，重启应用生效。",
     "appSettings.sideloadedConptyWindowsOnly": "仅 Windows 可用。",
     "appSettings.agentPaths": "智能体安装路径",
     "appSettings.installation": "安装",
