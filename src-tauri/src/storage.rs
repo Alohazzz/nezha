@@ -383,7 +383,6 @@ fn ensure_project_dir(project_id: &str) -> Result<(), String> {
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
-#[tauri::command]
 pub fn load_projects() -> Result<Vec<Project>, String> {
     let path = projects_path()?;
     if !path.exists() {
@@ -393,14 +392,12 @@ pub fn load_projects() -> Result<Vec<Project>, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub fn save_projects(projects: Vec<Project>) -> Result<(), String> {
     ensure_nezha_dirs()?;
     let raw = serde_json::to_string_pretty(&projects).map_err(|e| e.to_string())?;
     atomic_write(&projects_path()?, &raw)
 }
 
-#[tauri::command]
 pub fn load_project_tasks(project_id: String) -> Result<Vec<Task>, String> {
     let path = tasks_path(&project_id)?;
     if !path.exists() {
@@ -427,7 +424,6 @@ pub fn load_project_tasks(project_id: String) -> Result<Vec<Task>, String> {
     })
 }
 
-#[tauri::command]
 pub fn save_project_tasks(project_id: String, tasks: Vec<Task>) -> Result<(), String> {
     ensure_project_dir(&project_id)?;
     // 空列表也照常写 "[]",不删文件:删除路径曾放大过崩溃后的数据丢失

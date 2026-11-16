@@ -10,6 +10,21 @@ use super::task_bridge::ForwarderGuard;
 use super::{CodexAppServerSession, SessionPhase};
 
 impl CodexAppServerSession {
+    /// Auxiliary work must stop before preparing any real input or configuration change.
+    pub fn invalidate_prediction_context(&self) {
+        self.core.prediction.lock().revision += 1;
+        self.core.prediction_changed.notify_waiters();
+    }
+
+    pub async fn prediction_context_changed(&self, revision: u64) {
+        let changed = self.core.prediction_changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        if self.prediction_context().revision == revision {
+            changed.await;
+        }
+    }
+
     pub fn prediction_context(&self) -> PredictionContext {
         self.core.prediction.lock().clone()
     }

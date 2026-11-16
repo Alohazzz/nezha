@@ -57,7 +57,12 @@ pub(super) fn run() -> bool {
         .build()
         .unwrap()
         .block_on(async {
-            for scene in ["prediction", "prediction_timeout", "prediction_cancel"] {
+            for scene in [
+                "prediction",
+                "prediction_timeout",
+                "prediction_cancel",
+                "prediction_override",
+            ] {
                 let session = spawn_mock(scene).await;
                 prediction_policy::set_enabled(true);
                 session.start_thread().await.unwrap();
@@ -71,17 +76,29 @@ pub(super) fn run() -> bool {
                     "thread-happy",
                     "source-turn",
                     "prompt",
-                    tokio::time::Instant::now() + Duration::from_millis(100),
+                    tokio::time::Instant::now()
+                        + Duration::from_secs(if scene == "prediction_override" { 5 } else { 1 }),
                     &guard,
                     revision,
                 );
+                let started = tokio::time::Instant::now();
                 let cancel = async {
+                    if scene == "prediction_override" {
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        session.set_model_override(Some(Some("other-model")), None);
+                    }
                     if scene == "prediction_cancel" {
                         tokio::time::sleep(Duration::from_millis(30)).await;
                         guard.cancel();
                     }
                 };
                 let (result, _) = tokio::join!(future, cancel);
+                if scene == "prediction_override" {
+                    assert!(
+                        started.elapsed() < Duration::from_millis(500),
+                        "configuration change must cancel without waiting for sample timeout"
+                    );
+                }
                 if scene == "prediction" {
                     assert_eq!(result.unwrap()["sourceTurnId"], "source-turn");
                 } else {

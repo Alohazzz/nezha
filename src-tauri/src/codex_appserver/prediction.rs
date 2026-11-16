@@ -30,6 +30,13 @@ pub fn invalidate(app: &tauri::AppHandle, task: &str) {
     emit(app, state);
 }
 
+/// Clear the visible value and preempt a sample without changing user-turn ownership.
+pub fn invalidate_context(app: &tauri::AppHandle, manager: &crate::TaskManager, task: &str) {
+    invalidate(app, task);
+    let session = manager.codex_appserver_sessions.lock().get(task).map(|entry| entry.session.clone());
+    if let Some(session) = session { session.invalidate_prediction_context(); }
+}
+
 /// Called before publishing done. It never reads files or sends RPC.
 pub fn allow_retention(manager: &crate::TaskManager, task: &str, generation: u64) {
     let session = manager
@@ -164,6 +171,22 @@ pub fn schedule(app: tauri::AppHandle, task: String, guard: ForwarderGuard, comp
                     retained_session::close_owned(&manager, &task, key.session_generation).await;
             }
         }
+        else {
+            drop(_slot);
+            // Settings notifications can arrive after the sample has completed. Keep the
+            // visible cache tied to its context until reuse/expiry cancels this owner.
+            tokio::select! {
+                // Expiring a process does not expire its valid cached suggestion.
+                _ = guard.cancelled() => return,
+                _ = session.prediction_context_changed(revision) => {},
+                _ = policy.changed() => {},
+            }
+            let state = CACHE.lock().invalidate_key(&key);
+            emit(&app, state);
+            if let Some(manager) = app.try_state::<crate::TaskManager>() {
+                let _ = retained_session::close_owned(&manager, &task, key.session_generation).await;
+            }
+        }
     });
 }
 
@@ -193,6 +216,14 @@ pub fn get_codex_prompt_prediction(task_id: String, thread_id: String) -> Option
     CACHE.lock().get(&task_id, &thread_id)
 }
 
+/// Exit cancels auxiliary RPCs synchronously before owned processes are drained.
+pub fn invalidate_all_for_exit(app: &tauri::AppHandle) {
+    prediction_policy::set_enabled(false);
+    POLICY.send_modify(|revision| *revision += 1);
+    let states = CACHE.lock().invalidate_all();
+    for state in states { emit(app, Some(state)); }
+}
+
 pub async fn change_enabled(app: &tauri::AppHandle, manager: &crate::TaskManager, enabled: bool) {
     prediction_policy::set_enabled(enabled);
     POLICY.send_modify(|revision| *revision += 1);
@@ -203,22 +234,14 @@ pub async fn change_enabled(app: &tauri::AppHandle, manager: &crate::TaskManager
     for state in states {
         emit(app, Some(state));
     }
-    let tasks: Vec<_> = manager
-        .codex_appserver_sessions
-        .lock()
-        .iter()
-        .filter(|(_, entry)| entry.lifecycle.is_retained())
-        .map(|(id, _)| id.clone())
-        .collect();
-    for task in tasks {
-        let generation = manager
-            .codex_appserver_sessions
-            .lock()
-            .get(&task)
-            .filter(|entry| entry.lifecycle.is_retained())
-            .map(|entry| entry.lifecycle.generation());
-        if let Some(generation) = generation {
-            let _ = retained_session::close_owned(manager, &task, generation).await;
+    let tasks: Vec<_> = manager.codex_appserver_sessions.lock().keys().cloned().collect();
+    let closing: Vec<_> = tasks.into_iter().map(|task| {
+        let generation = super::prediction_retirement::prepare(manager, &task, false);
+        (task, generation)
+    }).collect();
+    for (task, generation) in closing {
+        if let Err(error) = super::prediction_retirement::finish(manager, &task, generation).await {
+            eprintln!("[codex prediction] disable cleanup failed: {error}");
         }
     }
 }

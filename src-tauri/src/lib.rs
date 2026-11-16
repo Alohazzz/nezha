@@ -33,6 +33,7 @@ mod pty;
 mod session;
 mod skills;
 mod storage;
+mod prediction_persistence;
 mod subprocess;
 mod system_notify;
 mod update;
@@ -523,10 +524,10 @@ pub fn run() {
             config::get_agent_config_file_path,
             config::read_agent_config_file,
             config::write_agent_config_file,
-            storage::load_projects,
-            storage::save_projects,
-            storage::load_project_tasks,
-            storage::save_project_tasks,
+            prediction_persistence::load_projects,
+            prediction_persistence::save_projects,
+            prediction_persistence::load_project_tasks,
+            prediction_persistence::save_project_tasks,
             storage::load_project_batches,
             storage::save_project_batches,
             storage::load_project_plans,

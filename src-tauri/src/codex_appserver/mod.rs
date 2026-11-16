@@ -36,6 +36,8 @@ pub mod prediction;
 pub mod prediction_cache;
 pub mod prediction_policy;
 pub mod prediction_rpc;
+pub mod prediction_retirement;
+pub mod prediction_registry;
 pub mod turn_attachments;
 mod shutdown_confirmation;
 
@@ -639,6 +641,7 @@ impl CodexAppServerSession {
     /// 这里只写状态不发包——生效路径有两个：运行中的 turn 由调用方再调
     /// `update_turn_settings` 热更；后续 turn 由 `start_turn_with_input` 携带。
     pub fn set_model_override(&self, model: Option<Option<&str>>, effort: Option<Option<&str>>) {
+        self.invalidate_prediction_context();
         let mut status = self.core.status.lock();
         if let Some(model) = model {
             status.model_override.model = model.map(str::to_string);
