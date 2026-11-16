@@ -1127,7 +1127,8 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   font-size: 11px;
   font-family: var(--font-ui);
   cursor: pointer;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
 }
@@ -1207,7 +1208,6 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
   min-height: 1.5em;
 }
 .nz-codexComposerFooter[data-prediction="true"] .nz-codexComposerFocusHint { display: none; }
-.nz-codexComposerFooter[data-prediction="true"] .nz-codexComposerModelBadge { flex-shrink: 1; min-width: 0; }
 .codex-prediction-ghost {
   position: absolute;
   bottom: 0;

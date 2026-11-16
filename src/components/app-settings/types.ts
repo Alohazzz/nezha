@@ -155,7 +155,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   claude_enabled: true,
   codex_enabled: true,
   codex_run_mode: "pty",
-  codex_prompt_predictions_enabled: false,
+  codex_prompt_predictions_enabled: true,
   codex_structured_model: null,
   codex_structured_reasoning_effort: null,
   codex_ask_in_workspace_auto_approve: false,

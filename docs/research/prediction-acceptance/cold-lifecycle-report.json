@@ -1,0 +1,473 @@
+{
+  "kind": "cold",
+  "task": "acceptance-cold-1794799628381",
+  "timeOrigin": 1794799388224.5,
+  "cycles": [
+    {
+      "index": 0,
+      "phase": "returned",
+      "started": 240284.6000000015,
+      "invokeReturned": 241168.40000000037,
+      "doneAt": 248226.30000000075,
+      "firstOutputAt": 241583.70000000112,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 5,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 1,
+      "phase": "returned",
+      "started": 248256.80000000075,
+      "invokeReturned": 250911.1000000015,
+      "doneAt": 257665,
+      "firstOutputAt": 250882.30000000075,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 11,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 2,
+      "phase": "returned",
+      "started": 257691.90000000037,
+      "invokeReturned": 260408.6000000015,
+      "doneAt": 267151.30000000075,
+      "firstOutputAt": 260376,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 17,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 3,
+      "phase": "returned",
+      "started": 267174.2000000011,
+      "invokeReturned": 270308.9000000004,
+      "doneAt": 277069.7000000011,
+      "firstOutputAt": 270269.30000000075,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 23,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 4,
+      "phase": "returned",
+      "started": 277099.80000000075,
+      "invokeReturned": 279799,
+      "doneAt": 286270.80000000075,
+      "firstOutputAt": 279770.7000000011,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 29,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 5,
+      "phase": "returned",
+      "started": 286294.6000000015,
+      "invokeReturned": 288976.6000000015,
+      "doneAt": 295379.80000000075,
+      "firstOutputAt": 288944.4000000004,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 35,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 6,
+      "phase": "returned",
+      "started": 295404.5,
+      "invokeReturned": 298072.6000000015,
+      "doneAt": 304992.6000000015,
+      "firstOutputAt": 298042.2000000011,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 41,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 7,
+      "phase": "returned",
+      "started": 305018.6000000015,
+      "invokeReturned": 307688.80000000075,
+      "doneAt": 313977.1000000015,
+      "firstOutputAt": 307660,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 47,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 8,
+      "phase": "returned",
+      "started": 314008,
+      "invokeReturned": 316738.9000000004,
+      "doneAt": 323611.30000000075,
+      "firstOutputAt": 316708.5,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 53,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 9,
+      "phase": "returned",
+      "started": 323641.30000000075,
+      "invokeReturned": 326377.30000000075,
+      "doneAt": 333319,
+      "firstOutputAt": 326343.4000000004,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 59,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 10,
+      "phase": "returned",
+      "started": 333347.2000000011,
+      "invokeReturned": 336117.30000000075,
+      "doneAt": 342851.80000000075,
+      "firstOutputAt": 336086.9000000004,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 65,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 11,
+      "phase": "returned",
+      "started": 342873.80000000075,
+      "invokeReturned": 345585.80000000075,
+      "doneAt": 352621.7000000011,
+      "firstOutputAt": 345559.6000000015,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 71,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 12,
+      "phase": "returned",
+      "started": 352651.7000000011,
+      "invokeReturned": 355431.30000000075,
+      "doneAt": 361725.2000000011,
+      "firstOutputAt": 355405.7000000011,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 77,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 13,
+      "phase": "returned",
+      "started": 361747.4000000004,
+      "invokeReturned": 364440.6000000015,
+      "doneAt": 371053.9000000004,
+      "firstOutputAt": 364412.2000000011,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 83,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 14,
+      "phase": "returned",
+      "started": 371077.30000000075,
+      "invokeReturned": 373936.4000000004,
+      "doneAt": 380508.1000000015,
+      "firstOutputAt": 373899.30000000075,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 89,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 15,
+      "phase": "returned",
+      "started": 380544.4000000004,
+      "invokeReturned": 383363.7000000011,
+      "doneAt": 390079.9000000004,
+      "firstOutputAt": 383336.1000000015,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 95,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 16,
+      "phase": "returned",
+      "started": 390119.5,
+      "invokeReturned": 392960.80000000075,
+      "doneAt": 399758.6000000015,
+      "firstOutputAt": 392920.2000000011,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 101,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 17,
+      "phase": "returned",
+      "started": 399787.80000000075,
+      "invokeReturned": 402479.7000000011,
+      "doneAt": 409411.5,
+      "firstOutputAt": 402453.9000000004,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 107,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 18,
+      "phase": "returned",
+      "started": 409436.80000000075,
+      "invokeReturned": 412183.5,
+      "doneAt": 418921.1000000015,
+      "firstOutputAt": 412157.2000000011,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 113,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 19,
+      "phase": "returned",
+      "started": 418942.6000000015,
+      "invokeReturned": 421627.80000000075,
+      "doneAt": 428167.9000000004,
+      "firstOutputAt": 421599.9000000004,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 119,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    },
+    {
+      "index": 20,
+      "phase": "returned",
+      "started": 428188.4000000004,
+      "invokeReturned": 430885.9000000004,
+      "doneAt": 437315.7000000011,
+      "firstOutputAt": 430850.1000000015,
+      "thread": "01a1e264-f262-7a92-af0b-63582032df7c",
+      "frameCount": 125,
+      "pendingHeight": 20,
+      "completeHeight": 20
+    }
+  ],
+  "statuses": [
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 241139.6000000015
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 248226.30000000075
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 250881.40000000037
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 257665
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 260375.40000000037
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 267151.30000000075
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 270268.2000000011
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 277069.7000000011
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 279770
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 286270.80000000075
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 288943.9000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 295379.80000000075
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 298041.6000000015
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 304992.6000000015
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 307659.4000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 313977.1000000015
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 316707.9000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 323611.30000000075
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 326342.9000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 333319
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 336086.4000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 342851.80000000075
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 345559.1000000015
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 352621.7000000011
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 355405.30000000075
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 361725.2000000011
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 364411.4000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 371053.9000000004
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 373898.80000000075
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 380508.1000000015
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 383335.4000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 390079.9000000004
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 392919.6000000015
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 399758.6000000015
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 402453.4000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 409411.5
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 412156.6000000015
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 418921.1000000015
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 421599.4000000004
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 428167.9000000004
+    },
+    {
+      "status": "running",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 430849
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-cold-1794799628381",
+      "at": 437315.7000000011
+    }
+  ],
+  "unexpected": [],
+  "error": ""
+}

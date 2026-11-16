@@ -1,0 +1,97 @@
+{
+  "kind": "live",
+  "task": "acceptance-live-1794801064691",
+  "timeOrigin": 1794801064302.3,
+  "cycles": [
+    {
+      "index": 0,
+      "phase": "returned",
+      "started": 495.2000000011176,
+      "invokeReturned": 15304.099999999627,
+      "doneAt": 22811.099999999627,
+      "firstOutputAt": 17693.300000000745,
+      "firstAssistantAt": 19658.300000000745,
+      "thread": "01a1e27b-0814-7bd1-a9d1-fe3ec24e3f06",
+      "sourceTurnId": "01a1e27b-143d-7d82-9b7d-336120064e6a",
+      "generation": 2,
+      "predictionStatus": "complete",
+      "predictionAt": 27795.5,
+      "frameCount": 64,
+      "pendingGeometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "completeGeometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    }
+  ],
+  "statuses": [
+    {
+      "status": "running",
+      "task_id": "acceptance-live-1794801064691",
+      "at": 15052.099999999627
+    },
+    {
+      "status": "done",
+      "task_id": "acceptance-live-1794801064691",
+      "at": 22811.099999999627
+    }
+  ],
+  "unexpected": [],
+  "error": ""
+}

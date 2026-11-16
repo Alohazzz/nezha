@@ -1,0 +1,1996 @@
+{
+  "percentile": "nearest rank ceil(n*0.95), initial launch excluded from resume statistics",
+  "runs": {
+    "warm": {
+      "completedCycles": 30,
+      "error": "",
+      "businessDoneEvents": 30,
+      "unexpectedInteractions": [],
+      "submitToStartAck": {
+        "n": 20,
+        "medianMs": 60.68359375,
+        "p95Ms": 77.646240234375,
+        "maxMs": 97.672119140625
+      },
+      "submitToFirstChannelFrame": {
+        "n": 20,
+        "medianMs": 82.8500000005588,
+        "p95Ms": 100.80000000074506,
+        "maxMs": 128.59999999962747
+      },
+      "submitToFirstAssistantContent": {
+        "n": 5,
+        "medianMs": 98.30000000074506,
+        "p95Ms": 115.59999999962747,
+        "maxMs": 115.59999999962747
+      },
+      "readinessRpc": {
+        "n": 29,
+        "medianMs": 3.4474,
+        "p95Ms": 5.3742,
+        "maxMs": 6.4893
+      },
+      "cancelAcknowledgment": {
+        "n": 6,
+        "medianMs": 0.82635,
+        "p95Ms": 1.0092,
+        "maxMs": 1.0092
+      },
+      "history": {
+        "rolloutCount": 1,
+        "predictionPromptPresent": false,
+        "userCycleCounts": {
+          "0": 1,
+          "1": 1,
+          "2": 1,
+          "3": 1,
+          "4": 1,
+          "5": 1,
+          "6": 1,
+          "7": 1,
+          "8": 1,
+          "9": 1,
+          "10": 1,
+          "11": 1,
+          "12": 1,
+          "13": 1,
+          "14": 1,
+          "15": 1,
+          "16": 1,
+          "17": 1,
+          "18": 1,
+          "19": 1,
+          "20": 1,
+          "21": 1,
+          "22": 1,
+          "23": 1,
+          "24": 1,
+          "25": 1,
+          "26": 1,
+          "27": 1,
+          "28": 1,
+          "29": 1
+        },
+        "exactlyOneUserMessagePerCycle": true
+      }
+    },
+    "cold": {
+      "completedCycles": 21,
+      "error": "",
+      "businessDoneEvents": 21,
+      "unexpectedInteractions": [],
+      "submitToStartAck": {
+        "n": 20,
+        "medianMs": 2701.884765625,
+        "p95Ms": 2842.295654296875,
+        "maxMs": 3113.5009765625
+      },
+      "submitToFirstChannelFrame": {
+        "n": 20,
+        "medianMs": 2684.9500000001863,
+        "p95Ms": 2822.0,
+        "maxMs": 3095.0999999996275
+      },
+      "submitToFirstAssistantContent": {
+        "n": 5,
+        "medianMs": 9207.700000001118,
+        "p95Ms": 9598.700000001118,
+        "maxMs": 9598.700000001118
+      },
+      "readinessRpc": null,
+      "cancelAcknowledgment": null,
+      "history": {
+        "rolloutCount": 1,
+        "predictionPromptPresent": false,
+        "userCycleCounts": {
+          "0": 1,
+          "1": 1,
+          "2": 1,
+          "3": 1,
+          "4": 1,
+          "5": 1,
+          "6": 1,
+          "7": 1,
+          "8": 1,
+          "9": 1,
+          "10": 1,
+          "11": 1,
+          "12": 1,
+          "13": 1,
+          "14": 1,
+          "15": 1,
+          "16": 1,
+          "17": 1,
+          "18": 1,
+          "19": 1,
+          "20": 1
+        },
+        "exactlyOneUserMessagePerCycle": true
+      }
+    }
+  },
+  "provider": {
+    "parentRequests": 78,
+    "sampleRequests": 43,
+    "parentEffortsObserved": [
+      "medium"
+    ],
+    "sampleFinalEffortsObserved": [
+      "high"
+    ]
+  },
+  "geometry": [
+    {
+      "kind": "warm",
+      "cycle": 0,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "warm",
+      "cycle": 1,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "warm",
+      "cycle": 2,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "warm",
+      "cycle": 3,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "warm",
+      "cycle": 4,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "warm",
+      "cycle": 5,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "cold",
+      "cycle": 0,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "cold",
+      "cycle": 1,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "cold",
+      "cycle": 2,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "cold",
+      "cycle": 3,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "cold",
+      "cycle": 4,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "kind": "cold",
+      "cycle": 5,
+      "pending": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      },
+      "complete": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    }
+  ],
+  "global": {
+    "bothCached": true,
+    "bothInvalidated": true,
+    "runningPreserved": true,
+    "runningCompleted": true,
+    "error": ""
+  },
+  "live": {
+    "kind": "live",
+    "task": "acceptance-live-1794801064691",
+    "timeOrigin": 1794801064302.3,
+    "cycles": [
+      {
+        "index": 0,
+        "phase": "returned",
+        "started": 495.2000000011176,
+        "invokeReturned": 15304.099999999627,
+        "doneAt": 22811.099999999627,
+        "firstOutputAt": 17693.300000000745,
+        "firstAssistantAt": 19658.300000000745,
+        "thread": "01a1e27b-0814-7bd1-a9d1-fe3ec24e3f06",
+        "sourceTurnId": "01a1e27b-143d-7d82-9b7d-336120064e6a",
+        "generation": 2,
+        "predictionStatus": "complete",
+        "predictionAt": 27795.5,
+        "frameCount": 64,
+        "pendingGeometry": {
+          ".nz-codexComposerBox": {
+            "x": 174,
+            "y": 347.5,
+            "width": 752,
+            "height": 69
+          },
+          ".codex-prediction-input-wrap": {
+            "x": 185,
+            "y": 356.5,
+            "width": 730,
+            "height": 20
+          },
+          ".nz-codexComposerFooter": {
+            "x": 185,
+            "y": 376.5,
+            "width": 730,
+            "height": 33
+          },
+          ".codex-prediction-ghost": null,
+          ".codex-prediction-tab": null,
+          "textarea": {
+            "x": 185,
+            "y": 356.5,
+            "width": 730,
+            "height": 20
+          }
+        },
+        "completeGeometry": {
+          ".nz-codexComposerBox": {
+            "x": 174,
+            "y": 347.5,
+            "width": 752,
+            "height": 69
+          },
+          ".codex-prediction-input-wrap": {
+            "x": 185,
+            "y": 356.5,
+            "width": 730,
+            "height": 20
+          },
+          ".nz-codexComposerFooter": {
+            "x": 185,
+            "y": 376.5,
+            "width": 730,
+            "height": 33
+          },
+          ".codex-prediction-ghost": {
+            "x": 185,
+            "y": 365.25,
+            "width": 479.1875,
+            "height": 39
+          },
+          ".codex-prediction-tab": null,
+          "textarea": {
+            "x": 185,
+            "y": 356.5,
+            "width": 730,
+            "height": 20
+          }
+        }
+      }
+    ],
+    "statuses": [
+      {
+        "status": "running",
+        "task_id": "acceptance-live-1794801064691",
+        "at": 15052.099999999627
+      },
+      {
+        "status": "done",
+        "task_id": "acceptance-live-1794801064691",
+        "at": 22811.099999999627
+      }
+    ],
+    "unexpected": [],
+    "error": ""
+  },
+  "ui": [
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 10.400000000372529,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 730,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 5.099999999627471,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 730,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 2.800000000745058,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 730,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 869.828125,
+          "y": 356.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 2.800000000745058,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 730,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 869.828125,
+          "y": 356.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 11.699999999254942,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 730,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 174,
+          "y": 347.5,
+          "width": 752,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 185,
+          "y": 376.5,
+          "width": 730,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 185,
+          "y": 365.25,
+          "width": 479.1875,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 185,
+          "y": 356.5,
+          "width": 730,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 4.100000001490116,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 3.900000000372529,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 639.828125,
+          "y": 386.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 2.300000000745058,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 639.828125,
+          "y": 386.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 2.400000000372529,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 2.799999998882413,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 2.700000001117587,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 639.828125,
+          "y": 386.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 1.700000001117587,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 639.828125,
+          "y": 386.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 1.800000000745058,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 2.599999999627471,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 4.200000001117587,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 6.400000000372529,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 2.199999999254942,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 4.400000000372529,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 2.599999999627471,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 639.828125,
+          "y": 386.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "click",
+      "trusted": true,
+      "elapsedMs": 5.300000000745058,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": true,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": {
+          "x": 415,
+          "y": 395.25,
+          "width": 94.5,
+          "height": 39
+        },
+        ".codex-prediction-tab": {
+          "x": 639.828125,
+          "y": 386.5,
+          "width": 43.171875,
+          "height": 16.5
+        },
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "input",
+      "trusted": true,
+      "inputType": "insertText",
+      "elapsedMs": 5.199999999254942,
+      "valueLength": 41,
+      "caret": 41,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "input",
+      "trusted": true,
+      "inputType": "historyUndo",
+      "elapsedMs": 4.5,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    },
+    {
+      "event": "focusin",
+      "trusted": true,
+      "elapsedMs": 4.800000000745058,
+      "valueLength": 0,
+      "caret": 0,
+      "height": 20,
+      "width": 270,
+      "ghost": false,
+      "geometry": {
+        ".nz-codexComposerBox": {
+          "x": 404,
+          "y": 377.5,
+          "width": 292,
+          "height": 69
+        },
+        ".codex-prediction-input-wrap": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        },
+        ".nz-codexComposerFooter": {
+          "x": 415,
+          "y": 406.5,
+          "width": 270,
+          "height": 33
+        },
+        ".codex-prediction-ghost": null,
+        ".codex-prediction-tab": null,
+        "textarea": {
+          "x": 415,
+          "y": 386.5,
+          "width": 270,
+          "height": 20
+        }
+      }
+    }
+  ]
+}

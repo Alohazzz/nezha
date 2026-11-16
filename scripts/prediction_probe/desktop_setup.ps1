@@ -10,7 +10,7 @@ foreach ($part in @('profile/.nezha','codex-home','project','webview')) {
 }
 $fixtureProject = Join-Path $fixtureRoot 'project'
 if (-not (Test-Path -LiteralPath (Join-Path $fixtureProject '.git'))) { git -C $fixtureProject init --quiet }
-foreach ($report in @('warm','cold','one')) {
+foreach ($report in @('warm','cold','one','ui','global','live')) {
   $reportPath = Join-Path $fixtureProject "$report-report.json"
   if (-not (Test-Path -LiteralPath $reportPath)) { '{}' | Set-Content -LiteralPath $reportPath -Encoding utf8 }
 }

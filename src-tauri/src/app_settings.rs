@@ -28,6 +28,10 @@ fn default_codex_run_mode() -> String {
     "pty".to_string()
 }
 
+fn default_codex_prompt_predictions_enabled() -> bool {
+    true
+}
+
 /// 只允许 pty / structured 两个取值，其余（含历史脏数据）一律回落 pty。
 fn normalize_codex_run_mode(value: String) -> String {
     match value.as_str() {
@@ -234,8 +238,8 @@ pub struct AppSettings {
     /// 创建的 Codex 任务一律跟随此值；云效直发任务在后端强制 PTY，不受影响。
     #[serde(default = "default_codex_run_mode")]
     pub codex_run_mode: String,
-    /// Development rollout defaults off until the final end-to-end acceptance gate.
-    #[serde(default)]
+    /// Optional suggestions are enabled by default; verified-build capability gating still applies.
+    #[serde(default = "default_codex_prompt_predictions_enabled")]
     pub codex_prompt_predictions_enabled: bool,
     /// Codex structured 通道的全局模型 override（None = 跟随 Codex 默认模型）。
     /// composer `/model` 的写入落点，对此后启动/续跑的所有 structured 任务生效；
@@ -309,7 +313,7 @@ impl Default for AppSettings {
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
             codex_run_mode: default_codex_run_mode(),
-            codex_prompt_predictions_enabled: false,
+            codex_prompt_predictions_enabled: default_codex_prompt_predictions_enabled(),
             codex_structured_model: None,
             codex_structured_reasoning_effort: None,
             codex_ask_in_workspace_auto_approve: false,
@@ -831,7 +835,7 @@ fn load_settings_unlocked() -> AppSettings {
             claude_enabled: default_agent_enabled(),
             codex_enabled: default_agent_enabled(),
             codex_run_mode: default_codex_run_mode(),
-            codex_prompt_predictions_enabled: false,
+            codex_prompt_predictions_enabled: default_codex_prompt_predictions_enabled(),
             codex_structured_model: None,
             codex_structured_reasoning_effort: None,
             codex_ask_in_workspace_auto_approve: false,
@@ -2175,9 +2179,10 @@ mod model_catalog_tests {
         assert!(AppSettings::default().knowledge.enabled);
     }
     #[test]
-    fn prediction_setting_migrates_conservatively_and_preserves_explicit_opt_in() {
+    fn prediction_setting_defaults_on_and_preserves_explicit_opt_out() {
         let absent: AppSettings = serde_json::from_str("{}").unwrap();
-        assert!(!absent.codex_prompt_predictions_enabled);
+        assert!(absent.codex_prompt_predictions_enabled);
+        assert!(AppSettings::default().codex_prompt_predictions_enabled);
         let enabled: AppSettings = serde_json::from_str(r#"{"codex_prompt_predictions_enabled":true}"#).unwrap();
         assert!(normalize_settings(enabled).codex_prompt_predictions_enabled);
         let disabled: AppSettings = serde_json::from_str(r#"{"codex_prompt_predictions_enabled":false}"#).unwrap();

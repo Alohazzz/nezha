@@ -2,7 +2,7 @@
 
 日期：2026-11-12
 
-状态：待实现；用户已确认先写 Spec，后续另行安排实施。本文不代表已完成开发或验收。
+状态更新（2026-11-16）：已实施并完成验收，默认开启；证据、支持范围和验证限制见[验收报告](../research/codex-prompt-prediction-acceptance.md)。以下原始需求保持不变。
 
 范围：Nezha 的 Codex structured 续聊输入框。
 
