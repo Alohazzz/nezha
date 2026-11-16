@@ -254,7 +254,7 @@ export const CodexComposer = memo(function CodexComposer({
         />
       )}
       <div className="nz-codexComposerBox" data-focused={focused}>
-        <div className="codex-prediction-input-wrap">
+        <div className="codex-prediction-input-wrap" data-prediction-enabled={predictionEligible === true}>
         <PredictionGhost suggestion={visiblePrediction} focused={focused} descriptionId={descriptionId} />
         <textarea
           ref={inputRef}

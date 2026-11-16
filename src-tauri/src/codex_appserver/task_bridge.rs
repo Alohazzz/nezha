@@ -250,6 +250,7 @@ pub async fn fork_structured_task(
     source_thread_id: String,
 ) -> Result<(), String> {
     let reservation = retained_session::begin_start(&task_id)?;
+    let result = async {
     let launch_task_id = task_id.clone();
     let request = tokio::task::spawn_blocking(move || {
         let (approval, sandbox) = permission_mode_to_policy(
@@ -281,6 +282,8 @@ pub async fn fork_structured_task(
     emit_task_session(&app, &task_id, &thread);
     let _ = app.emit("task-status", serde_json::json!({ "task_id": task_id, "status": "done" }));
     Ok(())
+    }.await;
+    reservation.finish(result)
 }
 
 /// structured 任务的 forwarder：唯一消费会话事件的地方。
@@ -767,6 +770,7 @@ pub async fn resume_structured_task(
     on_output: Channel<String>,
 ) -> Result<(), String> {
     let reservation = retained_session::begin_start(&task_id)?;
+    let result = async {
     super::prediction::invalidate(&app, &task_id);
     let ask_auto = tokio::task::spawn_blocking(|| crate::app_settings::load_settings_internal().codex_ask_in_workspace_auto_approve)
         .await.map_err(|error| error.to_string())?;
@@ -821,6 +825,8 @@ pub async fn resume_structured_task(
         return Err(format!("turn/start failed: {error:?}"));
     }
     Ok(())
+    }.await;
+    reservation.finish(result)
 }
 
 /// structured 任务的继续对话命令（前端 done 态输入框提交）。

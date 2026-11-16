@@ -235,18 +235,20 @@ pub async fn change_enabled(app: &tauri::AppHandle, manager: &crate::TaskManager
     if enabled {
         return;
     }
+    invalidate_configuration(app, manager).await;
+}
+
+/// Invalidate even cached results whose original warm process has already expired.
+pub async fn invalidate_configuration(app: &tauri::AppHandle, manager: &crate::TaskManager) {
+    POLICY.send_modify(|revision| *revision += 1);
     let states = CACHE.lock().invalidate_all();
     for state in states {
         emit(app, Some(state));
     }
-    let tasks: Vec<_> = manager.codex_appserver_sessions.lock().keys().cloned().collect();
-    let closing: Vec<_> = tasks.into_iter().map(|task| {
-        let generation = super::prediction_retirement::prepare(manager, &task, false);
-        (task, generation)
-    }).collect();
+    let closing = super::prediction_retirement::prepare_all(manager);
     for (task, generation) in closing {
         if let Err(error) = super::prediction_retirement::finish(manager, &task, generation).await {
-            eprintln!("[codex prediction] disable cleanup failed: {error}");
+            eprintln!("[codex prediction] configuration cleanup failed: {error}");
         }
     }
 }

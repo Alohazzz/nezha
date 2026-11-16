@@ -18,6 +18,16 @@ pub fn prepare(manager: &crate::TaskManager, task: &str, removed: bool) -> Optio
     }
 }
 
+/// Global settings affect every cached/warm task, including hidden projects.
+/// Capture all generations before the first await; Running turns are never cancelled.
+pub fn prepare_all(manager: &crate::TaskManager) -> Vec<(String, Option<u64>)> {
+    let tasks: Vec<_> = manager.codex_appserver_sessions.lock().keys().cloned().collect();
+    tasks.into_iter().map(|task| {
+        let generation = prepare(manager, &task, false);
+        (task, generation)
+    }).collect()
+}
+
 pub async fn finish(
     manager: &crate::TaskManager,
     task: &str,
@@ -37,6 +47,29 @@ mod tests {
         SessionCore,
     };
     use std::{sync::Arc, time::Instant};
+
+    #[tokio::test]
+    async fn global_configuration_change_retires_unselected_tasks_without_cancelling_running() {
+        let manager = crate::TaskManager::empty_for_test();
+        let mut guards = Vec::new();
+        for task in ["selected", "unselected", "running"] {
+            let guard = ForwarderGuard::new(Lifecycle::running().generation());
+            retained_session::activate(&manager, task, &guard, Arc::new(CodexAppServerSession { core: SessionCore::test_core() })).unwrap();
+            if task != "running" {
+                retained_session::set_retention(&manager, task, guard.generation(), true);
+                assert!(retained_session::completed(&manager, task, guard.generation(), "turn", Instant::now()).is_some());
+            }
+            guards.push((task, guard));
+        }
+        let closing = prepare_all(&manager);
+        for (task, guard) in &guards {
+            assert_eq!(guard.is_cancelled(), *task != "running");
+        }
+        for (task, generation) in closing { finish(&manager, &task, generation).await.unwrap(); }
+        assert_eq!(retained_session::active_ids(&manager), vec!["running"]);
+        assert_eq!(manager.codex_appserver_sessions.lock().len(), 1);
+        retained_session::close_task(&manager, "running").await.unwrap();
+    }
 
     #[tokio::test]
     async fn config_change_closes_auxiliary_session_but_preserves_running_user_turn() {

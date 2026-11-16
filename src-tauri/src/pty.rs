@@ -1384,8 +1384,9 @@ async fn run_structured_task(
 ) -> Result<(), String> {
     use crate::codex_appserver::task_bridge as bridge;
     let reservation = crate::codex_appserver::retained_session::begin_start(&launch.task_id)?;
+    let result = async {
     if crate::codex_appserver::retained_session::generation(task_manager, &launch.task_id).is_some() {
-        return Err("structured task already owns a session".into());
+        return Err(crate::codex_appserver::retained_session::start_aborted("task already owns a session"));
     }
 
     let launch_spec = tokio::task::spawn_blocking(|| crate::app_settings::get_agent_launch_spec("codex"))
@@ -1505,6 +1506,8 @@ async fn run_structured_task(
     }
 
     Ok(())
+    }.await;
+    reservation.finish(result)
 }
 
 /// structured 会话子进程的环境变量：与 `setup_nezha_env` 同语义（NEZHA_TASK_ID /

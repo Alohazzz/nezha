@@ -1199,7 +1199,8 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 .codex-prediction-ghost { position: absolute; inset: 0; pointer-events: none; color: var(--text-secondary); font-family: inherit; font-size: 13px; line-height: 1.5; padding: 2px; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
 .nz-taskModelCompactIcon { flex-shrink: 0; }
-.codex-prediction-input-wrap:has(.codex-prediction-ghost) { min-height: 62px; padding-bottom: 18px; }
+/* Reserve two suggestion lines and the focus hint before the async result arrives. */
+.codex-prediction-input-wrap[data-prediction-enabled="true"] { min-height: 62px; padding-bottom: 18px; }
 .codex-prediction-ghost { bottom: 18px; overflow-wrap: anywhere; }
 .codex-prediction-tab { position: absolute; bottom: 0; right: 2px; font-size: 11px; color: var(--text-secondary); pointer-events: none; }
 .codex-prediction-description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

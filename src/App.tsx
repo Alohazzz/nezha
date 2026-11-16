@@ -1,3 +1,4 @@
+import { isStructuredStartAborted } from "./structuredLaunch";
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { appConfirm } from "./components/AppConfirmDialog";
@@ -1236,6 +1237,7 @@ function App() {
           onOutput: channel,
         });
       } catch (err) {
+        if (isStructuredStartAborted(err)) return;
         showToast(t("toast.followUpFailed", { error: String(err) }), "error");
       } finally {
         setFollowUpBusyTaskId(null);
@@ -1358,6 +1360,7 @@ function App() {
       contextProjectPaths: resolveContextProjectPaths(task),
       onOutput,
     }).catch(async (err: unknown) => {
+      if (runMode === "structured" && isStructuredStartAborted(err)) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (runMode === "structured" && !structuredFallbackReason) {
         // 4.1 回退降级：structured 启动失败（spawn/握手/turn 起不来）→ 自动切回
@@ -2053,6 +2056,7 @@ function App() {
       rows: tm.terminalSizeRef.current.rows,
       onOutput: tm.createOutputChannel(task.id),
     }).catch((err: unknown) => {
+      if (structured && isStructuredStartAborted(err)) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (structured) {
         setTasks((prev) => {

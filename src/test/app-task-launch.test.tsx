@@ -210,6 +210,26 @@ describe("application task launch settings", () => {
     });
   });
 
+  it.each(["run_task", "fork_task"])("an intentionally aborted %s never falls back or overwrites cancellation", async (command) => {
+    const source: Task = { id: "source", projectId: project.id, prompt: "source", agent: "codex", permissionMode: "ask", status: "done", createdAt: 1, codexSessionId: "source-thread" };
+    await mountApp("structured", [source]);
+    await act(async () => { await mocks.welcome.mock.lastCall![0].onProjectClick(project); });
+    let rejectStart: (error: string) => void = () => {};
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((name, ...args) => name === command
+      ? new Promise((_, reject) => { rejectStart = reject; }) : original(name, ...args));
+    await act(async () => {
+      if (command === "fork_task") mocks.project.mock.lastCall![0].onForkTask(source.id, "fork");
+      else await mocks.project.mock.lastCall![0].onSubmitTask({ prompt: "fix", agent: "codex", permissionMode: "ask", images: [], texts: [], immediate: true, launchMode: "local", baseBranch: "" });
+    });
+    const taskId = mocks.invoke.mock.calls.find(([name]) => name === command)![1].taskId;
+    await completeTurn(taskId, "cancelled");
+    await act(async () => { rejectStart("STRUCTURED_START_ABORTED: cancelled or superseded"); });
+    expect(mocks.invoke.mock.calls.filter(([name]) => name === command)).toHaveLength(1);
+    const writes = mocks.invoke.mock.calls.filter(([name]) => name === "save_project_tasks");
+    expect(writes[writes.length - 1][1].tasks.find((task: Task) => task.id === taskId)).toMatchObject({ status: "cancelled", runMode: "structured" });
+  });
+
   it.each(["structured", "pty"] as const)("session forks follow %s settings", async (mode) => {
     const task: Task = {
       id: "source",

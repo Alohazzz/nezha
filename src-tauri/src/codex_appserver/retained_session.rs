@@ -30,6 +30,9 @@ pub struct StartReservation {
     registry: Arc<StartRegistry>,
 }
 
+/// Stable command error discriminator; never offer PTY fallback for lost ownership.
+pub fn start_aborted(reason: &str) -> String { format!("STRUCTURED_START_ABORTED: {reason}") }
+
 pub fn start_registry() -> Arc<StartRegistry> { STARTS.clone() }
 
 pub fn begin_start(task: &str) -> Result<StartReservation, String> { STARTS.begin(task) }
@@ -37,10 +40,10 @@ pub fn begin_start(task: &str) -> Result<StartReservation, String> { STARTS.begi
 impl StartRegistry {
     pub fn begin(self: &Arc<Self>, task: &str) -> Result<StartReservation, String> {
         let mut state = self.state.lock();
-        if state.closing { return Err("application is shutting down".into()); }
+        if state.closing { return Err(start_aborted("application is shutting down")); }
         state.tokens.retain(|_, token| token.strong_count() > 0);
         if state.tokens.get(task).and_then(Weak::upgrade).is_some() {
-            return Err("structured task is already starting or stopping".into());
+            return Err(start_aborted("already starting or stopping"));
         }
         let token = Arc::new(ForwarderGuard::new(super::session_lifecycle::Lifecycle::running().generation()));
         state.tokens.insert(task.to_owned(), Arc::downgrade(&token));
@@ -71,7 +74,12 @@ impl StartRegistry {
 impl StartReservation {
     pub fn token(&self) -> &ForwarderGuard { &self.token }
     pub fn check(&self) -> Result<(), String> {
-        if self.token.is_cancelled() { Err("structured start was cancelled".into()) } else { Ok(()) }
+        if self.token.is_cancelled() { Err(start_aborted("cancelled or superseded")) } else { Ok(()) }
+    }
+    /// Keep cancellation authoritative even when a concurrent RPC or file operation fails.
+    pub fn finish<T>(&self, result: Result<T, String>) -> Result<T, String> {
+        self.check()?;
+        result
     }
     pub async fn cancelled(&self) { self.token.cancelled().await }
     pub fn activate(&self, manager: &crate::TaskManager, guard: &ForwarderGuard, session: Arc<CodexAppServerSession>) -> Result<(), String> {
@@ -414,6 +422,16 @@ mod tests {
         assert!(owns(&manager, "task", second.generation()));
         assert_eq!(active_ids(&manager), vec!["task"]);
         close_task(&manager, "task").await.unwrap();
+    }
+
+    #[test]
+    fn cancelled_start_disposition_survives_concurrent_transport_failure() {
+        let starts = Arc::new(StartRegistry::default());
+        let reservation = starts.begin("cancelled-command").unwrap();
+        assert_eq!(reservation.finish::<()>(Err("handshake failed".into())), Err("handshake failed".into()));
+        reservation.token().cancel();
+        assert_eq!(reservation.finish::<()>(Err("pipe closed".into())).unwrap_err(), "STRUCTURED_START_ABORTED: cancelled or superseded");
+        assert_eq!(reservation.finish(Ok(())).unwrap_err(), "STRUCTURED_START_ABORTED: cancelled or superseded");
     }
 
     #[tokio::test]
