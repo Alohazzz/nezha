@@ -146,6 +146,11 @@ pub fn schedule(app: tauri::AppHandle, task: String, guard: ForwarderGuard, comp
         {
             let state = CACHE.lock().invalidate_key(&key);
             emit(&app, state);
+            // A context notification can cancel an in-flight sample without an explicit
+            // command owner. Release that retained generation as well.
+            if let Some(manager) = app.try_state::<crate::TaskManager>() {
+                let _ = retained_session::close_owned(&manager, &task, key.session_generation).await;
+            }
             return;
         }
         let failed = result.is_err();
