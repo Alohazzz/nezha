@@ -1196,11 +1196,37 @@ button.codex-stream-tool-status[data-status="failed"]:hover {
 .nz-codexComposerWrap { position: relative; }
 .codex-prediction-input-wrap { position: relative; display: flex; }
 .nz-codexComposerInput { width: 100%; box-sizing: border-box; }
-.codex-prediction-ghost { position: absolute; inset: 0; pointer-events: none; color: var(--text-secondary); font-family: inherit; font-size: 13px; line-height: 1.5; padding: 2px; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-
 .nz-taskModelCompactIcon { flex-shrink: 0; }
-/* Reserve two suggestion lines and the focus hint before the async result arrives. */
-.codex-prediction-input-wrap[data-prediction-enabled="true"] { min-height: 62px; padding-bottom: 18px; }
-.codex-prediction-ghost { bottom: 18px; overflow-wrap: anywhere; }
-.codex-prediction-tab { position: absolute; bottom: 0; right: 2px; font-size: 11px; color: var(--text-secondary); pointer-events: none; }
+/* The suggestion shares the existing empty input + footer hint area. Its absolute
+   overlay never changes input sizing or the off/unsupported composer geometry. */
+.nz-codexComposerFooter[data-prediction="true"] { gap: 8px; }
+.nz-codexComposerFooter[data-prediction="true"] .nz-codexComposerHint {
+  position: relative;
+  overflow: visible;
+  min-width: 35%;
+  min-height: 1.5em;
+}
+.nz-codexComposerFooter[data-prediction="true"] .nz-codexComposerFocusHint { display: none; }
+.nz-codexComposerFooter[data-prediction="true"] .nz-codexComposerModelBadge { flex-shrink: 1; min-width: 0; }
+.codex-prediction-ghost {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 39px;
+  pointer-events: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: normal;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.codex-prediction-tab { position: absolute; top: 0; right: 2px; font-size: 11px; color: var(--text-secondary); pointer-events: none; }
 .codex-prediction-description { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

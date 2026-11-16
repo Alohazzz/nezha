@@ -12,14 +12,13 @@ export function acceptPrediction(event: KeyboardEvent<HTMLTextAreaElement>, sugg
   return true;
 }
 
-export function PredictionGhost({ suggestion, focused, descriptionId }: {
-  suggestion: string | null; focused: boolean; descriptionId: string;
+export function PredictionGhost({ suggestion, descriptionId }: {
+  suggestion: string | null; descriptionId: string;
 }) {
   const { t } = useI18n();
   if (!suggestion) return null;
   return <>
     <span className="codex-prediction-ghost" aria-hidden="true">{suggestion}</span>
     <span id={descriptionId} className="codex-prediction-description">{t("codex.prediction.suggestion")}: {suggestion} — {t("codex.prediction.tab")}</span>
-    {focused && <span className="codex-prediction-tab" aria-hidden="true">{t("codex.prediction.tab")}</span>}
   </>;
 }

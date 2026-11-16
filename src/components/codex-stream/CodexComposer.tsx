@@ -254,8 +254,8 @@ export const CodexComposer = memo(function CodexComposer({
         />
       )}
       <div className="nz-codexComposerBox" data-focused={focused}>
-        <div className="codex-prediction-input-wrap" data-prediction-enabled={predictionEligible === true}>
-        <PredictionGhost suggestion={visiblePrediction} focused={focused} descriptionId={descriptionId} />
+        <div className="codex-prediction-input-wrap">
+        {visiblePrediction && focused && <span className="codex-prediction-tab" aria-hidden="true">{t("codex.prediction.tab")}</span>}
         <textarea
           ref={inputRef}
           rows={1}
@@ -315,9 +315,9 @@ export const CodexComposer = memo(function CodexComposer({
             />
           </div>
         )}
-        <div className="nz-codexComposerFooter">
+        <div className="nz-codexComposerFooter" data-prediction={!!visiblePrediction}>
           <span className="nz-codexComposerHint">
-            {mode === "steer" ? t("codex.composer.hintSteer") : t("codex.composer.hintResume")}
+            {visiblePrediction ? <PredictionGhost suggestion={visiblePrediction} descriptionId={descriptionId} /> : mode === "steer" ? t("codex.composer.hintSteer") : t("codex.composer.hintResume")}
           </span>
           {showModelBadge && onSetModel && (
             <>
