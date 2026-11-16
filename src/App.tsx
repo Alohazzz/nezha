@@ -1183,9 +1183,17 @@ function App() {
   // 两条路径都先本地插入乐观用户气泡（Paseo 的即时回显），resume 前只清
   // usage/审批残留、保留历史条目（thread/resume 不回放历史，内存流是唯一载体）。
   const [followUpBusyTaskId, setFollowUpBusyTaskId] = useState<string | null>(null);
+  const structuredStartsRef = useRef(new Map<string, Promise<boolean>>());
   const handleFollowUpStructured = useCallback(
     async (task: Task, text: string, images: string[] = []) => {
-      if (followUpBusyTaskId) return;
+      if (followUpBusyTaskId) return false;
+      // The task is visible before run_task finishes its first turn/start.
+      const starting = structuredStartsRef.current.get(task.id);
+      if (starting) {
+        if (!await starting) return false;
+        task = tasksRef.current.find((candidate) => candidate.id === task.id) ?? task;
+        if (task.runMode !== "structured" || task.status === "cancelled" || task.status === "failed") return false;
+      }
       const projectPath =
         task.worktreePath ?? projectsRef.current.find((p) => p.id === task.projectId)?.path ?? "";
 
@@ -1204,16 +1212,15 @@ function App() {
             images,
           });
           codexStream.appendLocalUserMessage(task.id, text, images);
-          showToast(t("toast.steerQueued"), "success");
+          return true;
         } catch (err) {
-          showToast(t("toast.followUpFailed", { error: String(err) }), "error");
+          console.warn("[codex] Follow-up send failed", err);
         }
-        return;
+        return false;
       }
 
       if (!task.codexSessionId) {
-        showToast(t("toast.followUpNoSession"), "error");
-        return;
+        return false;
       }
       setFollowUpBusyTaskId(task.id);
       const channel = new Channel<string>();
@@ -1236,14 +1243,15 @@ function App() {
           effort: codexStructuredEffort ?? null,
           onOutput: channel,
         });
+        return true;
       } catch (err) {
-        if (isStructuredStartAborted(err)) return;
-        showToast(t("toast.followUpFailed", { error: String(err) }), "error");
+        if (isStructuredStartAborted(err)) return false;
+        console.warn("[codex] Follow-up send failed", err);
+        return false;
       } finally {
         setFollowUpBusyTaskId(null);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [followUpBusyTaskId, codexStream, codexStructuredModel, codexStructuredEffort],
   );
 
@@ -1304,7 +1312,20 @@ function App() {
     [],
   );
 
-  async function invokeRunTask(
+  function invokeRunTask(...args: Parameters<typeof launchTask>): Promise<boolean> {
+    const started = launchTask(...args);
+    const task = args[0];
+    if (task.agent === "codex" && task.runMode === "structured") {
+      structuredStartsRef.current.set(task.id, started);
+      const clear = () => {
+        if (structuredStartsRef.current.get(task.id) === started) structuredStartsRef.current.delete(task.id);
+      };
+      void started.then(clear, clear);
+    }
+    return started;
+  }
+
+  async function launchTask(
     task: Task,
     projectPath: string,
     images: string[],
@@ -1333,7 +1354,7 @@ function App() {
             return channel;
           })()
         : tm.createOutputChannel(task.id);
-    invoke("run_task", {
+    return invoke("run_task", {
       taskId: task.id,
       taskName: task.name ?? "",
       projectPath,
@@ -1359,8 +1380,8 @@ function App() {
       // 跨仓库任务上下文：附加项目目录（后端校验后注入 --add-dir）。
       contextProjectPaths: resolveContextProjectPaths(task),
       onOutput,
-    }).catch(async (err: unknown) => {
-      if (runMode === "structured" && isStructuredStartAborted(err)) return;
+    }).then(() => true).catch(async (err: unknown) => {
+      if (runMode === "structured" && isStructuredStartAborted(err)) return false;
       const msg = err instanceof Error ? err.message : String(err);
       if (runMode === "structured" && !structuredFallbackReason) {
         // 4.1 回退降级：structured 启动失败（spawn/握手/turn 起不来）→ 自动切回
@@ -1385,7 +1406,7 @@ function App() {
           realProjectPath,
           msg,
         );
-        return;
+        return false;
       }
       if (runMode === "structured") {
         updateTaskStatus(task.id, "failed", undefined, msg);
@@ -1393,6 +1414,7 @@ function App() {
         tm.writeErrorToTerminal(task.id, `\r\nError: ${msg}\r\n`);
         updateTaskStatus(task.id, "failed", undefined, msg);
       }
+      return false;
     });
   }
 

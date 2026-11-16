@@ -59,7 +59,7 @@ export const CodexComposer = memo(function CodexComposer({
   reasoningEffort?: string;
   /** footer 是否显示当前模型徽标（structured 任务才开）。 */
   showModelBadge?: boolean;
-  onSubmit: (text: string, images: string[]) => void;
+  onSubmit: (text: string, images: string[]) => boolean | void | Promise<boolean | void>;
   /** 内置命令写入上抛；缺省 = 不注入 /model /effort（PTY 等旧调用方）。 */
   onSetModel?: (model: string | undefined) => void;
   onSetEffort?: (effort: string | undefined) => void;
@@ -85,8 +85,10 @@ export const CodexComposer = memo(function CodexComposer({
   const imagesRef = useRef<ComposerImage[]>([]);
   imagesRef.current = images;
 
-  const canSend = composerCanSend({ disabled, busy, text, imageCount: images.length });
-  const inputsLocked = disabled || busy;
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const canSend = composerCanSend({ disabled, busy: busy || submitting, text, imageCount: images.length });
+  const inputsLocked = disabled || busy || submitting;
   // 运行中（steer 模式）且输入未被锁（审批挂起时不受理中断，审批卡优先）
   const canStop = mode === "steer" && !inputsLocked;
 
@@ -200,16 +202,23 @@ export const CodexComposer = memo(function CodexComposer({
     [addImageFiles],
   );
 
-  const submit = () => {
-    if (!canSend) return;
-    const imageUrls = imagesRef.current.map((img) => img.dataUrl);
-    // 输入框里是紧凑的 `$skill` 引用，提交这一刻才展开成带 SKILL.md 路径的指令，
-    // agent 收到的提示词与改动前逐字一致。
-    onSubmit(expandSkillTokens(text, mention.skills).trim(), imageUrls);
-    setText("");
-    setImages([]);
-    mention.close();
-    autoResize();
+  const submit = async () => {
+    if (!canSend || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      const accepted = await onSubmit(expandSkillTokens(text, mention.skills).trim(), imagesRef.current.map((img) => img.dataUrl));
+      if (accepted === false) return;
+      setText("");
+      setImages([]);
+      mention.close();
+      autoResize();
+    } catch (error) {
+      console.warn("[codex] Composer submission failed", error);
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
   };
 
   /** 中断当前 turn（/stop 同一通道）：App 层落 `interrupt_codex_structured`。 */

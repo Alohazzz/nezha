@@ -148,6 +148,33 @@ describe("application task launch settings", () => {
     },
   );
 
+  it.each([false, true])("waits for initial turn startup before steering (aborted=%s)", async (aborted) => {
+    await mountApp("structured");
+    await act(async () => { await mocks.welcome.mock.lastCall![0].onProjectClick(project); });
+    let ready = false;
+    let resolveStart!: () => void;
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation((command, ...args) => {
+      if (command === "run_task") return new Promise<void>((resolve, reject) => { resolveStart = () => { ready = true; if (aborted) reject("STRUCTURED_START_ABORTED: cancelled"); else resolve(); }; });
+      if (command === "steer_codex_structured" && !ready) return Promise.reject('turn/steer failed: Protocol("no running turn to steer")');
+      return original(command, ...args);
+    });
+    await act(async () => {
+      await mocks.project.mock.lastCall![0].onSubmitTask({ prompt: "fix", agent: "codex", permissionMode: "ask", images: [], texts: [], immediate: true, launchMode: "local", baseBranch: "" });
+    });
+    const taskId = mocks.invoke.mock.calls.find(([command]) => command === "run_task")![1].taskId;
+    let submitted!: Promise<boolean>;
+    await act(async () => {
+      submitted = mocks.project.mock.lastCall![0].onFollowUpStructured({ id: taskId, projectId: project.id, status: "running" }, "additional instruction", []);
+      await Promise.resolve();
+    });
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "steer_codex_structured")).toHaveLength(0);
+    await act(async () => { resolveStart(); await submitted; });
+    expect(await submitted).toBe(!aborted);
+    if (aborted) expect(mocks.invoke.mock.calls.filter(([command]) => command === "steer_codex_structured")).toHaveLength(0);
+    else expect(mocks.invoke).toHaveBeenCalledWith("steer_codex_structured", expect.objectContaining({ taskId, prompt: "additional instruction" }));
+  });
+
   it("merge keeps PTY when configured", async () => {
     await mountApp("pty");
     await act(async () => {

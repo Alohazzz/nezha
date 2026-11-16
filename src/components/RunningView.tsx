@@ -161,7 +161,7 @@ export function RunningView({
   onHydrateCodexHistory?: (sessionPath: string) => void;
   /** structured 任务 done 态的继续对话（thread/resume 通道）；busy 期间禁用输入。
    *  images 为 dataUrl 数组（issue #118：composer 粘贴/选择的图片随消息发送）。 */
-  onFollowUp?: (text: string, images: string[]) => void;
+  onFollowUp?: (text: string, images: string[]) => boolean | void | Promise<boolean | void>;
   followUpBusy?: boolean;
   /** structured 任务的模型 / 推理深度切换（`/model` `/effort` 内置命令的写入通道）。
    *  缺省 = composer 不注入内置命令（PTY 等非 structured 场景）。 */
@@ -217,14 +217,14 @@ export function RunningView({
   const codexEntryCount = codexStream?.entries.length ?? 0;
   const historyState = codexStream?.history.state ?? "idle";
   useEffect(() => {
-    if (!codexStream || !onHydrateCodexHistory) return;
+    if (isActive || !codexStream || !onHydrateCodexHistory) return;
     if (codexEntryCount > 0) return;
     if (!task.codexSessionPath) return;
     // 只有 idle 才发起：loading / ready 不该重复调用，failed 也不自动重试
     // （hook 内部同样按 (taskId, sessionPath) 去重，这里省一次无效调用）。
     if (historyState !== "idle") return;
     onHydrateCodexHistory(task.codexSessionPath);
-  }, [codexStream, codexEntryCount, historyState, onHydrateCodexHistory, task.codexSessionPath]);
+  }, [isActive, codexStream, codexEntryCount, historyState, onHydrateCodexHistory, task.codexSessionPath]);
 
   const { snapshot: usageSnapshot } = useUsageSnapshot(visible && ENABLE_USAGE_INSIGHTS);
 

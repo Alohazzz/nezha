@@ -139,7 +139,7 @@ export function CodexStreamView({
   threadId?: string;
   predictionEligible?: boolean;
   predictionFingerprint?: string;
-  onComposerSubmit?: (text: string, images: string[]) => void;
+  onComposerSubmit?: (text: string, images: string[]) => boolean | void | Promise<boolean | void>;
   followUpBusy?: boolean;
   /** 审批挂起等 composer 不该受理输入的场景置真（Paseo 同款：审批卡优先）。 */
   composerDisabled?: boolean;

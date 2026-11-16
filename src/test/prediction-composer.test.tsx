@@ -108,3 +108,20 @@ test("unfocused Tab cannot accept a visible suggestion", async () => {
   expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
   expect(document.execCommand).not.toHaveBeenCalled();
 });
+
+
+test("failed submission preserves the draft and blocks duplicate sends while pending", async () => {
+  let resolve!: (accepted: boolean) => void;
+  const submit = vi.fn(() => new Promise<boolean>((done) => { resolve = done; }));
+  const { input } = await mount({ onSubmit: submit });
+  fireEvent.change(input, { target: { value: "keep this instruction" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(input).toHaveValue("keep this instruction");
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(submit).toHaveBeenCalledTimes(1);
+  await act(async () => resolve(false));
+  expect(input).toHaveValue("keep this instruction");
+  fireEvent.keyDown(input, { key: "Enter" });
+  await act(async () => resolve(true));
+  expect(input).toHaveValue("");
+});
