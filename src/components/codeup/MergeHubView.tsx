@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, GitMerge, RefreshCw, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, GitMerge, RefreshCw, Search } from "lucide-react";
 import type { CodeupMr } from "../../types";
 import { mergeHubStyles } from "../../styles";
 import { useMergeHub, type StartCodeupTask } from "./merge-hub/useMergeHub";
@@ -181,6 +181,17 @@ export function MergeHubView({
                       <span>{mr.author || "未知作者"}</span>
                     </span>
                     <h3>{mr.title}</h3>
+                    <span
+                      className="mh-inbox-branches"
+                      title={`${mr.sourceBranch} → ${mr.targetBranch}`}
+                    >
+                      <code className="mh-inbox-source">{mr.sourceBranch}</code>
+                      <ArrowRight size={13} aria-hidden="true" />
+                      <span className="mh-inbox-target">
+                        <span>合入</span>
+                        <strong>{mr.targetBranch}</strong>
+                      </span>
+                    </span>
                     <span className="mh-row-status">
                       <MrStatus mr={mr} />
                       {mr.hasConflict && <span className="mh-conflict">存在冲突</span>}

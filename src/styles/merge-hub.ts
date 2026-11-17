@@ -43,6 +43,12 @@ export const mergeHubStyles = `
 .mh-meta{display:flex;justify-content:space-between;gap:10px;color:var(--text-muted);font-size:10px;flex-wrap:wrap;overflow-wrap:anywhere}
 .mh-inbox-item h3{font-size:12px;font-weight:600;line-height:1.7;margin:9px 0 12px;overflow-wrap:anywhere}
 .mh-row-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mh-inbox-branches{display:flex;align-items:center;gap:6px;min-width:0;margin-bottom:12px;font-size:11px;color:var(--text-muted)}
+.mh-inbox-branches>svg{flex-shrink:0}
+.mh-inbox-source{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono)}
+.mh-inbox-target{display:inline-flex;align-items:baseline;gap:5px;max-width:65%;min-width:0;padding:4px 7px;border-radius:5px;background:var(--accent-subtle);color:var(--accent)}
+.mh-inbox-target>span{flex-shrink:0;font-size:10px}
+.mh-inbox-target strong{min-width:0;font-family:var(--font-mono);font-weight:700;overflow-wrap:anywhere}
 .mh-badge{display:inline-flex;font-size:10px;line-height:1.5;border-radius:5px;padding:3px 7px;background:var(--bg-subtle);color:var(--text-muted);white-space:nowrap}
 .mh-badge[data-state=TO_BE_MERGED],.mh-badge[data-state=APPROVED],.mh-badge[data-state=MERGED]{color:var(--success);background:color-mix(in srgb,var(--success) 10%,transparent)}
 .mh-badge[data-state=UNDER_REVIEW],.mh-badge[data-state=UNDER_DEV]{color:var(--accent);background:var(--accent-subtle)}
