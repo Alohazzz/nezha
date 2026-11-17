@@ -1782,7 +1782,7 @@ const translations: Record<AppLanguage, Record<string, string>> = {
     "status.inputRequired": "需要确认",
     "status.awaitingReview": "已完成待确认",
     "status.detached": "终端连接断开",
-    "status.interrupted": "异常中断",
+    "status.interrupted": "已中断",
     "status.done": "已完成",
     "status.failed": "失败",
     "status.cancelled": "已取消",

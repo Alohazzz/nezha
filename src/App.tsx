@@ -990,6 +990,12 @@ function App() {
               void syncDeliveryPlanAfterMerge(codeupCleanup.sourceBranch);
             }
           }).catch((error: unknown) => {
+            // Review completion is independent of checkout cleanup: conflicts can
+            // be a valid review finding. Never overwrite this or a newer turn.
+            if (codeupCleanup.kind === "review") {
+              showToast(`审查已完成，但清理未完成，已保留现场：${String(error)}`, "warning");
+              return;
+            }
             // A completed agent turn can still leave an unresolved Git merge. Preserve it.
             codeupTaskCleanupRef.current[task_id] = codeupCleanup;
             if (codeupMergeStoppedRef.current.has(task_id)) return;

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   welcome: vi.fn(),
   project: vi.fn(),
+  showToast: vi.fn(),
   events: new Map<string, (event: { payload: unknown }) => void>(),
   terminal: {
     terminalSizeRef: { current: { cols: 120, rows: 40 } },
@@ -50,7 +51,7 @@ vi.mock("../hooks/useWorktreeDiffStats", () => ({
   useWorktreeDiffStats: () => ({ scheduleForDoneTask: vi.fn() }),
 }));
 vi.mock("../hooks/useCodexAutoName", () => ({ useCodexAutoName: () => {} }));
-vi.mock("../components/Toast", () => ({ useToast: () => ({ showToast: vi.fn() }) }));
+vi.mock("../components/Toast", () => ({ useToast: () => ({ showToast: mocks.showToast }) }));
 
 const project = { id: "p1", path: "C:/fixture", name: "fixture", lastOpenedAt: 1 };
 const mr = {
@@ -339,6 +340,38 @@ describe("application task launch settings", () => {
       expect(mocks.invoke.mock.calls.some(([name]) => name === "resume_task")).toBe(false);
     },
   );
+
+  it.each([
+    "CODEUP_MERGE_INCOMPLETE: unresolved merge",
+    "checkout failed: permission denied",
+  ])("keeps a completed review done when cleanup fails: %s", async (reason) => {
+    await mountApp("structured");
+    await act(async () => {
+      await mocks.welcome.mock.lastCall![0].onStartCodeupTask(mr, "review");
+    });
+    const taskId = mocks.invoke.mock.calls.find(([command]) => command === "run_task")![1].taskId;
+    const original = mocks.invoke.getMockImplementation()!;
+    mocks.invoke.mockImplementation(async (command, ...args) => {
+      if (command === "codeup_cleanup_mr") throw new Error(reason);
+      return original(command, ...args);
+    });
+    mocks.invoke.mockClear();
+    await completeTurn(taskId);
+    expect(mocks.invoke).toHaveBeenCalledWith("codeup_cleanup_mr", {
+      repository: mr.repository,
+      mrId: String(mr.localId),
+    });
+    const writes = mocks.invoke.mock.calls.filter(([command]) => command === "save_project_tasks");
+    expect(writes.length).toBeGreaterThan(0);
+    for (const [, args] of writes) {
+      expect(args.tasks.find((task: Task) => task.id === taskId).status).toBe("done");
+    }
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      `审查已完成，但清理未完成，已保留现场：Error: ${reason}`,
+      "warning",
+    );
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "resume_codex_structured")).toBe(false);
+  });
 
   it("does not clean up a failed merge task", async () => {
     await mountApp("structured");
